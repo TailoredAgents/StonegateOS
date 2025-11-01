@@ -29,7 +29,7 @@
 - Legacy `quote-request` endpoint now returns HTTP 410 to signal the deprecation.
 
 ### 3. Pricing & Chatbot Experience - _Done_
-- `ChatBot` widget provides canned answers + price ranges (e.g., driveway $120-$260) and nudges visitors to schedule.
+- `ChatBot` widget provides canned answers + price ranges (e.g., single item $75–$150, quarter load $150–$250) and nudges visitors to schedule.
 - Uses quick suggestion chips and a lightweight keyword matcher for instant responses.
 
 ### 4. Notifications - _Integrated_

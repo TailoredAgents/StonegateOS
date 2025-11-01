@@ -38,7 +38,7 @@ export default async function ServicePage({ params }: ServicePageProps) {
     <Section>
       <div className="mx-auto max-w-5xl space-y-8">
         <header className="space-y-3">
-          <Badge tone="default">Myst Service</Badge>
+          <Badge tone="default">Stonegate Service</Badge>
           <h1 className="font-display text-display text-primary-800">{service.title}</h1>
           {service.short ? (
             <p className="text-body text-neutral-600">{service.short}</p>

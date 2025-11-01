@@ -20,7 +20,7 @@ import { callAdminApi } from "./lib/api";
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
 
-export const metadata = { title: "Myst Team Console" };
+export const metadata = { title: "Stonegate Team Console" };
 
 export default async function TeamPage({
   searchParams
@@ -92,7 +92,7 @@ export default async function TeamPage({
           <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <span className="inline-flex items-center rounded-full bg-primary-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-primary-700">
-                Myst Team
+                Stonegate Team
               </span>
               <h1 className="mt-4 text-3xl font-semibold text-slate-900 sm:text-4xl">Team Console</h1>
               <p className="mt-2 max-w-3xl text-sm text-slate-600 sm:text-base">

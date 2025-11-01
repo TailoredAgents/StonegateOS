@@ -5,10 +5,10 @@ export type LeadServiceOption = {
 };
 
 export const DEFAULT_LEAD_SERVICE_OPTIONS: LeadServiceOption[] = [
-  { slug: "house-wash", title: "Whole Home Soft Wash", description: "Siding, brick, and trim" },
-  { slug: "driveway", title: "Driveway & Walkway", description: "Concrete, pavers, and pads" },
-  { slug: "roof", title: "Roof Treatment", description: "Soft wash for shingles and tile" },
-  { slug: "deck", title: "Deck & Patio", description: "Wood, composite, or stone surfaces" },
-  { slug: "windows", title: "Exterior Windows", description: "Spot-free rinse and detailing" },
-  { slug: "gutter", title: "Gutters & Downspouts", description: "Clear, flush, and brighten" }
+  { slug: "single-item", title: "Single Item Pickup", description: "Mattress, TV, or small furniture" },
+  { slug: "furniture", title: "Furniture Removal", description: "Sofas, dressers, desks, and more" },
+  { slug: "appliances", title: "Appliance Removal", description: "Refrigerators, washers, dryers" },
+  { slug: "yard-waste", title: "Yard Waste & Debris", description: "Brush, branches, and bagged leaves" },
+  { slug: "construction-debris", title: "Construction Debris", description: "Renovation leftovers and materials" },
+  { slug: "hot-tub", title: "Hot Tub Removal", description: "Cut-up and haul away" }
 ];

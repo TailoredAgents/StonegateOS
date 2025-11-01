@@ -23,14 +23,14 @@ function fallbackResponse(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("schedule")) return "Today's run: morning driveway degrease, mid-day deck refresh, late afternoon whole-home soft wash. Keep pre-rinse gear ready.";
   if (m.includes("follow-up") || m.includes("text"))
-    return "Example follow-up: “Thanks for having us out today! Let me know if you have questions about the quote. We can get you on the calendar as soon as you’re ready.”";
+    return "Example follow-up: Thanks for having us out today! Let me know if you have questions about the quote. We can get you on the calendar as soon as you're ready.";
   if (m.includes("task") || m.includes("pipeline"))
-    return "Review pipeline cards for New and Scheduled Quote, add reminders when activity is 7+ days old, and attach notes for context.";
+    return "Review pipeline cards for New and Scheduled Estimate, add reminders when activity is 7+ days old, and attach notes for context.";
   if (m.includes("stain") || m.includes("rust"))
-    return "Pre-treat tough stains with surfactant + sodium hypochlorite mix, let dwell 10 minutes, then soft-rinse. For rust, use an oxalic-based recovery product.";
+    return "For heavy items: team lift with straps/dollies, protect floors, and clear pathways. Separate recyclables/e-waste when possible; note stairs or tight turns in job notes.";
   if (m.includes("upsell"))
-    return "Upsell ideas: window rinse after house wash, driveway refresh with deck cleaning, or gutter clear paired with roof treatment.";
-  return "Got it! Emphasize safety, document before/after pics in the job notes, and keep the customer looped in with friendly updates.";
+    return "Upsell ideas: curbside discount for items at the driveway, add yard waste with cleanouts, or bundle shed/attic cleanout with furniture haul-away.";
+  return "Got it! Emphasize safety, document before/after photos in the job notes, and keep the customer looped in with friendly updates.";
 }
 
 type AssistantPayload = {
@@ -65,11 +65,7 @@ export function TeamChatClient() {
   ]);
   const [input, setInput] = React.useState("");
   const endRef = React.useRef<HTMLDivElement>(null);
-  const [isSending, setIsSending] = React.useState(false);
-
-  React.useEffect(() => {
-    const timeout = setTimeout(() => {
-      endRef.current?.scrollIntoView({ behavior: "smooth" });
+  const [isSending…"smooth" });
     }, 120);
     return () => clearTimeout(timeout);
   }, [messages]);
@@ -77,35 +73,10 @@ export function TeamChatClient() {
   const handleSend = React.useCallback(
     async (raw: string) => {
       const text = raw.trim();
-      if (!text || isSending) return;
-      setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "user", text }]);
+      if (!text || isSending…"user", text }]);
       setInput("");
-      setIsSending(true);
-
-      const augmentedPrompt = `${TEAM_CONTEXT}\n\nTeam request: ${text}`;
-      const ai = await callAssistant(augmentedPrompt);
-      const reply = ai?.reply ?? fallbackResponse(text);
-      const combinedReply =
-        ai?.actionNote && ai.actionNote.trim().length
-          ? `${reply}\n\n${ai.actionNote}`
-          : reply;
-
-      setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "bot", text: combinedReply }]);
-      setIsSending(false);
-    },
-    [isSending]
-  );
-
-  const handleSubmit = React.useCallback(
-    (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      void handleSend(input);
-    },
-    [handleSend, input]
-  );
-
-  return (
-    <div className="space-y-4">
+      setIsSending…"bot", text: combinedReply }]);
+      setIsSending…"space-y-4">
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <header className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -159,8 +130,7 @@ export function TeamChatClient() {
                 placeholder="Type a question…"
                 className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
-              <Button type="submit" size="sm" disabled={isSending || !input.trim()}>
-                {isSending ? "Sending…" : "Send"}
+              <Button type="submit" size="sm" disabled={isSending…"Sending…" : "Send"}
               </Button>
             </form>
           </div>

@@ -910,7 +910,7 @@ export function LeadForm({ services, className, ...props }: LeadFormProps) {
             className="mt-1 h-4 w-4 accent-accent-500"
           />
           <label htmlFor="consent" className="text-sm text-neutral-600">
-            I agree to receive appointment updates and service tips from Myst. Text messaging rates may
+            I agree to receive appointment updates and service tips from Stonegate. Text messaging rates may
             apply. Reply STOP to opt out anytime.
           </label>
         </div>

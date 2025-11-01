@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { allAreas, allPages, allServices } from "contentlayer/generated";
 import { notFound } from "next/navigation";
-import { BeforeAfterSlider, Button, Card, Section, Stat, Testimonials } from "@myst-os/ui";
+import { Button, Card, Section, Stat, Testimonials } from "@myst-os/ui";
 import { HeroV2 } from "@/components/HeroV2";
 import { LeadForm } from "@/components/LeadForm";
 import { MdxContent } from "@/components/MdxContent";
@@ -11,41 +11,39 @@ import { StickyCtaBar } from "@/components/StickyCtaBar";
 import { createPageMetadata } from "@/lib/metadata";
 import { DEFAULT_LEAD_SERVICE_OPTIONS } from "@/lib/lead-services";
 
-const beforeImage = "/images/gallery/before.jpg";
-const afterImage = "/images/gallery/after.png";
+// Junk removal hero/gallery assets can be added under /images/services
 
 const resultTiles = [
   {
-    title: "Driveway Restoration",
-    description: "Layered rust, clay, and tire marks lifted in a single soft-wash pass.",
-    beforeImage: "/images/gallery/before.jpg",
-    afterImage: "/images/gallery/after.png"
+    title: "Garage Cleanout",
+    description: "Boxes, old furniture, and junk cleared in one scheduled visit.",
+    afterImage: "/images/services/junk-single.jpg"
   },
   {
-    title: "Whole-Home Glow-up",
-    description: "Stone facade, trim, and copper accents brightened in one visit.",
-    afterImage: "/images/gallery/home-after.png"
+    title: "Appliance & Furniture Pickup",
+    description: "Refrigerators, washers, and sofas hauled without scuffs or mess.",
+    afterImage: "/images/services/junk-furniture.jpg"
   },
   {
-    title: "Commercial Exterior Refresh",
-    description: "Audi Atlanta service entry refreshed overnight without disrupting business hours.",
-    afterImage: "/images/gallery/commercial-after.png"
+    title: "Yard & Debris Removal",
+    description: "Storm brush and light construction debris responsibly disposed.",
+    afterImage: "/images/services/junk-yard.jpg"
   }
 ];
 
 const testimonials = [
   {
-    quote: "Everything looks brand new again and the crew was respectful of our landscaping.",
+    quote: "They cleared our garage in under two hours and swept up after. Pricing matched the estimate.",
     name: "Brianna S.",
     location: "Woodstock"
   },
   {
-    quote: "Professional from quote to cleanup. Roof streaks vanished before lunch.",
+    quote: "On-time, professional, and careful through the house with a large sofa and fridge.",
     name: "Marcus T.",
     location: "Canton"
   },
   {
-    quote: "Communication was outstanding. Text updates and an immaculate driveway.",
+    quote: "Text updates, polite crew, and quick yard debris removal. CouldnÃ¢â‚¬â„¢t be easier.",
     name: "Alyssa K.",
     location: "Roswell"
   }
@@ -99,7 +97,7 @@ export default function HomePage() {
               <div className="relative aspect-[16/10] overflow-hidden">
                 <Image
                   src={tile.afterImage}
-                  alt={`${tile.title} after Myst exterior cleaning`}
+                  alt={`${tile.title} by Stonegate Junk Removal`}
                   fill
                   className="object-cover transition duration-700 group-hover:scale-105"
                   sizes="(min-width: 1280px) 400px, (min-width: 768px) 50vw, 100vw"
@@ -166,10 +164,8 @@ export default function HomePage() {
       <Section className="mt-4">
         <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="font-display text-headline text-primary-800">Services tailored to every surface</h2>
-            <p className="mt-3 max-w-2xl text-body text-neutral-600">
-              From whole-home soft washing to storefront refreshes, Myst builds each visit around the way your home or business weathers Georgia seasons.
-            </p>
+            <h2 className="font-display text-headline text-primary-800">Services for every pickup need</h2>
+            <p className="mt-3 max-w-2xl text-body text-neutral-600">From single-item pickups to full cleanouts, Stonegate builds each visit around your space and schedule with clear, upfront estimates.</p>
           </div>
           <Button variant="secondary" asChild>
             <Link href="/services">Explore Services</Link>
@@ -198,28 +194,24 @@ export default function HomePage() {
       </Section>
 
       <Section>
-        <div className="grid gap-10">
+        <div className="grid gap-6">
           <div>
-            <h2 className="font-display text-headline text-primary-800">See the Myst difference</h2>
-            <p className="mt-3 text-body text-neutral-600">
-              Real before-and-after transformations from North Metro homes. Slide to compare the restore in seconds.
-            </p>
-            <ul className="mt-5 space-y-2 text-body text-neutral-600">
-              <li>- Soft-wash chemistry keeps siding and paint protected.</li>
-              <li>- Pro-grade surface cleaners leave uniform finishes.</li>
-              <li>- Detailed rinse downs keep landscaping happy.</li>
+            <h2 className="font-display text-headline text-primary-800">Why Stonegate?</h2>
+            <ul className="mt-3 space-y-2 text-body text-neutral-600">
+              <li>- Careful in-home handling and floor protection.</li>
+              <li>- Responsible disposal and recycling whenever possible.</li>
+              <li>- Same-day and next-day availability.</li>
             </ul>
           </div>
-          <BeforeAfterSlider beforeImage={beforeImage} afterImage={afterImage} alt="Myst exterior cleaning transformation" />
         </div>
       </Section>
 
       <Section>
         <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="font-display text-headline text-primary-800">Homeowners and businesses rave about Myst</h2>
+            <h2 className="font-display text-headline text-primary-800">Homeowners and businesses rave about Stonegate</h2>
             <p className="mt-2 max-w-2xl text-body text-neutral-600">
-              Thousands of spotless finishes—residential and commercial—backed by verified five-star reviews and a make-it-right guarantee on every project.
+              Verified five-star reviews and a make-it-right guarantee on every pickup.
             </p>
           </div>
           <Button variant="secondary" asChild>

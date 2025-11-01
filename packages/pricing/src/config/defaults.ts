@@ -132,9 +132,9 @@ export const defaultPricingContext: PricingContext = {
 export const defaultDepositRate = 0.2;
 
 export const availabilityWindows: AvailabilityWindow[] = [
-  { id: "morning", label: "Morning (8:00 – 12:00)", startHour: 8, endHour: 12 },
-  { id: "afternoon", label: "Afternoon (12:00 – 16:00)", startHour: 12, endHour: 16 },
-  { id: "evening", label: "Evening (16:00 – 18:00)", startHour: 16, endHour: 18 }
+  { id: "morning", label: "Morning (8:00–12:00)", startHour: 8, endHour: 12 },
+  { id: "afternoon", label: "Afternoon (12:00–16:00)", startHour: 12, endHour: 16 },
+  { id: "evening", label: "Evening (16:00–18:00)", startHour: 16, endHour: 18 }
 ] as const;
 
 export const weeklyAvailability: WeeklyAvailability = {

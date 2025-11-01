@@ -141,7 +141,7 @@ export function ChatBot() {
         onClick={() => setIsOpen((prev) => !prev)}
         className="shadow-lg shadow-primary-900/20"
       >
-        {isOpen ? "Hide Assistant" : "Ask Myst"}
+        {isOpen ? "Hide Assistant" : "Ask Stonegate"}
       </Button>
     </div>
   );
