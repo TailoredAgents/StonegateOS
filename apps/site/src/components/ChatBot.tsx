@@ -17,12 +17,12 @@ const SUGGESTIONS = [
 
 function fallbackResponse(message: string): string {
   const m = message.toLowerCase();
-  if (m.includes("driveway")) return "Driveway cleans typically range from $120–$260 depending on size, stains, and access.";
-  if (m.includes("roof")) return "Roof treatments often range $350–$650 for most single family homes with soft-wash.";
-  if (m.includes("house") || m.includes("home")) return "Whole-home soft-wash projects usually fall between $220–$480 based on square footage and elevations.";
-  if (m.includes("window")) return "Exterior window rinsing can be added for about $6–$8 per opening.";
-  if (m.includes("deck") || m.includes("patio")) return "Deck and patio refreshes start near $180 and scale with square footage and railing detail.";
-  if (m.includes("insurance")) return "Yes—Myst is licensed and carries general liability and workers comp. COIs available on request.";
+  if (m.includes("sofa") || m.includes("couch") || m.includes("furniture")) return "Most furniture items run $80-$140 depending on size and access.";
+  if (m.includes("mattress")) return "Mattress pickup typically ranges $70-$120 based on size and stairs.";
+  if (m.includes("appliance") || m.includes("fridge") || m.includes("refrigerator") || m.includes("washer") || m.includes("dryer")) return "Appliance hauling usually runs $80-$150; freon handling may add a surcharge.";
+  if (m.includes("hot tub") || m.includes("spa")) return "Hot tub removals commonly fall between $250-$450 depending on access and cut-up needs.";
+  if (m.includes("yard") || m.includes("debris") || m.includes("construction") || m.includes("renovation")) return "Light construction or yard debris often ranges $150-$350 per load depending on volume and material.";
+  if (m.includes("insurance") || m.includes("licensed")) return "Yes—Stonegate is licensed and insured. COIs available on request.";
   return "Thanks for the question! Book an on-site estimate so we can confirm details and give exact pricing.";
 }
 
@@ -30,7 +30,7 @@ export function ChatBot() {
   const [isOpen, setIsOpen] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [messages, setMessages] = React.useState<Message[]>([
-    { id: "initial", sender: "bot", text: "Hi! I'm Myst Assist. Ask about services, pricing ranges, or how we work." }
+    { id: "initial", sender: "bot", text: "Hi! I'm Stonegate Assist. Ask about services, pricing ranges, or how we work." }
   ]);
   const endRef = React.useRef<HTMLDivElement>(null);
 
@@ -77,7 +77,7 @@ export function ChatBot() {
         <div className="w-full max-w-sm rounded-xl border border-neutral-300/70 bg-white shadow-xl shadow-primary-900/10 sm:max-w-md">
           <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
             <div>
-              <p className="font-semibold text-primary-800">Myst Assist</p>
+              <p className="font-semibold text-primary-800">Stonegate Assist</p>
               <p className="text-xs text-neutral-500">Ask anything about our services</p>
             </div>
             <button

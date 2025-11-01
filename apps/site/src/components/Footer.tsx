@@ -22,7 +22,7 @@ export function Footer() {
         />
         <div className="mt-12 grid gap-6 text-sm text-neutral-500 md:grid-cols-3">
           <div>
-            <p className="font-semibold text-neutral-700">Myst Pressure Washing</p>
+            <p className="font-semibold text-neutral-700">Stonegate Junk Removal</p>
             <p className="mt-2">
               Woodstock HQ - Serving Cherokee, Cobb, and North Fulton Counties
             </p>
@@ -45,10 +45,10 @@ export function Footer() {
               </li>
               <li>
                 <a
-                  href="mailto:Alex@MystWashing.com"
+                  href="mailto:info@stonegatejunkremoval.com"
                   className="text-neutral-600 hover:text-primary-700"
                 >
-                  Alex@MystWashing.com
+                  info@stonegatejunkremoval.com
                 </a>
               </li>
             </ul>
@@ -60,7 +60,7 @@ export function Footer() {
           </div>
         </div>
         <p className="mt-12 text-xs text-neutral-400">
-          Copyright {new Date().getFullYear()} Myst Pressure Washing. Licensed & insured. All rights reserved.
+          Copyright {new Date().getFullYear()} Stonegate Junk Removal. Licensed & insured. All rights reserved.
         </p>
       </div>
     </footer>

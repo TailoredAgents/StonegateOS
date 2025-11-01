@@ -17,7 +17,7 @@ const TEAM_SUGGESTIONS: string[] = [
 ];
 
 const TEAM_CONTEXT =
-  "You are Myst Assist, helping the Myst washing team inside their internal Team Console. Provide concise, actionable guidance for crew and owners. If pricing is needed, reference general ranges and encourage booking a quote when specifics are missing.";
+  "You are Stonegate Assist, helping the Stonegate junk removal team inside their internal Team Console. Provide concise, actionable guidance for crew and owners. If pricing is needed, reference general ranges and encourage booking a quote when specifics are missing.";
 
 function fallbackResponse(message: string): string {
   const m = message.toLowerCase();
@@ -60,7 +60,7 @@ export function TeamChatClient() {
     {
       id: "intro",
       sender: "bot",
-      text: "Hi! I'm Myst Assist. Ask me about schedules, follow-ups, pricing ranges, or workflow tips."
+      text: "Hi! I'm Stonegate Assist. Ask me about schedules, follow-ups, pricing ranges, or workflow tips."
     }
   ]);
   const [input, setInput] = React.useState("");
@@ -109,7 +109,7 @@ export function TeamChatClient() {
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <header className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Myst Assist Chat</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Stonegate Assist Chat</h2>
             <p className="text-sm text-slate-500">
               Quick answers for owners and crew. Ask about workflow steps, pricing ranges, or customer messaging.
             </p>

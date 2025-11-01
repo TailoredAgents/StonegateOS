@@ -18,15 +18,15 @@ const playfair = Playfair_Display({
   weight: ["700"]
 });
 
-const defaultTitle = "Myst Pressure Washing";
+const defaultTitle = "Stonegate Junk Removal";
 const defaultDescription =
-  "Premium soft-wash and pressure washing across North Metro Atlanta. Schedule an on-site estimate and get spotless results backed by our make-it-right guarantee.";
+  "Fast, reliable junk removal and hauling across North Metro Atlanta. Schedule an on-site estimate and get clutter cleared responsibly with licensed, insured crews.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
     default: defaultTitle,
-    template: "%s | Myst Pressure Washing"
+    template: "%s | Stonegate Junk Removal"
   },
   description: defaultDescription,
   openGraph: {

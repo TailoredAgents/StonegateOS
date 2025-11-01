@@ -1,6 +1,6 @@
 import { test, expect } from "../test";
 
-const heroHeading = /pressure washing that protects your property and your weekend/i;
+const heroHeading = /junk removal that clears clutter fast and responsibly/i;
 
 test.describe("MystOS smoke", () => {
   test("home hero renders call-to-action", async ({ page }) => {

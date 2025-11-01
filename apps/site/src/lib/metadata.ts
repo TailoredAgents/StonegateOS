@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import { getAreaBySlug, getPageBySlug, getServiceBySlug } from "./content";
 
-const fallbackTitle = "Myst Pressure Washing";
+const fallbackTitle = "Stonegate Junk Removal";
 const fallbackDescription =
-  "Premium soft-wash and pressure washing across North Metro Atlanta. Schedule an on-site estimate and get spotless results backed by our make-it-right guarantee.";
+  "Fast, reliable junk removal and hauling across North Metro Atlanta. Schedule an on-site estimate and get clutter cleared responsibly with licensed, insured crews.";
 
 const configuredSiteUrl = process.env["NEXT_PUBLIC_SITE_URL"]?.trim();
 const normalizedSiteUrl = configuredSiteUrl && /^https?:\/\//.test(configuredSiteUrl)
   ? configuredSiteUrl.replace(/\/+$/u, "")
-  : "https://myst.pressurewashing";
+  : "https://stonegatejunkremoval.com";
 
 export const siteUrl = normalizedSiteUrl;
 
@@ -62,7 +62,7 @@ export function createServiceMetadata(slug: string): Metadata {
   const path = `/services/${service.slug}`;
 
   return {
-    title: `${service.title} | Myst Pressure Washing`,
+    title: `${service.title} | Stonegate Junk Removal`,
     description,
     openGraph: {
       title: service.title,
@@ -89,7 +89,7 @@ export function createAreaMetadata(slug: string): Metadata {
   const isIndex = area.slug === "index";
   const path = isIndex ? "/areas" : `/areas/${area.slug}`;
   const description = area.description ?? fallbackDescription;
-  const title = isIndex ? "Myst Service Areas" : `${area.title} | Myst Service Area`;
+  const title = isIndex ? "Stonegate Service Areas" : `${area.title} | Stonegate Service Area`;
 
   return {
     title,

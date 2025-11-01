@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "MystOS Owner Hub",
-  description: "Operational dashboard for Myst Pressure Washing"
+  description: "Operational dashboard for Stonegate Junk Removal"
 };
 
 export default function RootLayout({

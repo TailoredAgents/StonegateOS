@@ -56,10 +56,10 @@ export function HeroV2({ className, variant = "lean" }: { className?: string; va
         <div className="space-y-6">
           <div className="space-y-4">
             <span className="inline-flex items-center rounded-full bg-neutral-100 px-3 py-1 text-sm font-semibold uppercase tracking-[0.14em] text-neutral-700">
-              Premium exterior cleaning
+              Fast junk removal
             </span>
             <h1 className="font-display text-3xl tracking-tight text-primary-900 sm:text-5xl md:text-6xl">
-              Pressure washing that protects your property and your weekend
+              Junk removal that clears clutter fast and responsibly
             </h1>
             <p className="max-w-xl text-base text-neutral-600 sm:text-lg">
               On-site estimate in under 24 hours. Licensed & insured. Serving Roswell, Alpharetta, Milton & nearby.
@@ -113,15 +113,15 @@ export function HeroV2({ className, variant = "lean" }: { className?: string; va
               <div className="space-y-4">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-[0.16em] text-accent-700">
-                    Why homeowners choose Myst
+                    Why homeowners choose Stonegate
                   </p>
                   <h2 className="mt-2 text-xl font-semibold text-primary-900">
                     Trusted crews. Spotless finishes. Guaranteed.
                   </h2>
                 </div>
                 <ul className="space-y-2 text-sm text-neutral-600">
-                  <li>- Soft-wash chemistry protects paint, siding, and landscaping.</li>
-                  <li>- Flexible arrival windows with proactive SMS updates.</li>
+                  <li>- Fast, careful hauling with licensed and insured crews.</li>
+                  <li>- Responsible disposal and recycling whenever possible.</li>
                   <li>- Make-It-Right Guarantee: we fix issues within 48 hours.</li>
                 </ul>
                 <div className="rounded-lg bg-neutral-50 p-4 text-sm text-neutral-600">

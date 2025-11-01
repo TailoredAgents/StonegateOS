@@ -233,7 +233,7 @@ export default async function OwnerHubPage() {
         <div>
           <h1 className="text-3xl font-semibold text-primary-900">Owner Hub</h1>
           <p className="text-sm text-neutral-600">
-            Daily schedule, crew readiness, and quick actions for Myst Pressure Washing.
+            Daily schedule, crew readiness, and quick actions for Stonegate Junk Removal.
           </p>
         </div>
         <div className="flex items-center gap-4 rounded-lg border border-neutral-200 bg-white px-4 py-2 shadow-sm">

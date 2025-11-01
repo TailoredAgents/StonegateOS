@@ -164,12 +164,12 @@ export async function generateEstimateNotificationCopy(
     return null;
   }
 
-  const systemPrompt = `You are Myst Assist, writing short, on-brand customer notifications for Myst Pressure Washing.
+  const systemPrompt = `You are Stonegate Assist, writing short, on-brand customer notifications for Stonegate Junk Removal.
 Constraints:
 - Tone: friendly, confident, concise, service-focused. No emojis.
-- Always mention Myst Pressure Washing once.
+- Always mention Stonegate Junk Removal once.
 - Include the confirmed time window using natural language.
-- Emphasize plant-safe, insured service in one sentence when appropriate.
+- Emphasize licensed, insured crews and responsible disposal when appropriate.
 - SMS must be <= 320 characters.
 - Email body should be <= 900 characters and include a clear CTA URL when provided.
 - Always include the reschedule link literally when given.
@@ -186,7 +186,7 @@ Constraints:
     contactName
   } = summary;
 
-  const servicesText = services.length ? services.join(", ") : "Exterior cleaning";
+  const servicesText = services.length ? services.join(", ") : "Junk removal";
   const lines = [
     `Recipient: ${contactName}`,
     `Appointment time: ${when}`,
@@ -211,12 +211,12 @@ export async function generateQuoteNotificationCopy(summary: QuoteSummary): Prom
     return null;
   }
 
-  const systemPrompt = `You are Myst Assist, crafting short, on-brand communications for Myst Pressure Washing quotes.
+  const systemPrompt = `You are Stonegate Assist, crafting short, on-brand communications for Stonegate Junk Removal quotes.
 Constraints:
 - Tone: confident, courteous, transparent. No emojis.
-- Mention "Myst Pressure Washing" once.
+- Mention "Stonegate Junk Removal" once.
 - Include the share link exactly as provided.
-- Highlight the service mix and total value, and remind customers that no deposit is required.
+- Highlight the pickup scope and total value, and remind customers that no deposit is required.
 - If the quote is accepted, outline next steps briefly. If declined, invite feedback.
 - Keep email body under 600 characters and SMS under 240 characters.
 - Respond ONLY as JSON with keys: email_subject, email_body, sms_body.`;
@@ -231,7 +231,7 @@ Constraints:
     reason
   } = summary;
 
-  const serviceText = services.length ? services.join(", ") : "Exterior cleaning services";
+  const serviceText = services.length ? services.join(", ") : "Junk removal services";
   const expiresText = expiresAtIso ? `Quote expires ${expiresAtIso}` : "Quote does not expire yet";
 
   const userPrompt = [

@@ -120,7 +120,7 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
   const end = start.plus({ minutes: appointment.durationMinutes ?? 60 });
   const stamp = DateTime.utc();
 
-  const summary = `Myst Estimate - ${contact.name}`;
+  const summary = `Stonegate Estimate - ${contact.name}`;
   const descriptionLines = [
     `Services: ${payload.services.join(", ") || "General exterior cleaning"}`,
     payload.notes ? `Notes: ${payload.notes}` : null,
@@ -368,14 +368,14 @@ async function sendEstimateReminderInternal(
   const rescheduleUrl = buildRescheduleUrl(appointment);
   const windowHours = Math.round(options.windowMinutes / 60);
 
-  const fallbackSms = `Myst reminder: estimate in ${windowHours}h (${when}). Need to reschedule? ${rescheduleUrl}`;
+  const fallbackSms = `Stonegate reminder: estimate in ${windowHours}h (${when}). Need to reschedule? ${rescheduleUrl}`;
   const fallbackEmailBody = [
-    `Quick reminder: your Myst Pressure Washing estimate is in ${windowHours} hours (${when}).`,
+    `Quick reminder: your Stonegate Junk Removal estimate is in ${windowHours} hours (${when}).`,
     `Location: ${payload.property.addressLine1}, ${payload.property.city}, ${payload.property.state} ${payload.property.postalCode}`,
     "",
     `Need to adjust? ${rescheduleUrl}`
   ].join("\n");
-  const fallbackSubject = `Reminder: Myst estimate ${when}`;
+  const fallbackSubject = `Reminder: Stonegate estimate ${when}`;
 
   let generated = null;
   try {
@@ -450,7 +450,7 @@ export async function sendEstimateReminder2h(payload: EstimateNotificationPayloa
 export async function sendQuoteSentNotification(payload: QuoteNotificationPayload): Promise<void> {
   const expiresIso = payload.expiresAt ? payload.expiresAt.toISOString() : null;
 
-  const fallbackSubject = "Your Myst Pressure Washing quote is ready";
+  const fallbackSubject = "Your Stonegate Junk Removal quote is ready";
   const fallbackBody = [
     `Hi ${payload.contact.name},`,
     "",
@@ -465,7 +465,7 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
     .filter((line): line is string => Boolean(line))
     .join("\n");
 
-  const fallbackSms = `Myst quote ready: ${formatCurrency(payload.total)}. Review ${payload.shareUrl}`;
+  const fallbackSms = `Stonegate quote ready: ${formatCurrency(payload.total)}. Review ${payload.shareUrl}`;
 
   let generated = null;
   try {
