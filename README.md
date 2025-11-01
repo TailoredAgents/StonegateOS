@@ -1,4 +1,4 @@
-# MystOS Monorepo
+# StonegateOS Monorepo
 
 ## Prerequisites
 - Node.js 18+
@@ -85,8 +85,41 @@ pnpm outbox:worker  # run the outbox dispatcher (see docs/outbox-worker.md)
 ## Content
 Markdown/MDX content lives under `apps/site/content`. Re-run `pnpm -w build` after changes to regenerate static pages.
 
+### Junk Removal Service Catalog
+The site now ships with a junk removal catalog (replacing pressure washing):
+- Single Item Pickup (`apps/site/content/services/single-item.mdx`)
+- Furniture Removal (`apps/site/content/services/furniture.mdx`)
+- Appliance Removal (`apps/site/content/services/appliances.mdx`)
+- Yard Waste & Debris (`apps/site/content/services/yard-waste.mdx`)
+- Construction Debris (`apps/site/content/services/construction-debris.mdx`)
+- Hot Tub Removal (`apps/site/content/services/hot-tub.mdx`)
+
+Hero images point at placeholder assets under `apps/site/public/images/services/`.
+Replace them with real photos (same filenames) whenever you’re ready.
+
+### Brand & Copy Configuration (TODOs)
+Update these when details are final:
+- Company name/metadata: `apps/site/src/app/layout.tsx`, `apps/site/src/lib/metadata.ts`
+- Homepage and marketing pages: `apps/site/content/pages/*.mdx`
+- Contact info (phone/email): `apps/site/src/components/Footer.tsx`, `apps/site/content/pages/contact.mdx`
+- Domain and canonical URL: `NEXT_PUBLIC_SITE_URL` in env and `apps/site/src/lib/metadata.ts`
+- Chat prompts: `apps/site/src/app/api/chat/route.ts`, team prompts `apps/api/app/api/chat/route.ts`
+- Notification prompts: `apps/api/src/lib/ai.ts`, `apps/api/src/lib/notifications.ts`
+- Logo: swap `/images/brand/Myst_logo.png` with Stonegate logo and update alt text if filename changes.
+
+Placeholders currently in use:
+- Email: `info@stonegatejunkremoval.com`
+- Phone: `(404) 445-3408`
+- Domain: `https://stonegatejunkremoval.com`
+Replace in content/components once finalized.
+
 ## Deployment
 Render deployment details are tracked in `DEPLOY-ON-RENDER.md` along with the generated `render.yaml` blueprint.
+
+If deploying Stonegate-branded site/API, ensure:
+- `NEXT_PUBLIC_SITE_URL` reflects the public domain (e.g., `https://stonegatejunkremoval.com`).
+- `NEXT_PUBLIC_API_BASE_URL` and `API_BASE_URL` are set for site/server actions.
+- `ADMIN_API_KEY` is configured for admin routes and server actions.
 
 ## Notifications
 - Estimate requests currently log email/SMS payloads via `notifyEstimateRequested` (see `apps/api/src/lib/notifications.ts`).
