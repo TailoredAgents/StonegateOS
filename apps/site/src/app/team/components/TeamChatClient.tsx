@@ -1,13 +1,9 @@
-'use client';
+"use client";
 
 import React from "react";
 import { Button, cn } from "@myst-os/ui";
 
-type Message = {
-  id: string;
-  sender: "bot" | "user";
-  text: string;
-};
+type Message = { id: string; sender: "bot" | "user"; text: string };
 
 const TEAM_SUGGESTIONS: string[] = [
   "Summarize today's schedule for the crew.",
@@ -16,27 +12,20 @@ const TEAM_SUGGESTIONS: string[] = [
   "Share tips for handling a tough stain."
 ];
 
-const TEAM_CONTEXT =
-  "You are Stonegate Assist, helping the Stonegate junk removal team inside their internal Team Console. Provide concise, actionable guidance for crew and owners. If pricing is needed, reference general ranges and encourage booking a quote when specifics are missing.";
-
 function fallbackResponse(message: string): string {
   const m = message.toLowerCase();
-  if (m.includes("schedule")) return "Today's run: morning driveway degrease, mid-day deck refresh, late afternoon whole-home soft wash. Keep pre-rinse gear ready.";
+  if (m.includes("schedule"))
+    return "Today's run: morning driveway degrease, mid-day deck refresh, late afternoon whole-home soft wash. Keep pre-rinse gear ready.";
   if (m.includes("follow-up") || m.includes("text"))
-    return "Example follow-up: Thanks for having us out today! Let me know if you have questions about the quote. We can get you on the calendar as soon as you're ready.";
+    return "Example follow-up: Thanks for having us out today! Let me know if you have questions about the quote.";
   if (m.includes("task") || m.includes("pipeline"))
     return "Review pipeline cards for New and Scheduled Estimate, add reminders when activity is 7+ days old, and attach notes for context.";
   if (m.includes("stain") || m.includes("rust"))
-    return "For heavy items: team lift with straps/dollies, protect floors, and clear pathways. Separate recyclables/e-waste when possible; note stairs or tight turns in job notes.";
-  if (m.includes("upsell"))
-    return "Upsell ideas: curbside discount for items at the driveway, add yard waste with cleanouts, or bundle shed/attic cleanout with furniture haul-away.";
-  return "Got it! Emphasize safety, document before/after photos in the job notes, and keep the customer looped in with friendly updates.";
+    return "For heavy items: team lift with straps/dollies, protect floors, and clear pathways. Separate recyclables when possible.";
+  return "Got it! Emphasize safety, document before/after photos, and keep the customer looped in.";
 }
 
-type AssistantPayload = {
-  reply?: string;
-  actionNote?: string;
-};
+type AssistantPayload = { reply?: string; actionNote?: string };
 
 async function callAssistant(message: string): Promise<AssistantPayload | null> {
   try {
@@ -45,9 +34,7 @@ async function callAssistant(message: string): Promise<AssistantPayload | null> 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message })
     });
-    if (!response.ok) {
-      return null;
-    }
+    if (!response.ok) return null;
     const data = (await response.json()) as AssistantPayload;
     return data ?? null;
   } catch {
@@ -60,23 +47,48 @@ export function TeamChatClient() {
     {
       id: "intro",
       sender: "bot",
-      text: "Hi! I'm Stonegate Assist. Ask me about schedules, follow-ups, pricing ranges, or workflow tips."
+      text: "Hi! I'm Stonegate Assist. Ask about schedules, follow-ups, pricing ranges, or workflow tips."
     }
   ]);
   const [input, setInput] = React.useState("");
+  const [isSending, setIsSending] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
-  const [isSending…"smooth" });
+
+  React.useEffect(() => {
+    const t = setTimeout(() => {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
     }, 120);
-    return () => clearTimeout(timeout);
+    return () => clearTimeout(t);
   }, [messages]);
 
   const handleSend = React.useCallback(
     async (raw: string) => {
       const text = raw.trim();
-      if (!text || isSending…"user", text }]);
+      if (!text || isSending) return;
+      setIsSending(true);
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "user", text }]);
       setInput("");
-      setIsSending…"bot", text: combinedReply }]);
-      setIsSending…"space-y-4">
+
+      const payload = await callAssistant(text);
+      const reply = payload?.reply?.trim() || fallbackResponse(text);
+      const actionNote = payload?.actionNote?.trim();
+      const combinedReply = actionNote ? `${reply}\n\n${actionNote}` : reply;
+      setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "bot", text: combinedReply }]);
+      setIsSending(false);
+    },
+    [isSending]
+  );
+
+  const handleSubmit = React.useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      await handleSend(input);
+    },
+    [handleSend, input]
+  );
+
+  return (
+    <div className="space-y-4">
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <header className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -90,10 +102,7 @@ export function TeamChatClient() {
         <div className="mt-5 flex h-[420px] flex-col rounded-2xl border border-slate-200 bg-white/95">
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4 text-sm">
             {messages.map((message) => (
-              <div
-                key={message.id}
-                className={cn("flex", message.sender === "bot" ? "justify-start" : "justify-end")}
-              >
+              <div key={message.id} className={cn("flex", message.sender === "bot" ? "justify-start" : "justify-end")}>
                 <div
                   className={cn(
                     "max-w-[92%] rounded-xl px-3 py-2 leading-relaxed sm:max-w-[75%]",
@@ -111,26 +120,28 @@ export function TeamChatClient() {
 
           <div className="border-t border-slate-200 px-4 py-3">
             <div className="mb-3 flex flex-wrap gap-2">
-              {TEAM_SUGGESTIONS.map((suggestion) => (
+              {TEAM_SUGGESTIONS.map((s) => (
                 <button
-                  key={suggestion}
+                  key={s}
                   type="button"
                   className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                  onClick={() => void handleSend(suggestion)}
+                  onClick={() => void handleSend(s)}
                 >
-                  {suggestion}
+                  {s}
                 </button>
               ))}
             </div>
+
             <form onSubmit={handleSubmit} className="flex items-center gap-2">
               <input
                 type="text"
                 value={input}
-                onChange={(event) => setInput(event.target.value)}
+                onChange={(e) => setInput(e.target.value)}
                 placeholder="Type a question…"
                 className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
-              <Button type="submit" size="sm" disabled={isSending…"Sending…" : "Send"}
+              <Button type="submit" size="sm" disabled={isSending}>
+                {isSending ? "Sending…" : "Send"}
               </Button>
             </form>
           </div>
@@ -139,3 +150,4 @@ export function TeamChatClient() {
     </div>
   );
 }
+
