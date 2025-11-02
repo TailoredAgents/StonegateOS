@@ -68,7 +68,12 @@ services:
       export PNPM_HOME="$HOME/.local/share/pnpm"
       mkdir -p "$PNPM_HOME"
       export PATH="$PNPM_HOME:$PATH"
-      npx -y pnpm@9.15.9 -w db:migrate
+      if [ "${SKIP_DB_MIGRATE:-0}" != "1" ]; then
+        echo "[preDeploy] Running db:migrate"
+        npx -y pnpm@9.15.9 -w db:migrate
+      else
+        echo "[preDeploy] Skipping db:migrate because SKIP_DB_MIGRATE=1"
+      fi
     healthCheckPath: /api/healthz
     envVars:
       - key: NODE_ENV
