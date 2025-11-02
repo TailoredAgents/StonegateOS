@@ -1,10 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
-import { isAdminRequest } from "../../web/admin";
+import { isAdminRequest } from "../../../web/admin";
 
-export async function GET(request: Request) {
-  if (!isAdminRequest(request as any)) {
+export async function GET(request: NextRequest) {
+  if (!isAdminRequest(request)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
@@ -35,4 +35,3 @@ export async function GET(request: Request) {
     return NextResponse.json({ ok: false, error: String(error) }, { status: 500 });
   }
 }
-
