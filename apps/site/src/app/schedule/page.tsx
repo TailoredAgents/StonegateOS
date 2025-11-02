@@ -19,7 +19,7 @@ export default async function SchedulePage({
   return (
     <main className="mx-auto flex min-h-screen max-w-lg flex-col justify-center gap-6 px-4 py-16">
       <div className="space-y-2 text-center">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">Myst Scheduling</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">Stonegate Scheduling</p>
         <h1 className="text-2xl font-semibold text-primary-900">Reschedule your visit</h1>
         <p className="text-sm text-neutral-600">Pick a new date and time window that works for you.</p>
       </div>

@@ -134,7 +134,7 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
   const content = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//MystOS//Estimate Scheduler//EN",
+    "PRODID:-//Stonegate//Estimate Scheduler//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:REQUEST",
     "BEGIN:VEVENT",
@@ -150,7 +150,7 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
   ].join("\r\n");
 
   return {
-    filename: "myst-estimate.ics",
+    filename: "stonegate-estimate.ics",
     content,
     contentType: "text/calendar; charset=utf-8; method=REQUEST"
   };
@@ -305,7 +305,7 @@ export async function sendEstimateConfirmation(
   const rescheduleUrl = buildRescheduleUrl(appointment);
   const headline = reason === "requested" ? "You're booked!" : "Appointment updated";
 
-  const fallbackSubject = `Myst Estimate - ${when}`;
+  const fallbackSubject = `Stonegate Estimate - ${when}`;
   const fallbackBody = [
     `${headline} We'll see you ${when}.`,
     `Location: ${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}`,
@@ -320,8 +320,8 @@ export async function sendEstimateConfirmation(
 
   const fallbackSms =
     reason === "requested"
-      ? `Myst confirm: estimate on ${when}. Need to adjust? ${rescheduleUrl}`
-      : `Myst update: new estimate time ${when}. Need changes? ${rescheduleUrl}`;
+      ? `Stonegate confirm: estimate on ${when}. Need to adjust? ${rescheduleUrl}`
+      : `Stonegate update: new estimate time ${when}. Need changes? ${rescheduleUrl}`;
 
   let generated = null;
   try {
@@ -536,8 +536,8 @@ export async function sendQuoteDecisionNotification(
 ): Promise<void> {
   const fallbackSubject =
     payload.decision === "accepted"
-      ? "Myst quote approved"
-      : "Myst quote decision received";
+      ? "Stonegate quote approved"
+      : "Stonegate quote decision received";
   const fallbackBody = [
     `Hi ${payload.contact.name},`,
     "",
@@ -555,8 +555,8 @@ export async function sendQuoteDecisionNotification(
 
   const fallbackSms =
     payload.decision === "accepted"
-      ? "Myst: thanks for approving your quote! We'll follow up with scheduling details."
-      : "Myst: we've recorded your quote decision. Let us know if you'd like any adjustments.";
+      ? "Stonegate: thanks for approving your quote! We'll follow up with scheduling details."
+      : "Stonegate: we've recorded your quote decision. Let us know if you'd like any adjustments.";
 
   let generated = null;
   try {

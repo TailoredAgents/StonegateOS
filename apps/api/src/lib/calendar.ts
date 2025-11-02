@@ -209,7 +209,7 @@ export async function createCalendarEvent(
   const response = await googleRequest(config, accessToken, null, {
     method: "POST",
     body: JSON.stringify({
-      summary: `Myst Estimate: ${payload.contact.name}`,
+      summary: `Stonegate Estimate: ${payload.contact.name}`,
       description: eventBody.description,
       start: {
         dateTime: eventBody.bufferStart.toISO(),
@@ -274,7 +274,7 @@ export async function updateCalendarEvent(
   const response = await googleRequest(config, accessToken, eventId, {
     method: "PATCH",
     body: JSON.stringify({
-      summary: `Myst Estimate: ${payload.contact.name}`,
+      summary: `Stonegate Estimate: ${payload.contact.name}`,
       description: eventBody.description,
       start: {
         dateTime: eventBody.bufferStart.toISO(),

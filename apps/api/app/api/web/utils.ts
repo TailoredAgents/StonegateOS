@@ -8,7 +8,7 @@ export interface NormalizedPhone {
 
 export function normalizeName(fullName: string): { firstName: string; lastName: string } {
   const parts = fullName.trim().split(/\s+/);
-  const firstName = parts.shift() ?? "Myst";
+  const firstName = parts.shift() ?? "Stonegate";
   const lastName = parts.join(" ") || "Customer";
   return { firstName, lastName };
 }

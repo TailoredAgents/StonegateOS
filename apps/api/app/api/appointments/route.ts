@@ -112,7 +112,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const appointmentsDto = baseRows.map((row) => {
     const contactName = row.contactFirstName && row.contactLastName
       ? `${row.contactFirstName} ${row.contactLastName}`
-      : row.contactFirstName ?? row.contactLastName ?? "Myst Customer";
+      : row.contactFirstName ?? row.contactLastName ?? "Stonegate Customer";
 
     return {
       id: row.id,

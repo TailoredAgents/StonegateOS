@@ -127,7 +127,7 @@ test.describe("Quote lifecycle journey", () => {
       const decisionSms = await waitForTwilioMessage(
         (message) => message.to === phoneE164 && message.body.toLowerCase().includes("thanks")
       );
-      expect(decisionSms.body).toContain("Myst");
+      expect(decisionSms.body).toContain("Stonegate");
 
       // Skip clearing shared inboxes; rely on unique email/phone tags per test run.
     });

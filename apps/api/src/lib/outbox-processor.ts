@@ -250,7 +250,7 @@ async function buildNotificationPayload(
     contactNameParts.join(" ").trim() ||
     row.contactFirstName ||
     row.contactLastName ||
-    "Myst Customer";
+    "Stonegate Customer";
 
   const status: AppointmentStatus = isValidAppointmentStatus(row.status) ? row.status : "requested";
 
@@ -348,7 +348,7 @@ async function buildQuoteNotificationPayload(
   const contactNameParts = [row.contactFirstName, row.contactLastName].filter(
     (value): value is string => typeof value === "string" && value.trim().length > 0
   );
-  const customerName = contactNameParts.join(" ").trim() || row.contactFirstName || "Myst Customer";
+  const customerName = contactNameParts.join(" ").trim() || row.contactFirstName || "Stonegate Customer";
 
   const total = Number(row.total ?? 0);
   const depositDue = Number(row.depositDue ?? 0);

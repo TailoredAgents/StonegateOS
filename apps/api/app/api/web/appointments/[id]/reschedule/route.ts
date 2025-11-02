@@ -185,7 +185,7 @@ export async function POST(
     services,
     notes: typeof existing.leadNotes === "string" ? existing.leadNotes : null,
     contact: {
-      name: `${existing.contactFirstName ?? "Myst"} ${existing.contactLastName ?? "Customer"}`,
+      name: `${existing.contactFirstName ?? "Stonegate"} ${existing.contactLastName ?? "Customer"}`,
       email: existing.contactEmail,
       phone: existing.contactPhoneE164 ?? existing.contactPhone ?? undefined
     },

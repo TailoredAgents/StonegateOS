@@ -48,7 +48,7 @@ async function request<T>({
 
   if (!response.ok) {
     const errorBody = await response.text();
-    throw new Error(`Myst SDK request failed (${response.status}): ${errorBody}`);
+    throw new Error(`Stonegate SDK request failed (${response.status}): ${errorBody}`);
   }
 
   const data = await response.json();

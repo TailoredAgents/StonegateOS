@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: myst-site
+    name: stonegate-site
     env: node
     plan: starter
     region: virginia
@@ -25,10 +25,6 @@ services:
         value: production
       - key: NODE_VERSION
         value: "20"
-      - key: DATABASE_URL
-        fromDatabase:
-          name: mystos-db
-          property: connectionString
       - key: NEXT_PUBLIC_SITE_URL
         sync: false
       - key: NEXT_PUBLIC_GA4_ID
@@ -51,7 +47,7 @@ services:
         - pnpm-lock.yaml
         - turbo.json
   - type: web
-    name: myst-api
+    name: stonegate-api
     env: node
     plan: starter
     region: virginia
@@ -81,11 +77,13 @@ services:
         value: "20"
       - key: DATABASE_URL
         fromDatabase:
-          name: mystos-db
+          name: stonegate-db
           property: connectionString
       - key: API_BASE_URL
         sync: false
       - key: ADMIN_API_KEY
+        sync: false
+      - key: NEXT_PUBLIC_SITE_URL
         sync: false
       - key: APPOINTMENT_TIMEZONE
         sync: false
@@ -117,6 +115,8 @@ services:
         sync: false
       - key: GOOGLE_CALENDAR_ID
         sync: false
+      - key: GOOGLE_CALENDAR_WEBHOOK_URL
+        sync: false
       - key: GA4_MEASUREMENT_ID
         sync: false
       - key: GA4_API_SECRET
@@ -140,16 +140,16 @@ services:
         - pnpm-lock.yaml
         - turbo.json
   - type: redis
-    name: myst-redis
+    name: stonegate-redis
     plan: starter
     region: virginia
     ipAllowList:
       - source: 0.0.0.0/0
         description: Allow all Render services (adjust as needed)
 databases:
-  - name: mystos-db
+  - name: stonegate-db
     plan: basic-1gb
     region: virginia
-    databaseName: mystos
-    user: myst
+    databaseName: stonegate
+    user: stonegate
     ipAllowList: []

@@ -7,7 +7,7 @@
 
 ## Environment
 1. Copy `.env.example` to `.env` and fill in values.
-2. Set `DATABASE_URL` to your local connection string, for example `postgres://myst:myst@localhost:5432/mystos`.
+2. Set `DATABASE_URL` to your local connection string, for example `postgres://stonegate:stonegate@localhost:5432/stonegate`.
 3. When running the API locally, set `NEXT_PUBLIC_API_BASE_URL` (site) and `API_BASE_URL` (server actions) to `http://localhost:3001`.
 4. Provide `ADMIN_API_KEY`; this key gates the appointments API and the `/admin/estimates` board.
 5. Adjust `APPOINTMENT_TIMEZONE` (defaults to `America/New_York`) if the crew operates in a different locale.

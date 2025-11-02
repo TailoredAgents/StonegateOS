@@ -2,7 +2,7 @@ import { test, expect } from "../test";
 
 const heroHeading = /junk removal that clears clutter fast and responsibly/i;
 
-test.describe("MystOS smoke", () => {
+test.describe("Stonegate smoke", () => {
   test("home hero renders call-to-action", async ({ page }) => {
     await test.step("Navigate to home page", async () => {
       await page.goto("/");

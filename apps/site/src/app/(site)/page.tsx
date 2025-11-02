@@ -111,7 +111,7 @@ export default function HomePage() {
                     >
                       <Image
                         src={tile.beforeImage}
-                        alt={`${tile.title} before Myst exterior cleaning`}
+                        alt={`${tile.title} before Stonegate service`}
                         fill
                         className="object-cover"
                         sizes="(min-width: 1280px) 400px, (min-width: 768px) 50vw, 100vw"

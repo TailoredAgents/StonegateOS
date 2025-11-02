@@ -69,7 +69,7 @@ test.describe("Lead Intake Journey", () => {
       const confirmationSms = await waitForTwilioMessage(
         (message) => message.to === phoneE164 && message.body.toLowerCase().includes("estimate")
       );
-      expect(confirmationSms.body).toContain("Myst");
+      expect(confirmationSms.body).toContain("Stonegate");
 
       // No-op: rely on unique email/phone per test instead of clearing shared inboxes.
     });
