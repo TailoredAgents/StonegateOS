@@ -139,13 +139,6 @@ services:
         - package.json
         - pnpm-lock.yaml
         - turbo.json
-  - type: redis
-    name: stonegate-redis
-    plan: starter
-    region: virginia
-    ipAllowList:
-      - source: 0.0.0.0/0
-        description: Allow all Render services (adjust as needed)
 databases:
   - name: stonegate-db
     plan: basic-1gb
