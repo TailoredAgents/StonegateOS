@@ -137,11 +137,11 @@ export function TeamChatClient() {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Type a question…"
+                placeholder="Type a question..."
                 className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
               <Button type="submit" size="sm" disabled={isSending}>
-                {isSending ? "Sending…" : "Send"}
+                {isSending ? "Sending..." : "Send"}
               </Button>
             </form>
           </div>
