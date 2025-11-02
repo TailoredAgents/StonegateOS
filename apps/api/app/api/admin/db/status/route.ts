@@ -14,14 +14,14 @@ export async function GET(request: NextRequest) {
     const tablesRes = await db.execute(
       sql`select table_name from information_schema.tables where table_schema='public' order by table_name`
     );
-    const tables = Array.isArray(tablesRes.rows)
-      ? tablesRes.rows.map((r: any) => r.table_name)
+    const tables = Array.isArray(tablesRes)
+      ? tablesRes.map((r: any) => r.table_name)
       : [];
 
     let migrations = 0;
     try {
       const migRes = await db.execute(sql`select count(*)::int as cnt from drizzle.__drizzle_migrations`);
-      const row = Array.isArray(migRes.rows) && migRes.rows[0] ? (migRes.rows[0] as any) : null;
+      const row = Array.isArray(migRes) && migRes[0] ? (migRes[0] as any) : null;
       migrations = Number(row?.cnt ?? 0);
     } catch {
       migrations = 0;
