@@ -13,7 +13,14 @@ import { DEFAULT_LEAD_SERVICE_OPTIONS } from "@/lib/lead-services";
 
 // Junk removal hero/gallery assets can be added under /images/services
 
-const resultTiles = [
+type ResultTile = {
+  title: string;
+  description: string;
+  afterImage: string;
+  beforeImage?: string;
+};
+
+const resultTiles: ResultTile[] = [
   {
     title: "Garage Cleanout",
     description: "Boxes, old furniture, and junk cleared in one scheduled visit.",
