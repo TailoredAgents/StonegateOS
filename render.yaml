@@ -144,7 +144,7 @@ services:
         - package.json
         - pnpm-lock.yaml
         - turbo.json
-  - type: background_worker
+  - type: worker
     name: stonegate-outbox-worker
     env: node
     plan: starter
