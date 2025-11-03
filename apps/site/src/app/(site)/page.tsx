@@ -38,17 +38,6 @@ const resultTiles: ResultTile[] = [
   }
 ];
 
-// Correct garbled apostrophes in Alyssa's testimonial without touching the original literal
-const testimonialsFixed = testimonials.map((t) =>
-  t.name === "Alyssa K."
-    ? {
-        ...t,
-        quote:
-          "Text updates, polite crew, and quick yard debris removal. Couldn't be easier."
-      }
-    : t
-);
-
 const testimonials = [
   {
     quote: "They cleared our garage in under two hours and swept up after. Pricing matched the estimate.",
@@ -66,6 +55,17 @@ const testimonials = [
     location: "Roswell"
   }
 ];
+
+// Correct garbled apostrophes in Alyssa's testimonial without touching the original literal
+const testimonialsFixed = testimonials.map((t) =>
+  t.name === "Alyssa K."
+    ? {
+        ...t,
+        quote:
+          "Text updates, polite crew, and quick yard debris removal. Couldn't be easier."
+      }
+    : t
+);
 
 const stats = [
   { label: "Projects", value: "1,200+", secondary: "Completed across North Metro Atlanta" },
