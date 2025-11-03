@@ -29,7 +29,7 @@ const resultTiles: ResultTile[] = [
   {
     title: "Appliance & Furniture Pickup",
     description: "Refrigerators, washers, and sofas hauled without scuffs or mess.",
-    afterImage: "/images/services/junk-furniture.jpg"
+    afterImage: "/images/services/Junkremoval.png"
   },
   {
     title: "Yard & Debris Removal",
