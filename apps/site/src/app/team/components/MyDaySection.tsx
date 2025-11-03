@@ -1,4 +1,4 @@
-import React, { type ReactElement } from "react";
+﻿import React, { type ReactElement } from "react";
 import { availabilityWindows, zones } from "@myst-os/pricing/src/config/defaults";
 import { CopyButton } from "@/components/CopyButton";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -62,7 +62,7 @@ export async function MyDaySection(): Promise<ReactElement> {
                 Confirmed
               </span>
               <span>{fmtTime(a.startAt)}</span>
-              <span>•</span>
+              <span>â€¢</span>
               <span>
                 {a.services[0] ?? "Junk removal"}
                 {a.services.length > 1 ? ` +${a.services.length - 1}` : ""}
