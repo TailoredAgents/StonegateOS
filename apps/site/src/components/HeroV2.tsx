@@ -82,7 +82,7 @@ export function HeroV2({ className, variant = "lean" }: { className?: string; va
               className="w-full justify-center border border-neutral-300/70 text-primary-800 sm:w-auto"
               onClick={handleCall}
             >
-              <a href="tel:14044453408">Call (404) 445-3408</a>
+              <a href="tel:16785417725">Call (678) 541-7725</a>
             </Button>
             {isLean ? null : (
               <Button
@@ -92,7 +92,7 @@ export function HeroV2({ className, variant = "lean" }: { className?: string; va
                 className="w-full justify-center border border-neutral-300/70 text-primary-800 sm:w-auto"
                 onClick={handleText}
               >
-                <a href="sms:14044453408">Text Us</a>
+                <a href="sms:16785417725">Text Us</a>
               </Button>
             )}
           </div>

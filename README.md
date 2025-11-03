@@ -109,7 +109,7 @@ Update these when details are final:
 
 Placeholders currently in use:
 - Email: `austin@stonegatejunkremoval.com`
-- Phone: `(404) 445-3408`
+- Phone: `(678) 541-7725`
 - Domain: `https://stonegatejunkremoval.com`
 Replace in content/components once finalized.
 

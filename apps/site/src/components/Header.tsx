@@ -130,7 +130,7 @@ export function Header() {
               size="lg"
               className="w-full border border-neutral-300/70 text-primary-800 hover:border-primary-300"
             >
-              <a href="tel:14044453408">Call (404) 445-3408</a>
+              <a href="tel:16785417725">Call (678) 541-7725</a>
             </Button>
           </div>
         </div>

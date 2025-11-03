@@ -21,14 +21,14 @@ export function StickyCtaBar({ className }: StickyCtaBarProps) {
           variant="ghost"
           className="flex-1 min-h-[48px] rounded-md border border-neutral-300/70 text-base font-semibold text-primary-800 hover:border-primary-300"
         >
-          <a href="tel:14044453408">Call</a>
+          <a href="tel:16785417725">Call</a>
         </Button>
         <Button
           asChild
           variant="ghost"
           className="flex-1 min-h-[48px] rounded-md border border-neutral-300/70 text-base font-semibold text-primary-800 hover:border-primary-300"
         >
-          <a href="sms:14044453408">Text</a>
+          <a href="sms:16785417725">Text</a>
         </Button>
         <Button asChild className="flex-1 min-h-[48px] rounded-md text-base font-semibold">
           <Link href="#schedule-estimate">Schedule Estimate</Link>
