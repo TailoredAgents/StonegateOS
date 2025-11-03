@@ -200,18 +200,7 @@ export default function HomePage() {
         </div>
       </Section>
 
-      <Section>
-        <div className="grid gap-6">
-          <div>
-            <h2 className="font-display text-headline text-primary-800">Why Stonegate?</h2>
-            <ul className="mt-3 space-y-2 text-body text-neutral-600">
-              <li>- Careful in-home handling and floor protection.</li>
-              <li>- Responsible disposal and recycling whenever possible.</li>
-              <li>- Same-day and next-day availability.</li>
-            </ul>
-          </div>
-        </div>
-      </Section>
+      {/* Removed "Why Stonegate?" section per request */}
 
       <Section>
         <div className="grid gap-6">
