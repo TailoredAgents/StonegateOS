@@ -34,7 +34,7 @@ const resultTiles: ResultTile[] = [
   {
     title: "Yard & Debris Removal",
     description: "Storm brush and light construction debris responsibly disposed.",
-    afterImage: "/images/services/junk-yard.jpg"
+    afterImage: "/images/services/Yarddebris.png"
   }
 ];
 
