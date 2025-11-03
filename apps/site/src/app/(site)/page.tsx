@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { allAreas, allPages, allServices } from "contentlayer/generated";
 import { notFound } from "next/navigation";
-import { Button, Card, Section, Stat, Testimonials } from "@myst-os/ui";
+import { BeforeAfterSlider, Button, Card, Section, Stat, Testimonials } from "@myst-os/ui";
 import { HeroV2 } from "@/components/HeroV2";
 import { LeadForm } from "@/components/LeadForm";
 import { MdxContent } from "@/components/MdxContent";
@@ -210,6 +210,22 @@ export default function HomePage() {
               <li>- Same-day and next-day availability.</li>
             </ul>
           </div>
+        </div>
+      </Section>
+
+      <Section>
+        <div className="grid gap-6">
+          <div>
+            <h2 className="font-display text-headline text-primary-800">See the Stonegate difference</h2>
+            <p className="mt-3 text-body text-neutral-600">
+              Slide to compare a real before-and-after result.
+            </p>
+          </div>
+          <BeforeAfterSlider
+            beforeImage="/images/gallery/showcase/garage_before_aligned_16x9_1080p.jpg"
+            afterImage="/images/gallery/showcase/garage_after_aligned_16x9_1080p.jpg"
+            alt="Garage cleanout transformation"
+          />
         </div>
       </Section>
 
