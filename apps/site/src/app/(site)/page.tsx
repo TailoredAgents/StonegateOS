@@ -24,7 +24,7 @@ const resultTiles: ResultTile[] = [
   {
     title: "Garage Cleanout",
     description: "Boxes, old furniture, and junk cleared in one scheduled visit.",
-    afterImage: "/images/gallery/showcase/garage_before_aligned_16x9_1080p.jpg"
+    afterImage: "/images/gallery/showcase/garage_after_aligned_16x9_1080p.jpg"
   },
   {
     title: "Appliance & Furniture Pickup",
