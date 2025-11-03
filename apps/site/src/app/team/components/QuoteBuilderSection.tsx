@@ -30,14 +30,23 @@ export async function QuoteBuilderSection({ initialContactId }: { initialContact
     }))
   }));
 
-  const serviceOptions: QuoteBuilderServiceOption[] = serviceRates.map((service) => ({
-    id: service.service,
-    label: service.label,
-    description: service.description ?? null,
-    allowCustomPrice: service.service !== "driveway",
-    autoPricingNote:
-      service.service === "driveway" ? "Automatically calculated from surface area at $0.14 per sq ft." : null
-  }));
+  const junkOnly = new Set([
+    "single-item",
+    "furniture",
+    "appliances",
+    "yard-waste",
+    "construction-debris",
+    "hot-tub"
+  ]);
+  const serviceOptions: QuoteBuilderServiceOption[] = serviceRates
+    .filter((svc) => junkOnly.has(svc.service))
+    .map((service) => ({
+      id: service.service,
+      label: service.label,
+      description: service.description ?? null,
+      allowCustomPrice: true,
+      autoPricingNote: null
+    }));
 
   const zoneOptions: QuoteBuilderZoneOption[] = zones.map((zone) => ({
     id: zone.id,

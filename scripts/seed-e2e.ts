@@ -64,7 +64,17 @@ async function seedBaseline(db: DbModule, pricing: PricingModule, defaults: Pric
     outboxEvents
   } = db;
 
-  const primaryService = defaults.defaultPricingContext.services[0]?.service ?? "house-wash";
+  const preferred = [
+    "furniture",
+    "single-item",
+    "appliances",
+    "yard-waste",
+    "construction-debris",
+    "hot-tub"
+  ];
+  const primaryService =
+    defaults.defaultPricingContext.services.find((s) => preferred.includes(s.service))?.service ??
+    "furniture";
   const zoneId = defaults.defaultPricingContext.zone.id;
 
   const runId = process.env["E2E_RUN_ID"] ?? `seed-${Date.now().toString(36)}`;
