@@ -41,6 +41,44 @@ export const serviceRates: ServiceBaseRate[] = [
     pricePerSquareFoot: 0.18,
     minimumSquareFootage: 1200
   },
+  // Junk removal catalog (additive; keep legacy wash services for compatibility)
+  {
+    service: "single-item",
+    label: "Single Item Pickup",
+    description: "Mattress, TV, or small furniture hauled curbside.",
+    flatRate: 95,
+    basePrice: 95
+  },
+  {
+    service: "furniture",
+    label: "Furniture Removal",
+    description: "Sofas, dressers, desks, and more.",
+    basePrice: 180
+  },
+  {
+    service: "appliances",
+    label: "Appliance Removal",
+    description: "Refrigerators, washers, dryers; freon fees may apply.",
+    basePrice: 150
+  },
+  {
+    service: "yard-waste",
+    label: "Yard Waste & Debris",
+    description: "Brush, branches, and bagged leaves.",
+    basePrice: 140
+  },
+  {
+    service: "construction-debris",
+    label: "Construction Debris",
+    description: "Renovation leftovers and materials.",
+    basePrice: 220
+  },
+  {
+    service: "hot-tub",
+    label: "Hot Tub Removal",
+    description: "Cut-up and haul away.",
+    basePrice: 450
+  },
   {
     service: "driveway",
     label: "Driveway Degrease",

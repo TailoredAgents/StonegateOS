@@ -4,7 +4,14 @@ export type ServiceCategory =
   | "roof"
   | "deck"
   | "gutter"
-  | "commercial";
+  | "commercial"
+  // Junk removal catalog (non-breaking additions)
+  | "single-item"
+  | "furniture"
+  | "appliances"
+  | "yard-waste"
+  | "construction-debris"
+  | "hot-tub";
 
 export type ZoneTier = "core" | "extended" | "premium";
 
