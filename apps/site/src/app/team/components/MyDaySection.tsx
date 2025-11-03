@@ -64,7 +64,7 @@ export async function MyDaySection(): Promise<ReactElement> {
               <span>{fmtTime(a.startAt)}</span>
               <span>•</span>
               <span>
-                {a.services[0] ?? "Exterior cleaning"}
+                {a.services[0] ?? "Junk removal"}
                 {a.services.length > 1 ? ` +${a.services.length - 1}` : ""}
               </span>
             </div>

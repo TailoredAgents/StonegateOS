@@ -164,7 +164,7 @@ export default async function PublicQuotePage({
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">
           Stonegate Junk Removal
         </p>
-        <h1 className="text-3xl font-semibold text-primary-900">Your exterior cleaning quote</h1>
+        <h1 className="text-3xl font-semibold text-primary-900">Your junk removal quote</h1>
         <div className="flex flex-wrap items-center gap-2 text-sm text-neutral-500">
           <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${statusTone(quote.status)}`}>
             {statusLabel(quote.status)}
@@ -286,7 +286,7 @@ export default async function PublicQuotePage({
       <footer className="mt-auto flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
         <span>Stonegate Junk Removal • Licensed & insured • Make-It-Right Guarantee</span>
         <Link href="/" className="text-accent-600 hover:underline">
-          Back to mystwashing.com
+          Back to homepage
         </Link>
       </footer>
     </main>

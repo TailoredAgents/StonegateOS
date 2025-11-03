@@ -15,7 +15,7 @@ const TEAM_SUGGESTIONS: string[] = [
 function fallbackResponse(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("schedule"))
-    return "Today's run: morning driveway degrease, mid-day deck refresh, late afternoon whole-home soft wash. Keep pre-rinse gear ready.";
+    return "Today's run: morning appliance pickup, mid-day garage cleanout, late afternoon curbside furniture haul. Keep tie-downs and dollies ready.";
   if (m.includes("follow-up") || m.includes("text"))
     return "Example follow-up: Thanks for having us out today! Let me know if you have questions about the quote.";
   if (m.includes("task") || m.includes("pipeline"))

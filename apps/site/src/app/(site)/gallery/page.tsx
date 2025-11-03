@@ -10,7 +10,7 @@ export const metadata = createPageMetadata("gallery");
 const galleryItems = [
   {
     src: "/images/gallery/showcase/BrickWall_beforeafter_16x9.png",
-    alt: "Before and after of a red brick wall revived with soft washing",
+    alt: "Before and after cleanup of a brick area with debris removed",
     caption: "Brick facade revival in Downtown Woodstock"
   },
   {
@@ -20,7 +20,7 @@ const galleryItems = [
   },
   {
     src: "/images/gallery/showcase/home-after.png",
-    alt: "Front elevation of a home after soft wash and driveway cleaning",
+    alt: "Front elevation of a home after junk removal with a clear driveway and entry",
     caption: "Full property glow-up in Bridgemill"
   },
   {
