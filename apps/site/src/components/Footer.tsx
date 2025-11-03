@@ -45,10 +45,10 @@ export function Footer() {
               </li>
               <li>
                 <a
-                  href="mailto:info@stonegatejunkremoval.com"
+                  href="mailto:austin@stonegatejunkremoval.com"
                   className="text-neutral-600 hover:text-primary-700"
                 >
-                  info@stonegatejunkremoval.com
+                  austin@stonegatejunkremoval.com
                 </a>
               </li>
             </ul>

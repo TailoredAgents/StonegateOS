@@ -108,7 +108,7 @@ Update these when details are final:
 - Logo: swap `/images/brand/Myst_logo.png` with Stonegate logo and update alt text if filename changes.
 
 Placeholders currently in use:
-- Email: `info@stonegatejunkremoval.com`
+- Email: `austin@stonegatejunkremoval.com`
 - Phone: `(404) 445-3408`
 - Domain: `https://stonegatejunkremoval.com`
 Replace in content/components once finalized.
