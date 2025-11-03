@@ -146,40 +146,7 @@ export async function EstimatesSection(): Promise<ReactElement> {
                           ))}
                         </select>
                       </label>
-                      <label className="flex flex-col gap-1">
-                        <span>General surface area (sq ft)</span>
-                        <input type="number" name="surfaceArea" min="0" step="1" placeholder="Optional" className="rounded-md border border-neutral-300 px-2 py-1" />
-                      </label>
-                      <div className="space-y-2 rounded-md border border-neutral-200 bg-neutral-50 p-3">
-                        <span className="text-xs font-semibold text-neutral-700">Concrete surfaces (optional)</span>
-                        {[1, 2, 3].map((index) => (
-                          <div key={index} className="flex flex-col gap-2 sm:flex-row">
-                            <select
-                              name={`concreteSurface${index}Kind`}
-                              defaultValue=""
-                              className="rounded-md border border-neutral-300 px-2 py-1 text-xs text-neutral-700"
-                            >
-                              <option value="">Select surface</option>
-                              <option value="driveway">Driveway</option>
-                              <option value="deck">Deck/Patio</option>
-                              <option value="other">Other</option>
-                            </select>
-                            <input
-                              name={`concreteSurface${index}Sqft`}
-                              type="number"
-                              min="0"
-                              step="1"
-                              placeholder="Sq ft"
-                              className="rounded-md border border-neutral-300 px-2 py-1 text-xs"
-                            />
-                          </div>
-                        ))}
-                        <p className="text-[11px] text-neutral-500">Priced automatically at $0.14 per sq ft.</p>
-                      </div>
-                      <label className="inline-flex items-center gap-2 text-xs text-neutral-700">
-                        <input type="checkbox" name="applyBundles" defaultChecked className="rounded border-neutral-300" />
-                        Apply bundle discounts
-                      </label>
+                      {/* Removed surface area, concrete inputs, and bundle toggle for junk removal */}
                       <label className="flex flex-col gap-1">
                         <span>Notes</span>
                         <textarea name="notes" rows={3} placeholder="Optional quote notes" className="rounded-md border border-neutral-300 px-2 py-1"></textarea>
