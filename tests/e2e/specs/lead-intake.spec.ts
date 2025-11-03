@@ -24,8 +24,8 @@ test.describe("Lead Intake Journey", () => {
       const formAnchor = page.locator("#schedule-estimate");
       await formAnchor.scrollIntoViewIfNeeded();
 
-      await page.getByLabel("Whole Home Soft Wash").check();
-      await page.getByLabel("Driveway & Walkway").check();
+      await page.getByLabel("Furniture Removal").check();
+      await page.getByLabel("Yard Waste & Debris").check();
 
       await page.getByLabel("Service address").fill("123 Lead Intake Lane");
       await page.getByLabel("City").fill("Atlanta");
@@ -52,7 +52,7 @@ test.describe("Lead Intake Journey", () => {
     await test.step("Verify DB + outbox", async () => {
       await drainOutbox(10);
       const record = await waitFor(() => findLeadByEmail(email), { description: "lead in database" });
-      expect(record.services).toEqual(expect.arrayContaining(["house-wash", "driveway"]));
+      expect(record.services).toEqual(expect.arrayContaining(["furniture", "yard-waste"]));
       expect(record.appointmentId).toBeTruthy();
 
       const events = await getOutboxEventsByLeadId(record.leadId);

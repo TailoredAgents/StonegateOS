@@ -20,7 +20,7 @@ export function buildLeadIntakePayload(overrides: LeadIntakeOptions = {}) {
   const defaultAlternate = new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   return {
-    services: overrides.services ?? ["house-wash"],
+    services: overrides.services ?? ["furniture"],
     name: overrides.name ?? "Playwright Lead",
     phone: overrides.phone ?? "(404) 555-0100",
     email: overrides.email ?? "playwright@mystos.test",

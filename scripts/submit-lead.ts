@@ -53,7 +53,7 @@ async function main() {
   const { POST, getDb, contacts, properties, leads, outboxEvents } = await loadModules();
 
   const payload = {
-    service: "house-wash",
+    service: "furniture",
     name: "CLI Test",
     phone: "404-555-0123",
     email: "cli-test@example.com",

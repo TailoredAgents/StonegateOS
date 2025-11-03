@@ -1,4 +1,4 @@
-export type ServiceCategory = "house-wash" | "driveway" | "roof" | "deck" | "gutter" | "commercial";
+export type ServiceCategory = "house-wash" | "driveway" | "roof" | "deck" | "gutter" | "commercial" | "single-item" | "furniture" | "appliances" | "yard-waste" | "construction-debris" | "hot-tub";
 export type ZoneTier = "core" | "extended" | "premium";
 export interface ZoneConfig {
     id: string;
@@ -52,6 +52,11 @@ export interface WeeklyAvailability {
         endHour: number;
     };
 }
+export type ConcreteSurfaceKind = "driveway" | "deck" | "other";
+export interface ConcreteSurfaceInput {
+    kind: ConcreteSurfaceKind;
+    squareFeet: number;
+}
 export type LineItemCategory = "service" | "add-on" | "travel" | "discount" | "deposit" | "fee" | "other";
 export interface QuoteRequestInput {
     zoneId: string;
@@ -60,6 +65,8 @@ export interface QuoteRequestInput {
     selectedAddOns?: string[];
     applyBundles?: boolean;
     depositRate?: number;
+    serviceOverrides?: Partial<Record<ServiceCategory, number>>;
+    concreteSurfaces?: ConcreteSurfaceInput[];
 }
 export interface LineItem {
     id: string;

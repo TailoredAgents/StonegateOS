@@ -26,7 +26,7 @@ test.describe("Quote lifecycle journey", () => {
       await api.post(
         "/api/web/lead-intake",
         {
-          services: ["house-wash"],
+          services: ["furniture"],
           name: "Casey Quote",
           phone: phoneDisplay,
           email: contactEmail,
@@ -61,7 +61,7 @@ test.describe("Quote lifecycle journey", () => {
         contactId: leadRecord.contactId,
         propertyId: leadRecord.propertyId,
         zoneId: "zone-core",
-        selectedServices: ["house-wash"],
+        selectedServices: ["furniture"],
         applyBundles: true,
         notes: "Playwright automated quote scenario."
       });

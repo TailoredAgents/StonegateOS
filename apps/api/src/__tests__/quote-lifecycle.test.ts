@@ -121,7 +121,7 @@ describeOrSkip("Quote lifecycle integration", () => {
       contactId,
       propertyId,
       zoneId: "zone-core",
-      selectedServices: ["house-wash"],
+      selectedServices: ["furniture"],
       selectedAddOns: [],
       applyBundles: true
     };
@@ -180,7 +180,7 @@ describeOrSkip("Quote lifecycle integration", () => {
       throw new Error("Expected quote sent notification payload");
     }
     expect(sentPayload.quoteId).toBe(quoteId);
-    expect(sentPayload.services).toEqual(expect.arrayContaining<string>(["house-wash"]));
+    expect(sentPayload.services).toEqual(expect.arrayContaining<string>(["furniture"]));
     const decisionRequest = {
       json: () => Promise.resolve({ decision: "accepted" }),
       headers: new Headers()
