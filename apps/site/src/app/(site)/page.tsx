@@ -241,7 +241,7 @@ export default function HomePage() {
             <Link href="/reviews">Read reviews</Link>
           </Button>
         </div>
-        <Testimonials items={testimonialsFixed} />
+        <Testimonials items={testimonials} />
       </Section>
 
       <Section>
