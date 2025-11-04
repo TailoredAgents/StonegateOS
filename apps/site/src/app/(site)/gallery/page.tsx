@@ -9,29 +9,14 @@ export const metadata = createPageMetadata("gallery");
 
 const galleryItems = [
   {
-    src: "/images/gallery/showcase/BrickWall_beforeafter_16x9.png",
-    alt: "Before and after cleanup of a brick area with debris removed",
-    caption: "Brick facade revival in Downtown Woodstock"
+    src: "/images/gallery/garage_before_after_split_1080p.jpg",
+    alt: "Before and after garage cleanout with debris removed and floor swept",
+    caption: "Garage cleanout — before and after"
   },
   {
-    src: "/images/gallery/showcase/Sidewalk_beforeafter_16x9.png",
-    alt: "Before and after of sidewalk cleaned free of clay and rust stains",
-    caption: "Clay-stained sidewalk restored near Towne Lake"
-  },
-  {
-    src: "/images/gallery/showcase/home-after.png",
-    alt: "Front elevation of a home after junk removal with a clear driveway and entry",
-    caption: "Full property glow-up in Bridgemill"
-  },
-  {
-    src: "/images/gallery/showcase/commercial-after.png",
-    alt: "Clean commercial service entry for Audi Atlanta",
-    caption: "After-hours exterior refresh for Audi Atlanta"
-  },
-  {
-    src: "/images/gallery/showcase/after.png",
-    alt: "Driveway and entryway after junk removal and cleanup",
-    caption: "Driveway decontamination in Milton"
+    src: "/images/gallery/trailer_16x9.png",
+    alt: "Stonegate 7x16 dumpster trailer ready for junk removal service",
+    caption: "7x16 dumpster trailer — ready for your pickup"
   }
 ];
 
