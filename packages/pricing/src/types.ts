@@ -11,7 +11,9 @@ export type ServiceCategory =
   | "appliances"
   | "yard-waste"
   | "construction-debris"
-  | "hot-tub";
+  | "hot-tub"
+  // Generic catch-all for custom items
+  | "other";
 
 export type ZoneTier = "core" | "extended" | "premium";
 

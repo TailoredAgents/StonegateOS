@@ -79,6 +79,13 @@ export const serviceRates: ServiceBaseRate[] = [
     description: "Cut-up and haul away.",
     basePrice: 450
   },
+  // Custom line item (priced manually by team)
+  {
+    service: "other",
+    label: "Other",
+    description: "Custom service or item not listed",
+    basePrice: 0
+  },
   {
     service: "driveway",
     label: "Driveway Degrease",

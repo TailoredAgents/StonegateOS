@@ -36,7 +36,8 @@ export async function QuoteBuilderSection({ initialContactId }: { initialContact
     "appliances",
     "yard-waste",
     "construction-debris",
-    "hot-tub"
+    "hot-tub",
+    "other"
   ]);
   const serviceOptions: QuoteBuilderServiceOption[] = serviceRates
     .filter((svc) => junkOnly.has(svc.service))
