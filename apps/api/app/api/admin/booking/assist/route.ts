@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, gte, lte } from "drizzle-orm";
-import { getDb, appointments } from "@/db";
+import { getDb, appointments, properties } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 
 type SuggestRequest = {
@@ -60,9 +60,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       id: appointments.id,
       startAt: appointments.startAt,
       durationMinutes: appointments.durationMinutes,
-      travelBufferMinutes: appointments.travelBufferMinutes
+      travelBufferMinutes: appointments.travelBufferMinutes,
+      city: properties.city,
+      state: properties.state
     })
     .from(appointments)
+    .leftJoin(properties, appointments.propertyId.eq(properties.id))
     .where(and(gte(appointments.startAt, windowStart), lte(appointments.startAt, windowEnd)));
 
   const blocks = existing
@@ -70,12 +73,28 @@ export async function POST(request: NextRequest): Promise<Response> {
     .map((row) => {
       const start = row.startAt as Date;
       const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? 0);
-      return { start, end: new Date(start.getTime() + dur * 60_000) };
+      const city = typeof row.city === "string" ? row.city.toLowerCase().trim() : null;
+      const state = typeof row.state === "string" ? row.state.toLowerCase().trim() : null;
+      return { start, end: new Date(start.getTime() + dur * 60_000), city, state };
     });
+
+  // Count how many appointments per day share the same city/state to favor clustering
+  const dayCityCounts = new Map<string, Map<string, number>>();
+  for (const block of blocks) {
+    const dayKey = formatDay(block.start);
+    if (!dayCityCounts.has(dayKey)) dayCityCounts.set(dayKey, new Map());
+    const cityKey = block.city ?? "unknown";
+    const current = dayCityCounts.get(dayKey)!.get(cityKey) ?? 0;
+    dayCityCounts.get(dayKey)!.set(cityKey, current + 1);
+  }
 
   const suggestions: Suggestion[] = [];
   for (let day = 0; day <= windowDays; day++) {
     const base = new Date(now.getTime() + day * 24 * 60 * 60 * 1000);
+    const dayKey = formatDay(base);
+    const dayCounts = dayCityCounts.get(dayKey);
+    const topCount =
+      dayCounts && [...dayCounts.values()].reduce((max, val) => (val > max ? val : max), 0);
     for (let hour = startHour; hour + durationMinutes / 60 <= endHour; hour += 2) {
       const slotStart = new Date(base);
       slotStart.setHours(hour, 0, 0, 0);
@@ -85,15 +104,18 @@ export async function POST(request: NextRequest): Promise<Response> {
       suggestions.push({
         startAt: slotStart.toISOString(),
         endAt: slotEnd.toISOString(),
-        reason: `No conflicts; ${durationMinutes} min slot`
+        reason:
+          topCount && topCount > 0
+            ? `Aligned with ${topCount} nearby appointment(s) on this day`
+            : `No conflicts; ${durationMinutes} min slot`
       });
       if (suggestions.length >= 5) {
-        return NextResponse.json({ ok: true, suggestions } satisfies SuggestResponse);
+        return NextResponse.json({ ok: true, suggestions: sortSuggestions(suggestions) } satisfies SuggestResponse);
       }
     }
   }
 
-  return NextResponse.json({ ok: true, suggestions } satisfies SuggestResponse);
+  return NextResponse.json({ ok: true, suggestions: sortSuggestions(suggestions) } satisfies SuggestResponse);
 }
 
 function conflictsWith(
@@ -106,4 +128,22 @@ function conflictsWith(
 
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
   return aStart < bEnd && bStart < aEnd;
+}
+
+function formatDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function sortSuggestions(list: Suggestion[]): Suggestion[] {
+  return [...list].sort((a, b) => {
+    // Extract counts from reason if present
+    const extractCount = (reason: string): number => {
+      const match = reason.match(/Aligned with (\d+)/i);
+      return match ? Number(match[1]) : 0;
+    };
+    const aCount = extractCount(a.reason);
+    const bCount = extractCount(b.reason);
+    if (aCount !== bCount) return bCount - aCount;
+    return Date.parse(a.startAt) - Date.parse(b.startAt);
+  });
 }
