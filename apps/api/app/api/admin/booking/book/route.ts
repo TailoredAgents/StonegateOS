@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import { getDb, appointments, outboxEvents } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
-import { parseISO } from "date-fns";
+function parseDate(value: string): Date | null {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
 
 type BookRequest = {
   contactId?: string;
@@ -56,8 +59,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "contact_property_and_start_required" }, { status: 400 });
   }
 
-  const startAt = parseISO(startAtIso);
-  if (!(startAt instanceof Date) || Number.isNaN(startAt.getTime())) {
+  const startAt = parseDate(startAtIso);
+  if (!startAt) {
     return NextResponse.json({ error: "invalid_startAt" }, { status: 400 });
   }
 
