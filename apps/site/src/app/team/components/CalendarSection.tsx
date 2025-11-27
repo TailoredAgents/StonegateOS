@@ -3,6 +3,7 @@ import { callAdminApi } from "../lib/api";
 import { BookingAssistant } from "./BookingAssistant";
 import { CalendarGrid } from "./CalendarGrid";
 import { CalendarMonthGrid } from "./CalendarMonthGrid";
+import { CalendarEventDetail } from "./CalendarEventDetail";
 
 type CalendarEvent = {
   id: string;
@@ -71,7 +72,7 @@ function evaluateCalendarHealth(payload: CalendarStatusApiResponse): { tone: "ok
 export async function CalendarSection({
   searchParams
 }: {
-  searchParams?: { addr?: string; city?: string; state?: string; zip?: string; view?: string };
+  searchParams?: { addr?: string; city?: string; state?: string; zip?: string; view?: string; contactId?: string; propertyId?: string };
 }): Promise<React.ReactElement> {
   const [feedRes, statusRes] = await Promise.all([
     callAdminApi("/api/admin/calendar/feed"),
@@ -86,6 +87,9 @@ export async function CalendarSection({
   const statusPayload = statusRes.ok ? ((await statusRes.json()) as CalendarStatusApiResponse) : null;
   const health = statusPayload ? evaluateCalendarHealth(statusPayload) : { tone: "alert", detail: "Status unavailable" };
   const view = searchParams?.view === "month" ? "month" : "week";
+  const allEvents = [...feed.appointments, ...feed.externalEvents];
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
+  const selectedEvent = selectedId ? allEvents.find((evt) => evt.id === selectedId) ?? null : null;
 
   return (
     <section className="space-y-4">
@@ -190,11 +194,13 @@ export async function CalendarSection({
 
       <div className="space-y-4">
         {view === "month" ? (
-          <CalendarMonthGrid events={[...feed.appointments, ...feed.externalEvents]} conflicts={feed.conflicts} />
+          <CalendarMonthGrid events={allEvents} conflicts={feed.conflicts} onSelectEvent={(id) => {}} />
         ) : (
-          <CalendarGrid events={[...feed.appointments, ...feed.externalEvents]} conflicts={feed.conflicts} />
+          <CalendarGrid events={allEvents} conflicts={feed.conflicts} onSelectEvent={(id) => {}} />
         )}
       </div>
+
+      {selectedEvent ? <CalendarEventDetail event={selectedEvent} /> : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <BookingAssistant
@@ -202,6 +208,8 @@ export async function CalendarSection({
           city={searchParams?.city ?? undefined}
           state={searchParams?.state ?? undefined}
           postalCode={searchParams?.zip ?? undefined}
+          contactId={searchParams?.contactId}
+          propertyId={searchParams?.propertyId}
         />
 
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">

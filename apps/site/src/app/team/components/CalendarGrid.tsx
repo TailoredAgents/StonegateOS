@@ -14,11 +14,12 @@ type CalendarEvent = {
 type Props = {
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
+  onSelectEvent?: (id: string) => void;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function CalendarGrid({ events, conflicts }: Props): React.ReactElement {
+export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React.ReactElement {
   const now = new Date();
   const startOfWeek = new Date(now);
   startOfWeek.setDate(now.getDate() - now.getDay()); // Sunday
@@ -57,11 +58,13 @@ export function CalendarGrid({ events, conflicts }: Props): React.ReactElement {
                 bucket
                   .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
                   .map((evt) => (
-                    <div
+                    <button
                       key={evt.id}
                       className={`rounded-lg border px-2 py-1 ${
                         evt.source === "db" ? "border-primary-200 bg-primary-50/70" : "border-slate-200 bg-slate-50"
                       } ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
+                      onClick={() => onSelectEvent?.(evt.id)}
+                      type="button"
                     >
                       <div className="flex items-center gap-1 text-[11px] text-slate-600">
                         <span className="font-semibold text-slate-800">
@@ -83,7 +86,7 @@ export function CalendarGrid({ events, conflicts }: Props): React.ReactElement {
                       </div>
                       <div className="text-xs font-semibold text-slate-900">{evt.title}</div>
                       {evt.address ? <div className="text-[11px] text-slate-500">{evt.address}</div> : null}
-                    </div>
+                    </button>
                   ))
               )}
             </div>

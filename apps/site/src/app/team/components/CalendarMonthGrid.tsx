@@ -14,11 +14,12 @@ type CalendarEvent = {
 type Props = {
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
+  onSelectEvent?: (id: string) => void;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function CalendarMonthGrid({ events, conflicts }: Props): React.ReactElement {
+export function CalendarMonthGrid({ events, conflicts, onSelectEvent }: Props): React.ReactElement {
   const today = new Date();
   const year = today.getFullYear();
   const month = today.getMonth();
@@ -63,16 +64,18 @@ export function CalendarMonthGrid({ events, conflicts }: Props): React.ReactElem
                 bucket
                   .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
                   .map((evt) => (
-                    <div
+                    <button
                       key={evt.id}
                       className={`rounded border px-1 py-0.5 text-[11px] ${
                         evt.source === "db" ? "border-primary-200 bg-primary-50/70" : "border-slate-200 bg-slate-100"
                       } ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
+                      onClick={() => onSelectEvent?.(evt.id)}
+                      type="button"
                     >
                       <span className="font-semibold text-slate-800">{formatTime(evt.start)}</span>{" "}
                       <span className="text-slate-700">{evt.title}</span>
                       {evt.status ? <span className="ml-1 rounded bg-white px-1 text-[10px] uppercase text-primary-700">{evt.status}</span> : null}
-                    </div>
+                    </button>
                   ))
               )}
             </div>

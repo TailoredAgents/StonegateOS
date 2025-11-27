@@ -22,10 +22,13 @@
         "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
         "prepare": "husky install",
         "db:generate": "drizzle-kit generate:pg",
-        "db:migrate": "drizzle-kit migrate",
-        "outbox:worker": "tsx scripts/outbox-worker.ts",
-        "outbox:worker:prod": "NODE_ENV=production tsx scripts/outbox-worker.ts"
-    },
+    "db:migrate": "drizzle-kit migrate",
+    "outbox:worker": "tsx scripts/outbox-worker.ts",
+    "outbox:worker:prod": "NODE_ENV=production tsx scripts/outbox-worker.ts"
+  },
+  "bin": {
+    "geocode:backfill": "tsx scripts/geocode-backfill.ts"
+  },
     "devDependencies": {
         "@commitlint/cli": "^19.5.0",
         "@commitlint/config-conventional": "^19.4.2",

@@ -12,6 +12,8 @@ type Props = {
   city?: string | null;
   state?: string | null;
   postalCode?: string | null;
+  contactId?: string | null;
+  propertyId?: string | null;
 };
 
 export async function BookingAssistant(props: Props): Promise<React.ReactElement> {
@@ -20,6 +22,8 @@ export async function BookingAssistant(props: Props): Promise<React.ReactElement
   if (props.city) payload["city"] = props.city;
   if (props.state) payload["state"] = props.state;
   if (props.postalCode) payload["postalCode"] = props.postalCode;
+  if (props.contactId) payload["contactId"] = props.contactId;
+  if (props.propertyId) payload["propertyId"] = props.propertyId;
 
   const res = await callAdminApi("/api/admin/booking/assist", {
     method: "POST",
@@ -67,6 +71,7 @@ export async function BookingAssistant(props: Props): Promise<React.ReactElement
                   <span className="font-semibold text-slate-700">Contact ID</span>
                   <input
                     name="contactId"
+                    defaultValue={props.contactId ?? ""}
                     required
                     className="rounded border border-slate-200 px-2 py-1"
                     placeholder="Contact ID"
@@ -76,6 +81,7 @@ export async function BookingAssistant(props: Props): Promise<React.ReactElement
                   <span className="font-semibold text-slate-700">Property ID</span>
                   <input
                     name="propertyId"
+                    defaultValue={props.propertyId ?? ""}
                     required
                     className="rounded border border-slate-200 px-2 py-1"
                     placeholder="Property ID"
