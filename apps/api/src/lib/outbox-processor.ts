@@ -1,5 +1,5 @@
 import { asc, eq, isNull } from "drizzle-orm";
-import { getDb, outboxEvents, appointments, leads, contacts, properties, quotes } from "@/db";
+import { getDb, outboxEvents, appointments, leads, contacts, properties, quotes, crmPipeline } from "@/db";
 import type { EstimateNotificationPayload, QuoteNotificationPayload } from "@/lib/notifications";
 import {
   sendEstimateConfirmation,
@@ -26,6 +26,9 @@ export interface ProcessOutboxBatchOptions {
 const APPOINTMENT_STATUS_VALUES = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
 type AppointmentStatus = (typeof APPOINTMENT_STATUS_VALUES)[number];
 const VALID_APPOINTMENT_STATUSES = new Set<string>(APPOINTMENT_STATUS_VALUES);
+
+type PipelineStage = "new" | "contacted" | "qualified" | "quoted" | "won" | "lost";
+const PIPELINE_STAGE_SET = new Set<PipelineStage>(["new", "contacted", "qualified", "quoted", "won", "lost"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -265,6 +268,7 @@ async function buildNotificationPayload(
 
   const payload: EstimateNotificationPayload = {
     leadId: row.leadId ?? "unknown",
+    contactId: row.contactId ?? undefined,
     services,
     contact: {
       name: contactName,
@@ -362,6 +366,7 @@ async function buildQuoteNotificationPayload(
       email: row.contactEmail ?? null,
       phone: row.contactPhoneE164 ?? row.contactPhone ?? null
     },
+    contactId: row.contactId ?? null,
     total,
     depositDue,
     balanceDue,
@@ -369,6 +374,75 @@ async function buildQuoteNotificationPayload(
     expiresAt: row.expiresAt ?? null,
     notes: overrides?.notes ?? null
   };
+}
+
+async function updatePipelineStageForContact(
+  contactId: string | null | undefined,
+  targetStage: PipelineStage,
+  reason: string,
+  meta?: Record<string, unknown>
+): Promise<void> {
+  if (!contactId || !PIPELINE_STAGE_SET.has(targetStage)) {
+    return;
+  }
+
+  try {
+    const db = getDb();
+    const [existing] = await db
+      .select({ stage: crmPipeline.stage })
+      .from(crmPipeline)
+      .where(eq(crmPipeline.contactId, contactId))
+      .limit(1);
+
+    const previousStage = (existing?.stage ?? null) as PipelineStage | null;
+    if (previousStage === targetStage) {
+      return;
+    }
+
+    await db
+      .insert(crmPipeline)
+      .values({ contactId, stage: targetStage })
+      .onConflictDoUpdate({
+        target: crmPipeline.contactId,
+        set: {
+          stage: targetStage,
+          updatedAt: new Date()
+        }
+      });
+
+    await db.insert(outboxEvents).values({
+      type: "pipeline.auto_stage_change",
+      payload: {
+        contactId,
+        fromStage: previousStage,
+        toStage: targetStage,
+        reason,
+        meta
+      }
+    });
+  } catch (error) {
+    console.warn("[pipeline] auto_update_failed", {
+      contactId,
+      targetStage,
+      reason,
+      error: String(error)
+    });
+  }
+}
+
+function mapAppointmentStatusToStage(status: string): PipelineStage {
+  switch (status) {
+    case "confirmed":
+    case "requested":
+      return "qualified";
+    case "completed":
+      return "won";
+    case "no_show":
+    case "canceled":
+      return "lost";
+    default:
+      return "qualified";
+  }
 }
 
 async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" | "skipped"> {
@@ -412,6 +486,12 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
 
       await ensureCalendarEventCreated(notification);
       await sendEstimateConfirmation(notification, "requested");
+      await updatePipelineStageForContact(
+        notification.contactId ?? null,
+        "qualified",
+        "estimate.requested",
+        { appointmentId }
+      );
       return "processed";
     }
 
@@ -435,6 +515,12 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
 
       await syncCalendarEventForReschedule(notification);
       await sendEstimateConfirmation(notification, "rescheduled");
+      await updatePipelineStageForContact(
+        notification.contactId ?? null,
+        "qualified",
+        "estimate.rescheduled",
+        { appointmentId }
+      );
       return "processed";
     }
 
@@ -457,6 +543,12 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       }
 
       await sendQuoteSentNotification(notification);
+      await updatePipelineStageForContact(
+        notification.contactId ?? null,
+        "quoted",
+        "quote.sent",
+        { quoteId }
+      );
       return "processed";
     }
 
@@ -486,6 +578,13 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
         decision,
         source
       });
+      const targetStage: PipelineStage = decision === "accepted" ? "won" : "lost";
+      await updatePipelineStageForContact(
+        notification.contactId ?? null,
+        targetStage,
+        "quote.decision",
+        { quoteId, decision, source }
+      );
       return "processed";
     }
 
@@ -542,6 +641,16 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       }
 
       await sendEstimateConfirmation(notification, "requested");
+      if (notification.contactId) {
+        const targetStage: PipelineStage =
+          event.type === "estimate.status_changed" && typeof payload?.["status"] === "string"
+            ? mapAppointmentStatusToStage(payload["status"] as string)
+            : "qualified";
+        await updatePipelineStageForContact(notification.contactId, targetStage, event.type, {
+          appointmentId: appointment.id,
+          status: payload?.["status"] ?? null
+        });
+      }
       return "processed";
     }
 

@@ -20,6 +20,8 @@ export interface EstimateNotificationPayload {
   services: string[];
   contact: BaseContact;
   property: BaseProperty;
+  contactId?: string;
+  propertyId?: string;
   scheduling: {
     preferredDate: string | null;
     alternateDate: string | null;
@@ -44,6 +46,7 @@ export interface QuoteNotificationPayload {
   quoteId: string;
   services: string[];
   contact: BaseContact;
+  contactId?: string;
   total: number;
   depositDue: number;
   balanceDue: number;
