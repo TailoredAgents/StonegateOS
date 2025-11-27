@@ -2,6 +2,7 @@ import React, { type ReactElement } from "react";
 import { callAdminApi } from "../lib/api";
 import PipelineBoardClient from "./PipelineBoardClient";
 import type { PipelineResponse } from "./pipeline.types";
+import { PipelineAudit } from "./PipelineAudit";
 
 export async function PipelineSection(): Promise<ReactElement> {
   const response = await callAdminApi("/api/admin/crm/pipeline");
@@ -29,6 +30,8 @@ export async function PipelineSection(): Promise<ReactElement> {
       ) : (
         <PipelineBoardClient stages={payload.stages} lanes={payload.lanes} />
       )}
+
+      <PipelineAudit />
     </section>
   );
 }
