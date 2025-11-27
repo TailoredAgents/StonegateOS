@@ -1,7 +1,16 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { inArray, asc, desc, eq } from "drizzle-orm";
-import { getDb, appointments, contacts, properties, leads, appointmentNotes } from "@/db";
+import {
+  getDb,
+  appointments,
+  contacts,
+  properties,
+  leads,
+  appointmentNotes,
+  crmPipeline,
+  quotes
+} from "@/db";
 import { isAdminRequest } from "../web/admin";
 
 const STATUS_OPTIONS = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
@@ -79,6 +88,13 @@ export async function GET(request: NextRequest): Promise<Response> {
   const appointmentIds = baseRows
     .map((row) => row.id)
     .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const contactIds = Array.from(
+    new Set(
+      baseRows
+        .map((row) => row.contactId)
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+    )
+  );
 
   const notesMap = new Map<string, { id: string; body: string; createdAt: string }[]>();
 
@@ -109,10 +125,47 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
   }
 
+  const pipelineMap = new Map<string, string>();
+  if (contactIds.length > 0) {
+    const pipelineRows = await db
+      .select({
+        contactId: crmPipeline.contactId,
+        stage: crmPipeline.stage,
+        updatedAt: crmPipeline.updatedAt
+      })
+      .from(crmPipeline)
+      .where(inArray(crmPipeline.contactId, contactIds));
+    for (const row of pipelineRows) {
+      if (!row.contactId) continue;
+      pipelineMap.set(row.contactId, row.stage ?? "new");
+    }
+  }
+
+  const quoteMap = new Map<string, { status: string; updatedAt: Date }>();
+  if (contactIds.length > 0) {
+    const quoteRows = await db
+      .select({
+        contactId: quotes.contactId,
+        status: quotes.status,
+        updatedAt: quotes.updatedAt
+      })
+      .from(quotes)
+      .where(inArray(quotes.contactId, contactIds))
+      .orderBy(desc(quotes.updatedAt));
+
+    for (const row of quoteRows) {
+      if (!row.contactId) continue;
+      if (quoteMap.has(row.contactId)) continue; // keep most recent
+      quoteMap.set(row.contactId, { status: row.status ?? "pending", updatedAt: row.updatedAt });
+    }
+  }
+
   const appointmentsDto = baseRows.map((row) => {
     const contactName = row.contactFirstName && row.contactLastName
       ? `${row.contactFirstName} ${row.contactLastName}`
       : row.contactFirstName ?? row.contactLastName ?? "Stonegate Customer";
+    const pipelineStage = row.contactId ? pipelineMap.get(row.contactId) ?? null : null;
+    const quoteStatus = row.contactId ? quoteMap.get(row.contactId)?.status ?? null : null;
 
     return {
       id: row.id,
@@ -130,6 +183,8 @@ export async function GET(request: NextRequest): Promise<Response> {
         email: row.contactEmail ?? null,
         phone: row.contactPhoneE164 ?? row.contactPhone ?? null
       },
+      pipelineStage,
+      quoteStatus,
       property: {
         id: row.propertyId ?? "unknown",
         addressLine1: row.addressLine1 ?? "Undisclosed",

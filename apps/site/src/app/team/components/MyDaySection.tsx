@@ -26,6 +26,8 @@ interface AppointmentDto {
     email: string | null;
     phone: string | null;
   };
+  pipelineStage: string | null;
+  quoteStatus: string | null;
   property: {
     id: string | null;
     addressLine1: string;
@@ -89,6 +91,19 @@ export async function MyDaySection(): Promise<ReactElement> {
             </p>
 
             <div className="mt-3 flex flex-wrap gap-2">
+              {a.pipelineStage ? (
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                  Pipeline: {a.pipelineStage}
+                </span>
+              ) : null}
+              {a.quoteStatus ? (
+                <span className="rounded-full bg-primary-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
+                  Quote: {a.quoteStatus}
+                </span>
+              ) : null}
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-2">
               <form action={updateApptStatus}>
                 <input type="hidden" name="appointmentId" value={a.id} />
                 <input type="hidden" name="status" value="completed" />

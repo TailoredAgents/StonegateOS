@@ -17,6 +17,8 @@ interface AppointmentDto {
   contact: { id: string | null; name: string };
   property: { id: string | null; addressLine1: string; city: string; state: string; postalCode: string };
   services: string[];
+  pipelineStage: string | null;
+  quoteStatus: string | null;
   rescheduleToken: string;
 }
 
@@ -56,6 +58,18 @@ export async function EstimatesSection(): Promise<ReactElement> {
                 <p className="text-sm text-neutral-600">
                   {fmtTime(a.startAt)} • {a.contact.name}
                 </p>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                  {a.pipelineStage ? (
+                    <span className="rounded-full bg-neutral-100 px-2 py-0.5 font-semibold text-neutral-700">
+                      Pipeline: {a.pipelineStage}
+                    </span>
+                  ) : null}
+                  {a.quoteStatus ? (
+                    <span className="rounded-full bg-primary-50 px-2 py-0.5 font-semibold text-primary-700">
+                      Quote: {a.quoteStatus}
+                    </span>
+                  ) : null}
+                </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {status === "requested" ? (
                     <>
