@@ -1,9 +1,8 @@
 import React from "react";
 import { callAdminApi } from "../lib/api";
 import { BookingAssistant } from "./BookingAssistant";
-import { CalendarGrid } from "./CalendarGrid";
-import { CalendarMonthGrid } from "./CalendarMonthGrid";
-import { CalendarEventDetail } from "./CalendarEventDetail";
+import { CalendarViewer } from "./CalendarViewer";
+import { evaluateCalendarHealth } from "./calendarStatus";
 
 type CalendarEvent = {
   id: string;
@@ -42,33 +41,6 @@ type CalendarStatusApiResponse = {
   error?: string;
 };
 
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit"
-  }).format(d);
-}
-
-function isConflict(conflicts: Array<{ a: string; b: string }>, id: string): boolean {
-  return conflicts.some((c) => c.a === id || c.b === id);
-}
-
-function evaluateCalendarHealth(payload: CalendarStatusApiResponse): { tone: "ok" | "warn" | "alert" | "idle"; detail: string } {
-  if (!payload.ok) return { tone: "alert", detail: payload.error ?? "Status unavailable" };
-  if (!payload.config.calendarId) return { tone: "idle", detail: "Calendar ID not set" };
-  if (!payload.config.webhookConfigured) return { tone: "warn", detail: "Webhook not configured" };
-  if (!payload.status) return { tone: "warn", detail: "Awaiting first sync" };
-
-  const lastSyncedAt = payload.status.lastSyncedAt ? new Date(payload.status.lastSyncedAt) : null;
-  const staleSync = !lastSyncedAt || Date.now() - lastSyncedAt.getTime() > 3 * 60 * 60 * 1000;
-  if (staleSync) return { tone: "warn", detail: "Sync stale" };
-  return { tone: "ok", detail: "Healthy" };
-}
-
 export async function CalendarSection({
   searchParams
 }: {
@@ -88,8 +60,6 @@ export async function CalendarSection({
   const health = statusPayload ? evaluateCalendarHealth(statusPayload) : { tone: "alert", detail: "Status unavailable" };
   const view = searchParams?.view === "month" ? "month" : "week";
   const allEvents = [...feed.appointments, ...feed.externalEvents];
-  const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  const selectedEvent = selectedId ? allEvents.find((evt) => evt.id === selectedId) ?? null : null;
 
   return (
     <section className="space-y-4">
@@ -97,7 +67,7 @@ export async function CalendarSection({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Calendar</h2>
-            <p className="text-sm text-slate-600">Upcoming appointments with Google Calendar overlay and conflict highlights.</p>
+            <p className="text-sm text-slate-600">Merged view of appointments (source of truth) and Google events.</p>
           </div>
           <div
             className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${
@@ -115,92 +85,19 @@ export async function CalendarSection({
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-base font-semibold text-slate-900">Appointments</h3>
-            <span className="text-xs text-slate-500">{feed.appointments.length} items</span>
-          </div>
-          <ul className="space-y-3">
-            {feed.appointments.map((evt) => (
-              <li key={evt.id} className="rounded-lg border border-slate-200 bg-white/80 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-slate-900">{evt.title}</span>
-                  {evt.status ? (
-                    <span className="rounded-full bg-primary-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
-                      {evt.status}
-                    </span>
-                  ) : null}
-                  {isConflict(feed.conflicts, evt.id) ? (
-                    <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-rose-700">
-                      Conflict
-                    </span>
-                  ) : null}
-                </div>
-                <p className="text-sm text-slate-600">{formatTime(evt.start)} – {formatTime(evt.end)}</p>
-                {evt.address ? <p className="text-xs text-slate-500">{evt.address}</p> : null}
-              </li>
-            ))}
-            {feed.appointments.length === 0 ? (
-              <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">No appointments in window.</li>
-            ) : null}
-          </ul>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-base font-semibold text-slate-900">Google Calendar</h3>
-            <span className="text-xs text-slate-500">{feed.externalEvents.length} items</span>
-          </div>
-          <ul className="space-y-3">
-            {feed.externalEvents.map((evt) => (
-              <li key={evt.id} className="rounded-lg border border-slate-200 bg-white/80 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-slate-900">{evt.title}</span>
-                  {isConflict(feed.conflicts, evt.id) ? (
-                    <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-rose-700">
-                      Conflict
-                    </span>
-                  ) : null}
-                </div>
-                <p className="text-sm text-slate-600">{formatTime(evt.start)} – {formatTime(evt.end)}</p>
-              </li>
-            ))}
-            {feed.externalEvents.length === 0 ? (
-              <li className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">No Google events in window.</li>
-            ) : null}
-          </ul>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-3">
-        <a
-          href="/team?tab=calendar&view=week"
-          className={`rounded-full px-3 py-1 text-xs font-semibold ${
-            view === "week" ? "bg-primary-600 text-white" : "bg-slate-200 text-slate-700"
-          }`}
-        >
-          Week view
-        </a>
-        <a
-          href="/team?tab=calendar&view=month"
-          className={`rounded-full px-3 py-1 text-xs font-semibold ${
-            view === "month" ? "bg-primary-600 text-white" : "bg-slate-200 text-slate-700"
-          }`}
-        >
-          Month view
-        </a>
-      </div>
-
-      <div className="space-y-4">
-        {view === "month" ? (
-          <CalendarMonthGrid events={allEvents} conflicts={feed.conflicts} onSelectEvent={(id) => {}} />
-        ) : (
-          <CalendarGrid events={allEvents} conflicts={feed.conflicts} onSelectEvent={(id) => {}} />
-        )}
-      </div>
-
-      {selectedEvent ? <CalendarEventDetail event={selectedEvent} /> : null}
+      <CalendarViewer
+        initialView={view}
+        events={allEvents}
+        conflicts={feed.conflicts}
+        bookingAddress={{
+          addressLine1: searchParams?.addr ?? undefined,
+          city: searchParams?.city ?? undefined,
+          state: searchParams?.state ?? undefined,
+          postalCode: searchParams?.zip ?? undefined,
+          contactId: searchParams?.contactId,
+          propertyId: searchParams?.propertyId
+        }}
+      />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <BookingAssistant
@@ -253,6 +150,24 @@ export async function CalendarSection({
                 defaultValue={searchParams?.zip ?? ""}
                 className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
                 placeholder="30075"
+              />
+            </label>
+            <label className="block text-sm text-slate-700">
+              Contact ID
+              <input
+                name="contactId"
+                defaultValue={searchParams?.contactId ?? ""}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                placeholder="Contact ID"
+              />
+            </label>
+            <label className="block text-sm text-slate-700">
+              Property ID
+              <input
+                name="propertyId"
+                defaultValue={searchParams?.propertyId ?? ""}
+                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                placeholder="Property ID"
               />
             </label>
             <button
