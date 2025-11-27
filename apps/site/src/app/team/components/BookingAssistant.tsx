@@ -48,11 +48,54 @@ export async function BookingAssistant(props: Props): Promise<React.ReactElement
       ) : (
         <ul className="space-y-2">
           {suggestions.map((slot) => (
-            <li key={slot.startAt} className="rounded-lg border border-slate-200 bg-white/80 p-3">
-              <p className="text-sm font-semibold text-slate-900">
-                {fmt(slot.startAt)} – {fmt(slot.endAt)}
-              </p>
-              <p className="text-xs text-slate-500">{slot.reason}</p>
+            <li key={slot.startAt} className="rounded-lg border border-slate-200 bg-white/80 p-3 space-y-2">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">
+                  {fmt(slot.startAt)} – {fmt(slot.endAt)}
+                </p>
+                <p className="text-xs text-slate-500">{slot.reason}</p>
+              </div>
+              <form
+                action="/api/admin/booking/book"
+                method="post"
+                className="grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs"
+              >
+                <input type="hidden" name="startAt" value={slot.startAt} />
+                <input type="hidden" name="durationMinutes" value="60" />
+                <input type="hidden" name="travelBufferMinutes" value="30" />
+                <label className="flex flex-col gap-1">
+                  <span className="font-semibold text-slate-700">Contact ID</span>
+                  <input
+                    name="contactId"
+                    required
+                    className="rounded border border-slate-200 px-2 py-1"
+                    placeholder="Contact ID"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="font-semibold text-slate-700">Property ID</span>
+                  <input
+                    name="propertyId"
+                    required
+                    className="rounded border border-slate-200 px-2 py-1"
+                    placeholder="Property ID"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="font-semibold text-slate-700">Services (comma separated)</span>
+                  <input
+                    name="services"
+                    className="rounded border border-slate-200 px-2 py-1"
+                    placeholder="e.g. furniture, appliances"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className="mt-1 rounded bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700"
+                >
+                  Book this slot
+                </button>
+              </form>
             </li>
           ))}
         </ul>
