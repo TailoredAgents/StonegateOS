@@ -188,7 +188,7 @@ export default async function TeamPage({
               </div>
             }
           >
-            <CalendarSection />
+            <CalendarSection searchParams={params as any} />
           </React.Suspense>
         ) : null}
 

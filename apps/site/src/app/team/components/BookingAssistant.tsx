@@ -1,4 +1,5 @@
 import React from "react";
+import React from "react";
 import { callAdminApi } from "../lib/api";
 
 type Suggestion = {
@@ -7,10 +8,23 @@ type Suggestion = {
   reason: string;
 };
 
-export async function BookingAssistant(): Promise<React.ReactElement> {
+type Props = {
+  addressLine1?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+};
+
+export async function BookingAssistant(props: Props): Promise<React.ReactElement> {
+  const payload: Record<string, unknown> = {};
+  if (props.addressLine1) payload["addressLine1"] = props.addressLine1;
+  if (props.city) payload["city"] = props.city;
+  if (props.state) payload["state"] = props.state;
+  if (props.postalCode) payload["postalCode"] = props.postalCode;
+
   const res = await callAdminApi("/api/admin/booking/assist", {
     method: "POST",
-    body: JSON.stringify({})
+    body: JSON.stringify(payload)
   });
 
   if (!res.ok) {
