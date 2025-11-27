@@ -74,7 +74,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       lng: properties.lng
     })
     .from(appointments)
-    .leftJoin(properties, appointments.propertyId.eq(properties.id))
+    .leftJoin(properties, eq(appointments.propertyId, properties.id))
     .where(and(gte(appointments.startAt, windowStart), lte(appointments.startAt, windowEnd)));
 
   const blocks = existing
