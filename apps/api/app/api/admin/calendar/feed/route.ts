@@ -136,11 +136,15 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
   }
 
   const conflicts: Array<{ a: string; b: string }> = [];
-  const allEvents = [...appointmentsEvents, ...externalEvents].filter(Boolean) as CalendarEvent[];
+  const allEvents: CalendarEvent[] = [...appointmentsEvents, ...externalEvents];
   for (let i = 0; i < allEvents.length; i++) {
+    const a = allEvents[i];
+    if (!a) continue;
     for (let j = i + 1; j < allEvents.length; j++) {
-      if (overlaps(allEvents[i], allEvents[j])) {
-        conflicts.push({ a: allEvents[i].id, b: allEvents[j].id });
+      const b = allEvents[j];
+      if (!b) continue;
+      if (overlaps(a, b)) {
+        conflicts.push({ a: a.id, b: b.id });
       }
     }
   }
