@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, gte, lte } from "drizzle-orm";
 import { getDb, appointments } from "@/db";
-import { isAdminRequest } from "../../web/admin";
+import { isAdminRequest } from "../../../web/admin";
 
 type SuggestRequest = {
   durationMinutes?: number;
