@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb, contacts, properties } from "@/db";
 import { isAdminRequest } from "../../../../web/admin";
 import { eq } from "drizzle-orm";
+import { forwardGeocode } from "@/lib/geocode";
 
 type RouteContext = {
   params: Promise<{ contactId?: string }>;
@@ -56,6 +57,13 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
   }
 
+  const geo = await forwardGeocode({
+    addressLine1: addressLine1.trim(),
+    city: city.trim(),
+    state: state.trim().slice(0, 2).toUpperCase(),
+    postalCode: postalCode.trim()
+  });
+
   const [property] = await db
     .insert(properties)
     .values({
@@ -67,7 +75,9 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
           : null,
       city: city.trim(),
       state: state.trim().slice(0, 2).toUpperCase(),
-      postalCode: postalCode.trim()
+      postalCode: postalCode.trim(),
+      lat: geo?.lat ?? null,
+      lng: geo?.lng ?? null
     })
     .returning({
       id: properties.id,

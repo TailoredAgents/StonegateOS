@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb, properties } from "@/db";
 import { isAdminRequest } from "../../../../../web/admin";
 import { and, eq } from "drizzle-orm";
+import { forwardGeocode } from "@/lib/geocode";
 
 type RouteContext = {
   params: Promise<{ contactId?: string; propertyId?: string }>;
@@ -80,6 +81,24 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
 
   const db = getDb();
 
+  // Attempt geocode if address fields changed
+  if (updates["addressLine1"] || updates["city"] || updates["state"] || updates["postalCode"]) {
+    const currentAddress = {
+      addressLine1: typeof updates["addressLine1"] === "string" ? updates["addressLine1"] : undefined,
+      city: typeof updates["city"] === "string" ? updates["city"] : undefined,
+      state: typeof updates["state"] === "string" ? updates["state"] : undefined,
+      postalCode: typeof updates["postalCode"] === "string" ? updates["postalCode"] : undefined
+    };
+    const geo = await forwardGeocode({
+      addressLine1: currentAddress.addressLine1 ?? "",
+      city: currentAddress.city,
+      state: currentAddress.state,
+      postalCode: currentAddress.postalCode
+    });
+    updates["lat"] = geo?.lat ?? null;
+    updates["lng"] = geo?.lng ?? null;
+  }
+
   const [updated] = await db
     .update(properties)
     .set(updates)
@@ -91,6 +110,8 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
       city: properties.city,
       state: properties.state,
       postalCode: properties.postalCode,
+      lat: properties.lat,
+      lng: properties.lng,
       updatedAt: properties.updatedAt
     });
 
@@ -106,6 +127,8 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
       city: updated.city,
       state: updated.state,
       postalCode: updated.postalCode,
+      lat: updated.lat,
+      lng: updated.lng,
       updatedAt: updated.updatedAt.toISOString()
     }
   });

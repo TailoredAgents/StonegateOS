@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { and, gte, lte, eq } from "drizzle-orm";
 import { getDb, appointments, properties } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
+import { forwardGeocode } from "@/lib/geocode";
 
 type SuggestRequest = {
   durationMinutes?: number;
@@ -12,6 +13,10 @@ type SuggestRequest = {
   targetLat?: number;
   targetLng?: number;
   radiusKm?: number;
+  addressLine1?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
 };
 
 type Suggestion = {
@@ -56,6 +61,26 @@ export async function POST(request: NextRequest): Promise<Response> {
   const targetLng = typeof payload.targetLng === "number" ? payload.targetLng : null;
   const radiusKm =
     typeof payload.radiusKm === "number" && payload.radiusKm > 0 ? payload.radiusKm : 30;
+  const addressLine1 = typeof payload.addressLine1 === "string" ? payload.addressLine1 : null;
+  const city = typeof payload.city === "string" ? payload.city : null;
+  const state = typeof payload.state === "string" ? payload.state : null;
+  const postalCode = typeof payload.postalCode === "string" ? payload.postalCode : null;
+
+  let resolvedLat = targetLat;
+  let resolvedLng = targetLng;
+
+  if (resolvedLat === null && resolvedLng === null && addressLine1) {
+    const geo = await forwardGeocode({
+      addressLine1,
+      city: city ?? undefined,
+      state: state ?? undefined,
+      postalCode: postalCode ?? undefined
+    });
+    if (geo) {
+      resolvedLat = geo.lat;
+      resolvedLng = geo.lng;
+    }
+  }
 
   const now = new Date();
   const windowStart = new Date(now);
@@ -107,10 +132,11 @@ export async function POST(request: NextRequest): Promise<Response> {
     const topCount =
       dayCounts && [...dayCounts.values()].reduce((max, val) => (val > max ? val : max), 0);
     const dayBlocks = blocks.filter((b) => formatDay(b.start) === dayKey);
-    const nearest = targetLat !== null && targetLng !== null ? nearestDistanceKm(dayBlocks, targetLat, targetLng) : null;
+    const nearest =
+      resolvedLat !== null && resolvedLng !== null ? nearestDistanceKm(dayBlocks, resolvedLat, resolvedLng) : null;
     const withinRadius =
-      targetLat !== null && targetLng !== null
-        ? dayBlocks.filter((b) => distanceKm(b, targetLat, targetLng) <= radiusKm).length
+      resolvedLat !== null && resolvedLng !== null
+        ? dayBlocks.filter((b) => distanceKm(b, resolvedLat, resolvedLng) <= radiusKm).length
         : null;
     for (let hour = startHour; hour + durationMinutes / 60 <= endHour; hour += 2) {
       const slotStart = new Date(base);

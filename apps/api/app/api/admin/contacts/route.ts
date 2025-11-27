@@ -11,6 +11,7 @@ import {
 } from "@/db";
 import { isAdminRequest } from "../../web/admin";
 import { normalizePhone } from "../../web/utils";
+import { forwardGeocode } from "@/lib/geocode";
 import type { SQL } from "drizzle-orm";
 import { asc, desc, inArray, ilike, or, sql } from "drizzle-orm";
 
@@ -373,6 +374,13 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   try {
     const result = await db.transaction(async (tx) => {
+      const geo = await forwardGeocode({
+        addressLine1: addressLine1.trim(),
+        city: city.trim(),
+        state: state.trim().slice(0, 2).toUpperCase(),
+        postalCode: postalCode.trim()
+      });
+
       const [contact] = await tx
         .insert(contacts)
         .values({
@@ -402,7 +410,9 @@ export async function POST(request: NextRequest): Promise<Response> {
               : null,
           city: city.trim(),
           state: state.trim().slice(0, 2).toUpperCase(),
-          postalCode: postalCode.trim()
+          postalCode: postalCode.trim(),
+          lat: geo?.lat ?? null,
+          lng: geo?.lng ?? null
         })
         .returning();
 
