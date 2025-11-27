@@ -1,6 +1,7 @@
 import React from "react";
 import { callAdminApi } from "../lib/api";
 import { BookingAssistant } from "./BookingAssistant";
+import { CalendarGrid } from "./CalendarGrid";
 
 type CalendarEvent = {
   id: string;
@@ -164,6 +165,10 @@ export async function CalendarSection({
             ) : null}
           </ul>
         </div>
+      </div>
+
+      <div className="space-y-4">
+        <CalendarGrid events={[...feed.appointments, ...feed.externalEvents]} conflicts={feed.conflicts} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
