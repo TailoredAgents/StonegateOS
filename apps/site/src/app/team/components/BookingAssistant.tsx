@@ -1,5 +1,4 @@
 import React from "react";
-import React from "react";
 import { callAdminApi } from "../lib/api";
 
 type Suggestion = {
