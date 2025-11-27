@@ -95,8 +95,8 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
       state: currentAddress.state,
       postalCode: currentAddress.postalCode
     });
-    updates["lat"] = geo?.lat ?? null;
-    updates["lng"] = geo?.lng ?? null;
+    updates["lat"] = geo?.lat !== undefined && geo?.lat !== null ? geo.lat.toString() : null;
+    updates["lng"] = geo?.lng !== undefined && geo?.lng !== null ? geo.lng.toString() : null;
   }
 
   const [updated] = await db

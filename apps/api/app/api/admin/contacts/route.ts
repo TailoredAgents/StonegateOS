@@ -411,8 +411,8 @@ export async function POST(request: NextRequest): Promise<Response> {
           city: city.trim(),
           state: state.trim().slice(0, 2).toUpperCase(),
           postalCode: postalCode.trim(),
-          lat: geo?.lat ?? null,
-          lng: geo?.lng ?? null
+          lat: geo?.lat !== undefined && geo?.lat !== null ? geo.lat.toString() : null,
+          lng: geo?.lng !== undefined && geo?.lng !== null ? geo.lng.toString() : null
         })
         .returning();
 
