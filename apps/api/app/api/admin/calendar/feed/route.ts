@@ -136,7 +136,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
   }
 
   const conflicts: Array<{ a: string; b: string }> = [];
-  const allEvents = [...appointmentsEvents, ...externalEvents];
+  const allEvents = [...appointmentsEvents, ...externalEvents].filter(Boolean) as CalendarEvent[];
   for (let i = 0; i < allEvents.length; i++) {
     for (let j = i + 1; j < allEvents.length; j++) {
       if (overlaps(allEvents[i], allEvents[j])) {
