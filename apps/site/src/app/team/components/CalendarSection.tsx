@@ -2,6 +2,7 @@ import React from "react";
 import { callAdminApi } from "../lib/api";
 import { BookingAssistant } from "./BookingAssistant";
 import { CalendarGrid } from "./CalendarGrid";
+import { CalendarMonthGrid } from "./CalendarMonthGrid";
 
 type CalendarEvent = {
   id: string;
@@ -70,7 +71,7 @@ function evaluateCalendarHealth(payload: CalendarStatusApiResponse): { tone: "ok
 export async function CalendarSection({
   searchParams
 }: {
-  searchParams?: { addr?: string; city?: string; state?: string; zip?: string };
+  searchParams?: { addr?: string; city?: string; state?: string; zip?: string; view?: string };
 }): Promise<React.ReactElement> {
   const [feedRes, statusRes] = await Promise.all([
     callAdminApi("/api/admin/calendar/feed"),
@@ -84,6 +85,7 @@ export async function CalendarSection({
   const feed = (await feedRes.json()) as CalendarFeedResponse;
   const statusPayload = statusRes.ok ? ((await statusRes.json()) as CalendarStatusApiResponse) : null;
   const health = statusPayload ? evaluateCalendarHealth(statusPayload) : { tone: "alert", detail: "Status unavailable" };
+  const view = searchParams?.view === "month" ? "month" : "week";
 
   return (
     <section className="space-y-4">
@@ -167,8 +169,31 @@ export async function CalendarSection({
         </div>
       </div>
 
+      <div className="flex flex-wrap gap-3">
+        <a
+          href="/team?tab=calendar&view=week"
+          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+            view === "week" ? "bg-primary-600 text-white" : "bg-slate-200 text-slate-700"
+          }`}
+        >
+          Week view
+        </a>
+        <a
+          href="/team?tab=calendar&view=month"
+          className={`rounded-full px-3 py-1 text-xs font-semibold ${
+            view === "month" ? "bg-primary-600 text-white" : "bg-slate-200 text-slate-700"
+          }`}
+        >
+          Month view
+        </a>
+      </div>
+
       <div className="space-y-4">
-        <CalendarGrid events={[...feed.appointments, ...feed.externalEvents]} conflicts={feed.conflicts} />
+        {view === "month" ? (
+          <CalendarMonthGrid events={[...feed.appointments, ...feed.externalEvents]} conflicts={feed.conflicts} />
+        ) : (
+          <CalendarGrid events={[...feed.appointments, ...feed.externalEvents]} conflicts={feed.conflicts} />
+        )}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
