@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, gte, lte, eq } from "drizzle-orm";
 import { getDb, appointments, contacts, properties } from "@/db";
 import { getCalendarConfig, getAccessToken } from "@/lib/calendar";
-import { isAdminRequest } from "../../web/admin";
+import { isAdminRequest } from "../../../web/admin";
 
 type CalendarEvent = {
   id: string;
