@@ -11,7 +11,7 @@ export type GeocodeResult = {
 } | null;
 
 export async function forwardGeocode(input: GeocodeInput): Promise<GeocodeResult> {
-  const apiKey = process.env["GOOGLE_MAPS_API_KEY"] ?? process.env["GOOGLE_GEOCODING_API_KEY"];
+  const apiKey = process.env["MAPBOX_ACCESS_TOKEN"];
   if (!apiKey) return null;
 
   const parts = [input.addressLine1, input.city, input.state, input.postalCode]
@@ -19,18 +19,20 @@ export async function forwardGeocode(input: GeocodeInput): Promise<GeocodeResult
     .join(", ");
   if (!parts.length) return null;
 
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(parts)}&key=${apiKey}`;
+  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(parts)}.json?access_token=${apiKey}&limit=1`;
 
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = (await res.json()) as {
-      results?: Array<{ geometry?: { location?: { lat?: number; lng?: number } } }>;
-      status?: string;
+      features?: Array<{ center?: [number, number] }>;
     };
-    const loc = data.results?.[0]?.geometry?.location;
-    if (loc && typeof loc.lat === "number" && typeof loc.lng === "number") {
-      return { lat: loc.lat, lng: loc.lng };
+    const center = data.features?.[0]?.center;
+    if (Array.isArray(center) && center.length === 2) {
+      const [lng, lat] = center;
+      if (typeof lat === "number" && typeof lng === "number") {
+        return { lat, lng };
+      }
     }
   } catch {
     // ignore errors; return null

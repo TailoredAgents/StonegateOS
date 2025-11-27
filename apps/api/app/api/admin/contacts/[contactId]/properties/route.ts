@@ -4,6 +4,7 @@ import { getDb, contacts, properties } from "@/db";
 import { isAdminRequest } from "../../../../web/admin";
 import { eq } from "drizzle-orm";
 import { forwardGeocode } from "@/lib/geocode";
+import type { InferInsertModel } from "drizzle-orm";
 
 type RouteContext = {
   params: Promise<{ contactId?: string }>;
@@ -64,21 +65,21 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     postalCode: postalCode.trim()
   });
 
+  const insertPayload: InferInsertModel<typeof properties> = {
+    contactId,
+    addressLine1: addressLine1.trim(),
+    addressLine2:
+      typeof addressLine2 === "string" && addressLine2.trim().length ? addressLine2.trim() : null,
+    city: city.trim(),
+    state: state.trim().slice(0, 2).toUpperCase(),
+    postalCode: postalCode.trim(),
+    lat: geo?.lat ?? null,
+    lng: geo?.lng ?? null
+  };
+
   const [property] = await db
     .insert(properties)
-    .values({
-      contactId,
-      addressLine1: addressLine1.trim(),
-      addressLine2:
-        typeof addressLine2 === "string" && addressLine2.trim().length
-          ? addressLine2.trim()
-          : null,
-      city: city.trim(),
-      state: state.trim().slice(0, 2).toUpperCase(),
-      postalCode: postalCode.trim(),
-      lat: geo?.lat ?? null,
-      lng: geo?.lng ?? null
-    })
+    .values(insertPayload)
     .returning({
       id: properties.id,
       addressLine1: properties.addressLine1,
