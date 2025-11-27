@@ -1,5 +1,6 @@
 import React from "react";
 import { callAdminApi } from "../lib/api";
+import { BookingAssistant } from "./BookingAssistant";
 
 type CalendarEvent = {
   id: string;
@@ -160,6 +161,8 @@ export async function CalendarSection(): Promise<React.ReactElement> {
           </ul>
         </div>
       </div>
+
+      <BookingAssistant />
     </section>
   );
 }
