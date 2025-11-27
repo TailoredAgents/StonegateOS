@@ -14,6 +14,7 @@ import { ContactsSection } from "./components/ContactsSection";
 import { PipelineSection } from "./components/PipelineSection";
 import { QuoteBuilderSection } from "./components/QuoteBuilderSection";
 import { ChatSection } from "./components/ChatSection";
+import { CalendarSection } from "./components/CalendarSection";
 import { TabNav, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 
@@ -52,6 +53,7 @@ export default async function TeamPage({
     { id: "quote-builder", label: "Quote Builder", href: "/team?tab=quote-builder", requires: "crew" },
     { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "owner" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
+    { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
     { id: "payments", label: "Payments", href: "/team?tab=payments", requires: "owner" },
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
@@ -175,6 +177,18 @@ export default async function TeamPage({
             }
           >
             <ChatSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "calendar" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
+                Loading calendar
+              </div>
+            }
+          >
+            <CalendarSection />
           </React.Suspense>
         ) : null}
 
