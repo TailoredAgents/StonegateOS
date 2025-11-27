@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, gte, lte } from "drizzle-orm";
+import { and, gte, lte, eq } from "drizzle-orm";
 import { getDb, appointments, properties } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 
