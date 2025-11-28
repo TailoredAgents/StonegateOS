@@ -89,14 +89,6 @@ export async function CalendarSection({
         initialView={view}
         events={allEvents}
         conflicts={feed.conflicts}
-        bookingAddress={{
-          addressLine1: searchParams?.addr ?? undefined,
-          city: searchParams?.city ?? undefined,
-          state: searchParams?.state ?? undefined,
-          postalCode: searchParams?.zip ?? undefined,
-          contactId: searchParams?.contactId,
-          propertyId: searchParams?.propertyId
-        }}
       />
 
       <div className="grid gap-4 lg:grid-cols-2">

@@ -4,23 +4,14 @@ import React from "react";
 import { CalendarGrid, type CalendarEvent } from "./CalendarGrid";
 import { CalendarMonthGrid } from "./CalendarMonthGrid";
 import { CalendarEventDetail } from "./CalendarEventDetail";
-import { BookingAssistant } from "./BookingAssistant";
 
 type Props = {
   initialView: "week" | "month";
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
-  bookingAddress: {
-    addressLine1?: string;
-    city?: string;
-    state?: string;
-    postalCode?: string;
-    contactId?: string;
-    propertyId?: string;
-  };
 };
 
-export function CalendarViewer({ initialView, events, conflicts, bookingAddress }: Props) {
+export function CalendarViewer({ initialView, events, conflicts }: Props) {
   const [view, setView] = React.useState<"week" | "month">(initialView);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const selectedEvent = selectedId ? events.find((evt) => evt.id === selectedId) ?? null : null;
@@ -55,15 +46,6 @@ export function CalendarViewer({ initialView, events, conflicts, bookingAddress 
       )}
 
       {selectedEvent ? <CalendarEventDetail event={selectedEvent} /> : null}
-
-      <BookingAssistant
-        addressLine1={bookingAddress.addressLine1}
-        city={bookingAddress.city}
-        state={bookingAddress.state}
-        postalCode={bookingAddress.postalCode}
-        contactId={bookingAddress.contactId}
-        propertyId={bookingAddress.propertyId}
-      />
     </div>
   );
 }
