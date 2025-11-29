@@ -121,7 +121,8 @@ async function maybeGetSuggestions(message: string): Promise<Suggestion[] | null
     process.env["API_BASE_URL"] ??
     process.env["NEXT_PUBLIC_API_BASE_URL"] ??
     "http://localhost:3001";
-  const adminKey = process.env["ADMIN_API_KEY"] ?? headers().get("x-api-key");
+  const hdrs = await headers();
+  const adminKey = process.env["ADMIN_API_KEY"] ?? hdrs.get("x-api-key");
   if (!adminKey) return null;
 
   try {
