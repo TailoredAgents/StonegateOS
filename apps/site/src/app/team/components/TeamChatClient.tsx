@@ -3,6 +3,17 @@
 import React from "react";
 import { Button, cn } from "@myst-os/ui";
 
+type SpeechRecognitionType = {
+  start: () => void;
+  stop: () => void;
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: any) => void) | null;
+  onerror: ((event: any) => void) | null;
+  onend: (() => void) | null;
+};
+
 type Message = { id: string; sender: "bot" | "user"; text: string };
 
 const TEAM_SUGGESTIONS: string[] = [
@@ -55,11 +66,7 @@ export function TeamChatClient() {
   const [isListening, setIsListening] = React.useState(false);
   const [supportsSpeech, setSupportsSpeech] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
-  const recognitionRef = React.useRef<
-    (SpeechRecognition & {
-      webkitSpeechRecognition?: SpeechRecognition;
-    }) | null
-  >(null);
+  const recognitionRef = React.useRef<SpeechRecognitionType | null>(null);
 
   React.useEffect(() => {
     const t = setTimeout(() => {
@@ -70,16 +77,15 @@ export function TeamChatClient() {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    // Narrow types safely for Web Speech
     const SpeechRecognitionCtor =
       (window as typeof window & { SpeechRecognition?: unknown }).SpeechRecognition ??
       (window as typeof window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
     if (typeof SpeechRecognitionCtor !== "function") return;
-    const recognition = new (SpeechRecognitionCtor as new () => SpeechRecognition)();
+    const recognition = new (SpeechRecognitionCtor as new () => SpeechRecognitionType)();
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.lang = "en-US";
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event: any) => {
       const transcript = event.results?.[0]?.[0]?.transcript;
       if (transcript && transcript.trim().length > 0) {
         setInput((prev) => (prev ? `${prev} ${transcript.trim()}` : transcript.trim()));
