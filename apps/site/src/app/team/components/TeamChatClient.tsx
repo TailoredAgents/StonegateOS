@@ -115,8 +115,9 @@ export function TeamChatClient() {
       const res = await fetch("/api/chat/stt", { method: "POST", body: form });
       if (!res.ok) return;
       const data = (await res.json()) as { transcript?: string };
-      if (data.transcript && data.transcript.trim().length > 0) {
-        setInput((prev) => (prev ? `${prev} ${data.transcript}` : data.transcript));
+      const transcript = data.transcript?.trim() ?? "";
+      if (transcript.length > 0) {
+        setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
       }
     } catch {
       // ignore
