@@ -3,17 +3,6 @@
 import React from "react";
 import { Button, cn } from "@myst-os/ui";
 
-type SpeechRecognitionType = {
-  start: () => void;
-  stop: () => void;
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((event: any) => void) | null;
-  onerror: ((event: any) => void) | null;
-  onend: (() => void) | null;
-};
-
 type Message = { id: string; sender: "bot" | "user"; text: string };
 
 const TEAM_SUGGESTIONS: string[] = [
@@ -63,10 +52,12 @@ export function TeamChatClient() {
   ]);
   const [input, setInput] = React.useState("");
   const [isSending, setIsSending] = React.useState(false);
-  const [isListening, setIsListening] = React.useState(false);
-  const [supportsSpeech, setSupportsSpeech] = React.useState(false);
+  const [isRecording, setIsRecording] = React.useState(false);
+  const [supportsRecording, setSupportsRecording] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
-  const recognitionRef = React.useRef<SpeechRecognitionType | null>(null);
+  const mediaRecorderRef = React.useRef<any>(null);
+  const chunksRef = React.useRef<BlobPart[]>([]);
+  const lastBotMessageRef = React.useRef<string>("");
 
   React.useEffect(() => {
     const t = setTimeout(() => {
@@ -77,25 +68,7 @@ export function TeamChatClient() {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    const SpeechRecognitionCtor =
-      (window as typeof window & { SpeechRecognition?: unknown }).SpeechRecognition ??
-      (window as typeof window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
-    if (typeof SpeechRecognitionCtor !== "function") return;
-    const recognition = new (SpeechRecognitionCtor as new () => SpeechRecognitionType)();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = "en-US";
-    recognition.onresult = (event: any) => {
-      const transcript = event.results?.[0]?.[0]?.transcript;
-      if (transcript && transcript.trim().length > 0) {
-        setInput((prev) => (prev ? `${prev} ${transcript.trim()}` : transcript.trim()));
-      }
-      setIsListening(false);
-    };
-    recognition.onerror = () => setIsListening(false);
-    recognition.onend = () => setIsListening(false);
-    recognitionRef.current = recognition;
-    setSupportsSpeech(true);
+    setSupportsRecording(Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
   }, []);
 
   const handleSend = React.useCallback(
@@ -111,6 +84,7 @@ export function TeamChatClient() {
       const actionNote = payload?.actionNote?.trim();
       const combinedReply = actionNote ? `${reply}\n\n${actionNote}` : reply;
       setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "bot", text: combinedReply }]);
+      lastBotMessageRef.current = combinedReply;
       setIsSending(false);
     },
     [isSending]
@@ -124,20 +98,84 @@ export function TeamChatClient() {
     [handleSend, input]
   );
 
-  const handleMicToggle = React.useCallback(() => {
-    if (!supportsSpeech || !recognitionRef.current) return;
-    if (isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    } else {
+  const stopRecording = React.useCallback(() => {
+    if (mediaRecorderRef.current) {
       try {
-        setIsListening(true);
-        recognitionRef.current.start();
+        mediaRecorderRef.current.stop();
       } catch {
-        setIsListening(false);
+        // ignore
       }
     }
-  }, [supportsSpeech, isListening]);
+  }, []);
+
+  const uploadAudio = React.useCallback(async (blob: Blob) => {
+    try {
+      const form = new FormData();
+      form.append("audio", blob, "audio.webm");
+      const res = await fetch("/api/chat/stt", { method: "POST", body: form });
+      if (!res.ok) return;
+      const data = (await res.json()) as { transcript?: string };
+      if (data.transcript && data.transcript.trim().length > 0) {
+        setInput((prev) => (prev ? `${prev} ${data.transcript}` : data.transcript));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handleMicToggle = React.useCallback(async () => {
+    if (!supportsRecording) return;
+    if (isRecording) {
+      stopRecording();
+      setIsRecording(false);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunksRef.current = [];
+      mr.ondataavailable = (e: BlobEvent) => {
+        if (e.data.size > 0) {
+          chunksRef.current.push(e.data);
+        }
+      };
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        uploadAudio(blob);
+        stream.getTracks().forEach((t) => t.stop());
+        setIsRecording(false);
+      };
+      mr.onerror = () => {
+        setIsRecording(false);
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      mediaRecorderRef.current = mr;
+      setIsRecording(true);
+      mr.start();
+    } catch {
+      setIsRecording(false);
+    }
+  }, [supportsRecording, isRecording, stopRecording, uploadAudio]);
+
+  const handleSpeak = React.useCallback(async () => {
+    const text = lastBotMessageRef.current.trim();
+    if (!text) return;
+    try {
+      const res = await fetch("/api/chat/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text })
+      });
+      if (!res.ok) return;
+      const arrayBuffer = await res.arrayBuffer();
+      const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.play().catch(() => undefined);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -192,8 +230,11 @@ export function TeamChatClient() {
                 placeholder="Type a question..."
                 className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
-              <Button type="button" size="sm" disabled={!supportsSpeech} onClick={handleMicToggle}>
-                {supportsSpeech ? (isListening ? "Stop" : "Mic") : "No mic"}
+              <Button type="button" size="sm" disabled={!supportsRecording} onClick={handleMicToggle}>
+                {supportsRecording ? (isRecording ? "Stop" : "Record") : "No mic"}
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={handleSpeak}>
+                Speak reply
               </Button>
               <Button type="submit" size="sm" disabled={isSending}>
                 {isSending ? "Sending..." : "Send"}
