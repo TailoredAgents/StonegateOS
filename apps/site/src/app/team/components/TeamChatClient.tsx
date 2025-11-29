@@ -55,7 +55,11 @@ export function TeamChatClient() {
   const [isListening, setIsListening] = React.useState(false);
   const [supportsSpeech, setSupportsSpeech] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
-  const recognitionRef = React.useRef<SpeechRecognition | null>(null);
+  const recognitionRef = React.useRef<
+    (SpeechRecognition & {
+      webkitSpeechRecognition?: SpeechRecognition;
+    }) | null
+  >(null);
 
   React.useEffect(() => {
     const t = setTimeout(() => {
@@ -66,12 +70,12 @@ export function TeamChatClient() {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    const SpeechRecognition =
-      (window as typeof window & { SpeechRecognition?: SpeechRecognition; webkitSpeechRecognition?: SpeechRecognition })
-        .SpeechRecognition ??
-      (window as typeof window & { webkitSpeechRecognition?: SpeechRecognition }).webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-    const recognition = new SpeechRecognition();
+    // Narrow types safely for Web Speech
+    const SpeechRecognitionCtor =
+      (window as typeof window & { SpeechRecognition?: unknown }).SpeechRecognition ??
+      (window as typeof window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
+    if (typeof SpeechRecognitionCtor !== "function") return;
+    const recognition = new (SpeechRecognitionCtor as new () => SpeechRecognition)();
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.lang = "en-US";
