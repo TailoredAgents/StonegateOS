@@ -2,7 +2,6 @@ import React from "react";
 import { callAdminApi } from "../lib/api";
 import { BookingAssistant } from "./BookingAssistant";
 import { CalendarViewer } from "./CalendarViewer";
-import { evaluateCalendarHealth } from "./calendarStatus";
 
 type CalendarEvent = {
   id: string;
@@ -57,34 +56,11 @@ export async function CalendarSection({
 
   const feed = (await feedRes.json()) as CalendarFeedResponse;
   const statusPayload = statusRes.ok ? ((await statusRes.json()) as CalendarStatusApiResponse) : null;
-  const health = statusPayload ? evaluateCalendarHealth(statusPayload) : { tone: "alert", detail: "Status unavailable" };
   const view = searchParams?.view === "month" ? "month" : "week";
   const allEvents = [...feed.appointments, ...feed.externalEvents];
 
   return (
     <section className="space-y-4">
-      <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900">Calendar</h2>
-            <p className="text-sm text-slate-600">Merged view of appointments (source of truth) and Google events.</p>
-          </div>
-          <div
-            className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${
-              health.tone === "ok"
-                ? "bg-emerald-100 text-emerald-700"
-                : health.tone === "warn"
-                  ? "bg-amber-100 text-amber-700"
-                  : health.tone === "idle"
-                    ? "bg-slate-100 text-slate-600"
-                    : "bg-rose-100 text-rose-700"
-            }`}
-          >
-            {health.detail}
-          </div>
-        </div>
-      </div>
-
       <CalendarViewer
         initialView={view}
         events={allEvents}
