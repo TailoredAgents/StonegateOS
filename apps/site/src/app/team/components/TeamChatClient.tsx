@@ -52,7 +52,10 @@ export function TeamChatClient() {
   ]);
   const [input, setInput] = React.useState("");
   const [isSending, setIsSending] = React.useState(false);
+  const [isListening, setIsListening] = React.useState(false);
+  const [supportsSpeech, setSupportsSpeech] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
+  const recognitionRef = React.useRef<SpeechRecognition | null>(null);
 
   React.useEffect(() => {
     const t = setTimeout(() => {
@@ -60,6 +63,30 @@ export function TeamChatClient() {
     }, 120);
     return () => clearTimeout(t);
   }, [messages]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const SpeechRecognition =
+      (window as typeof window & { SpeechRecognition?: SpeechRecognition; webkitSpeechRecognition?: SpeechRecognition })
+        .SpeechRecognition ??
+      (window as typeof window & { webkitSpeechRecognition?: SpeechRecognition }).webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = "en-US";
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      const transcript = event.results?.[0]?.[0]?.transcript;
+      if (transcript && transcript.trim().length > 0) {
+        setInput((prev) => (prev ? `${prev} ${transcript.trim()}` : transcript.trim()));
+      }
+      setIsListening(false);
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+    recognitionRef.current = recognition;
+    setSupportsSpeech(true);
+  }, []);
 
   const handleSend = React.useCallback(
     async (raw: string) => {
@@ -86,6 +113,21 @@ export function TeamChatClient() {
     },
     [handleSend, input]
   );
+
+  const handleMicToggle = React.useCallback(() => {
+    if (!supportsSpeech || !recognitionRef.current) return;
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      try {
+        setIsListening(true);
+        recognitionRef.current.start();
+      } catch {
+        setIsListening(false);
+      }
+    }
+  }, [supportsSpeech, isListening]);
 
   return (
     <div className="space-y-4">
@@ -140,6 +182,15 @@ export function TeamChatClient() {
                 placeholder="Type a question..."
                 className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!supportsSpeech}
+                onClick={handleMicToggle}
+              >
+                {supportsSpeech ? (isListening ? "Stop" : "Mic") : "No mic"}
+              </Button>
               <Button type="submit" size="sm" disabled={isSending}>
                 {isSending ? "Sending..." : "Send"}
               </Button>
