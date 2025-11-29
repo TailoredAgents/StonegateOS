@@ -192,13 +192,7 @@ export function TeamChatClient() {
                 placeholder="Type a question..."
                 className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={!supportsSpeech}
-                onClick={handleMicToggle}
-              >
+              <Button type="button" size="sm" disabled={!supportsSpeech} onClick={handleMicToggle}>
                 {supportsSpeech ? (isListening ? "Stop" : "Mic") : "No mic"}
               </Button>
               <Button type="submit" size="sm" disabled={isSending}>
