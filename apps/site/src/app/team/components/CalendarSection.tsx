@@ -73,8 +73,6 @@ export async function CalendarSection({
           city={searchParams?.city ?? undefined}
           state={searchParams?.state ?? undefined}
           postalCode={searchParams?.zip ?? undefined}
-          contactId={searchParams?.contactId}
-          propertyId={searchParams?.propertyId}
         />
 
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
