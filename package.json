@@ -29,6 +29,9 @@
   "bin": {
     "geocode:backfill": "tsx scripts/geocode-backfill.ts"
   },
+  "bin": {
+    "geocode:backfill": "tsx scripts/geocode-backfill.ts"
+  },
     "devDependencies": {
         "@commitlint/cli": "^19.5.0",
         "@commitlint/config-conventional": "^19.4.2",
