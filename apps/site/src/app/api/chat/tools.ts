@@ -1,17 +1,22 @@
-export type ToolName = "booking_suggest";
+import type { NextRequest } from "next/server";
+import { headers } from "next/headers";
+import { callAdminApi } from "../../team/lib/api";
 
-export type BookingSuggestResult = {
-  suggestions: Array<{
-    start: string;
-    end: string;
-    reason: string;
-  }>;
-};
+export type BookingSuggestion = { start: string; end: string; reason: string };
 
-export async function fetchBookingSuggestions(
-  adminKey: string,
-  apiBase: string
-): Promise<BookingSuggestResult | null> {
+export async function getAdminContext(): Promise<{ apiBase: string; adminKey: string | null }> {
+  const apiBase =
+    process.env["API_BASE_URL"] ??
+    process.env["NEXT_PUBLIC_API_BASE_URL"] ??
+    "http://localhost:3001";
+  const hdrs = await headers();
+  const adminKey = process.env["ADMIN_API_KEY"] ?? hdrs.get("x-api-key");
+  return { apiBase, adminKey };
+}
+
+export async function fetchBookingSuggestions(): Promise<BookingSuggestion[] | null> {
+  const { apiBase, adminKey } = await getAdminContext();
+  if (!adminKey) return null;
   try {
     const res = await fetch(`${apiBase.replace(/\/$/, "")}/api/admin/booking/assist`, {
       method: "POST",
@@ -31,7 +36,7 @@ export async function fetchBookingSuggestions(
           end: s.endAt ? new Date(s.endAt).toLocaleString() : "TBD",
           reason: s.reason ?? "No conflicts"
         })) ?? [];
-    return { suggestions };
+    return suggestions;
   } catch (error) {
     console.warn("[chat] booking_suggest_failed", { error: String(error) });
     return null;
