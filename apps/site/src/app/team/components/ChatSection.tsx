@@ -1,6 +1,6 @@
 import React from "react";
 import { TeamChatClient } from "./TeamChatClient";
-import { callAdminApi } from "./lib/api";
+import { callAdminApi } from "../lib/api";
 
 type ContactOption = {
   id: string;
