@@ -5,6 +5,12 @@ import { Button, cn } from "@myst-os/ui";
 
 type Message = { id: string; sender: "bot" | "user"; text: string };
 
+type ContactOption = {
+  id: string;
+  name: string;
+  properties: Array<{ id: string; label: string }>;
+};
+
 const TEAM_SUGGESTIONS: string[] = [
   "Summarize today's schedule for the crew.",
   "Draft a follow-up text after a quote visit.",
@@ -27,12 +33,16 @@ function fallbackResponse(message: string): string {
 
 type AssistantPayload = { reply?: string; actionNote?: string };
 
-async function callAssistant(message: string): Promise<AssistantPayload | null> {
+async function callAssistant(
+  message: string,
+  contactId?: string,
+  propertyId?: string
+): Promise<AssistantPayload | null> {
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message, contactId, propertyId })
     });
     if (!response.ok) return null;
     const data = (await response.json()) as AssistantPayload;
@@ -42,7 +52,7 @@ async function callAssistant(message: string): Promise<AssistantPayload | null> 
   }
 }
 
-export function TeamChatClient() {
+export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const [messages, setMessages] = React.useState<Message[]>([
     {
       id: "intro",
@@ -54,6 +64,8 @@ export function TeamChatClient() {
   const [isSending, setIsSending] = React.useState(false);
   const [isRecording, setIsRecording] = React.useState(false);
   const [supportsRecording, setSupportsRecording] = React.useState(false);
+  const [selectedContactId, setSelectedContactId] = React.useState<string>(contacts[0]?.id ?? "");
+  const [selectedPropertyId, setSelectedPropertyId] = React.useState<string>(contacts[0]?.properties[0]?.id ?? "");
   const endRef = React.useRef<HTMLDivElement>(null);
   const mediaRecorderRef = React.useRef<any>(null);
   const chunksRef = React.useRef<BlobPart[]>([]);
@@ -79,7 +91,7 @@ export function TeamChatClient() {
       setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "user", text }]);
       setInput("");
 
-      const payload = await callAssistant(text);
+      const payload = await callAssistant(text, selectedContactId || undefined, selectedPropertyId || undefined);
       const reply = payload?.reply?.trim() || fallbackResponse(text);
       const actionNote = payload?.actionNote?.trim();
       const combinedReply = actionNote ? `${reply}\n\n${actionNote}` : reply;
@@ -87,7 +99,7 @@ export function TeamChatClient() {
       lastBotMessageRef.current = combinedReply;
       setIsSending(false);
     },
-    [isSending]
+    [isSending, selectedContactId, selectedPropertyId]
   );
 
   const handleSubmit = React.useCallback(
@@ -190,6 +202,47 @@ export function TeamChatClient() {
           </div>
         </header>
 
+        {contacts.length > 0 ? (
+          <div className="mt-3 grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-semibold text-slate-600">Contact</span>
+                <select
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  value={selectedContactId}
+                  onChange={(e) => {
+                    const cid = e.target.value;
+                    setSelectedContactId(cid);
+                    const contact = contacts.find((c) => c.id === cid);
+                    setSelectedPropertyId(contact?.properties[0]?.id ?? "");
+                  }}
+                >
+                  {contacts.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-semibold text-slate-600">Property</span>
+                <select
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  value={selectedPropertyId}
+                  onChange={(e) => setSelectedPropertyId(e.target.value)}
+                >
+                  {(contacts.find((c) => c.id === selectedContactId)?.properties ?? []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <p className="text-[11px] text-slate-500">Context is used for booking suggestions/actions.</p>
+          </div>
+        ) : null}
+
         <div className="mt-5 flex h-[420px] flex-col rounded-2xl border border-slate-200 bg-white/95">
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4 text-sm">
             {messages.map((message) => (
@@ -247,4 +300,3 @@ export function TeamChatClient() {
     </div>
   );
 }
-
