@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { headers } from "next/headers";
 
 const SYSTEM_PROMPT = `You are Stonegate Assist, the warm front-office voice for Stonegate Junk Removal in North Metro Atlanta. Think like a friendly teammate, not a call script.
 
@@ -117,4 +118,39 @@ async function maybeGetSuggestions(message: string): Promise<Suggestion[] | null
   if (!keywords.some((kw) => lower.includes(kw))) return null;
 
   return (await fetchBookingSuggestions()) ?? null;
+}
+
+async function fetchBookingSuggestions(): Promise<Suggestion[] | null> {
+  const apiBase =
+    process.env["API_BASE_URL"] ??
+    process.env["NEXT_PUBLIC_API_BASE_URL"] ??
+    "http://localhost:3001";
+  const hdrs = await headers();
+  const adminKey = process.env["ADMIN_API_KEY"] ?? hdrs.get("x-api-key");
+  if (!adminKey) return null;
+
+  try {
+    const res = await fetch(`${apiBase.replace(/\/$/, "")}/api/admin/booking/assist`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": adminKey
+      },
+      body: JSON.stringify({})
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { suggestions?: Array<{ startAt?: string; endAt?: string; reason?: string }> };
+    const suggestions =
+      data.suggestions
+        ?.slice(0, 3)
+        .map((s) => ({
+          start: s.startAt ? new Date(s.startAt).toLocaleString() : "TBD",
+          end: s.endAt ? new Date(s.endAt).toLocaleString() : "TBD",
+          reason: s.reason ?? "No conflicts"
+        })) ?? [];
+    return suggestions;
+  } catch (error) {
+    console.warn("[chat] suggestion_fetch_failed", { error: String(error) });
+    return null;
+  }
 }
