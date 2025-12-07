@@ -223,9 +223,13 @@ async function fetchBookingSuggestions(
   if (!apiKey) return null;
 
   try {
-    const body: Record<string, unknown> = {
-      durationMinutes: 60
-    };
+    const body: {
+      durationMinutes: number;
+      addressLine1?: string;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+    } = { durationMinutes: 60 };
 
     if (ctx.property?.addressLine1) {
       body.addressLine1 = ctx.property.addressLine1;
