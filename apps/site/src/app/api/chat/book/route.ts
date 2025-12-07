@@ -31,7 +31,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const { apiBase, adminKey } = getAdminContext();
-  const hdrs = headers();
+  const hdrs = await headers();
   const apiKey = adminKey ?? hdrs.get("x-api-key");
   if (!apiKey) {
     return NextResponse.json({ error: "admin_key_missing" }, { status: 401 });

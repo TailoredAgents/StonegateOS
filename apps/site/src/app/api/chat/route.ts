@@ -218,7 +218,7 @@ async function fetchBookingSuggestions(
   }
 ): Promise<BookingSuggestion[] | null> {
   const { apiBase, adminKey } = getAdminContext();
-  const hdrs = headers();
+  const hdrs = await headers();
   const apiKey = adminKey ?? hdrs.get("x-api-key");
   if (!apiKey) return null;
 
@@ -283,7 +283,7 @@ function fmtMoney(cents: number, currency: string | null): string {
 
 async function fetchScheduleSummary(range: string): Promise<string | null> {
   const { apiBase, adminKey } = getAdminContext();
-  const hdrs = headers();
+  const hdrs = await headers();
   const apiKey = adminKey ?? hdrs.get("x-api-key");
   if (!apiKey) return null;
 
@@ -313,7 +313,7 @@ async function fetchScheduleSummary(range: string): Promise<string | null> {
 
 async function fetchRevenueForecast(range: string): Promise<string | null> {
   const { apiBase, adminKey } = getAdminContext();
-  const hdrs = headers();
+  const hdrs = await headers();
   const apiKey = adminKey ?? hdrs.get("x-api-key");
   if (!apiKey) return null;
 
