@@ -1,8 +1,33 @@
 import React from "react";
 import { OwnerAssistClient } from "./OwnerAssistClient";
-import { PaymentsSection } from "./PaymentsSection";
+import { callAdminApi } from "../lib/api";
+
+type PaymentDto = {
+  id: string;
+  amount: number;
+  currency: string;
+  status: string;
+  method: string | null;
+  cardBrand: string | null;
+  last4: string | null;
+  createdAt: string;
+};
 
 export async function OwnerSection(): Promise<React.ReactElement> {
+  let payments: PaymentDto[] | null = null;
+  let paymentsError: string | null = null;
+  try {
+    const res = await callAdminApi("/api/payments?status=all&limit=10");
+    if (res.ok) {
+      const payload = (await res.json()) as { payments?: PaymentDto[] };
+      payments = payload.payments ?? [];
+    } else {
+      paymentsError = `Payments unavailable (HTTP ${res.status})`;
+    }
+  } catch (error) {
+    paymentsError = "Payments not connected yet.";
+  }
+
   return (
     <section className="space-y-4">
       <div className="rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-lg shadow-slate-200/60">
@@ -22,11 +47,32 @@ export async function OwnerSection(): Promise<React.ReactElement> {
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold text-slate-900">Payments</h3>
-            <p className="text-sm text-slate-600">Review recent payments and attach/detach as needed.</p>
+            <p className="text-sm text-slate-600">Recent payments (connect Stripe to populate).</p>
           </div>
         </div>
-        <div className="mt-4">
-          <PaymentsSection />
+        <div className="mt-4 space-y-2 text-sm text-slate-700">
+          {paymentsError ? (
+            <p className="text-amber-700">{paymentsError}</p>
+          ) : payments && payments.length ? (
+            <ul className="space-y-1">
+              {payments.slice(0, 5).map((p) => (
+                <li key={p.id} className="flex justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <div>
+                    <div className="font-semibold text-slate-900">
+                      {(p.currency ?? "USD").toUpperCase()} {(p.amount / 100).toFixed(2)}
+                    </div>
+                    <div className="text-[11px] uppercase text-slate-500">{p.status}</div>
+                  </div>
+                  <div className="text-right text-xs text-slate-600">
+                    <div>{p.cardBrand ?? p.method ?? "payment"}</div>
+                    <div>{new Date(p.createdAt).toLocaleDateString()}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-slate-600">No payments yet. Connect Stripe to start seeing revenue.</p>
+          )}
         </div>
       </div>
 
