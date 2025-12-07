@@ -4,7 +4,7 @@ import { and, gte, lt, sql } from "drizzle-orm";
 import { getDb, payments } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 
-type RangeKey = "today" | "this_week" | "next_week";
+type RangeKey = "today" | "tomorrow" | "this_week" | "next_week";
 
 type ForecastResponse = {
   ok: boolean;
@@ -16,7 +16,7 @@ type ForecastResponse = {
 };
 
 function parseRange(value: string | null): RangeKey {
-  if (value === "today" || value === "next_week") return value;
+  if (value === "today" || value === "tomorrow" || value === "next_week") return value;
   return "this_week";
 }
 
@@ -36,6 +36,11 @@ function computeRange(range: RangeKey): { start: Date; end: Date } {
   const now = new Date();
   if (range === "today") {
     const start = startOfDay(now);
+    const end = addDays(start, 1);
+    return { start, end };
+  }
+  if (range === "tomorrow") {
+    const start = startOfDay(addDays(now, 1));
     const end = addDays(start, 1);
     return { start, end };
   }

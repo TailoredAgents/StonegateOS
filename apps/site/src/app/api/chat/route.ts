@@ -148,10 +148,11 @@ export async function POST(request: NextRequest) {
     });
     const wantsSchedule = looksLikeScheduleQuestion(trimmedMessage);
     const wantsRevenue = looksLikeRevenueQuestion(trimmedMessage);
+    const range = wantsSchedule || wantsRevenue ? pickRange(trimmedMessage) : "this_week";
 
     const [scheduleText, revenueText] = await Promise.all([
-      wantsSchedule ? fetchScheduleSummary("this_week") : Promise.resolve(null),
-      wantsRevenue ? fetchRevenueForecast("this_week") : Promise.resolve(null)
+      wantsSchedule ? fetchScheduleSummary(range) : Promise.resolve(null),
+      wantsRevenue ? fetchRevenueForecast(range) : Promise.resolve(null)
     ]);
 
     const replyParts = [reply];
@@ -266,13 +267,13 @@ async function fetchBookingSuggestions(
 
 function looksLikeScheduleQuestion(message: string): boolean {
   const lower = message.toLowerCase();
-  const keywords = ["schedule", "appointments", "jobs", "calendar", "booked", "slots", "week"];
+  const keywords = ["schedule", "appointments", "jobs", "calendar", "booked", "slots", "week", "today", "tomorrow"];
   return keywords.some((kw) => lower.includes(kw));
 }
 
 function looksLikeRevenueQuestion(message: string): boolean {
   const lower = message.toLowerCase();
-  const keywords = ["revenue", "forecast", "sales", "booked out", "projected", "income"];
+  const keywords = ["revenue", "forecast", "sales", "booked out", "projected", "income", "today", "tomorrow"];
   return keywords.some((kw) => lower.includes(kw));
 }
 
@@ -283,6 +284,14 @@ function fmtMoney(cents: number, currency: string | null): string {
   } catch {
     return `$${(cents / 100).toFixed(2)}`;
   }
+}
+
+function pickRange(message: string): "today" | "tomorrow" | "this_week" | "next_week" {
+  const lower = message.toLowerCase();
+  if (lower.includes("tomorrow")) return "tomorrow";
+  if (lower.includes("today")) return "today";
+  if (lower.includes("next week")) return "next_week";
+  return "this_week";
 }
 
 async function fetchScheduleSummary(range: string): Promise<string | null> {
@@ -300,7 +309,9 @@ async function fetchScheduleSummary(range: string): Promise<string | null> {
     if (!res.ok) return null;
     const data = (await res.json()) as ScheduleSummary;
     if (!data.ok) return null;
-    if (!data.total) return "Schedule this week: no appointments on the books.";
+    const label =
+      range === "today" ? "today" : range === "tomorrow" ? "tomorrow" : range === "next_week" ? "next week" : "this week";
+    if (!data.total) return `Schedule ${label}: no appointments on the books.`;
     const statusParts = Object.entries(data.byStatus)
       .map(([k, v]) => `${k}: ${v}`)
       .join(", ");
@@ -308,7 +319,7 @@ async function fetchScheduleSummary(range: string): Promise<string | null> {
       .slice(0, 3)
       .map((d) => `${d.date}: ${d.count}`)
       .join(", ");
-    return `Schedule this week: ${data.total} appointment(s)${statusParts ? ` (${statusParts})` : ""}${byDay ? `. Busiest days: ${byDay}` : ""}`;
+    return `Schedule ${label}: ${data.total} appointment(s)${statusParts ? ` (${statusParts})` : ""}${byDay ? `. Busiest days: ${byDay}` : ""}`;
   } catch (error) {
     console.warn("[chat] schedule_summary_failed", error);
     return null;
@@ -330,7 +341,9 @@ async function fetchRevenueForecast(range: string): Promise<string | null> {
     if (!res.ok) return null;
     const data = (await res.json()) as RevenueForecast;
     if (!data.ok) return null;
-    return `Revenue this week: ${fmtMoney(data.totalCents, data.currency)} across ${data.count} payment(s).`;
+    const label =
+      range === "today" ? "today" : range === "tomorrow" ? "tomorrow" : range === "next_week" ? "next week" : "this week";
+    return `Revenue ${label}: ${fmtMoney(data.totalCents, data.currency)} across ${data.count} payment(s).`;
   } catch (error) {
     console.warn("[chat] revenue_forecast_failed", error);
     return null;
