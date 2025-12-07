@@ -4,7 +4,7 @@ import React from "react";
 import { Button, cn } from "@myst-os/ui";
 
 type BookingSuggestion = { startAt: string; endAt: string; reason: string };
-type BookingOption = BookingSuggestion & { services?: string[] };
+type BookingOption = BookingSuggestion & { services?: string[]; selectedService?: string };
 
 type Message = {
   id: string;
@@ -288,7 +288,12 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
             startAt: suggestion.startAt,
             durationMinutes: 60,
             travelBufferMinutes: 30,
-            services: suggestion.services && suggestion.services.length ? suggestion.services : ["junk_removal_primary"]
+            services:
+              suggestion.selectedService && suggestion.selectedService.length
+                ? [suggestion.selectedService]
+                : suggestion.services && suggestion.services.length
+                  ? suggestion.services
+                  : ["junk_removal_primary"]
           })
         });
         if (!res.ok) {
@@ -392,19 +397,45 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                     {message.booking.propertyLabel ? (
                       <div className="text-[11px] font-semibold text-primary-800">Property: {message.booking.propertyLabel}</div>
                     ) : null}
-                    <div className="flex flex-wrap gap-2 text-xs text-slate-600">
-                      {message.booking.suggestions.map((suggestion, idx) => (
-                        <button
-                          key={`${message.id}-sugg-${idx}`}
-                          type="button"
-                          onClick={() => void handleBook(message.booking!, suggestion)}
-                          disabled={bookingInFlight}
-                          className="rounded-full border border-primary-200 bg-white px-3 py-1 font-semibold text-primary-800 shadow-sm transition hover:border-primary-300 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-60"
-                          title={suggestion.reason}
-                        >
-                          {formatSlot(suggestion)}
-                        </button>
-                      ))}
+                    <div className="flex flex-wrap gap-3 text-xs text-slate-700">
+                      {message.booking.suggestions.map((suggestion, idx) => {
+                        const selected = suggestion.selectedService ?? (suggestion.services?.[0] ?? "junk_removal_primary");
+                        return (
+                          <div
+                            key={`${message.id}-sugg-${idx}`}
+                            className="flex items-center gap-2 rounded-lg border border-primary-100 bg-white px-2 py-1 shadow-sm"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => void handleBook(message.booking!, { ...suggestion, selectedService: selected })}
+                              disabled={bookingInFlight}
+                              className="rounded-full border border-primary-200 bg-primary-50 px-3 py-1 font-semibold text-primary-800 transition hover:border-primary-300 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              title={suggestion.reason}
+                            >
+                              {formatSlot(suggestion)}
+                            </button>
+                            <select
+                              className="rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-700 focus:border-primary-400 focus:outline-none"
+                              value={selected}
+                              onChange={(e) => {
+                                const next = e.target.value;
+                                message.booking!.suggestions = message.booking!.suggestions.map((s, i) =>
+                                  i === idx ? { ...s, selectedService: next } : s
+                                );
+                              }}
+                            >
+                              {(suggestion.services && suggestion.services.length
+                                ? suggestion.services
+                                : ["junk_removal_primary"]
+                              ).map((svc) => (
+                                <option key={svc} value={svc}>
+                                  {svc.replace(/_/g, " ")}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
                     </div>
                     {bookingStatus.state !== "idle" ? (
                       <div className="text-[11px] text-slate-600">
