@@ -29,6 +29,21 @@ export async function OwnerSection(): Promise<React.ReactElement> {
           <PaymentsSection />
         </div>
       </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-lg shadow-slate-200/60">
+          <h3 className="text-lg font-semibold text-slate-900">Expenses</h3>
+          <p className="text-sm text-slate-600">
+            Expenses tracking isn&apos;t connected yet. Add expense data to see spend and savings opportunities here.
+          </p>
+        </div>
+        <div className="rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-lg shadow-slate-200/60">
+          <h3 className="text-lg font-semibold text-slate-900">P&amp;L</h3>
+          <p className="text-sm text-slate-600">
+            Monthly and yearly P&amp;L will appear once revenue and expenses are connected. Right now only payments are available.
+          </p>
+        </div>
+      </div>
     </section>
   );
 }
