@@ -24,6 +24,7 @@ type BookingPayload = {
   contactId: string;
   propertyId: string;
   suggestions: BookingSuggestion[];
+  propertyLabel?: string;
 };
 
 type ScheduleSummary = {
@@ -195,6 +196,7 @@ async function maybeGetSuggestions(
     contactId?: string;
     propertyId?: string;
     property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+    propertyLabel?: string;
   }
 ): Promise<BookingPayload | null> {
   const keywords = ["book", "schedule", "slot", "time", "appointment"];
@@ -207,7 +209,8 @@ async function maybeGetSuggestions(
   return {
     contactId: ctx.contactId,
     propertyId: ctx.propertyId,
-    suggestions
+    suggestions,
+    propertyLabel: ctx.propertyLabel
   };
 }
 

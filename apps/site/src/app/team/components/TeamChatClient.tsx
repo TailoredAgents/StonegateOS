@@ -4,6 +4,7 @@ import React from "react";
 import { Button, cn } from "@myst-os/ui";
 
 type BookingSuggestion = { startAt: string; endAt: string; reason: string };
+type BookingOption = BookingSuggestion & { services?: string[] };
 
 type Message = {
   id: string;
@@ -12,7 +13,8 @@ type Message = {
   booking?: {
     contactId: string;
     propertyId: string;
-    suggestions: BookingSuggestion[];
+    suggestions: BookingOption[];
+    propertyLabel?: string;
   };
 };
 
@@ -55,7 +57,8 @@ type AssistantPayload = {
   booking?: {
     contactId: string;
     propertyId: string;
-    suggestions: BookingSuggestion[];
+    suggestions: BookingOption[];
+    propertyLabel?: string;
   };
 };
 
@@ -99,6 +102,12 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const [selectedContactId, setSelectedContactId] = React.useState<string>(contacts[0]?.id ?? "");
   const [selectedPropertyId, setSelectedPropertyId] = React.useState<string>(contacts[0]?.properties[0]?.id ?? "");
   const [bookingInFlight, setBookingInFlight] = React.useState(false);
+  const [bookingStatus, setBookingStatus] = React.useState<
+    | { state: "idle" }
+    | { state: "confirming"; label: string }
+    | { state: "success"; message: string }
+    | { state: "error"; message: string }
+  >({ state: "idle" });
   const endRef = React.useRef<HTMLDivElement>(null);
   const mediaRecorderRef = React.useRef<any>(null);
   const chunksRef = React.useRef<BlobPart[]>([]);
@@ -148,7 +157,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           ? {
               contactId: payload.booking.contactId,
               propertyId: payload.booking.propertyId,
-              suggestions: payload.booking.suggestions
+              suggestions: payload.booking.suggestions,
+              propertyLabel: payload.booking.propertyLabel
             }
           : undefined;
       setMessages((prev) => [
@@ -261,13 +271,12 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   }, []);
 
   const handleBook = React.useCallback(
-    async (booking: NonNullable<Message["booking"]>, suggestion: BookingSuggestion) => {
+    async (booking: NonNullable<Message["booking"]>, suggestion: BookingOption) => {
       if (bookingInFlight) return;
       const contact = contacts.find((c) => c.id === booking.contactId);
       const property = contact?.properties.find((p) => p.id === booking.propertyId);
       const confirmLabel = `${formatSlot(suggestion)}${property ? ` at ${property.label}` : ""}`;
-      const ok = typeof window !== "undefined" ? window.confirm(`Book this slot?\n${confirmLabel}`) : true;
-      if (!ok) return;
+      setBookingStatus({ state: "confirming", label: confirmLabel });
       setBookingInFlight(true);
       try {
         const res = await fetch("/api/chat/book", {
@@ -279,40 +288,28 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
             startAt: suggestion.startAt,
             durationMinutes: 60,
             travelBufferMinutes: 30,
-            services: ["junk_removal_primary"]
+            services: suggestion.services && suggestion.services.length ? suggestion.services : ["junk_removal_primary"]
           })
         });
         if (!res.ok) {
           const errText = await res.text();
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              sender: "bot",
-              text: `Booking failed (HTTP ${res.status}): ${errText.slice(0, 160)}`
-            }
-          ]);
+          setBookingStatus({
+            state: "error",
+            message: `Booking failed (HTTP ${res.status}): ${errText.slice(0, 160)}`
+          });
         } else {
           const data = (await res.json()) as { appointmentId?: string; startAt?: string };
           const when = data.startAt ? new Date(data.startAt).toLocaleString() : formatSlot(suggestion);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              sender: "bot",
-              text: `Booked ${when}${contact ? ` for ${contact.name}` : ""}${property ? ` at ${property.label}` : ""}.`
-            }
-          ]);
+          setBookingStatus({
+            state: "success",
+            message: `Booked ${when}${contact ? ` for ${contact.name}` : ""}${property ? ` at ${property.label}` : ""}.`
+          });
         }
       } catch (error) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            sender: "bot",
-            text: `Booking request failed: ${(error as Error).message}`
-          }
-        ]);
+        setBookingStatus({
+          state: "error",
+          message: `Booking request failed: ${(error as Error).message}`
+        });
       } finally {
         setBookingInFlight(false);
       }
@@ -391,19 +388,44 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 </div>
 
                 {message.booking ? (
-                  <div className="flex flex-wrap gap-2 pl-1 text-xs text-slate-600">
-                    {message.booking.suggestions.map((suggestion, idx) => (
-                      <button
-                        key={`${message.id}-sugg-${idx}`}
-                        type="button"
-                        onClick={() => void handleBook(message.booking!, suggestion)}
-                        disabled={bookingInFlight}
-                        className="rounded-full border border-primary-200 bg-primary-50 px-3 py-1 font-semibold text-primary-800 shadow-sm transition hover:border-primary-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
-                        title={suggestion.reason}
-                      >
-                        {formatSlot(suggestion)}
-                      </button>
-                    ))}
+                  <div className="space-y-2 rounded-xl border border-primary-50 bg-primary-50/60 px-3 py-2">
+                    {message.booking.propertyLabel ? (
+                      <div className="text-[11px] font-semibold text-primary-800">Property: {message.booking.propertyLabel}</div>
+                    ) : null}
+                    <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+                      {message.booking.suggestions.map((suggestion, idx) => (
+                        <button
+                          key={`${message.id}-sugg-${idx}`}
+                          type="button"
+                          onClick={() => void handleBook(message.booking!, suggestion)}
+                          disabled={bookingInFlight}
+                          className="rounded-full border border-primary-200 bg-white px-3 py-1 font-semibold text-primary-800 shadow-sm transition hover:border-primary-300 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          title={suggestion.reason}
+                        >
+                          {formatSlot(suggestion)}
+                        </button>
+                      ))}
+                    </div>
+                    {bookingStatus.state !== "idle" ? (
+                      <div className="text-[11px] text-slate-600">
+                        {bookingStatus.state === "confirming" ? (
+                          <span className="inline-flex items-center gap-2 text-amber-700">
+                            <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                            Booking {bookingStatus.label}...
+                          </span>
+                        ) : bookingStatus.state === "success" ? (
+                          <span className="inline-flex items-center gap-2 text-emerald-700">
+                            <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                            {bookingStatus.message}
+                          </span>
+                        ) : bookingStatus.state === "error" ? (
+                          <span className="inline-flex items-center gap-2 text-rose-700">
+                            <span className="h-2 w-2 rounded-full bg-rose-400" />
+                            {bookingStatus.message}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
