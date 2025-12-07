@@ -9,7 +9,6 @@ import {
 import { MyDaySection } from "./components/MyDaySection";
 import { EstimatesSection } from "./components/EstimatesSection";
 import { QuotesSection } from "./components/QuotesSection";
-import { PaymentsSection } from "./components/PaymentsSection";
 import { ContactsSection } from "./components/ContactsSection";
 import { PipelineSection } from "./components/PipelineSection";
 import { QuoteBuilderSection } from "./components/QuoteBuilderSection";
@@ -56,8 +55,7 @@ export default async function TeamPage({
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
     { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
-    { id: "payments", label: "Payments", href: "/team?tab=payments", requires: "owner" },
-    { id: "owner", label: "Owner", href: "/team?tab=owner", requires: "owner" },
+    { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
@@ -239,18 +237,6 @@ export default async function TeamPage({
             }
           >
             <ContactsSection search={contactsQuery} offset={contactsOffset} />
-          </React.Suspense>
-        ) : null}
-
-        {tab === "payments" && hasOwner ? (
-          <React.Suspense
-            fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading Payments
-              </div>
-            }
-          >
-            <PaymentsSection />
           </React.Suspense>
         ) : null}
 
