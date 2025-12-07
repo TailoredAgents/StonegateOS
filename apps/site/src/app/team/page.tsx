@@ -15,6 +15,7 @@ import { PipelineSection } from "./components/PipelineSection";
 import { QuoteBuilderSection } from "./components/QuoteBuilderSection";
 import { ChatSection } from "./components/ChatSection";
 import { CalendarSection } from "./components/CalendarSection";
+import { OwnerSection } from "./components/OwnerSection";
 import { TabNav, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 
@@ -56,6 +57,7 @@ export default async function TeamPage({
     { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
     { id: "payments", label: "Payments", href: "/team?tab=payments", requires: "owner" },
+    { id: "owner", label: "Owner", href: "/team?tab=owner", requires: "owner" },
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
@@ -249,6 +251,18 @@ export default async function TeamPage({
             }
           >
             <PaymentsSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "owner" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
+                Loading owner tools
+              </div>
+            }
+          >
+            <OwnerSection />
           </React.Suspense>
         ) : null}
 
