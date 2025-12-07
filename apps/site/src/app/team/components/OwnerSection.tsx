@@ -1,5 +1,6 @@
 import React from "react";
 import { OwnerAssistClient } from "./OwnerAssistClient";
+import { PaymentsSection } from "./PaymentsSection";
 
 export async function OwnerSection(): Promise<React.ReactElement> {
   return (
@@ -16,6 +17,18 @@ export async function OwnerSection(): Promise<React.ReactElement> {
       </div>
 
       <OwnerAssistClient />
+
+      <div className="rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-lg shadow-slate-200/60">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">Payments</h3>
+            <p className="text-sm text-slate-600">Review recent payments and attach/detach as needed.</p>
+          </div>
+        </div>
+        <div className="mt-4">
+          <PaymentsSection />
+        </div>
+      </div>
     </section>
   );
 }
