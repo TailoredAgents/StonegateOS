@@ -6,6 +6,14 @@ type Props = {
 };
 
 export function CalendarEventDetail({ event }: Props): React.ReactElement {
+  const appointmentId =
+    event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : null);
+  const rescheduleLink =
+    appointmentId && event.rescheduleToken
+      ? `/schedule?appointmentId=${encodeURIComponent(appointmentId)}&token=${encodeURIComponent(event.rescheduleToken)}`
+      : null;
+  const teamLink = appointmentId ? `/team?tab=myday&appointmentId=${encodeURIComponent(appointmentId)}` : null;
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
       <div className="flex flex-wrap items-center gap-2">
@@ -20,10 +28,28 @@ export function CalendarEventDetail({ event }: Props): React.ReactElement {
       </div>
       <h3 className="mt-2 text-lg font-semibold text-slate-900">{event.title}</h3>
       <p className="text-sm text-slate-600">
-        {formatTime(event.start)} – {formatTime(event.end)}
+        {formatTime(event.start)} - {formatTime(event.end)}
       </p>
       {event.address ? <p className="text-xs text-slate-500">{event.address}</p> : null}
       {event.contactName ? <p className="text-xs text-slate-500">Contact: {event.contactName}</p> : null}
+      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+        {teamLink ? (
+          <a
+            href={teamLink}
+            className="inline-flex items-center gap-1 rounded-full border border-primary-200 bg-primary-50 px-3 py-1 font-semibold text-primary-800 transition hover:border-primary-300 hover:bg-white"
+          >
+            Open in Team
+          </a>
+        ) : null}
+        {rescheduleLink ? (
+          <a
+            href={rescheduleLink}
+            className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+          >
+            Reschedule
+          </a>
+        ) : null}
+      </div>
     </div>
   );
 }

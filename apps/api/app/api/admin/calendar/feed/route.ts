@@ -12,6 +12,8 @@ type CalendarEvent = {
   source: "db" | "google";
   start: string;
   end: string;
+  appointmentId?: string;
+  rescheduleToken?: string | null;
   contactName?: string | null;
   address?: string | null;
   status?: string | null;
@@ -46,6 +48,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
       status: appointments.status,
       startAt: appointments.startAt,
       durationMinutes: appointments.durationMinutes,
+      rescheduleToken: appointments.rescheduleToken,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
       addressLine1: properties.addressLine1,
@@ -77,6 +80,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
         .join(", ");
       return {
         id: `db:${row.id}`,
+        appointmentId: row.id,
+        rescheduleToken: row.rescheduleToken,
         title: contactName ?? "Appointment",
         source: "db",
         start: start.toISOString(),

@@ -6,6 +6,8 @@ export type CalendarEvent = {
   source: "db" | "google";
   start: string;
   end: string;
+  appointmentId?: string;
+  rescheduleToken?: string | null;
   contactName?: string | null;
   address?: string | null;
   status?: string | null;

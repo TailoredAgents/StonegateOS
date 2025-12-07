@@ -11,19 +11,61 @@ Principles:
 - Pricing: speak in ranges only (single items $75-$125, quarter load $150-$250, half load $280-$420, full load $480-$780). Never promise an exact total.
 - Process notes (use when relevant): licensed and insured two-person crews, careful in-home handling, responsible disposal and recycling when possible.
 - Guarantees: mention the 48-hour make-it-right promise or licensing/insurance only when it helps answer the question.
-- Scheduling: mention the "Schedule Estimate" button (#schedule-estimate) or call (404) 445-3408 only when the user asks about booking, timing, or next steps; otherwise skip the CTA.
+- Scheduling: if the user hints at booking and a contact/property is provided, offer a short confirmation and suggested slots. Otherwise, mention the "Schedule Estimate" button (#schedule-estimate) or call (404) 445-3408 only when the user asks about booking, timing, or next steps.
 - Preparation tips (share only if asked): separate items for pickup, ensure clear pathways, and note stairs or heavy items.
 - Escalate politely to a human if the request is hazardous, urgent, or needs a firm commitment.
 - Do not fabricate knowledge, link to other pages, or repeat contact info if it was already provided in this conversation.
 
 Stay personable, concise, and helpful.`;
 
-type Suggestion = { start: string; end: string; reason: string };
+type BookingSuggestion = { startAt: string; endAt: string; reason: string };
+
+type BookingPayload = {
+  contactId: string;
+  propertyId: string;
+  suggestions: BookingSuggestion[];
+};
+
+type ScheduleSummary = {
+  ok: boolean;
+  total: number;
+  byStatus: Record<string, number>;
+  byDay: Array<{ date: string; count: number }>;
+};
+
+type RevenueForecast = {
+  ok: boolean;
+  totalCents: number;
+  currency: string | null;
+  count: number;
+};
+
+type ChatRequest = {
+  message?: string;
+  contactId?: string;
+  propertyId?: string;
+  property?: {
+    addressLine1?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+  };
+};
+
+function getAdminContext() {
+  const apiBase =
+    process.env["API_BASE_URL"] ??
+    process.env["NEXT_PUBLIC_API_BASE_URL"] ??
+    "http://localhost:3001";
+  const adminKey = process.env["ADMIN_API_KEY"];
+  return { apiBase: apiBase.replace(/\/$/, ""), adminKey };
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const { message } = (await request.json()) as { message?: string };
-    if (!message || message.trim().length === 0) {
+    const { message, contactId, propertyId, property } = (await request.json()) as ChatRequest;
+    const trimmedMessage = message?.trim() ?? "";
+    if (!trimmedMessage) {
       return NextResponse.json({ error: "missing_message" }, { status: 400 });
     }
 
@@ -44,7 +86,7 @@ export async function POST(request: NextRequest) {
       model,
       input: [
         { role: "system" as const, content: SYSTEM_PROMPT },
-        { role: "user" as const, content: message }
+        { role: "user" as const, content: trimmedMessage }
       ],
       reasoning: { effort: "low" as const },
       text: { verbosity: "medium" as const },
@@ -99,44 +141,106 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const suggestions = await maybeGetSuggestions(message);
-    const finalReply =
-      suggestions && suggestions.length
-        ? `${reply}\n\nSuggested slots:\n${suggestions.map((s) => `- ${s.start} – ${s.end} (${s.reason})`).join("\n")}`
-        : reply;
+    const booking = await maybeGetSuggestions(trimmedMessage, {
+      contactId,
+      propertyId,
+      property
+    });
+    const wantsSchedule = looksLikeScheduleQuestion(trimmedMessage);
+    const wantsRevenue = looksLikeRevenueQuestion(trimmedMessage);
 
-    return NextResponse.json({ ok: true, reply: finalReply });
+    const [scheduleText, revenueText] = await Promise.all([
+      wantsSchedule ? fetchScheduleSummary("this_week") : Promise.resolve(null),
+      wantsRevenue ? fetchRevenueForecast("this_week") : Promise.resolve(null)
+    ]);
+
+    const replyParts = [reply];
+
+    if (booking && booking.suggestions.length) {
+      replyParts.push(
+        `Suggested slots:\n${booking.suggestions
+          .map(
+            (s) =>
+              `- ${new Date(s.startAt).toLocaleString()} - ${new Date(s.endAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} (${s.reason})`
+          )
+          .join("\n")}`
+      );
+    }
+
+    if (scheduleText) {
+      replyParts.push(scheduleText);
+    }
+
+    if (revenueText) {
+      replyParts.push(revenueText);
+    }
+
+    const finalReply = replyParts.join("\n\n").trim();
+
+    return NextResponse.json({
+      ok: true,
+      reply: finalReply,
+      ...(booking ? { booking } : {})
+    });
   } catch (error) {
     console.error("[chat] Server error:", error);
     return NextResponse.json({ error: "server_error" }, { status: 500 });
   }
 }
 
-async function maybeGetSuggestions(message: string): Promise<Suggestion[] | null> {
+async function maybeGetSuggestions(
+  message: string,
+  ctx: {
+    contactId?: string;
+    propertyId?: string;
+    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+  }
+): Promise<BookingPayload | null> {
   const keywords = ["book", "schedule", "slot", "time", "appointment"];
   const lower = message.toLowerCase();
   if (!keywords.some((kw) => lower.includes(kw))) return null;
+  if (!ctx.contactId || !ctx.propertyId) return null;
 
-  return (await fetchBookingSuggestions()) ?? null;
+  const suggestions = await fetchBookingSuggestions(ctx);
+  if (!suggestions || !suggestions.length) return null;
+  return {
+    contactId: ctx.contactId,
+    propertyId: ctx.propertyId,
+    suggestions
+  };
 }
 
-async function fetchBookingSuggestions(): Promise<Suggestion[] | null> {
-  const apiBase =
-    process.env["API_BASE_URL"] ??
-    process.env["NEXT_PUBLIC_API_BASE_URL"] ??
-    "http://localhost:3001";
-  const hdrs = await headers();
-  const adminKey = process.env["ADMIN_API_KEY"] ?? hdrs.get("x-api-key");
-  if (!adminKey) return null;
+async function fetchBookingSuggestions(
+  ctx: {
+    contactId?: string;
+    propertyId?: string;
+    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+  }
+): Promise<BookingSuggestion[] | null> {
+  const { apiBase, adminKey } = getAdminContext();
+  const hdrs = headers();
+  const apiKey = adminKey ?? hdrs.get("x-api-key");
+  if (!apiKey) return null;
 
   try {
-    const res = await fetch(`${apiBase.replace(/\/$/, "")}/api/admin/booking/assist`, {
+    const body: Record<string, unknown> = {
+      durationMinutes: 60
+    };
+
+    if (ctx.property?.addressLine1) {
+      body.addressLine1 = ctx.property.addressLine1;
+      if (ctx.property.city) body.city = ctx.property.city;
+      if (ctx.property.state) body.state = ctx.property.state;
+      if (ctx.property.postalCode) body.postalCode = ctx.property.postalCode;
+    }
+
+    const res = await fetch(`${apiBase}/api/admin/booking/assist`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": adminKey
+        "x-api-key": apiKey
       },
-      body: JSON.stringify({})
+      body: JSON.stringify(body)
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { suggestions?: Array<{ startAt?: string; endAt?: string; reason?: string }> };
@@ -144,13 +248,87 @@ async function fetchBookingSuggestions(): Promise<Suggestion[] | null> {
       data.suggestions
         ?.slice(0, 3)
         .map((s) => ({
-          start: s.startAt ? new Date(s.startAt).toLocaleString() : "TBD",
-          end: s.endAt ? new Date(s.endAt).toLocaleString() : "TBD",
+          startAt: typeof s.startAt === "string" ? s.startAt : "",
+          endAt: typeof s.endAt === "string" ? s.endAt : "",
           reason: s.reason ?? "No conflicts"
-        })) ?? [];
+        }))
+        .filter((s) => s.startAt && s.endAt) ?? [];
     return suggestions;
   } catch (error) {
     console.warn("[chat] suggestion_fetch_failed", { error: String(error) });
+    return null;
+  }
+}
+
+function looksLikeScheduleQuestion(message: string): boolean {
+  const lower = message.toLowerCase();
+  const keywords = ["schedule", "appointments", "jobs", "calendar", "booked", "slots", "week"];
+  return keywords.some((kw) => lower.includes(kw));
+}
+
+function looksLikeRevenueQuestion(message: string): boolean {
+  const lower = message.toLowerCase();
+  const keywords = ["revenue", "forecast", "sales", "booked out", "projected", "income"];
+  return keywords.some((kw) => lower.includes(kw));
+}
+
+function fmtMoney(cents: number, currency: string | null): string {
+  if (!Number.isFinite(cents)) return "$0";
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: currency ?? "USD" }).format(cents / 100);
+  } catch {
+    return `$${(cents / 100).toFixed(2)}`;
+  }
+}
+
+async function fetchScheduleSummary(range: string): Promise<string | null> {
+  const { apiBase, adminKey } = getAdminContext();
+  const hdrs = headers();
+  const apiKey = adminKey ?? hdrs.get("x-api-key");
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch(`${apiBase}/api/admin/schedule/summary?range=${encodeURIComponent(range)}`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as ScheduleSummary;
+    if (!data.ok) return null;
+    if (!data.total) return "Schedule this week: no appointments on the books.";
+    const statusParts = Object.entries(data.byStatus)
+      .map(([k, v]) => `${k}: ${v}`)
+      .join(", ");
+    const byDay = data.byDay
+      .slice(0, 3)
+      .map((d) => `${d.date}: ${d.count}`)
+      .join(", ");
+    return `Schedule this week: ${data.total} appointment(s)${statusParts ? ` (${statusParts})` : ""}${byDay ? `. Busiest days: ${byDay}` : ""}`;
+  } catch (error) {
+    console.warn("[chat] schedule_summary_failed", error);
+    return null;
+  }
+}
+
+async function fetchRevenueForecast(range: string): Promise<string | null> {
+  const { apiBase, adminKey } = getAdminContext();
+  const hdrs = headers();
+  const apiKey = adminKey ?? hdrs.get("x-api-key");
+  if (!apiKey) return null;
+
+  try {
+    const res = await fetch(`${apiBase}/api/admin/revenue/forecast?range=${encodeURIComponent(range)}`, {
+      headers: {
+        "x-api-key": apiKey
+      }
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as RevenueForecast;
+    if (!data.ok) return null;
+    return `Revenue this week: ${fmtMoney(data.totalCents, data.currency)} across ${data.count} payment(s).`;
+  } catch (error) {
+    console.warn("[chat] revenue_forecast_failed", error);
     return null;
   }
 }

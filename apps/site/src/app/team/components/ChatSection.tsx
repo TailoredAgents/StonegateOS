@@ -5,7 +5,14 @@ import { callAdminApi } from "../lib/api";
 type ContactOption = {
   id: string;
   name: string;
-  properties: Array<{ id: string; label: string }>;
+  properties: Array<{
+    id: string;
+    label: string;
+    addressLine1: string;
+    city: string;
+    state: string;
+    postalCode: string;
+  }>;
 };
 
 export async function ChatSection(): Promise<React.ReactElement> {
@@ -33,7 +40,11 @@ export async function ChatSection(): Promise<React.ReactElement> {
       name: c.name,
       properties: c.properties.map((p) => ({
         id: p.id,
-        label: `${p.addressLine1}, ${p.city}, ${p.state} ${p.postalCode}`
+        label: `${p.addressLine1}, ${p.city}, ${p.state} ${p.postalCode}`,
+        addressLine1: p.addressLine1,
+        city: p.city,
+        state: p.state,
+        postalCode: p.postalCode
       }))
     })) ?? [];
 
