@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { isAdminRequest } from "../../../web/admin";
 import { getPlaidClient, plaidConfigured } from "@/lib/plaid";
 import { nanoid } from "nanoid";
+import type { CountryCode, Products } from "plaid";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!isAdminRequest(request)) {
@@ -21,8 +22,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const res = await plaid.linkTokenCreate({
       client_name: "Stonegate Owner HQ",
       language: "en",
-      country_codes: ["US"],
-      products: ["transactions"],
+      country_codes: ["US" as CountryCode],
+      products: ["transactions" as Products],
       user: {
         // single-tenant; use a unique but stable id
         client_user_id: `stonegate-${nanoid(12)}`
