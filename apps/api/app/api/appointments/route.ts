@@ -8,6 +8,7 @@ import {
   properties,
   leads,
   appointmentNotes,
+  appointmentAttachments,
   crmPipeline,
   quotes
 } from "@/db";
@@ -99,6 +100,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   );
 
   const notesMap = new Map<string, { id: string; body: string; createdAt: string }[]>();
+  const attachmentsMap = new Map<
+    string,
+    { id: string; filename: string; url: string; contentType: string | null; createdAt: string }[]
+  >();
 
   if (appointmentIds.length > 0) {
     const noteRows = await db
@@ -124,6 +129,35 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     for (const noteList of notesMap.values()) {
       noteList.sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
+    }
+
+    const attachmentRows = await db
+      .select({
+        id: appointmentAttachments.id,
+        appointmentId: appointmentAttachments.appointmentId,
+        filename: appointmentAttachments.filename,
+        url: appointmentAttachments.url,
+        contentType: appointmentAttachments.contentType,
+        createdAt: appointmentAttachments.createdAt
+      })
+      .from(appointmentAttachments)
+      .where(inArray(appointmentAttachments.appointmentId, appointmentIds));
+
+    for (const att of attachmentRows) {
+      if (!attachmentsMap.has(att.appointmentId)) {
+        attachmentsMap.set(att.appointmentId, []);
+      }
+      attachmentsMap.get(att.appointmentId)!.push({
+        id: att.id,
+        filename: att.filename,
+        url: att.url,
+        contentType: att.contentType,
+        createdAt: att.createdAt.toISOString()
+      });
+    }
+
+    for (const attList of attachmentsMap.values()) {
+      attList.sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
     }
   }
 
@@ -198,7 +232,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       rescheduleToken: row.rescheduleToken,
       crew: row.crew ?? null,
       owner: row.owner ?? null,
-      notes: notesMap.get(row.id) ?? []
+      notes: notesMap.get(row.id) ?? [],
+      attachments: attachmentsMap.get(row.id) ?? []
     };
   });
 
