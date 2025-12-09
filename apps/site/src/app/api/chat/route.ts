@@ -834,7 +834,8 @@ async function findAppointmentForContext(
       .filter((appt) => appt.startAt && !Number.isNaN(Date.parse(appt.startAt)) && Date.parse(appt.startAt) >= now)
       .sort((a, b) => Date.parse(a.startAt ?? "") - Date.parse(b.startAt ?? ""));
 
-    return upcoming[0] ?? matches[0];
+    const candidate = upcoming[0] ?? matches[0];
+    return candidate ?? null;
   } catch (error) {
     console.warn("[chat] appointment_lookup_failed", error);
     return null;
