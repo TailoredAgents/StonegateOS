@@ -210,8 +210,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           for (const action of actions) {
             if (!next[action.id]) {
               const svc =
-                Array.isArray(action.payload?.services) && action.payload.services.length
-                  ? action.payload.services[0]
+                Array.isArray(action.payload?.["services"]) && action.payload["services"].length
+                  ? action.payload["services"][0]
                   : "junk_removal_primary";
               next[action.id] = svc;
             }
@@ -244,8 +244,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           for (const action of actions) {
             if (action.type === "book_appointment" && !next[action.id]) {
               next[action.id] =
-                typeof action.payload?.travelBufferMinutes === "number" && action.payload.travelBufferMinutes >= 0
-                  ? action.payload.travelBufferMinutes
+                typeof action.payload?.["travelBufferMinutes"] === "number" && action.payload["travelBufferMinutes"] >= 0
+                  ? action.payload["travelBufferMinutes"]
                   : 30;
             }
           }
@@ -468,17 +468,17 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           payload.services =
             selected && selected.length
               ? [selected]
-              : Array.isArray(action.payload?.services) && action.payload.services.length
-                ? action.payload.services
+              : Array.isArray(action.payload?.["services"]) && action.payload["services"].length
+                ? action.payload["services"]
                 : ["junk_removal_primary"];
           payload.durationMinutes =
             typeof actionDurations[action.id] === "number" && actionDurations[action.id] > 0
               ? actionDurations[action.id]
-              : action.payload?.durationMinutes ?? 60;
+              : action.payload?.["durationMinutes"] ?? 60;
           payload.travelBufferMinutes =
             typeof actionTravel[action.id] === "number" && actionTravel[action.id] >= 0
               ? actionTravel[action.id]
-              : action.payload?.travelBufferMinutes ?? 30;
+              : action.payload?.["travelBufferMinutes"] ?? 30;
           const datePart = actionStartDate[action.id];
           const timePart = actionStartTime[action.id];
           if (datePart) {
