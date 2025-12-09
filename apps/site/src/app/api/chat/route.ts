@@ -108,6 +108,7 @@ type CreateBookingAction = {
     durationMinutes?: number;
     travelBufferMinutes?: number;
     services?: string[];
+    note?: string | null;
   };
   context?: {
     propertyLabel?: string;
@@ -745,18 +746,27 @@ function parseWhen(text: string): { iso: string; source: string } | null {
   const dayOffset = lower.includes("tomorrow") ? 1 : 0;
   const base = new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000);
 
-  const timeMatch = text.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
-  let hour = 9;
-  let minute = 0;
-  if (timeMatch) {
-    hour = Number(timeMatch[1]);
-    minute = timeMatch[2] ? Number(timeMatch[2]) : 0;
-    const meridiem = timeMatch[3]?.toLowerCase();
-    if (meridiem === "pm" && hour < 12) hour += 12;
-    if (meridiem === "am" && hour === 12) hour = 0;
+  // broad windows
+  if (lower.includes("morning")) {
+    base.setHours(9, 0, 0, 0);
+  } else if (lower.includes("afternoon")) {
+    base.setHours(13, 0, 0, 0);
+  } else if (lower.includes("evening")) {
+    base.setHours(17, 0, 0, 0);
+  } else {
+    const timeMatch = text.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+    let hour = 9;
+    let minute = 0;
+    if (timeMatch) {
+      hour = Number(timeMatch[1]);
+      minute = timeMatch[2] ? Number(timeMatch[2]) : 0;
+      const meridiem = timeMatch[3]?.toLowerCase();
+      if (meridiem === "pm" && hour < 12) hour += 12;
+      if (meridiem === "am" && hour === 12) hour = 0;
+    }
+    base.setHours(hour, minute, 0, 0);
   }
 
-  base.setHours(hour, minute, 0, 0);
   if (base.getTime() < now.getTime()) {
     base.setDate(base.getDate() + 1);
   }

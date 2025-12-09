@@ -15,6 +15,7 @@ type ActionSuggestion = {
     appointmentStartAt?: string | null;
     propertyLabel?: string;
   };
+  note?: string | null;
 };
 
 type ActionStatus =
@@ -132,6 +133,13 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const [actionNotes, setActionNotes] = React.useState<Record<string, string>>({});
   const [actionDurations, setActionDurations] = React.useState<Record<string, number>>({});
   const [actionTravel, setActionTravel] = React.useState<Record<string, number>>({});
+  const [actionStartDate, setActionStartDate] = React.useState<Record<string, string>>({});
+  const [actionStartTime, setActionStartTime] = React.useState<Record<string, string>>({});
+  const [actionHistory, setActionHistory] = React.useState<
+    Array<{ id: string; summary: string; status: ActionStatus["state"]; message?: string }>
+  >([]);
+  const [lastBooked, setLastBooked] = React.useState<{ appointmentId: string; message: string } | null>(null);
+  const [undoStatus, setUndoStatus] = React.useState<ActionStatus>({ state: "idle" });
   const endRef = React.useRef<HTMLDivElement>(null);
   const mediaRecorderRef = React.useRef<any>(null);
   const chunksRef = React.useRef<BlobPart[]>([]);
@@ -239,6 +247,28 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 typeof action.payload?.travelBufferMinutes === "number" && action.payload.travelBufferMinutes >= 0
                   ? action.payload.travelBufferMinutes
                   : 30;
+            }
+          }
+          return next;
+        });
+        setActionStartDate((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (action.type === "book_appointment" && !next[action.id]) {
+              const start = action.payload?.startAt ? new Date(action.payload.startAt) : null;
+              next[action.id] = start ? start.toISOString().slice(0, 10) : "";
+            }
+          }
+          return next;
+        });
+        setActionStartTime((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (action.type === "book_appointment" && !next[action.id]) {
+              const start = action.payload?.startAt ? new Date(action.payload.startAt) : null;
+              next[action.id] = start
+                ? start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+                : "";
             }
           }
           return next;
@@ -421,63 +451,122 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
     });
   }, []);
 
-  const handleActionConfirm = React.useCallback(async (action: ActionSuggestion) => {
-    setActionStatuses((prev) => ({ ...prev, [action.id]: { state: "running" } }));
-    try {
-      const payload = { ...action.payload };
-      const note = actionNotes[action.id]?.trim();
-      if (note && note.length > 0) {
-        payload.note = note;
-        if (action.type === "create_quote") {
-          payload.notes = note;
+  const handleActionConfirm = React.useCallback(
+    async (action: ActionSuggestion) => {
+      setActionStatuses((prev) => ({ ...prev, [action.id]: { state: "running" } }));
+      try {
+        const payload = { ...action.payload };
+        const note = actionNotes[action.id]?.trim();
+        if (note && note.length > 0) {
+          payload.note = note;
+          if (action.type === "create_quote") {
+            payload.notes = note;
+          }
         }
+        if (action.type === "book_appointment") {
+          const selected = actionServices[action.id];
+          payload.services =
+            selected && selected.length
+              ? [selected]
+              : Array.isArray(action.payload?.services) && action.payload.services.length
+                ? action.payload.services
+                : ["junk_removal_primary"];
+          payload.durationMinutes =
+            typeof actionDurations[action.id] === "number" && actionDurations[action.id] > 0
+              ? actionDurations[action.id]
+              : action.payload?.durationMinutes ?? 60;
+          payload.travelBufferMinutes =
+            typeof actionTravel[action.id] === "number" && actionTravel[action.id] >= 0
+              ? actionTravel[action.id]
+              : action.payload?.travelBufferMinutes ?? 30;
+          const datePart = actionStartDate[action.id];
+          const timePart = actionStartTime[action.id];
+          if (datePart) {
+            const iso = timePart ? `${datePart}T${timePart}:00` : `${datePart}T09:00:00`;
+            payload.startAt = new Date(iso).toISOString();
+          }
+        }
+        const res = await fetch("/api/chat/actions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: action.type, payload })
+        });
+        if (!res.ok) {
+          const detail = await res.text();
+          setActionStatuses((prev) => ({
+            ...prev,
+            [action.id]: { state: "error", message: `Action failed (HTTP ${res.status}): ${detail.slice(0, 140)}` }
+          }));
+          setActionHistory((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              summary: `Action error: ${action.summary}`,
+              status: "error",
+              message: `Action failed (HTTP ${res.status})`
+            }
+          ]);
+          return;
+        }
+        const data = (await res.json().catch(() => ({}))) as { result?: { summary?: string; appointmentId?: string } };
+        const summary =
+          data?.result && typeof data.result === "object"
+            ? (data.result as any).summary ?? "Action completed"
+            : "Action completed";
+        setActionStatuses((prev) => ({
+          ...prev,
+          [action.id]: { state: "success", message: summary }
+        }));
+        setActionHistory((prev) => [...prev.slice(-6), { id: action.id, summary: action.summary, status: "success", message: summary }]);
+        if (action.type === "book_appointment") {
+          const appointmentId = (data?.result as any)?.appointmentId;
+          if (appointmentId) {
+            setLastBooked({ appointmentId, message: summary });
+          }
+        }
+      } catch (error) {
+        setActionStatuses((prev) => ({
+          ...prev,
+          [action.id]: { state: "error", message: `Action request failed: ${(error as Error).message}` }
+        }));
+        setActionHistory((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            summary: `Action error: ${action.summary}`,
+            status: "error",
+            message: `Action failed: ${(error as Error).message}`
+          }
+        ]);
       }
-      if (action.type === "book_appointment") {
-        const selected = actionServices[action.id];
-        payload.services =
-          selected && selected.length
-            ? [selected]
-            : Array.isArray(action.payload?.services) && action.payload.services.length
-              ? action.payload.services
-              : ["junk_removal_primary"];
-        payload.durationMinutes =
-          typeof actionDurations[action.id] === "number" && actionDurations[action.id] > 0
-            ? actionDurations[action.id]
-            : action.payload?.durationMinutes ?? 60;
-        payload.travelBufferMinutes =
-          typeof actionTravel[action.id] === "number" && actionTravel[action.id] >= 0
-            ? actionTravel[action.id]
-            : action.payload?.travelBufferMinutes ?? 30;
-      }
+    },
+    [actionNotes, actionDurations, actionServices, actionTravel, actionStartDate, actionStartTime]
+  );
+
+  const handleUndoBooking = React.useCallback(async () => {
+    if (!lastBooked) return;
+    setUndoStatus({ state: "running" });
+    try {
       const res = await fetch("/api/chat/actions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: action.type, payload })
+        body: JSON.stringify({ type: "cancel_appointment", payload: { appointmentId: lastBooked.appointmentId } })
       });
       if (!res.ok) {
         const detail = await res.text();
-        setActionStatuses((prev) => ({
-          ...prev,
-          [action.id]: { state: "error", message: `Action failed (HTTP ${res.status}): ${detail.slice(0, 140)}` }
-        }));
+        setUndoStatus({ state: "error", message: `Cancel failed (HTTP ${res.status}): ${detail.slice(0, 140)}` });
         return;
       }
-      const data = (await res.json().catch(() => ({}))) as { result?: { summary?: string } };
-      const summary =
-        data?.result && typeof data.result === "object"
-          ? (data.result as any).summary ?? "Action completed"
-          : "Action completed";
-      setActionStatuses((prev) => ({
+      setUndoStatus({ state: "success", message: "Appointment canceled" });
+      setActionHistory((prev) => [
         ...prev,
-        [action.id]: { state: "success", message: summary }
-      }));
+        { id: crypto.randomUUID(), summary: "Undo booking", status: "success", message: "Appointment canceled" }
+      ]);
+      setLastBooked(null);
     } catch (error) {
-      setActionStatuses((prev) => ({
-        ...prev,
-        [action.id]: { state: "error", message: `Action request failed: ${(error as Error).message}` }
-      }));
+      setUndoStatus({ state: "error", message: `Cancel failed: ${(error as Error).message}` });
     }
-  }, []);
+  }, [lastBooked]);
 
   return (
     <div className="space-y-4">
@@ -704,6 +793,49 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   }
                                 />
                               </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Start date</span>
+                                <input
+                                  type="date"
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionStartDate[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionStartDate((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value
+                                    }))
+                                  }
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Start time</span>
+                                <input
+                                  type="time"
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionStartTime[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionStartTime((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value
+                                    }))
+                                  }
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1 sm:col-span-3">
+                                <span className="font-semibold text-slate-700">Booking note (optional)</span>
+                                <textarea
+                                  rows={2}
+                                  className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionNotes[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionNotes((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value
+                                    }))
+                                  }
+                                  placeholder="Add a short note for this booking"
+                                />
+                              </label>
                             </div>
                           ) : null}
                           {action.type === "create_quote" || action.type === "create_task" ? (
@@ -747,6 +879,51 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 ) : null}
               </div>
             ))}
+            {lastBooked ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold">Booked: {lastBooked.message}</span>
+                  <button
+                    type="button"
+                    onClick={() => void handleUndoBooking()}
+                    disabled={undoStatus.state === "running"}
+                    className="rounded-full border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-800 hover:border-amber-400 disabled:opacity-60"
+                  >
+                    {undoStatus.state === "running" ? "Canceling..." : "Undo booking"}
+                  </button>
+                </div>
+                {undoStatus.state === "error" || undoStatus.state === "success" ? (
+                  <div className="mt-1 text-[10px]">
+                    {undoStatus.state === "success" ? "Canceled." : undoStatus.message ?? "Undo failed"}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {actionHistory.length ? (
+              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-700">
+                <div className="font-semibold text-slate-800">Recent actions</div>
+                <ul className="mt-1 space-y-1">
+                  {actionHistory.slice(-5).map((entry) => (
+                    <li key={entry.id} className="flex items-start justify-between gap-2">
+                      <span>{entry.summary}</span>
+                      <span
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                          entry.status === "success"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : entry.status === "error"
+                              ? "bg-rose-100 text-rose-700"
+                              : "bg-slate-100 text-slate-600"
+                        )}
+                      >
+                        {entry.status}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div ref={endRef} />
           </div>
 

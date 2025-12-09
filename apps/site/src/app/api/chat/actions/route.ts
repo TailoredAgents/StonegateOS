@@ -36,13 +36,19 @@ type BookAppointmentPayload = {
   durationMinutes?: number;
   travelBufferMinutes?: number;
   services?: string[];
+  note?: string | null;
+};
+
+type CancelAppointmentPayload = {
+  appointmentId: string;
 };
 
 type ActionRequest =
   | { type: "create_contact"; payload: CreateContactPayload }
   | { type: "create_quote"; payload: CreateQuotePayload }
   | { type: "create_task"; payload: CreateTaskPayload }
-  | { type: "book_appointment"; payload: BookAppointmentPayload };
+  | { type: "book_appointment"; payload: BookAppointmentPayload }
+  | { type: "cancel_appointment"; payload: CancelAppointmentPayload };
 
 const ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
 const ACTION_RATE_LIMIT_MS = Number(process.env["CHAT_ACTION_RATE_MS"] ?? 0);
@@ -211,7 +217,8 @@ export async function POST(request: NextRequest) {
         travelBufferMinutes: typeof body.travelBufferMinutes === "number" ? body.travelBufferMinutes : 30,
         services: Array.isArray(body.services)
           ? body.services.filter((s) => typeof s === "string" && s.trim().length).slice(0, 3)
-          : []
+          : [],
+        note: typeof body.note === "string" && body.note.trim().length ? body.note.trim() : undefined
       })
     });
 
@@ -222,6 +229,31 @@ export async function POST(request: NextRequest) {
 
     const data = await res.json().catch(() => ({}));
     console.info("[chat-actions] appointment booked", { result: data });
+    return NextResponse.json({ ok: true, type: payload.type, result: data });
+  }
+
+  if (payload.type === "cancel_appointment") {
+    const body = payload.payload;
+    if (!body || typeof body.appointmentId !== "string") {
+      return NextResponse.json({ error: "missing_cancel_fields" }, { status: 400 });
+    }
+
+    const res = await fetch(`${apiBase}/api/appointments/${body.appointmentId}/status`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({ status: "canceled" })
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return NextResponse.json({ error: "cancel_failed", detail: detail.slice(0, 200) }, { status: res.status });
+    }
+
+    const data = await res.json().catch(() => ({}));
+    console.info("[chat-actions] appointment canceled", { result: data });
     return NextResponse.json({ ok: true, type: payload.type, result: data });
   }
 
