@@ -458,9 +458,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         const payload = { ...action.payload };
         const note = actionNotes[action.id]?.trim();
         if (note && note.length > 0) {
-          payload.note = note;
+          payload["note"] = note;
           if (action.type === "create_quote") {
-            payload.notes = note;
+            payload["notes"] = note;
           }
         }
         if (action.type === "book_appointment") {
