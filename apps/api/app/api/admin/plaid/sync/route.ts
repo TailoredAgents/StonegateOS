@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { isAdminRequest } from "../../../web/admin";
 import { getPlaidClient, plaidConfigured } from "@/lib/plaid";
 import { getDb, plaidItems, plaidAccounts, plaidTransactions } from "@/db";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, type InferInsertModel } from "drizzle-orm";
 
 type SyncRequest = { itemId?: string };
 
@@ -42,20 +42,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       for (const acct of accountsRes) {
         const available = acct.balances.available ?? null;
         const current = acct.balances.current ?? null;
+        const accountPayload: InferInsertModel<typeof plaidAccounts> = {
+          itemId: item.id,
+          accountId: acct.account_id,
+          name: acct.name ?? null,
+          officialName: acct.official_name ?? null,
+          mask: acct.mask ?? null,
+          type: acct.type ?? null,
+          subtype: acct.subtype ?? null,
+          isoCurrencyCode: acct.balances.iso_currency_code ?? null,
+          available: available !== null ? String(available) : null,
+          current: current !== null ? String(current) : null
+        };
         await db
           .insert(plaidAccounts)
-          .values({
-            itemId: item.id,
-            accountId: acct.account_id,
-            name: acct.name ?? null,
-            officialName: acct.official_name ?? null,
-            mask: acct.mask ?? null,
-            type: acct.type ?? null,
-            subtype: acct.subtype ?? null,
-            isoCurrencyCode: acct.balances.iso_currency_code ?? null,
-            available: available !== null ? available : null,
-            current: current !== null ? current : null
-          })
+          .values(accountPayload)
           .onConflictDoUpdate({
             target: plaidAccounts.accountId,
             set: {
@@ -65,8 +66,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
               type: acct.type ?? null,
               subtype: acct.subtype ?? null,
               isoCurrencyCode: acct.balances.iso_currency_code ?? null,
-              available: available !== null ? available : null,
-              current: current !== null ? current : null,
+              available: accountPayload.available,
+              current: accountPayload.current,
               updatedAt: new Date()
             }
           });
