@@ -751,8 +751,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                     setActionServices((prev) => ({ ...prev, [action.id]: e.target.value }))
                                   }
                                 >
-                                  {(Array.isArray(action.payload?.services) && action.payload.services.length
-                                    ? action.payload.services
+                                  {(Array.isArray(action.payload?.["services"]) && action.payload["services"].length
+                                    ? action.payload["services"]
                                     : ["junk_removal_primary"]
                                   ).map((svc) => (
                                     <option key={svc} value={svc}>
