@@ -471,13 +471,15 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
               : Array.isArray(action.payload?.["services"]) && action.payload["services"].length
                 ? action.payload["services"]
                 : ["junk_removal_primary"];
+          const chosenDuration = actionDurations[action.id];
           payload["durationMinutes"] =
-            typeof actionDurations[action.id] === "number" && actionDurations[action.id] > 0
-              ? actionDurations[action.id]
+            typeof chosenDuration === "number" && chosenDuration > 0
+              ? chosenDuration
               : action.payload?.["durationMinutes"] ?? 60;
+          const chosenTravel = actionTravel[action.id];
           payload["travelBufferMinutes"] =
-            typeof actionTravel[action.id] === "number" && actionTravel[action.id] >= 0
-              ? actionTravel[action.id]
+            typeof chosenTravel === "number" && chosenTravel >= 0
+              ? chosenTravel
               : action.payload?.["travelBufferMinutes"] ?? 30;
           const datePart = actionStartDate[action.id];
           const timePart = actionStartTime[action.id];
