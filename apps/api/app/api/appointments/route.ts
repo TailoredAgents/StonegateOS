@@ -9,6 +9,7 @@ import {
   leads,
   appointmentNotes,
   appointmentAttachments,
+  appointmentTasks,
   crmPipeline,
   quotes
 } from "@/db";
