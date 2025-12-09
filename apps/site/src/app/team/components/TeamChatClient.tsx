@@ -232,8 +232,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           for (const action of actions) {
             if (action.type === "book_appointment" && !next[action.id]) {
               next[action.id] =
-                typeof action.payload?.durationMinutes === "number" && action.payload.durationMinutes > 0
-                  ? action.payload.durationMinutes
+                typeof action.payload?.["durationMinutes"] === "number" && action.payload["durationMinutes"] > 0
+                  ? action.payload["durationMinutes"]
                   : 60;
             }
           }
