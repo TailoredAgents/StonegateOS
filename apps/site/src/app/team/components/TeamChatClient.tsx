@@ -255,7 +255,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           const next = { ...prev };
           for (const action of actions) {
             if (action.type === "book_appointment" && !next[action.id]) {
-              const start = action.payload?.startAt ? new Date(action.payload.startAt) : null;
+              const start = action.payload?.["startAt"] ? new Date(action.payload["startAt"]) : null;
               next[action.id] = start ? start.toISOString().slice(0, 10) : "";
             }
           }
@@ -265,7 +265,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           const next = { ...prev };
           for (const action of actions) {
             if (action.type === "book_appointment" && !next[action.id]) {
-              const start = action.payload?.startAt ? new Date(action.payload.startAt) : null;
+              const start = action.payload?.["startAt"] ? new Date(action.payload["startAt"]) : null;
               next[action.id] = start
                 ? start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
                 : "";
