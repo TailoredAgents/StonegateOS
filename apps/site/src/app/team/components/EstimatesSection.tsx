@@ -4,7 +4,8 @@ import { SubmitButton } from "@/components/SubmitButton";
 import {
   createQuoteAction,
   rescheduleAppointmentAction,
-  updateApptStatus
+  updateApptStatus,
+  addApptNote
 } from "../actions";
 import { callAdminApi, fmtTime } from "../lib/api";
 
@@ -22,6 +23,7 @@ interface AppointmentDto {
   rescheduleToken: string;
   crew: string | null;
   owner: string | null;
+  notes: Array<{ id: string; body: string; createdAt: string }>;
 }
 
 const CREW_OPTIONS = ["Crew 1", "Crew 2"];
@@ -157,6 +159,31 @@ export async function EstimatesSection(): Promise<ReactElement> {
                     </>
                   ) : null}
                 </div>
+
+                {a.notes.length ? (
+                  <div className="mt-2 space-y-1 rounded-md border border-neutral-200 bg-neutral-50 p-2 text-xs text-neutral-700">
+                    <div className="text-[11px] font-semibold uppercase text-neutral-500">Notes</div>
+                    {a.notes.map((note) => (
+                      <div key={note.id} className="rounded-md bg-white px-2 py-1">
+                        <div>{note.body}</div>
+                        <div className="text-[10px] text-neutral-400">{new Date(note.createdAt).toLocaleString()}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <details className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
+                  <summary className="cursor-pointer text-xs font-medium text-neutral-700">Add note</summary>
+                  <form action={addApptNote} className="mt-2 flex flex-col gap-2">
+                    <input type="hidden" name="appointmentId" value={a.id} />
+                    <label className="flex flex-col gap-1">
+                      <span>Note</span>
+                      <textarea name="body" rows={2} className="rounded-md border border-neutral-300 px-2 py-1" required></textarea>
+                    </label>
+                    <SubmitButton className="self-start rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white" pendingLabel="Saving...">
+                      Save note
+                    </SubmitButton>
+                  </form>
+                </details>
 
                 <details className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
                   <summary className="cursor-pointer text-xs font-medium text-neutral-700">Reschedule</summary>
