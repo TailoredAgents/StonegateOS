@@ -100,7 +100,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             date: new Date(txn.date ?? new Date().toISOString()),
             pending: Boolean(txn.pending),
             category: txn.category as string[] | null,
-            raw: txn as Record<string, unknown>
+            raw: txn as unknown as Record<string, unknown>
           })
           .onConflictDoUpdate({
             target: plaidTransactions.transactionId,
