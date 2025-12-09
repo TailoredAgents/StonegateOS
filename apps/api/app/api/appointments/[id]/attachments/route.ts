@@ -11,7 +11,7 @@ const AttachmentSchema = z.object({
   contentType: z.string().optional()
 });
 
-const MAX_BYTES = 5 * 1024 * 1024; // 5MB
+const MAX_BYTES = 20 * 1024 * 1024; // 20MB
 
 export async function POST(
   request: NextRequest,
