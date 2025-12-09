@@ -905,8 +905,11 @@ Keep note short (<120 chars). If unsure, use intent "none".
     const raw = data.output_text ?? "";
     const parsed = safeJsonParse(raw);
     if (parsed && typeof parsed["intent"] === "string") {
+      const intent = ["booking", "contact", "quote", "task"].includes(parsed["intent"])
+        ? (parsed["intent"] as IntentClassification["intent"])
+        : "none";
       return {
-        intent: ["booking", "contact", "quote", "task"].includes(parsed["intent"]) ? parsed["intent"] : "none",
+        intent,
         contactName: typeof parsed["contactName"] === "string" ? parsed["contactName"] : undefined,
         address: typeof parsed["address"] === "string" ? parsed["address"] : undefined,
         services: Array.isArray(parsed["services"])
