@@ -243,6 +243,23 @@ export const appointmentNotes = pgTable(
   })
 );
 
+export const appointmentAttachments = pgTable(
+  "appointment_attachments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    url: text("url").notNull(),
+    contentType: text("content_type"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    appointmentIdx: index("appointment_attachments_appointment_idx").on(table.appointmentId)
+  })
+);
+
 export const quotes = pgTable(
   "quotes",
   {
