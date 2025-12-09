@@ -853,17 +853,6 @@ function buildTaskTitle(message: string, note?: string | null): string {
   return base;
 }
 
-function extractActionNote(message: string): string | null {
-  const match = message.match(/(?:note|notes|details|message)[:\-]\s*(.+)$/i);
-  if (match && typeof match[1] === "string") {
-    const text = match[1].trim();
-    if (text.length > 0) {
-      return text.slice(0, 200);
-    }
-  }
-  return null;
-}
-
 async function classifyIntent(message: string): Promise<IntentClassification | null> {
   const apiKey = process.env["OPENAI_API_KEY"];
   const model = (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
