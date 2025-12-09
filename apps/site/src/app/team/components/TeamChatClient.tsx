@@ -485,7 +485,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           const timePart = actionStartTime[action.id];
           if (datePart) {
             const iso = timePart ? `${datePart}T${timePart}:00` : `${datePart}T09:00:00`;
-            payload.startAt = new Date(iso).toISOString();
+            payload["startAt"] = new Date(iso).toISOString();
           }
         }
         const res = await fetch("/api/chat/actions", {
