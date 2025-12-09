@@ -904,15 +904,16 @@ Keep note short (<120 chars). If unsure, use intent "none".
     const data = (await res.json()) as { output_text?: string };
     const raw = data.output_text ?? "";
     const parsed = safeJsonParse(raw);
-    if (parsed && typeof parsed.intent === "string") {
+    if (parsed && typeof parsed["intent"] === "string") {
       return {
-        intent: ["booking", "contact", "quote", "task"].includes(parsed.intent) ? parsed.intent : "none",
-        contactName: typeof parsed.contactName === "string" ? parsed.contactName : undefined,
-        address: typeof parsed.address === "string" ? parsed.address : undefined,
-        services: Array.isArray(parsed.services)
-          ? parsed.services.filter((s: unknown) => typeof s === "string" && s.trim().length)
+        intent: ["booking", "contact", "quote", "task"].includes(parsed["intent"]) ? parsed["intent"] : "none",
+        contactName: typeof parsed["contactName"] === "string" ? parsed["contactName"] : undefined,
+        address: typeof parsed["address"] === "string" ? parsed["address"] : undefined,
+        services: Array.isArray(parsed["services"])
+          ? parsed["services"].filter((s: unknown) => typeof s === "string" && s.trim().length)
           : undefined,
-        note: typeof parsed.note === "string" ? parsed.note : undefined
+        note: typeof parsed["note"] === "string" ? parsed["note"] : undefined,
+        when: typeof parsed["when"] === "string" ? parsed["when"] : undefined
       };
     }
   } catch (error) {
