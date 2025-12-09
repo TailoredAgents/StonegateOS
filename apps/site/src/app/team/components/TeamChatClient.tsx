@@ -465,17 +465,17 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         }
         if (action.type === "book_appointment") {
           const selected = actionServices[action.id];
-          payload.services =
+          payload["services"] =
             selected && selected.length
               ? [selected]
               : Array.isArray(action.payload?.["services"]) && action.payload["services"].length
                 ? action.payload["services"]
                 : ["junk_removal_primary"];
-          payload.durationMinutes =
+          payload["durationMinutes"] =
             typeof actionDurations[action.id] === "number" && actionDurations[action.id] > 0
               ? actionDurations[action.id]
               : action.payload?.["durationMinutes"] ?? 60;
-          payload.travelBufferMinutes =
+          payload["travelBufferMinutes"] =
             typeof actionTravel[action.id] === "number" && actionTravel[action.id] >= 0
               ? actionTravel[action.id]
               : action.payload?.["travelBufferMinutes"] ?? 30;
