@@ -368,6 +368,135 @@ export const crmPipelineRelations = relations(crmPipeline, ({ one }) => ({
   })
 }));
 
+// Plaid banking data
+export const plaidItems = pgTable(
+  "plaid_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    itemId: text("item_id").notNull().unique(),
+    accessToken: text("access_token").notNull(),
+    institutionId: text("institution_id"),
+    institutionName: text("institution_name"),
+    cursor: text("cursor"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    itemIdx: uniqueIndex("plaid_items_item_idx").on(table.itemId)
+  })
+);
+
+export const plaidAccounts = pgTable(
+  "plaid_accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => plaidItems.id, { onDelete: "cascade" }),
+    accountId: text("account_id").notNull(),
+    name: text("name"),
+    officialName: text("official_name"),
+    mask: varchar("mask", { length: 10 }),
+    type: text("type"),
+    subtype: text("subtype"),
+    isoCurrencyCode: varchar("iso_currency_code", { length: 8 }),
+    available: numeric("available", { precision: 14, scale: 2 }),
+    current: numeric("current", { precision: 14, scale: 2 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    accountIdx: uniqueIndex("plaid_accounts_account_idx").on(table.accountId),
+    itemIdx: index("plaid_accounts_item_idx").on(table.itemId)
+  })
+);
+
+export const plaidTransactions = pgTable(
+  "plaid_transactions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => plaidAccounts.id, { onDelete: "cascade" }),
+    transactionId: text("transaction_id").notNull(),
+    name: text("name"),
+    merchantName: text("merchant_name"),
+    amount: integer("amount_cents").notNull(), // store in cents
+    isoCurrencyCode: varchar("iso_currency_code", { length: 8 }),
+    date: timestamp("date", { withTimezone: false }).notNull(),
+    pending: boolean("pending").default(false).notNull(),
+    category: text("category").array(),
+    raw: jsonb("raw"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    txnIdx: uniqueIndex("plaid_transactions_txn_idx").on(table.transactionId),
+    accountIdx: index("plaid_transactions_account_idx").on(table.accountId),
+    dateIdx: index("plaid_transactions_date_idx").on(table.date)
+  })
+);
+
+export const expenses = pgTable(
+  "expenses",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    amount: integer("amount_cents").notNull(),
+    currency: varchar("currency", { length: 8 }).default("USD").notNull(),
+    category: text("category"),
+    vendor: text("vendor"),
+    memo: text("memo"),
+    method: text("method"),
+    source: text("source").default("manual").notNull(),
+    paidAt: timestamp("paid_at", { withTimezone: true }).defaultNow().notNull(),
+    bankTransactionId: uuid("bank_transaction_id").references(() => plaidTransactions.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    txnIdx: index("expenses_bank_txn_idx").on(table.bankTransactionId),
+    paidAtIdx: index("expenses_paid_at_idx").on(table.paidAt)
+  })
+);
+
+export const plaidItemRelations = relations(plaidItems, ({ many }) => ({
+  accounts: many(plaidAccounts)
+}));
+
+export const plaidAccountRelations = relations(plaidAccounts, ({ one, many }) => ({
+  item: one(plaidItems, {
+    fields: [plaidAccounts.itemId],
+    references: [plaidItems.id]
+  }),
+  transactions: many(plaidTransactions)
+}));
+
+export const plaidTransactionRelations = relations(plaidTransactions, ({ one }) => ({
+  account: one(plaidAccounts, {
+    fields: [plaidTransactions.accountId],
+    references: [plaidAccounts.id]
+  })
+}));
+
+export const expenseRelations = relations(expenses, ({ one }) => ({
+  bankTransaction: one(plaidTransactions, {
+    fields: [expenses.bankTransactionId],
+    references: [plaidTransactions.id]
+  })
+}));
+
 // Payments (Stripe charge ingestion for reconciliation)
 export const payments = pgTable(
   "payments",

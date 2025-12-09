@@ -7,22 +7,23 @@
         "build": "next build --turbopack",
         "start": "next start",
         "lint": "eslint",
-        "test": "jest --config jest.config.cjs --passWithNoTests"
-    },
-    "dependencies": {
-        "@myst-os/pricing": "workspace:*",
-        "drizzle-orm": "0.44.6",
-        "libphonenumber-js": "^1.11.10",
-        "lru-cache": "^10.4.3",
-        "luxon": "^3.5.0",
-        "nanoid": "^5.0.7",
-        "next": "15.5.5",
-        "nodemailer": "^6.9.16",
-        "postgres": "^3.4.4",
-        "react": "19.1.0",
-        "react-dom": "19.1.0",
-        "zod": "^3.24.1"
-    },
+    "test": "jest --config jest.config.cjs --passWithNoTests"
+  },
+  "dependencies": {
+    "@myst-os/pricing": "workspace:*",
+    "drizzle-orm": "0.44.6",
+    "libphonenumber-js": "^1.11.10",
+    "lru-cache": "^10.4.3",
+    "luxon": "^3.5.0",
+    "nanoid": "^5.0.7",
+    "next": "15.5.5",
+    "nodemailer": "^6.9.16",
+    "plaid": "^25.0.0",
+    "postgres": "^3.4.4",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "zod": "^3.24.1"
+  },
     "devDependencies": {
         "@eslint/eslintrc": "^3",
         "@myst-os/config": "workspace:*",
