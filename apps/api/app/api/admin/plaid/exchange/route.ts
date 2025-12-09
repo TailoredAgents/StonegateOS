@@ -51,6 +51,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         }
       })
       .returning();
+    if (!item) {
+      return NextResponse.json({ error: "plaid_item_upsert_failed" }, { status: 500 });
+    }
 
     // Fetch accounts for this item and upsert
     const accountsRes = await plaid.accountsGet({ access_token: accessToken });
