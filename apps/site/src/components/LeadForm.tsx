@@ -632,8 +632,8 @@ export function LeadForm({ services, className, ...props }: LeadFormProps) {
         )}
         <p className="mt-6 text-xs text-neutral-500">
           Need faster help? Call{" "}
-          <a href="tel:16785417725" className="text-accent-600 underline">
-            (678) 541-7725
+          <a href="tel:14046920768" className="text-accent-600 underline">
+            (404) 692-0768
           </a>{" "}
           and mention your estimate request.
         </p>
@@ -763,7 +763,7 @@ export function LeadForm({ services, className, ...props }: LeadFormProps) {
               name="phone"
               type="tel"
               required
-              placeholder="(678) 541-7725"
+              placeholder="(404) 692-0768"
               className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
             />
           </div>

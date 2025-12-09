@@ -16,7 +16,7 @@ export function Footer() {
           }
           secondaryAction={
             <Button variant="secondary" asChild>
-              <a href="tel:16785417725">Call (678) 541-7725</a>
+              <a href="tel:14046920768">Call (404) 692-0768</a>
             </Button>
           }
         />
@@ -31,13 +31,13 @@ export function Footer() {
             <p className="font-semibold text-neutral-700">Contact</p>
             <ul className="mt-2 space-y-1">
               <li>
-                <a href="tel:16785417725" className="text-neutral-600 hover:text-primary-700">
-                  (678) 541-7725
+                <a href="tel:14046920768" className="text-neutral-600 hover:text-primary-700">
+                  (404) 692-0768
                 </a>
               </li>
               <li>
                 <a
-                  href="sms:16785417725"
+                  href="sms:14046920768"
                   className="text-neutral-600 hover:text-primary-700"
                 >
                   Text the crew
