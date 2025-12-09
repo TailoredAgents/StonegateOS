@@ -66,6 +66,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       city: properties.city,
       state: properties.state,
       postalCode: properties.postalCode,
+      lat: properties.lat,
+      lng: properties.lng,
       servicesRequested: leads.servicesRequested,
       rescheduleToken: appointments.rescheduleToken,
       calendarEventId: appointments.calendarEventId,
@@ -104,6 +106,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     string,
     { id: string; filename: string; url: string; contentType: string | null; createdAt: string }[]
   >();
+  const tasksMap = new Map<string, { id: string; title: string; status: string; createdAt: string }[]>();
 
   if (appointmentIds.length > 0) {
     const noteRows = await db
@@ -158,6 +161,33 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     for (const attList of attachmentsMap.values()) {
       attList.sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
+    }
+
+    const taskRows = await db
+      .select({
+        id: appointmentTasks.id,
+        appointmentId: appointmentTasks.appointmentId,
+        title: appointmentTasks.title,
+        status: appointmentTasks.status,
+        createdAt: appointmentTasks.createdAt
+      })
+      .from(appointmentTasks)
+      .where(inArray(appointmentTasks.appointmentId, appointmentIds));
+
+    for (const task of taskRows) {
+      if (!tasksMap.has(task.appointmentId)) {
+        tasksMap.set(task.appointmentId, []);
+      }
+      tasksMap.get(task.appointmentId)!.push({
+        id: task.id,
+        title: task.title,
+        status: task.status ?? "open",
+        createdAt: task.createdAt.toISOString()
+      });
+    }
+
+    for (const taskList of tasksMap.values()) {
+      taskList.sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
     }
   }
 
@@ -226,14 +256,17 @@ export async function GET(request: NextRequest): Promise<Response> {
         addressLine1: row.addressLine1 ?? "Undisclosed",
         city: row.city ?? "",
         state: row.state ?? "",
-        postalCode: row.postalCode ?? ""
+        postalCode: row.postalCode ?? "",
+        lat: row.lat ? Number(row.lat) : null,
+        lng: row.lng ? Number(row.lng) : null
       },
       calendarEventId: row.calendarEventId,
       rescheduleToken: row.rescheduleToken,
       crew: row.crew ?? null,
       owner: row.owner ?? null,
       notes: notesMap.get(row.id) ?? [],
-      attachments: attachmentsMap.get(row.id) ?? []
+      attachments: attachmentsMap.get(row.id) ?? [],
+      tasks: tasksMap.get(row.id) ?? []
     };
   });
 

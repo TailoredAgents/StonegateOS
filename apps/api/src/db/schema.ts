@@ -380,6 +380,27 @@ export const crmTaskRelations = relations(crmTasks, ({ one }) => ({
   })
 }));
 
+export const appointmentTasks = pgTable(
+  "appointment_tasks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    status: text("status").default("open").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    apptIdx: index("appointment_tasks_appt_idx").on(table.appointmentId),
+    statusIdx: index("appointment_tasks_status_idx").on(table.status)
+  })
+);
+
 export const crmPipelineRelations = relations(crmPipeline, ({ one }) => ({
   contact: one(contacts, {
     fields: [crmPipeline.contactId],
