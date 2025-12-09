@@ -44,6 +44,10 @@ type ActionRequest =
   | { type: "create_task"; payload: CreateTaskPayload }
   | { type: "book_appointment"; payload: BookAppointmentPayload };
 
+const ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
+const ACTION_RATE_LIMIT_MS = Number(process.env["CHAT_ACTION_RATE_MS"] ?? 0);
+const lastActionByType = new Map<string, number>();
+
 function getAdminContext() {
   const apiBase =
     process.env["API_BASE_URL"] ??
@@ -59,12 +63,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
 
+  if (!ACTIONS_ENABLED) {
+    return NextResponse.json({ error: "actions_disabled" }, { status: 403 });
+  }
+
   const { apiBase, adminKey } = getAdminContext();
   const hdrs = await headers();
   const apiKey = adminKey ?? hdrs.get("x-api-key");
   if (!apiKey) {
     return NextResponse.json({ error: "admin_key_missing" }, { status: 401 });
   }
+
+  const now = Date.now();
+  const last = lastActionByType.get(payload.type);
+  if (ACTION_RATE_LIMIT_MS > 0 && last && now - last < ACTION_RATE_LIMIT_MS) {
+    return NextResponse.json({ error: "rate_limited", retryInMs: ACTION_RATE_LIMIT_MS - (now - last) }, { status: 429 });
+  }
+  lastActionByType.set(payload.type, now);
 
   if (payload.type === "create_contact") {
     const body = payload.payload;
@@ -85,7 +100,16 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/json",
         "x-api-key": apiKey
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify({
+        contactName: body.contactName.trim(),
+        addressLine1: body.addressLine1.trim(),
+        city: body.city.trim(),
+        state: body.state.trim(),
+        postalCode: body.postalCode.trim(),
+        addressLine2: typeof body.addressLine2 === "string" ? body.addressLine2.trim() : undefined,
+        phone: typeof body.phone === "string" ? body.phone.trim() : undefined,
+        email: typeof body.email === "string" ? body.email.trim() : undefined
+      })
     });
 
     if (!res.ok) {
@@ -166,6 +190,12 @@ export async function POST(request: NextRequest) {
     if (!body || typeof body.contactId !== "string" || typeof body.propertyId !== "string" || typeof body.startAt !== "string") {
       return NextResponse.json({ error: "missing_booking_fields" }, { status: 400 });
     }
+    if (body.durationMinutes !== undefined && (!Number.isFinite(body.durationMinutes) || body.durationMinutes <= 0)) {
+      return NextResponse.json({ error: "invalid_duration" }, { status: 400 });
+    }
+    if (body.travelBufferMinutes !== undefined && (!Number.isFinite(body.travelBufferMinutes) || body.travelBufferMinutes < 0)) {
+      return NextResponse.json({ error: "invalid_travel_buffer" }, { status: 400 });
+    }
 
     const res = await fetch(`${apiBase}/api/admin/booking/book`, {
       method: "POST",
@@ -179,7 +209,9 @@ export async function POST(request: NextRequest) {
         startAt: body.startAt,
         durationMinutes: typeof body.durationMinutes === "number" ? body.durationMinutes : 60,
         travelBufferMinutes: typeof body.travelBufferMinutes === "number" ? body.travelBufferMinutes : 30,
-        services: Array.isArray(body.services) ? body.services : []
+        services: Array.isArray(body.services)
+          ? body.services.filter((s) => typeof s === "string" && s.trim().length).slice(0, 3)
+          : []
       })
     });
 

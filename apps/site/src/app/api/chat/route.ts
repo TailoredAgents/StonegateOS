@@ -127,6 +127,8 @@ type IntentClassification = {
   when?: string;
 };
 
+const CLASSIFIER_ENABLED = process.env["CHAT_CLASSIFIER_ENABLED"] !== "false";
+
 function getAdminContext() {
   const apiBase =
     process.env["API_BASE_URL"] ??
@@ -223,7 +225,7 @@ export async function POST(request: NextRequest) {
       propertyId,
       property
     });
-    const classification = isTeamChat ? await classifyIntent(trimmedMessage) : null;
+    const classification = isTeamChat && CLASSIFIER_ENABLED ? await classifyIntent(trimmedMessage) : null;
     const wantsSchedule = looksLikeScheduleQuestion(trimmedMessage);
     const wantsRevenue = looksLikeRevenueQuestion(trimmedMessage);
     const range = wantsSchedule || wantsRevenue ? pickRange(trimmedMessage) : "this_week";
