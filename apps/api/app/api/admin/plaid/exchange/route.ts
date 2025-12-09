@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getPlaidClient, plaidConfigured } from "@/lib/plaid";
 import { isAdminRequest } from "../../../web/admin";
 import { getDb, plaidItems, plaidAccounts } from "@/db";
-import { eq } from "drizzle-orm";
+import { eq, type InferInsertModel } from "drizzle-orm";
 
 type ExchangeRequest = {
   public_token?: string;
@@ -57,20 +57,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     for (const acct of accountsRes.data.accounts ?? []) {
       const available = acct.balances.available ?? null;
       const current = acct.balances.current ?? null;
+      const insertPayload: InferInsertModel<typeof plaidAccounts> = {
+        itemId: item.id,
+        accountId: acct.account_id,
+        name: acct.name ?? null,
+        officialName: acct.official_name ?? null,
+        mask: acct.mask ?? null,
+        type: acct.type ?? null,
+        subtype: acct.subtype ?? null,
+        isoCurrencyCode: acct.balances.iso_currency_code ?? null,
+        available: available !== null ? String(available) : null,
+        current: current !== null ? String(current) : null
+      };
       await db
         .insert(plaidAccounts)
-        .values({
-          itemId: item.id,
-          accountId: acct.account_id,
-          name: acct.name ?? null,
-          officialName: acct.official_name ?? null,
-          mask: acct.mask ?? null,
-          type: acct.type ?? null,
-          subtype: acct.subtype ?? null,
-          isoCurrencyCode: acct.balances.iso_currency_code ?? null,
-          available: available !== null ? available : null,
-          current: current !== null ? current : null
-        })
+        .values(insertPayload)
         .onConflictDoUpdate({
           target: plaidAccounts.accountId,
           set: {
@@ -80,8 +81,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             type: acct.type ?? null,
             subtype: acct.subtype ?? null,
             isoCurrencyCode: acct.balances.iso_currency_code ?? null,
-            available: available !== null ? available : null,
-            current: current !== null ? current : null,
+            available: insertPayload.available,
+            current: insertPayload.current,
             updatedAt: new Date()
           }
         });
