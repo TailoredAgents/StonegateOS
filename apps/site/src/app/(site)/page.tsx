@@ -50,22 +50,11 @@ const testimonials = [
     location: "Canton"
   },
   {
-    quote: "Text updates, polite crew, and quick yard debris removal. CouldnÃ¢â‚¬â„¢t be easier.",
+    quote: "Text updates, polite crew, and quick yard debris removal. Couldn't be easier.",
     name: "Alyssa K.",
     location: "Roswell"
   }
 ];
-
-// Correct garbled apostrophes in Alyssa's testimonial without touching the original literal
-const testimonialsFixed = testimonials.map((t) =>
-  t.name === "Alyssa K."
-    ? {
-        ...t,
-        quote:
-          "Text updates, polite crew, and quick yard debris removal. Couldn't be easier."
-      }
-    : t
-);
 
 const stats = [
   { label: "Projects", value: "1,200+", secondary: "Completed across North Metro Atlanta" },
@@ -272,3 +261,4 @@ export default function HomePage() {
     </div>
   );
 }
+
