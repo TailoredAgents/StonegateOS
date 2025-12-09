@@ -804,10 +804,10 @@ async function extractTaskSuggestion(
   };
 }
 
-async function findAppointmentForContext(contactId?: string, propertyId?: string): Promise<{
-  id: string;
-  startAt: string | null;
-}> {
+async function findAppointmentForContext(
+  contactId?: string,
+  propertyId?: string
+): Promise<{ id: string; startAt: string | null } | null> {
   const { apiBase, adminKey } = getAdminContext();
   const hdrs = await headers();
   const apiKey = adminKey ?? hdrs.get("x-api-key");
