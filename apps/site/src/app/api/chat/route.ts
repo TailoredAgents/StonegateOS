@@ -118,6 +118,14 @@ type ActionSuggestion = (CreateContactAction | CreateQuoteAction | CreateTaskAct
   note?: string | null;
 };
 
+type IntentClassification = {
+  intent: "booking" | "contact" | "quote" | "task" | "none";
+  contactName?: string;
+  address?: string;
+  services?: string[];
+  note?: string;
+};
+
 function getAdminContext() {
   const apiBase =
     process.env["API_BASE_URL"] ??
@@ -214,6 +222,7 @@ export async function POST(request: NextRequest) {
       propertyId,
       property
     });
+    const classification = isTeamChat ? await classifyIntent(trimmedMessage) : null;
     const wantsSchedule = looksLikeScheduleQuestion(trimmedMessage);
     const wantsRevenue = looksLikeRevenueQuestion(trimmedMessage);
     const range = wantsSchedule || wantsRevenue ? pickRange(trimmedMessage) : "this_week";
@@ -231,7 +240,8 @@ export async function POST(request: NextRequest) {
             propertyId,
             property
           },
-          booking
+          booking,
+          classification
         )
       : [];
     const actionNote =
@@ -445,17 +455,21 @@ async function buildActionSuggestions(
     propertyId?: string;
     property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
   },
-  booking?: BookingPayload | null
+  booking?: BookingPayload | null,
+  classification?: IntentClassification | null
 ): Promise<ActionSuggestion[]> {
   const actions: ActionSuggestion[] = [];
-  const note = extractActionNote(message);
+  const note = extractActionNote(message) ?? classification?.note ?? null;
 
-  const contactAction = extractContactSuggestion(message, note);
+  const contactAction = extractContactSuggestion(message, note, {
+    contactName: classification?.contactName,
+    address: classification?.address
+  });
   if (contactAction) {
     actions.push(contactAction);
   }
 
-  const quoteAction = extractQuoteSuggestion(message, ctx, note);
+  const quoteAction = extractQuoteSuggestion(message, ctx, note, classification?.services);
   if (quoteAction) {
     actions.push(quoteAction);
   }
@@ -478,7 +492,11 @@ async function buildActionSuggestions(
   return actions.slice(0, 3);
 }
 
-function extractContactSuggestion(message: string, note?: string | null): CreateContactAction | null {
+function extractContactSuggestion(
+  message: string,
+  note?: string | null,
+  hints?: { contactName?: string | null; address?: string | null }
+): CreateContactAction | null {
   const lower = message.toLowerCase();
   const intentMatch =
     /(add|new|create)\s+(a\s+)?contact/.test(lower) ||
@@ -487,8 +505,8 @@ function extractContactSuggestion(message: string, note?: string | null): Create
 
   const pattern = /contact\s+(.+?)\s+at\s+(.+)/i;
   const match = message.match(pattern);
-  const contactName = match?.[1]?.trim() ?? extractNameFallback(message);
-  const addressRaw = match?.[2]?.trim() ?? extractAddressFromMessage(message);
+  const contactName = (match?.[1]?.trim() ?? hints?.contactName ?? extractNameFallback(message)).trim();
+  const addressRaw = match?.[2]?.trim() ?? hints?.address ?? extractAddressFromMessage(message);
   const address = addressRaw ? parseAddress(addressRaw) : null;
 
   if (!contactName.length || !address) {
@@ -575,7 +593,8 @@ function extractQuoteSuggestion(
     propertyId?: string;
     property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
   },
-  note?: string | null
+  note?: string | null,
+  servicesHint?: string[] | null
 ): CreateQuoteAction | null {
   const lower = message.toLowerCase();
   if (
@@ -589,7 +608,7 @@ function extractQuoteSuggestion(
   }
   if (!ctx.contactId || !ctx.propertyId) return null;
 
-  const services = deriveServicesFromMessage(message);
+  const services = deriveServicesFromMessage(message, servicesHint);
   const propertyLabel = ctx.property
     ? [ctx.property.addressLine1, ctx.property.city].filter((part) => part && part.length).join(", ")
     : null;
@@ -625,8 +644,15 @@ const SERVICE_KEYWORDS: Array<{ id: string; patterns: RegExp[] }> = [
   { id: "other", patterns: [/quote/i, /estimate/i] }
 ];
 
-function deriveServicesFromMessage(message: string): string[] {
+function deriveServicesFromMessage(message: string, hints?: string[] | null): string[] {
   const services: string[] = [];
+  if (Array.isArray(hints)) {
+    for (const hint of hints) {
+      if (typeof hint === "string" && hint.trim().length && !services.includes(hint.trim())) {
+        services.push(hint.trim());
+      }
+    }
+  }
   for (const entry of SERVICE_KEYWORDS) {
     if (entry.patterns.some((pattern) => pattern.test(message))) {
       if (!services.includes(entry.id)) {
@@ -791,6 +817,71 @@ function extractActionNote(message: string): string | null {
     }
   }
   return null;
+}
+
+async function classifyIntent(message: string): Promise<IntentClassification | null> {
+  const apiKey = process.env["OPENAI_API_KEY"];
+  const model = (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
+  if (!apiKey) return null;
+
+  const systemPrompt = `
+You classify a chat message into intents: booking, contact, quote, task, or none.
+Return ONLY JSON with keys: intent, contactName, address, services (array), note.
+Keep note short (<120 chars). If unsure, use intent "none".
+`.trim();
+
+  const payload = {
+    model,
+    input: [
+      { role: "system" as const, content: systemPrompt },
+      { role: "user" as const, content: message }
+    ],
+    text: { verbosity: "low" as const },
+    max_output_tokens: 180,
+    response_format: { type: "json_object" as const }
+  };
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "OpenAI-Beta": "assistants=v2"
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      console.warn("[chat] intent classify failed", res.status, text.slice(0, 120));
+      return null;
+    }
+    const data = (await res.json()) as { output_text?: string };
+    const raw = data.output_text ?? "";
+    const parsed = safeJsonParse(raw);
+    if (parsed && typeof parsed.intent === "string") {
+      return {
+        intent: ["booking", "contact", "quote", "task"].includes(parsed.intent) ? parsed.intent : "none",
+        contactName: typeof parsed.contactName === "string" ? parsed.contactName : undefined,
+        address: typeof parsed.address === "string" ? parsed.address : undefined,
+        services: Array.isArray(parsed.services)
+          ? parsed.services.filter((s: unknown) => typeof s === "string" && s.trim().length)
+          : undefined,
+        note: typeof parsed.note === "string" ? parsed.note : undefined
+      };
+    }
+  } catch (error) {
+    console.warn("[chat] intent classify error", error);
+  }
+  return null;
+}
+
+function safeJsonParse(text: string): Record<string, any> | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 function newActionId(): string {

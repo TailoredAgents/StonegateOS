@@ -130,6 +130,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const [actionStatuses, setActionStatuses] = React.useState<Record<string, ActionStatus>>({});
   const [actionServices, setActionServices] = React.useState<Record<string, string>>({});
   const [actionNotes, setActionNotes] = React.useState<Record<string, string>>({});
+  const [actionDurations, setActionDurations] = React.useState<Record<string, number>>({});
+  const [actionTravel, setActionTravel] = React.useState<Record<string, number>>({});
   const endRef = React.useRef<HTMLDivElement>(null);
   const mediaRecorderRef = React.useRef<any>(null);
   const chunksRef = React.useRef<BlobPart[]>([]);
@@ -213,6 +215,30 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           for (const action of actions) {
             if (!next[action.id]) {
               next[action.id] = action.note ?? "";
+            }
+          }
+          return next;
+        });
+        setActionDurations((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (action.type === "book_appointment" && !next[action.id]) {
+              next[action.id] =
+                typeof action.payload?.durationMinutes === "number" && action.payload.durationMinutes > 0
+                  ? action.payload.durationMinutes
+                  : 60;
+            }
+          }
+          return next;
+        });
+        setActionTravel((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (action.type === "book_appointment" && !next[action.id]) {
+              next[action.id] =
+                typeof action.payload?.travelBufferMinutes === "number" && action.payload.travelBufferMinutes >= 0
+                  ? action.payload.travelBufferMinutes
+                  : 30;
             }
           }
           return next;
@@ -414,6 +440,14 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
             : Array.isArray(action.payload?.services) && action.payload.services.length
               ? action.payload.services
               : ["junk_removal_primary"];
+        payload.durationMinutes =
+          typeof actionDurations[action.id] === "number" && actionDurations[action.id] > 0
+            ? actionDurations[action.id]
+            : action.payload?.durationMinutes ?? 60;
+        payload.travelBufferMinutes =
+          typeof actionTravel[action.id] === "number" && actionTravel[action.id] >= 0
+            ? actionTravel[action.id]
+            : action.payload?.travelBufferMinutes ?? 30;
       }
       const res = await fetch("/api/chat/actions", {
         method: "POST",
@@ -616,24 +650,60 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                             </div>
                           </div>
                           {action.type === "book_appointment" ? (
-                            <div className="flex items-center gap-2 text-[11px] text-slate-600">
-                              <span className="font-semibold text-slate-700">Service</span>
-                              <select
-                                className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
-                                value={actionServices[action.id] ?? "junk_removal_primary"}
-                                onChange={(e) =>
-                                  setActionServices((prev) => ({ ...prev, [action.id]: e.target.value }))
-                                }
-                              >
-                                {(Array.isArray(action.payload?.services) && action.payload.services.length
-                                  ? action.payload.services
-                                  : ["junk_removal_primary"]
-                                ).map((svc) => (
-                                  <option key={svc} value={svc}>
-                                    {svc.replace(/_/g, " ")}
-                                  </option>
-                                ))}
-                              </select>
+                            <div className="grid gap-2 text-[11px] text-slate-600 sm:grid-cols-3">
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Service</span>
+                                <select
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionServices[action.id] ?? "junk_removal_primary"}
+                                  onChange={(e) =>
+                                    setActionServices((prev) => ({ ...prev, [action.id]: e.target.value }))
+                                  }
+                                >
+                                  {(Array.isArray(action.payload?.services) && action.payload.services.length
+                                    ? action.payload.services
+                                    : ["junk_removal_primary"]
+                                  ).map((svc) => (
+                                    <option key={svc} value={svc}>
+                                      {svc.replace(/_/g, " ")}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Duration (min)</span>
+                                <input
+                                  type="number"
+                                  min={15}
+                                  max={240}
+                                  step={15}
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionDurations[action.id] ?? 60}
+                                  onChange={(e) =>
+                                    setActionDurations((prev) => ({
+                                      ...prev,
+                                      [action.id]: Number(e.target.value)
+                                    }))
+                                  }
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Travel buffer (min)</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={180}
+                                  step={10}
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionTravel[action.id] ?? 30}
+                                  onChange={(e) =>
+                                    setActionTravel((prev) => ({
+                                      ...prev,
+                                      [action.id]: Number(e.target.value)
+                                    }))
+                                  }
+                                />
+                              </label>
                             </div>
                           ) : null}
                           {action.type === "create_quote" || action.type === "create_task" ? (
