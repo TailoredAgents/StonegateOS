@@ -211,36 +211,26 @@ export async function EstimatesSection(): Promise<ReactElement> {
                   </form>
                 </details>
                 <details className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
-                  <summary className="cursor-pointer text-xs font-medium text-neutral-700">Add attachment (link)</summary>
+                  <summary className="cursor-pointer text-xs font-medium text-neutral-700">Add attachment (upload)</summary>
                   <form action={addApptAttachmentAction} className="mt-2 flex flex-col gap-2">
                     <input type="hidden" name="appointmentId" value={a.id} />
                     <label className="flex flex-col gap-1">
-                      <span>File name</span>
+                      <span>File</span>
+                      <input
+                        type="file"
+                        name="file"
+                        required
+                        className="rounded-md border border-neutral-300 px-2 py-1"
+                        accept="image/*,application/pdf"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span>File name (optional override)</span>
                       <input
                         type="text"
                         name="filename"
-                        required
                         className="rounded-md border border-neutral-300 px-2 py-1"
                         placeholder="before-after.jpg"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span>URL</span>
-                      <input
-                        type="url"
-                        name="url"
-                        required
-                        className="rounded-md border border-neutral-300 px-2 py-1"
-                        placeholder="https://..."
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span>Content type (optional)</span>
-                      <input
-                        type="text"
-                        name="contentType"
-                        className="rounded-md border border-neutral-300 px-2 py-1"
-                        placeholder="image/jpeg"
                       />
                     </label>
                     <SubmitButton className="self-start rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white" pendingLabel="Saving...">

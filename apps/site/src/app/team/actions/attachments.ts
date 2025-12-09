@@ -6,19 +6,23 @@ import { callAdminApi } from "../lib/api";
 
 export async function addApptAttachmentAction(formData: FormData) {
   const appointmentId = formData.get("appointmentId");
-  const url = formData.get("url");
-  const filename = formData.get("filename");
-  const contentType = formData.get("contentType");
+  const file = formData.get("file");
+  const nameOverride = formData.get("filename");
 
   if (typeof appointmentId !== "string" || !appointmentId.trim()) return;
-  if (typeof url !== "string" || !url.trim() || typeof filename !== "string" || !filename.trim()) return;
+  if (!(file instanceof File)) return;
+
+  const buf = Buffer.from(await file.arrayBuffer());
+  const contentType = file.type || "application/octet-stream";
+  const base64 = buf.toString("base64");
+  const dataUrl = `data:${contentType};base64,${base64}`;
 
   await callAdminApi(`/api/appointments/${appointmentId}/attachments`, {
     method: "POST",
     body: JSON.stringify({
-      url: url.trim(),
-      filename: filename.trim(),
-      contentType: typeof contentType === "string" && contentType.trim() ? contentType.trim() : undefined
+      url: dataUrl,
+      filename: typeof nameOverride === "string" && nameOverride.trim().length ? nameOverride.trim() : file.name,
+      contentType
     })
   });
 

@@ -2,14 +2,16 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { getDb, appointmentAttachments, appointments } from "@/db";
+import { getDb, appointments, appointmentAttachments } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 
 const AttachmentSchema = z.object({
   filename: z.string().min(1),
-  url: z.string().url(),
+  url: z.string().min(1),
   contentType: z.string().optional()
 });
+
+const MAX_BYTES = 5 * 1024 * 1024; // 5MB
 
 export async function POST(
   request: NextRequest,
@@ -24,13 +26,46 @@ export async function POST(
     return NextResponse.json({ error: "missing_id" }, { status: 400 });
   }
 
-  const payload = (await request.json().catch(() => null)) as unknown;
-  const parsed = AttachmentSchema.safeParse(payload);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: "invalid_payload", message: parsed.error.flatten() },
-      { status: 400 }
-    );
+  const contentType = request.headers.get("content-type") ?? "";
+  let filename: string | null = null;
+  let url: string | null = null;
+  let storedContentType: string | null = null;
+
+  if (contentType.includes("multipart/form-data")) {
+    const form = await request.formData();
+    const file = form.get("file");
+    const name = form.get("filename");
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: "missing_file" }, { status: 400 });
+    }
+    filename = typeof name === "string" && name.trim().length ? name.trim() : file.name;
+    storedContentType = file.type || "application/octet-stream";
+    const buf = Buffer.from(await file.arrayBuffer());
+    if (buf.byteLength > MAX_BYTES) {
+      return NextResponse.json({ error: "file_too_large" }, { status: 413 });
+    }
+    const base64 = buf.toString("base64");
+    url = `data:${storedContentType};base64,${base64}`;
+  } else {
+    const payload = (await request.json().catch(() => null)) as unknown;
+    const parsed = AttachmentSchema.safeParse(payload);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "invalid_payload", message: parsed.error.flatten() },
+        { status: 400 }
+      );
+    }
+    filename = parsed.data.filename;
+    url = parsed.data.url;
+    storedContentType = parsed.data.contentType ?? null;
+
+    if (url.startsWith("data:")) {
+      const base64Part = url.split(",")[1] ?? "";
+      const estimatedBytes = Math.ceil((base64Part.length * 3) / 4);
+      if (estimatedBytes > MAX_BYTES) {
+        return NextResponse.json({ error: "file_too_large" }, { status: 413 });
+      }
+    }
   }
 
   const db = getDb();
@@ -43,9 +78,9 @@ export async function POST(
     .insert(appointmentAttachments)
     .values({
       appointmentId,
-      filename: parsed.data.filename,
-      url: parsed.data.url,
-      contentType: parsed.data.contentType ?? null
+      filename: filename!,
+      url: url!,
+      contentType: storedContentType
     })
     .returning();
 
