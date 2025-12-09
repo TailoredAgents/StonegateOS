@@ -3,8 +3,25 @@
 import React from "react";
 import { Button, cn } from "@myst-os/ui";
 
-type BookingSuggestion = { startAt: string; endAt: string; reason: string };
+type BookingSuggestion = { startAt: string; endAt: string; reason: string; services?: string[] };
 type BookingOption = BookingSuggestion & { services?: string[]; selectedService?: string };
+
+type ActionSuggestion = {
+  id: string;
+  type: "create_contact" | "create_quote" | "create_task" | "book_appointment";
+  summary: string;
+  payload: Record<string, any>;
+  context?: {
+    appointmentStartAt?: string | null;
+    propertyLabel?: string;
+  };
+};
+
+type ActionStatus =
+  | { state: "idle" }
+  | { state: "running" }
+  | { state: "success"; message?: string }
+  | { state: "error"; message?: string };
 
 type Message = {
   id: string;
@@ -16,6 +33,7 @@ type Message = {
     suggestions: BookingOption[];
     propertyLabel?: string;
   };
+  actions?: ActionSuggestion[];
 };
 
 type ContactOption = {
@@ -60,6 +78,7 @@ type AssistantPayload = {
     suggestions: BookingOption[];
     propertyLabel?: string;
   };
+  actions?: ActionSuggestion[];
 };
 
 async function callAssistant(
@@ -77,7 +96,7 @@ async function callAssistant(
     const response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, contactId, propertyId, property: propertyMeta })
+      body: JSON.stringify({ message, contactId, propertyId, property: propertyMeta, mode: "team" })
     });
     if (!response.ok) return null;
     const data = (await response.json()) as AssistantPayload;
@@ -108,6 +127,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
     | { state: "success"; message: string }
     | { state: "error"; message: string }
   >({ state: "idle" });
+  const [actionStatuses, setActionStatuses] = React.useState<Record<string, ActionStatus>>({});
+  const [actionServices, setActionServices] = React.useState<Record<string, string>>({});
+  const [actionNotes, setActionNotes] = React.useState<Record<string, string>>({});
   const endRef = React.useRef<HTMLDivElement>(null);
   const mediaRecorderRef = React.useRef<any>(null);
   const chunksRef = React.useRef<BlobPart[]>([]);
@@ -161,13 +183,49 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
               propertyLabel: payload.booking.propertyLabel
             }
           : undefined;
+      const actions = payload?.actions && payload.actions.length ? payload.actions : undefined;
+
+      if (actions && actions.length) {
+        setActionStatuses((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (!next[action.id]) {
+              next[action.id] = { state: "idle" };
+            }
+          }
+          return next;
+        });
+        setActionServices((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (!next[action.id]) {
+              const svc =
+                Array.isArray(action.payload?.services) && action.payload.services.length
+                  ? action.payload.services[0]
+                  : "junk_removal_primary";
+              next[action.id] = svc;
+            }
+          }
+          return next;
+        });
+        setActionNotes((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (!next[action.id]) {
+              next[action.id] = action.note ?? "";
+            }
+          }
+          return next;
+        });
+      }
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           sender: "bot",
           text: combinedReply,
-          ...(booking ? { booking } : {})
+          ...(booking ? { booking } : {}),
+          ...(actions ? { actions } : {})
         }
       ]);
       lastBotMessageRef.current = combinedReply;
@@ -322,6 +380,71 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
     [bookingInFlight, contacts, formatSlot]
   );
 
+  const handleActionDismiss = React.useCallback((messageId: string, actionId: string) => {
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.id === messageId
+          ? { ...msg, actions: msg.actions?.filter((action) => action.id !== actionId) ?? [] }
+          : msg
+      )
+    );
+    setActionStatuses((prev) => {
+      const next = { ...prev };
+      delete next[actionId];
+      return next;
+    });
+  }, []);
+
+  const handleActionConfirm = React.useCallback(async (action: ActionSuggestion) => {
+    setActionStatuses((prev) => ({ ...prev, [action.id]: { state: "running" } }));
+    try {
+      const payload = { ...action.payload };
+      const note = actionNotes[action.id]?.trim();
+      if (note && note.length > 0) {
+        payload.note = note;
+        if (action.type === "create_quote") {
+          payload.notes = note;
+        }
+      }
+      if (action.type === "book_appointment") {
+        const selected = actionServices[action.id];
+        payload.services =
+          selected && selected.length
+            ? [selected]
+            : Array.isArray(action.payload?.services) && action.payload.services.length
+              ? action.payload.services
+              : ["junk_removal_primary"];
+      }
+      const res = await fetch("/api/chat/actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: action.type, payload })
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        setActionStatuses((prev) => ({
+          ...prev,
+          [action.id]: { state: "error", message: `Action failed (HTTP ${res.status}): ${detail.slice(0, 140)}` }
+        }));
+        return;
+      }
+      const data = (await res.json().catch(() => ({}))) as { result?: { summary?: string } };
+      const summary =
+        data?.result && typeof data.result === "object"
+          ? (data.result as any).summary ?? "Action completed"
+          : "Action completed";
+      setActionStatuses((prev) => ({
+        ...prev,
+        [action.id]: { state: "success", message: summary }
+      }));
+    } catch (error) {
+      setActionStatuses((prev) => ({
+        ...prev,
+        [action.id]: { state: "error", message: `Action request failed: ${(error as Error).message}` }
+      }));
+    }
+  }, []);
+
   return (
     <div className="space-y-4">
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
@@ -457,6 +580,99 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                         ) : null}
                       </div>
                     ) : null}
+                  </div>
+                ) : null}
+
+                {message.actions && message.actions.length ? (
+                  <div className="space-y-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Actions</div>
+                    {message.actions.map((action) => {
+                      const status = actionStatuses[action.id]?.state ?? "idle";
+                      const statusMessage = actionStatuses[action.id]?.message;
+                      return (
+                        <div
+                          key={action.id}
+                          className="flex flex-col gap-2 rounded-lg border border-slate-100 bg-slate-50/80 px-2 py-2 text-xs text-slate-700"
+                        >
+                          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+                            <div className="font-semibold text-slate-800">{action.summary}</div>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void handleActionConfirm(action)}
+                                disabled={status === "running" || status === "success"}
+                                className="rounded-full border border-primary-200 bg-primary-50 px-3 py-1 text-[11px] font-semibold text-primary-800 transition hover:border-primary-300 hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {status === "running" ? "Working..." : status === "success" ? "Done" : "Confirm"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleActionDismiss(message.id, action.id)}
+                                disabled={status === "running"}
+                                className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          </div>
+                          {action.type === "book_appointment" ? (
+                            <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                              <span className="font-semibold text-slate-700">Service</span>
+                              <select
+                                className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                value={actionServices[action.id] ?? "junk_removal_primary"}
+                                onChange={(e) =>
+                                  setActionServices((prev) => ({ ...prev, [action.id]: e.target.value }))
+                                }
+                              >
+                                {(Array.isArray(action.payload?.services) && action.payload.services.length
+                                  ? action.payload.services
+                                  : ["junk_removal_primary"]
+                                ).map((svc) => (
+                                  <option key={svc} value={svc}>
+                                    {svc.replace(/_/g, " ")}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : null}
+                          {action.type === "create_quote" || action.type === "create_task" ? (
+                            <div className="flex flex-col gap-1 text-[11px] text-slate-600">
+                              <span className="font-semibold text-slate-700">Add note (optional)</span>
+                              <textarea
+                                rows={2}
+                                className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                value={actionNotes[action.id] ?? ""}
+                                onChange={(e) =>
+                                  setActionNotes((prev) => ({
+                                    ...prev,
+                                    [action.id]: e.target.value
+                                  }))
+                                }
+                                placeholder="Short note for this action"
+                              />
+                            </div>
+                          ) : null}
+                          {action.context?.appointmentStartAt ? (
+                            <div className="text-[11px] text-slate-500">
+                              Appointment:{" "}
+                              {action.context.appointmentStartAt
+                                ? new Date(action.context.appointmentStartAt).toLocaleString()
+                                : "Timing TBD"}
+                            </div>
+                          ) : null}
+                          {status === "error" || status === "success" ? (
+                            <div
+                              className={`text-[11px] ${
+                                status === "success" ? "text-emerald-700" : "text-rose-700"
+                              }`}
+                            >
+                              {statusMessage ?? (status === "success" ? "Completed" : "Action failed")}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : null}
               </div>

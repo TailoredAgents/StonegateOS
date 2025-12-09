@@ -18,7 +18,7 @@ Principles:
 
 Stay personable, concise, and helpful.`;
 
-type BookingSuggestion = { startAt: string; endAt: string; reason: string };
+type BookingSuggestion = { startAt: string; endAt: string; reason: string; services?: string[] };
 
 type BookingPayload = {
   contactId: string;
@@ -51,6 +51,71 @@ type ChatRequest = {
     state?: string;
     postalCode?: string;
   };
+  mode?: "team" | "public" | string;
+};
+
+type CreateContactAction = {
+  id: string;
+  type: "create_contact";
+  summary: string;
+  payload: {
+    contactName: string;
+    addressLine1: string;
+    city: string;
+    state: string;
+    postalCode: string;
+    addressLine2?: string | null;
+    phone?: string | null;
+    email?: string | null;
+  };
+};
+
+type CreateQuoteAction = {
+  id: string;
+  type: "create_quote";
+  summary: string;
+  payload: {
+    contactId: string;
+    propertyId: string;
+    services: string[];
+    notes?: string | null;
+    appointmentId?: string | null;
+    zoneId?: string | null;
+  };
+};
+
+type CreateTaskAction = {
+  id: string;
+  type: "create_task";
+  summary: string;
+  payload: {
+    appointmentId: string;
+    title: string;
+  };
+  context?: {
+    appointmentStartAt?: string | null;
+  };
+};
+
+type CreateBookingAction = {
+  id: string;
+  type: "book_appointment";
+  summary: string;
+  payload: {
+    contactId: string;
+    propertyId: string;
+    startAt: string;
+    durationMinutes?: number;
+    travelBufferMinutes?: number;
+    services?: string[];
+  };
+  context?: {
+    propertyLabel?: string;
+  };
+};
+
+type ActionSuggestion = (CreateContactAction | CreateQuoteAction | CreateTaskAction | CreateBookingAction) & {
+  note?: string | null;
 };
 
 function getAdminContext() {
@@ -64,7 +129,9 @@ function getAdminContext() {
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, contactId, propertyId, property } = (await request.json()) as ChatRequest;
+    const { message, contactId, propertyId, property, mode } = (await request.json()) as ChatRequest;
+    const audience = mode === "team" ? "team" : "public";
+    const isTeamChat = audience === "team";
     const trimmedMessage = message?.trim() ?? "";
     if (!trimmedMessage) {
       return NextResponse.json({ error: "missing_message" }, { status: 400 });
@@ -156,6 +223,22 @@ export async function POST(request: NextRequest) {
       wantsRevenue ? fetchRevenueForecast(range) : Promise.resolve(null)
     ]);
 
+    const actions = isTeamChat
+      ? await buildActionSuggestions(
+          trimmedMessage,
+          {
+            contactId,
+            propertyId,
+            property
+          },
+          booking
+        )
+      : [];
+    const actionNote =
+      isTeamChat && actions.length
+        ? actions.map((action) => `Action: ${action.summary}`).join("\n")
+        : null;
+
     const replyParts = [reply];
 
     if (booking && booking.suggestions.length) {
@@ -182,7 +265,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       reply: finalReply,
-      ...(booking ? { booking } : {})
+      ...(booking ? { booking } : {}),
+      ...(actions.length ? { actions } : {}),
+      ...(actionNote ? { actionNote } : {})
     });
   } catch (error) {
     console.error("[chat] Server error:", error);
@@ -351,4 +436,366 @@ async function fetchRevenueForecast(range: string): Promise<string | null> {
     console.warn("[chat] revenue_forecast_failed", error);
     return null;
   }
+}
+
+async function buildActionSuggestions(
+  message: string,
+  ctx: {
+    contactId?: string;
+    propertyId?: string;
+    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+  },
+  booking?: BookingPayload | null
+): Promise<ActionSuggestion[]> {
+  const actions: ActionSuggestion[] = [];
+  const note = extractActionNote(message);
+
+  const contactAction = extractContactSuggestion(message, note);
+  if (contactAction) {
+    actions.push(contactAction);
+  }
+
+  const quoteAction = extractQuoteSuggestion(message, ctx, note);
+  if (quoteAction) {
+    actions.push(quoteAction);
+  }
+
+  const taskAction = await extractTaskSuggestion(message, ctx, note);
+  if (taskAction) {
+    actions.push(taskAction);
+  }
+
+  if (booking) {
+    const bookingActions = buildBookingActions(booking, ctx);
+    actions.push(
+      ...bookingActions.map((action) => ({
+        ...action,
+        ...(note ? { note } : {})
+      }))
+    );
+  }
+
+  return actions.slice(0, 3);
+}
+
+function extractContactSuggestion(message: string, note?: string | null): CreateContactAction | null {
+  const lower = message.toLowerCase();
+  const intentMatch =
+    /(add|new|create)\s+(a\s+)?contact/.test(lower) ||
+    /(add|new|create)\s+[a-z]+\s+[a-z]+\s+(at|@)/i.test(message);
+  if (!intentMatch) return null;
+
+  const pattern = /contact\s+(.+?)\s+at\s+(.+)/i;
+  const match = message.match(pattern);
+  const contactName = match?.[1]?.trim() ?? extractNameFallback(message);
+  const addressRaw = match?.[2]?.trim() ?? extractAddressFromMessage(message);
+  const address = addressRaw ? parseAddress(addressRaw) : null;
+
+  if (!contactName.length || !address) {
+    return null;
+  }
+
+  const email = extractEmailFromText(message);
+  const phone = extractPhoneFromText(message);
+
+  return {
+    id: newActionId(),
+    type: "create_contact",
+    summary: `Create contact ${contactName} at ${address.addressLine1}, ${address.city}`,
+    payload: {
+      contactName,
+      addressLine1: address.addressLine1,
+      addressLine2: address.addressLine2 ?? null,
+      city: address.city,
+      state: address.state,
+      postalCode: address.postalCode,
+      ...(phone ? { phone } : {}),
+      ...(email ? { email } : {})
+    },
+    ...(note ? { note } : {})
+  };
+}
+
+function parseAddress(
+  raw: string
+): { addressLine1: string; addressLine2?: string | null; city: string; state: string; postalCode: string } | null {
+  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 3) return null;
+
+  const hasLine2 = parts.length >= 4;
+  const addressLine1 = parts[0];
+  const addressLine2 = hasLine2 ? parts[1] : null;
+  const city = hasLine2 ? parts[2] : parts[1];
+  const stateZip = hasLine2 ? parts.slice(3).join(" ") : parts.slice(2).join(" ");
+  const stateZipParts = stateZip.split(/\s+/).filter(Boolean);
+  const state = stateZipParts[0] ?? "";
+  const postalCode = stateZipParts.slice(1).join("") || stateZipParts[1] || "";
+
+  if (!addressLine1 || !city || !state || !postalCode) return null;
+
+  return {
+    addressLine1,
+    addressLine2,
+    city,
+    state: state.slice(0, 2).toUpperCase(),
+    postalCode
+  };
+}
+
+function extractAddressFromMessage(message: string): string | null {
+  const match = message.match(/(\d{3,}[^,]+,\s*[^,]+,\s*[A-Za-z]{2}\s+\d{3,})/);
+  return match ? match[1].trim() : null;
+}
+
+function extractNameFallback(message: string): string {
+  const words = message.replace(/[,@]/g, " ").split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return `${words[0]} ${words[1]}`;
+  }
+  return "New Contact";
+}
+
+function extractEmailFromText(text: string): string | null {
+  const match = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0] : null;
+}
+
+function extractPhoneFromText(text: string): string | null {
+  const digits = text.replace(/[^0-9]/g, "");
+  if (digits.length >= 10) {
+    return digits.slice(-10);
+  }
+  return null;
+}
+
+function extractQuoteSuggestion(
+  message: string,
+  ctx: {
+    contactId?: string;
+    propertyId?: string;
+    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+  },
+  note?: string | null
+): CreateQuoteAction | null {
+  const lower = message.toLowerCase();
+  if (
+    !lower.includes("quote") &&
+    !lower.includes("proposal") &&
+    !lower.includes("estimate") &&
+    !lower.includes("price") &&
+    !lower.includes("bid")
+  ) {
+    return null;
+  }
+  if (!ctx.contactId || !ctx.propertyId) return null;
+
+  const services = deriveServicesFromMessage(message);
+  const propertyLabel = ctx.property
+    ? [ctx.property.addressLine1, ctx.property.city].filter((part) => part && part.length).join(", ")
+    : null;
+
+  return {
+    id: newActionId(),
+    type: "create_quote",
+    summary: `Create quote (${services.join(", ")})${propertyLabel ? ` at ${propertyLabel}` : ""}`,
+    payload: {
+      contactId: ctx.contactId,
+      propertyId: ctx.propertyId,
+      services,
+      appointmentId: null,
+      notes: note ?? null,
+      zoneId: null
+    },
+    ...(note ? { note } : {})
+  };
+}
+
+const SERVICE_KEYWORDS: Array<{ id: string; patterns: RegExp[] }> = [
+  { id: "single-item", patterns: [/single/i, /item/i, /tv/i, /mattress/i] },
+  { id: "furniture", patterns: [/furniture/i, /sofa/i, /couch/i, /dresser/i, /bed/i] },
+  { id: "appliances", patterns: [/appliance/i, /fridge/i, /washer/i, /dryer/i, /stove/i, /oven/i] },
+  { id: "yard-waste", patterns: [/yard/i, /brush/i, /leaves/i, /branches/i] },
+  { id: "construction-debris", patterns: [/construction/i, /debris/i, /demo/i, /renovation/i, /junk/i, /load/i] },
+  { id: "hot-tub", patterns: [/hot[ -]?tub/i, /spa/i, /jacuzzi/i] },
+  { id: "driveway", patterns: [/driveway/i, /concrete/i] },
+  { id: "roof", patterns: [/roof/i] },
+  { id: "deck", patterns: [/deck/i, /patio/i, /porch/i] },
+  { id: "gutter", patterns: [/gutter/i] },
+  { id: "commercial", patterns: [/commercial/i, /store/i, /office/i] },
+  { id: "other", patterns: [/quote/i, /estimate/i] }
+];
+
+function deriveServicesFromMessage(message: string): string[] {
+  const services: string[] = [];
+  for (const entry of SERVICE_KEYWORDS) {
+    if (entry.patterns.some((pattern) => pattern.test(message))) {
+      if (!services.includes(entry.id)) {
+        services.push(entry.id);
+      }
+    }
+  }
+  if (!services.length) {
+    services.push("other");
+  }
+  return services.slice(0, 3);
+}
+
+function buildBookingActions(
+  booking: BookingPayload,
+  ctx: {
+    contactId?: string;
+    propertyId?: string;
+    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+  }
+): ActionSuggestion[] {
+  if (!booking?.suggestions?.length || !booking.contactId || !booking.propertyId) return [];
+
+  const propertyLabel =
+    booking.propertyLabel ??
+    (ctx.property
+      ? [ctx.property.addressLine1, ctx.property.city, ctx.property.state, ctx.property.postalCode]
+          .filter((part) => part && part.length)
+          .join(", ")
+      : null);
+
+  return booking.suggestions.slice(0, 2).map((suggestion) => ({
+    id: newActionId(),
+    type: "book_appointment" as const,
+    summary: `Book ${formatSlotSummary(suggestion.startAt, suggestion.endAt)}${propertyLabel ? ` at ${propertyLabel}` : ""}`,
+    payload: {
+      contactId: booking.contactId,
+      propertyId: booking.propertyId,
+      startAt: suggestion.startAt,
+      durationMinutes: 60,
+      travelBufferMinutes: 30,
+      services: normalizeServiceArray(suggestion.services)
+    },
+    context: propertyLabel ? { propertyLabel } : undefined
+  }));
+}
+
+function formatSlotSummary(startIso: string, endIso: string): string {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "slot";
+  const startLabel = start.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  const endLabel = end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return `${startLabel} - ${endLabel}`;
+}
+
+function normalizeServiceArray(services?: string[] | null): string[] {
+  if (Array.isArray(services) && services.length) {
+    return services
+      .map((s) => (typeof s === "string" ? s.trim() : ""))
+      .filter((s) => s.length > 0)
+      .slice(0, 3);
+  }
+  return ["junk_removal_primary"];
+}
+
+async function extractTaskSuggestion(
+  message: string,
+  ctx: {
+    contactId?: string;
+    propertyId?: string;
+    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+  },
+  note?: string | null
+): Promise<CreateTaskAction | null> {
+  const lower = message.toLowerCase();
+  const hasIntent =
+    lower.includes("task") ||
+    lower.includes("todo") ||
+    lower.includes("remind") ||
+    lower.includes("follow up") ||
+    lower.includes("follow-up") ||
+    lower.includes("call back") ||
+    lower.includes("call-back");
+  if (!hasIntent) return null;
+
+  if (!ctx.contactId || !ctx.propertyId) return null;
+
+  const appt = await findAppointmentForContext(ctx.contactId, ctx.propertyId);
+  if (!appt) return null;
+
+  const title = buildTaskTitle(message, note);
+
+  return {
+    id: newActionId(),
+    type: "create_task",
+    summary: `Add task for appointment${appt.startAt ? ` on ${new Date(appt.startAt).toLocaleString()}` : ""}`,
+    payload: {
+      appointmentId: appt.id,
+      title,
+      ...(note ? { note } : {})
+    },
+    context: {
+      appointmentStartAt: appt.startAt ?? null
+    }
+  };
+}
+
+async function findAppointmentForContext(contactId?: string, propertyId?: string): Promise<{
+  id: string;
+  startAt: string | null;
+}> {
+  const { apiBase, adminKey } = getAdminContext();
+  const hdrs = await headers();
+  const apiKey = adminKey ?? hdrs.get("x-api-key");
+  if (!apiKey || !contactId || !propertyId) return null;
+
+  try {
+    const res = await fetch(`${apiBase}/api/appointments?status=confirmed,requested`, {
+      headers: { "x-api-key": apiKey }
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      data?: Array<{ id: string; startAt: string | null; contact?: { id: string }; property?: { id: string } }>;
+    };
+    const matches =
+      data.data?.filter(
+        (appt) => appt.contact?.id === contactId && appt.property?.id === propertyId
+      ) ?? [];
+    if (!matches.length) return null;
+
+    const now = Date.now();
+    const upcoming = matches
+      .filter((appt) => appt.startAt && !Number.isNaN(Date.parse(appt.startAt)) && Date.parse(appt.startAt) >= now)
+      .sort((a, b) => Date.parse(a.startAt ?? "") - Date.parse(b.startAt ?? ""));
+
+    return upcoming[0] ?? matches[0];
+  } catch (error) {
+    console.warn("[chat] appointment_lookup_failed", error);
+    return null;
+  }
+}
+
+function buildTaskTitle(message: string, note?: string | null): string {
+  const cleaned = message
+    .replace(/\b(add|create|new|make)\b/gi, "")
+    .replace(/\b(task|todo|reminder|remind|follow\s*up|follow-up|call\s*back|callback)\b/gi, "")
+    .trim();
+  const base = cleaned.length >= 4 ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : "Follow up on this job";
+  if (note && note.trim().length > 0) {
+    return `${base} — ${note.trim()}`;
+  }
+  return base;
+}
+
+function extractActionNote(message: string): string | null {
+  const match = message.match(/(?:note|notes|details|message)[:\-]\s*(.+)$/i);
+  if (match && typeof match[1] === "string") {
+    const text = match[1].trim();
+    if (text.length > 0) {
+      return text.slice(0, 200);
+    }
+  }
+  return null;
+}
+
+function newActionId(): string {
+  // Guard against environments without crypto.randomUUID (mainly for tests)
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2);
 }
