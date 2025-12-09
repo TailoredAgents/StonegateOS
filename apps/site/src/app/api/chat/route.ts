@@ -124,6 +124,7 @@ type IntentClassification = {
   address?: string;
   services?: string[];
   note?: string;
+  when?: string;
 };
 
 function getAdminContext() {
@@ -460,6 +461,7 @@ async function buildActionSuggestions(
 ): Promise<ActionSuggestion[]> {
   const actions: ActionSuggestion[] = [];
   const note = extractActionNote(message) ?? classification?.note ?? null;
+  const when = classification?.when;
 
   const contactAction = extractContactSuggestion(message, note, {
     contactName: classification?.contactName,
@@ -480,7 +482,7 @@ async function buildActionSuggestions(
   }
 
   if (booking) {
-    const bookingActions = buildBookingActions(booking, ctx);
+    const bookingActions = buildBookingActions(booking, ctx, when);
     actions.push(
       ...bookingActions.map((action) => ({
         ...action,
@@ -674,10 +676,12 @@ function buildBookingActions(
     contactId?: string;
     propertyId?: string;
     property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
-  }
+  },
+  whenHint?: string | null
 ): ActionSuggestion[] {
   if (!booking?.suggestions?.length || !booking.contactId || !booking.propertyId) return [];
 
+  const parsed = whenHint ? parseWhen(whenHint) : null;
   const propertyLabel =
     booking.propertyLabel ??
     (ctx.property
@@ -693,7 +697,7 @@ function buildBookingActions(
     payload: {
       contactId: booking.contactId,
       propertyId: booking.propertyId,
-      startAt: suggestion.startAt,
+      startAt: parsed?.iso ?? suggestion.startAt,
       durationMinutes: 60,
       travelBufferMinutes: 30,
       services: normalizeServiceArray(suggestion.services)
@@ -719,6 +723,43 @@ function normalizeServiceArray(services?: string[] | null): string[] {
       .slice(0, 3);
   }
   return ["junk_removal_primary"];
+}
+
+function extractActionNote(message: string): string | null {
+  const match = message.match(/(?:note|notes|details|message)[:\-]\s*(.+)$/i);
+  if (match && typeof match[1] === "string") {
+    const text = match[1].trim();
+    if (text.length > 0) {
+      return text.slice(0, 200);
+    }
+  }
+  return null;
+}
+
+function parseWhen(text: string): { iso: string; source: string } | null {
+  const lower = text.toLowerCase();
+  const now = new Date();
+
+  const dayOffset = lower.includes("tomorrow") ? 1 : 0;
+  const base = new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+
+  const timeMatch = text.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  let hour = 9;
+  let minute = 0;
+  if (timeMatch) {
+    hour = Number(timeMatch[1]);
+    minute = timeMatch[2] ? Number(timeMatch[2]) : 0;
+    const meridiem = timeMatch[3]?.toLowerCase();
+    if (meridiem === "pm" && hour < 12) hour += 12;
+    if (meridiem === "am" && hour === 12) hour = 0;
+  }
+
+  base.setHours(hour, minute, 0, 0);
+  if (base.getTime() < now.getTime()) {
+    base.setDate(base.getDate() + 1);
+  }
+
+  return { iso: base.toISOString(), source: text };
 }
 
 async function extractTaskSuggestion(
