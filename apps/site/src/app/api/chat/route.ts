@@ -562,7 +562,9 @@ function parseAddress(
 
 function extractAddressFromMessage(message: string): string | null {
   const match = message.match(/(\d{3,}[^,]+,\s*[^,]+,\s*[A-Za-z]{2}\s+\d{3,})/);
-  return match ? match[1].trim() : null;
+  if (!match || typeof match[1] !== "string") return null;
+  const text = match[1].trim();
+  return text.length ? text : null;
 }
 
 function extractNameFallback(message: string): string {
