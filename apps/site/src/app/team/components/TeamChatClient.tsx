@@ -711,9 +711,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 {message.actions && message.actions.length ? (
                   <div className="space-y-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Actions</div>
-                    {message.actions.map((action) => {
-                      const status = actionStatuses[action.id]?.state ?? "idle";
-                      const statusMessage = actionStatuses[action.id]?.message;
+                      {message.actions.map((action) => {
+                        const status = actionStatuses[action.id]?.state ?? "idle";
+                        const statusMessage = (actionStatuses[action.id] as any)?.message as string | undefined;
                       return (
                         <div
                           key={action.id}
