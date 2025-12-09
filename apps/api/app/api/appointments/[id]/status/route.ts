@@ -7,7 +7,9 @@ import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
 
 const StatusSchema = z.object({
-  status: z.enum(["requested", "confirmed", "completed", "no_show", "canceled"])
+  status: z.enum(["requested", "confirmed", "completed", "no_show", "canceled"]),
+  crew: z.string().optional().nullable(),
+  owner: z.string().optional().nullable()
 });
 
 export async function POST(
@@ -34,11 +36,15 @@ export async function POST(
 
   const db = getDb();
   const status = parsed.data.status;
+  const crew = parsed.data.crew;
+  const owner = parsed.data.owner;
 
   const [updated] = await db
     .update(appointments)
     .set({
       status,
+      ...(crew !== undefined ? { crew: crew ?? null } : {}),
+      ...(owner !== undefined ? { owner: owner ?? null } : {}),
       updatedAt: new Date()
     })
     .where(eq(appointments.id, appointmentId))

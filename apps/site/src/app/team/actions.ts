@@ -8,11 +8,17 @@ import { callAdminApi } from "./lib/api";
 export async function updateApptStatus(formData: FormData) {
   const id = formData.get("appointmentId");
   const status = formData.get("status");
+  const crew = formData.get("crew");
+  const owner = formData.get("owner");
   if (typeof id !== "string" || typeof status !== "string") return;
+
+  const payload: Record<string, unknown> = { status };
+  if (typeof crew === "string") payload["crew"] = crew.length ? crew : null;
+  if (typeof owner === "string") payload["owner"] = owner.length ? owner : null;
 
   await callAdminApi(`/api/appointments/${id}/status`, {
     method: "POST",
-    body: JSON.stringify({ status })
+    body: JSON.stringify(payload)
   });
 
   const jar = await cookies();

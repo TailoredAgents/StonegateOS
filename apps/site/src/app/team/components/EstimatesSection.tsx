@@ -20,7 +20,12 @@ interface AppointmentDto {
   pipelineStage: string | null;
   quoteStatus: string | null;
   rescheduleToken: string;
+  crew: string | null;
+  owner: string | null;
 }
+
+const CREW_OPTIONS = ["Crew 1", "Crew 2"];
+const OWNER_OPTIONS = ["Austin", "Jeffery", "Conner"];
 
 export async function EstimatesSection(): Promise<ReactElement> {
   const res = await callAdminApi("/api/appointments?status=all");
@@ -59,6 +64,12 @@ export async function EstimatesSection(): Promise<ReactElement> {
                   {fmtTime(a.startAt)} • {a.contact.name}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700">
+                    Crew: {a.crew ?? "Unassigned"}
+                  </span>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">
+                    Owner: {a.owner ?? "Unassigned"}
+                  </span>
                   {a.pipelineStage ? (
                     <span className="rounded-full bg-neutral-100 px-2 py-0.5 font-semibold text-neutral-700">
                       Pipeline: {a.pipelineStage}
@@ -69,6 +80,44 @@ export async function EstimatesSection(): Promise<ReactElement> {
                       Quote: {a.quoteStatus}
                     </span>
                   ) : null}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  <form action={updateApptStatus} className="flex flex-wrap items-center gap-2">
+                    <input type="hidden" name="appointmentId" value={a.id} />
+                    <input type="hidden" name="status" value={a.status} />
+                    <label className="text-[11px] text-neutral-600">
+                      Crew
+                      <select
+                        name="crew"
+                        defaultValue={a.crew ?? ""}
+                        className="ml-2 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                      >
+                        <option value="">Unassigned</option>
+                        {CREW_OPTIONS.map((crew) => (
+                          <option key={crew} value={crew}>
+                            {crew}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-[11px] text-neutral-600">
+                      Owner
+                      <select
+                        name="owner"
+                        defaultValue={a.owner ?? "Austin"}
+                        className="ml-2 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                      >
+                        {OWNER_OPTIONS.map((owner) => (
+                          <option key={owner} value={owner}>
+                            {owner}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <SubmitButton className="rounded-full border border-neutral-300 px-3 py-1 text-xs text-neutral-700" pendingLabel="Saving...">
+                      Save assignment
+                    </SubmitButton>
+                  </form>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {status === "requested" ? (

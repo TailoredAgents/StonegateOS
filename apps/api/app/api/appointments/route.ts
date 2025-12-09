@@ -67,7 +67,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       postalCode: properties.postalCode,
       servicesRequested: leads.servicesRequested,
       rescheduleToken: appointments.rescheduleToken,
-      calendarEventId: appointments.calendarEventId
+      calendarEventId: appointments.calendarEventId,
+      crew: appointments.crew,
+      owner: appointments.owner
     })
     .from(appointments)
     .leftJoin(contacts, eq(appointments.contactId, contacts.id))
@@ -194,6 +196,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       },
       calendarEventId: row.calendarEventId,
       rescheduleToken: row.rescheduleToken,
+      crew: row.crew ?? null,
+      owner: row.owner ?? null,
       notes: notesMap.get(row.id) ?? []
     };
   });

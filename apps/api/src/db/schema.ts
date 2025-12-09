@@ -212,6 +212,8 @@ export const appointments = pgTable(
     durationMinutes: integer("duration_min").default(60).notNull(),
     status: appointmentStatusEnum("status").default("requested").notNull(),
     calendarEventId: text("calendar_event_id"),
+    crew: text("crew"),
+    owner: text("owner"),
     rescheduleToken: varchar("reschedule_token", { length: 64 }).notNull(),
     travelBufferMinutes: integer("travel_buffer_min").default(30).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
