@@ -32,12 +32,18 @@ const CREW_OPTIONS = ["Crew 1", "Crew 2"];
 const OWNER_OPTIONS = ["Austin", "Jeffery", "Conner"];
 
 export async function EstimatesSection(): Promise<ReactElement> {
-  const res = await callAdminApi("/api/appointments?status=all");
-  if (!res.ok) {
-    throw new Error("Failed to load appointments");
+  let payload: { ok: boolean; data: AppointmentDto[] } = { ok: false, data: [] };
+  let loadError: string | null = null;
+  try {
+    const res = await callAdminApi("/api/appointments?status=all");
+    if (!res.ok) {
+      loadError = `Appointments request failed (HTTP ${res.status})`;
+    } else {
+      payload = (await res.json()) as { ok: boolean; data: AppointmentDto[] };
+    }
+  } catch (error) {
+    loadError = `Appointments request error: ${(error as Error).message}`;
   }
-
-  const payload = (await res.json()) as { ok: boolean; data: AppointmentDto[] };
   const byStatus: Record<AppointmentStatus, AppointmentDto[]> = {
     requested: [],
     confirmed: [],
@@ -59,6 +65,9 @@ export async function EstimatesSection(): Promise<ReactElement> {
 
   return (
     <div className="space-y-4">
+      {loadError ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{loadError}</p>
+      ) : null}
       <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
       {columns.map((status) => (
         <div key={status} className="rounded-lg border border-neutral-200 bg-white shadow-sm">

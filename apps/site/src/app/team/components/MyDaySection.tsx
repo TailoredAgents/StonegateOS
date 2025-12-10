@@ -39,19 +39,29 @@ interface AppointmentDto {
 }
 
 export async function MyDaySection(): Promise<ReactElement> {
-  const res = await callAdminApi("/api/appointments?status=confirmed");
-  if (!res.ok) {
-    throw new Error("Failed to load appointments");
+  let appts: AppointmentDto[] = [];
+  let loadError: string | null = null;
+  try {
+    const res = await callAdminApi("/api/appointments?status=confirmed");
+    if (!res.ok) {
+      loadError = `Appointments request failed (HTTP ${res.status})`;
+    } else {
+      const payload = (await res.json()) as { ok: boolean; data: AppointmentDto[] };
+      appts = (payload.data ?? []).sort((a, b) => {
+        const ax = a.startAt ? Date.parse(a.startAt) : 0;
+        const bx = b.startAt ? Date.parse(b.startAt) : 0;
+        return ax - bx;
+      });
+    }
+  } catch (error) {
+    loadError = `Appointments request error: ${(error as Error).message}`;
   }
-  const payload = (await res.json()) as { ok: boolean; data: AppointmentDto[] };
-  const appts = (payload.data ?? []).sort((a, b) => {
-    const ax = a.startAt ? Date.parse(a.startAt) : 0;
-    const bx = b.startAt ? Date.parse(b.startAt) : 0;
-    return ax - bx;
-  });
 
   return (
     <section className="space-y-4">
+      {loadError ? (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{loadError}</p>
+      ) : null}
       {appts.length === 0 ? (
         <p className="rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-4 text-sm text-neutral-500">
           No confirmed visits.
