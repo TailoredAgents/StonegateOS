@@ -162,7 +162,7 @@ export default function HomePage() {
                 </div>
               }
             >
-              <LeadForm services={leadFormServices} />
+              <LeadForm />
             </Suspense>
           </div>
         </div>

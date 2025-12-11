@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb, instantQuotes } from "@/db";
-import { callOpenAI } from "@/lib/ai";
 
 const DISCOUNT = Number(process.env["INSTANT_QUOTE_DISCOUNT"] ?? 0);
 
@@ -108,50 +107,57 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
     throw new Error("missing_api_key");
   }
 
-  const response = await callOpenAI({
-    apiKey,
-    model,
-    systemPrompt: SYSTEM_PROMPT,
-    userPrompt: JSON.stringify(body.job),
-    responseFormat: {
-      type: "json_schema",
-      name: "junk_quote",
-      strict: true,
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          loadFractionEstimate: { type: "number" },
-          priceLow: { type: "number" },
-          priceHigh: { type: "number" },
-          displayTierLabel: { type: "string" },
-          reasonSummary: { type: "string" },
-          needsInPersonEstimate: { type: "boolean" }
-        },
-        required: [
-          "loadFractionEstimate",
-          "priceLow",
-          "priceHigh",
-          "displayTierLabel",
-          "reasonSummary",
-          "needsInPersonEstimate"
-        ]
-      }
+  const res = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
     },
-    maxTokens: 400
+    body: JSON.stringify({
+      model,
+      input: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: JSON.stringify(body.job) }
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "junk_quote",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              loadFractionEstimate: { type: "number" },
+              priceLow: { type: "number" },
+              priceHigh: { type: "number" },
+              displayTierLabel: { type: "string" },
+              reasonSummary: { type: "string" },
+              needsInPersonEstimate: { type: "boolean" }
+            },
+            required: [
+              "loadFractionEstimate",
+              "priceLow",
+              "priceHigh",
+              "displayTierLabel",
+              "reasonSummary",
+              "needsInPersonEstimate"
+            ]
+          }
+        }
+      },
+      max_output_tokens: 400,
+      temperature: 0.3
+    })
   });
 
-  if (!response) {
-    throw new Error("ai_failed");
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`ai_failed_${res.status}: ${text.slice(0, 200)}`);
   }
 
-  const raw =
-    typeof response === "string"
-      ? response
-      : (response as any).output_text ??
-        (response as any).output ??
-        (Array.isArray((response as any).output) ? (response as any).output.join("") : "{}");
-
+  const data = (await res.json().catch(() => ({}))) as { output_text?: string };
+  const raw = typeof data.output_text === "string" && data.output_text.trim().length ? data.output_text : "{}";
   return JSON.parse(raw);
 }
 
