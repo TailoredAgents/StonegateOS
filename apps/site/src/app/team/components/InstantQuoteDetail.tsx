@@ -39,6 +39,13 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
   const low = quote.aiResult.priceLowDiscounted ?? quote.aiResult.priceLow;
   const high = quote.aiResult.priceHighDiscounted ?? quote.aiResult.priceHigh;
 
+  const prefill = new URLSearchParams({
+    quoteId: quote.id,
+    contactName: quote.contactName,
+    contactPhone: quote.contactPhone,
+    zip: quote.zip
+  }).toString();
+
   return (
     <div className="space-y-3 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
       <div className="flex items-center justify-between text-sm">
@@ -83,6 +90,14 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
           Needs in-person review
         </div>
       ) : null}
+      <div className="pt-2">
+        <a
+          href={`/team/instant-quotes/${quote.id}?${prefill}`}
+          className="inline-flex items-center rounded-md bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700"
+        >
+          Book from this quote
+        </a>
+      </div>
     </div>
   );
 }
