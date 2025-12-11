@@ -1,4 +1,6 @@
 import type { LineItem } from "@myst-os/pricing";
+
+// existing tables...
 import {
   pgTable,
   text,
@@ -315,6 +317,25 @@ export const quoteRelations = relations(quotes, ({ one }) => ({
     references: [properties.id]
   })
 }));
+
+// Instant quotes (junk removal)
+export const instantQuotes = pgTable("instant_quotes", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  source: text("source").default("public_site").notNull(),
+  contactName: text("contact_name").notNull(),
+  contactPhone: text("contact_phone").notNull(),
+  timeframe: text("timeframe").notNull(),
+  zip: text("zip").notNull(),
+  jobTypes: text("job_types").array().notNull().default([]),
+  perceivedSize: text("perceived_size").notNull(),
+  notes: text("notes"),
+  photoUrls: text("photo_urls").array().notNull().default([]),
+  aiResult: jsonb("ai_result").notNull()
+});
+
+export type InstantQuote = typeof instantQuotes.$inferSelect;
+export type InstantQuoteInsert = typeof instantQuotes.$inferInsert;
 
 export const contactRelations = relations(contacts, ({ many, one }) => ({
   properties: many(properties),
