@@ -8,6 +8,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const db = getDb();
-  const rows = await db.select().from(instantQuotes).orderBy(desc(instantQuotes.createdAt)).limit(50);
+  const { searchParams } = request.nextUrl;
+  const id = searchParams.get("id");
+  const baseQuery = db.select().from(instantQuotes).orderBy(desc(instantQuotes.createdAt));
+  const rows = id ? await baseQuery.where(instantQuotes.id.eq(id)).limit(1) : await baseQuery.limit(50);
   return NextResponse.json({ quotes: rows });
 }

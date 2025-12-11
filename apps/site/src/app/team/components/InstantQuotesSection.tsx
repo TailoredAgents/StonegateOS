@@ -77,6 +77,14 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
                   Needs in-person review
                 </div>
               ) : null}
+              <div className="mt-2">
+                <a
+                  href={`/team/instant-quotes/${q.id}`}
+                  className="text-[11px] font-semibold text-primary-700 underline"
+                >
+                  View details / book from quote
+                </a>
+              </div>
             </div>
           );
         })}
