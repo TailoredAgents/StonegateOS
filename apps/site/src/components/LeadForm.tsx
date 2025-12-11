@@ -1,962 +1,390 @@
 'use client';
 
 import * as React from "react";
-import { useSearchParams } from "next/navigation";
-import { availabilityWindows } from "@myst-os/pricing";
 import { Button, cn } from "@myst-os/ui";
-import { DEFAULT_LEAD_SERVICE_OPTIONS, type LeadServiceOption } from "@/lib/lead-services";
 import { useUTM } from "../lib/use-utm";
 
-interface LeadFormProps extends React.HTMLAttributes<HTMLDivElement> {
-  services?: LeadServiceOption[];
-}
+type QuoteState =
+  | { status: "idle" | "loading" }
+  | {
+      status: "ready";
+      baseLow: number;
+      baseHigh: number;
+      discountPercent: number;
+      low: number;
+      high: number;
+      tier: string;
+      reason: string;
+      needsInPersonEstimate: boolean;
+    }
+  | { status: "error"; message: string };
 
-type IdleState = { status: "idle" | "submitting" };
-type ErrorState = { status: "error"; message: string };
-type SuccessState = {
-  status: "success";
-  message: string;
-  appointmentId: string | null;
-  rescheduleToken: string | null;
-  startAtIso: string | null;
-  preferredDate: string | null;
-  timeWindow: string | null;
-  durationMinutes: number | null;
-  services: string[];
-};
+type Timeframe = "today" | "tomorrow" | "this_week" | "flexible";
+type PerceivedSize = "few_items" | "small_area" | "one_room_or_half_garage" | "big_cleanout" | "not_sure";
+type JunkType =
+  | "furniture"
+  | "appliances"
+  | "general_junk"
+  | "yard_waste"
+  | "construction_debris"
+  | "hot_tub_playset"
+  | "business_commercial";
 
-type FormState = IdleState | ErrorState | SuccessState;
+const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
+  { id: "furniture", label: "Furniture" },
+  { id: "appliances", label: "Appliances" },
+  { id: "general_junk", label: "General household junk" },
+  { id: "yard_waste", label: "Yard waste / outdoor items" },
+  { id: "construction_debris", label: "Construction / renovation debris" },
+  { id: "hot_tub_playset", label: "Hot tub / playset" },
+  { id: "business_commercial", label: "Business / commercial cleanout" }
+];
 
-const INITIAL_STATE: FormState = { status: "idle" };
+const SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
+  { id: "few_items", label: "Just a few items", hint: "1–3 items" },
+  { id: "small_area", label: "One small area", hint: "Corner, closet, or small pile" },
+  { id: "one_room_or_half_garage", label: "One full room or half a garage", hint: "" },
+  { id: "big_cleanout", label: "Big cleanout", hint: "Full garage, basement, or multiple rooms" },
+  { id: "not_sure", label: "Not sure yet", hint: "" }
+];
 
-const APPOINTMENT_TIME_ZONE =
-  process.env["NEXT_PUBLIC_APPOINTMENT_TIMEZONE"] ?? "America/New_York";
+const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
+  { id: "today", label: "Today" },
+  { id: "tomorrow", label: "Tomorrow" },
+  { id: "this_week", label: "This week" },
+  { id: "flexible", label: "Flexible" }
+];
 
-export function LeadForm({ services, className, ...props }: LeadFormProps) {
-  const serviceOptions = services?.length ? services : DEFAULT_LEAD_SERVICE_OPTIONS;
+export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   const utm = useUTM();
-  const searchParams = useSearchParams();
-  const [formState, setFormState] = React.useState<FormState>(INITIAL_STATE);
-  const [selectedServices, setSelectedServices] = React.useState<string[]>([]);
-  const [preferredDate, setPreferredDate] = React.useState<string>("");
-  const [timeWindow, setTimeWindow] = React.useState<string>("");
-  const [localError, setLocalError] = React.useState<string | null>(null);
   const [step, setStep] = React.useState<1 | 2>(1);
-  const [isRescheduleOpen, setIsRescheduleOpen] = React.useState(false);
-  const [rescheduleDate, setRescheduleDate] = React.useState<string>("");
-  const [rescheduleWindow, setRescheduleWindow] = React.useState<string>("");
-  const [rescheduleStatus, setRescheduleStatus] =
-    React.useState<"idle" | "submitting" | "success" | "error">("idle");
-  const [rescheduleFeedback, setRescheduleFeedback] = React.useState<string | null>(null);
-  const [initialTokenHandled, setInitialTokenHandled] = React.useState(false);
-  const formRef = React.useRef<HTMLFormElement>(null);
-  const apiBase = process.env["NEXT_PUBLIC_API_BASE_URL"]?.replace(/\/$/, "");
-  const submitUrl = `${apiBase ?? ""}/api/web/lead-intake`;
-  const serviceLabelMap = React.useMemo(
-    () => new Map(serviceOptions.map((service) => [service.slug, service.title])),
-    [serviceOptions]
-  );
-  const availabilityMap = React.useMemo(
-    () => new Map(availabilityWindows.map((window) => [window.id, window])),
-    []
-  );
-  const timeFormatter = React.useMemo(
-    () =>
-      new Intl.DateTimeFormat("en-US", {
-        dateStyle: "full",
-        timeStyle: "short",
-        timeZone: APPOINTMENT_TIME_ZONE
-      }),
-    []
-  );
-  const dateFormatter = React.useMemo(
-    () =>
-      new Intl.DateTimeFormat("en-US", {
-        dateStyle: "full",
-        timeZone: APPOINTMENT_TIME_ZONE
-      }),
-    []
-  );
-  const appointmentTimeZoneLabel = React.useMemo(
-    () => (APPOINTMENT_TIME_ZONE.includes("_") ? APPOINTMENT_TIME_ZONE.replace("_", " ") : APPOINTMENT_TIME_ZONE),
-    []
-  );
-  const buildConfirmationMessage = React.useCallback(
-    ({
-      startAtIso,
-      preferredDateValue,
-      timeWindowValue
-    }: {
-      startAtIso: string | null;
-      preferredDateValue: string | null;
-      timeWindowValue: string | null;
-    }): string => {
-      const windowLabel = timeWindowValue
-        ? availabilityMap.get(timeWindowValue)?.label ?? timeWindowValue
-        : null;
+  const [types, setTypes] = React.useState<JunkType[]>([]);
+  const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize>("few_items");
+  const [notes, setNotes] = React.useState("");
+  const [zip, setZip] = React.useState("");
+  const [photos, setPhotos] = React.useState<string[]>([]);
+  const [name, setName] = React.useState("");
+  const [phone, setPhone] = React.useState("");
+  const [timeframe, setTimeframe] = React.useState<Timeframe>("this_week");
+  const [quoteState, setQuoteState] = React.useState<QuoteState>({ status: "idle" });
+  const [error, setError] = React.useState<string | null>(null);
 
-      if (startAtIso) {
-        const arrivalText = timeFormatter.format(new Date(startAtIso));
-        return `Crew arrival is locked for ${arrivalText} (${appointmentTimeZoneLabel}). You'll get prep tips plus reminders 24h and 2h before we roll up.`;
-      }
+  const apiBase = process.env["NEXT_PUBLIC_API_BASE_URL"]?.replace(/\/$/, "") ?? "";
 
-      if (preferredDateValue) {
-        const parsed = new Date(`${preferredDateValue}T00:00:00`);
-        const dateText = dateFormatter.format(parsed);
-        const windowText = windowLabel ? ` during the ${windowLabel} window` : "";
-        return `We penciled you in for ${dateText}${windowText}. We'll text shortly with exact arrival details (${appointmentTimeZoneLabel}).`;
-      }
-
-      if (windowLabel) {
-        return `We're locking in the ${windowLabel} window (${appointmentTimeZoneLabel}) and will confirm by text shortly.`;
-      }
-
-      return "Our dispatcher is reviewing your request now. Expect a confirmation text shortly with the best arrival window for your property.";
-    },
-    [availabilityMap, dateFormatter, timeFormatter, appointmentTimeZoneLabel]
-  );
-  const serviceTitles = React.useMemo(() => {
-    if (formState.status !== "success") {
-      return [] as string[];
-    }
-    return formState.services.map((slug) => serviceLabelMap.get(slug) ?? slug);
-  }, [formState, serviceLabelMap]);
-  const appointmentDisplay = React.useMemo(() => {
-    if (formState.status !== "success") {
-      return null as string | null;
-    }
-    if (formState.startAtIso) {
-      const date = new Date(formState.startAtIso);
-      return timeFormatter.format(date);
-    }
-    if (formState.preferredDate) {
-      const parsed = new Date(`${formState.preferredDate}T00:00:00`);
-      const dateText = dateFormatter.format(parsed);
-      if (formState.timeWindow) {
-        const window = availabilityMap.get(formState.timeWindow);
-        const label = window?.label ?? formState.timeWindow;
-        return `${dateText} (${label})`;
-      }
-      return dateText;
-    }
-    return null;
-  }, [formState, availabilityMap, timeFormatter, dateFormatter]);
-  React.useEffect(() => {
-    if (initialTokenHandled) {
-      return;
-    }
-
-    const appointmentIdParam = searchParams?.get("appointmentId");
-    const tokenParam = searchParams?.get("token");
-
-    if (appointmentIdParam && tokenParam && formState.status === "idle") {
-      setFormState({
-        status: "success",
-        message: "Let's pick a new time for your on-site estimate.",
-        appointmentId: appointmentIdParam,
-        rescheduleToken: tokenParam,
-        startAtIso: null,
-        preferredDate: null,
-        timeWindow: null,
-        durationMinutes: null,
-        services: []
-      });
-      setIsRescheduleOpen(true);
-      setRescheduleStatus("idle");
-      setRescheduleFeedback(null);
-      setRescheduleDate("");
-      setRescheduleWindow("");
-      setInitialTokenHandled(true);
-    }
-  }, [searchParams, formState.status, initialTokenHandled]);
-
-  const toggleService = (slug: string) => {
-    setSelectedServices((prev) =>
-      prev.includes(slug) ? prev.filter((item) => item !== slug) : [...prev, slug]
-    );
+  const toggleType = (id: JunkType) => {
+    setTypes((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
   };
 
-  const focusField = (name: string) => {
-    const field = formRef.current?.elements.namedItem(name);
-    if (!field) {
-      return;
+  const handlePhotos = async (files: FileList | null) => {
+    if (!files) return;
+    const selected = Array.from(files).slice(0, 4);
+    const dataUrls: string[] = [];
+    for (const file of selected) {
+      const url = await toDataUrl(file);
+      if (url) dataUrls.push(url);
     }
-
-    if ("item" in field && typeof field.item === "function") {
-      const node = field.item(0);
-      if (node instanceof HTMLElement) {
-        node.scrollIntoView({ behavior: "smooth", block: "center" });
-        node.focus();
-      }
-      return;
-    }
-
-    if (field instanceof HTMLElement) {
-      field.scrollIntoView({ behavior: "smooth", block: "center" });
-      field.focus();
-    }
+    setPhotos(dataUrls);
   };
 
-  const resetForm = () => {
-    setFormState({ status: "idle" });
-    setSelectedServices([]);
-    setPreferredDate("");
-    setTimeWindow("");
-    setLocalError(null);
-    setStep(1);
-    setIsRescheduleOpen(false);
-    setRescheduleDate("");
-    setRescheduleWindow("");
-    setRescheduleStatus("idle");
-    setRescheduleFeedback(null);
-    setInitialTokenHandled(true);
-    formRef.current?.reset();
-  };
-
-  const goToStepTwo = () => {
-    if (!formRef.current) {
-      setStep(2);
+  const submitQuote = async () => {
+    if (!name.trim() || !phone.trim() || !zip.trim()) {
+      setError("Please fill name, phone, and ZIP.");
       return;
     }
-
-    if (!selectedServices.length) {
-      setLocalError("Select at least one service to continue.");
-      focusField("selectedServices");
-      return;
-    }
-
-    const formData = new FormData(formRef.current);
-    const requiredFields: Array<{ key: string; label: string }> = [
-      { key: "addressLine1", label: "service address" },
-      { key: "city", label: "city" },
-      { key: "state", label: "state" },
-      { key: "postalCode", label: "ZIP" }
-    ];
-
-    for (const field of requiredFields) {
-      const value = formData.get(field.key);
-      if (typeof value !== "string" || value.trim().length === 0) {
-        setLocalError(`Enter your ${field.label}.`);
-        focusField(field.key);
-        return;
-      }
-    }
-
-    setLocalError(null);
-    setStep(2);
-    requestAnimationFrame(() => focusField("name"));
-  };
-
-  const handleBackToStepOne = () => {
-    setStep(1);
-    setLocalError(null);
-    requestAnimationFrame(() => focusField("selectedServices"));
-  };
-
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (formState.status === "submitting") {
-      return;
-    }
-
-    setLocalError(null);
-    const form = event.currentTarget;
-    const formData = new FormData(form);
-
-    const consentChecked = formData.get("consent") === "on";
-    if (!selectedServices.length) {
-      setLocalError("Select at least one service for your in-person estimate.");
-      setStep(1);
-      focusField("selectedServices");
-      return;
-    }
-    if (!preferredDate) {
-      setLocalError("Choose a preferred visit date.");
-      setStep(2);
-      focusField("preferredDate");
-      return;
-    }
-    if (!timeWindow) {
-      setLocalError("Pick a time window that works for you.");
-      setStep(2);
-      focusField("timeWindow");
-      return;
-    }
-    if (!consentChecked) {
-      setLocalError("Please approve appointment updates and tips so we can reach you.");
-      setStep(2);
-      focusField("consent");
-      return;
-    }
-
-    const getValue = (key: string): string => {
-      const value = formData.get(key);
-      return typeof value === "string" ? value.trim() : "";
-    };
-
-    const getOptionalValue = (key: string): string | undefined => {
-      const value = formData.get(key);
-      const trimmed = typeof value === "string" ? value.trim() : "";
-      return trimmed.length > 0 ? trimmed : undefined;
-    };
-
-    const utmRaw = formData.get("utm");
-    let utmPayload: Record<string, unknown> = {};
-    if (typeof utmRaw === "string" && utmRaw.trim().length > 0) {
-      try {
-        const parsed = JSON.parse(utmRaw) as unknown;
-        if (parsed && typeof parsed === "object") {
-          utmPayload = parsed as Record<string, unknown>;
-        }
-      } catch {
-        // ignore malformed payload
-      }
-    }
-
-    setFormState({ status: "submitting" });
-    const servicesSnapshot = [...selectedServices];
-
-    const payload = {
-      appointmentType: "in_person_estimate" as const,
-      services: selectedServices,
-      name: getValue("name"),
-      phone: getValue("phone"),
-      email: getOptionalValue("email"),
-      addressLine1: getValue("addressLine1"),
-      city: getValue("city"),
-      state: getValue("state"),
-      postalCode: getValue("postalCode"),
-      notes: getOptionalValue("notes"),
-      consent: consentChecked,
-      scheduling: {
-        preferredDate,
-        timeWindow,
-        alternateDate: getOptionalValue("alternateDate")
-      },
-      utm: utmPayload,
-      gclid: getOptionalValue("gclid"),
-      fbclid: getOptionalValue("fbclid"),
-      hp_company: getOptionalValue("company")
-    };
-
+    setError(null);
+    setQuoteState({ status: "loading" });
     try {
-      const response = await fetch(submitUrl, {
+      const res = await fetch(`${apiBase}/api/junk-quote`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(payload)
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "public_site",
+          contact: { name: name.trim(), phone: phone.trim(), timeframe },
+          job: {
+            types,
+            perceivedSize,
+            notes: notes.trim() || undefined,
+            zip: zip.trim(),
+            photoUrls: photos
+          },
+          utm
+        })
       });
-
-      const result = (await response.json().catch(() => null)) as
-        | {
-            ok?: boolean;
-            appointmentId?: string | null;
-            rescheduleToken?: string | null;
-            startAt?: string | null;
-            durationMinutes?: number | null;
-            preferredDate?: string | null;
-            timeWindow?: string | null;
-          }
-        | null;
-
-      if (!response.ok || !result?.ok) {
-        throw new Error("Submission failed");
+      if (!res.ok) {
+        throw new Error(`Quote failed (HTTP ${res.status})`);
       }
-
-      const preferredDateValue = result.preferredDate ?? preferredDate ?? "";
-      const timeWindowValue = result.timeWindow ?? timeWindow ?? "";
-
-      const successMessage = buildConfirmationMessage({
-        startAtIso: result.startAt ?? null,
-        preferredDateValue: preferredDateValue || null,
-        timeWindowValue: timeWindowValue || null
+      const data = (await res.json()) as {
+        ok?: boolean;
+        quote?: {
+          loadFractionEstimate: number;
+          priceLow: number;
+          priceHigh: number;
+          priceLowDiscounted: number;
+          priceHighDiscounted: number;
+          displayTierLabel: string;
+          reasonSummary: string;
+          discountPercent?: number;
+          needsInPersonEstimate?: boolean;
+        };
+      };
+      if (!data.ok || !data.quote) throw new Error("Quote unavailable");
+      setQuoteState({
+        status: "ready",
+        baseLow: data.quote.priceLow,
+        baseHigh: data.quote.priceHigh,
+        low: data.quote.priceLowDiscounted ?? data.quote.priceLow,
+        high: data.quote.priceHighDiscounted ?? data.quote.priceHigh,
+        discountPercent: data.quote.discountPercent ?? 0,
+        tier: data.quote.displayTierLabel,
+        reason: data.quote.reasonSummary,
+        needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate)
       });
-      setFormState({
-        status: "success",
-        message: successMessage,
-        appointmentId: result.appointmentId ?? null,
-        rescheduleToken: result.rescheduleToken ?? null,
-        startAtIso: result.startAt ?? null,
-        preferredDate: preferredDateValue || null,
-        timeWindow: timeWindowValue || null,
-        durationMinutes: result.durationMinutes ?? null,
-        services: servicesSnapshot
-      });
-      setRescheduleDate(preferredDateValue);
-      setRescheduleWindow(timeWindowValue);
-      setRescheduleStatus("idle");
-      setRescheduleFeedback(null);
-      setIsRescheduleOpen(false);
-      setInitialTokenHandled(true);
-      form.reset();
-      setSelectedServices([]);
-      setPreferredDate("");
-      setTimeWindow("");
-    } catch (error) {
-      console.error(error);
-      setFormState({
-        status: "error",
-        message:
-          "We couldn&apos;t schedule your estimate. Please call or text and we&apos;ll assist right away."
-      });
+    } catch (err) {
+      setQuoteState({ status: "error", message: (err as Error).message });
     }
   };
 
-  const handleRescheduleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (
-      formState.status !== "success" ||
-      !formState.appointmentId ||
-      !formState.rescheduleToken
-    ) {
-      return;
-    }
-
-    if (!rescheduleDate) {
-      setRescheduleStatus("error");
-      setRescheduleFeedback("Pick a new visit date to reschedule your estimate.");
-      return;
-    }
-
-    if (!rescheduleWindow) {
-      setRescheduleStatus("error");
-      setRescheduleFeedback("Select a preferred time window to reschedule.");
-      return;
-    }
-
-    setRescheduleStatus("submitting");
-    setRescheduleFeedback(null);
-
-    try {
-      const response = await fetch(
-        `${apiBase ?? ""}/api/web/appointments/${formState.appointmentId}/reschedule`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            preferredDate: rescheduleDate,
-            timeWindow: rescheduleWindow,
-            rescheduleToken: formState.rescheduleToken
-          })
-        }
-      );
-
-      const result = (await response.json().catch(() => null)) as
-        | {
-            ok?: boolean;
-            startAt?: string | null;
-            preferredDate?: string | null;
-            timeWindow?: string | null;
-            durationMinutes?: number | null;
-            rescheduleToken?: string | null;
-          }
-        | null;
-
-      if (!response.ok || !result?.ok) {
-        throw new Error("reschedule_failed");
-      }
-
-      const updatedStartAtIso = result.startAt ?? formState.startAtIso ?? null;
-      const updatedPreferred = (result.preferredDate ?? rescheduleDate) || formState.preferredDate || null;
-      const updatedWindow = (result.timeWindow ?? rescheduleWindow) || formState.timeWindow || null;
-      const updatedMessage = buildConfirmationMessage({
-        startAtIso: updatedStartAtIso,
-        preferredDateValue: updatedPreferred,
-        timeWindowValue: updatedWindow
-      });
-
-      setRescheduleStatus("success");
-      setRescheduleFeedback("Appointment updated. We'll send refreshed reminders before arrival.");
-      setFormState((previous) => {
-        if (previous.status !== "success") {
-          return previous;
-        }
-
-        return {
-          ...previous,
-          message: updatedMessage,
-          startAtIso: updatedStartAtIso,
-          preferredDate: updatedPreferred,
-          timeWindow: updatedWindow,
-          durationMinutes: result.durationMinutes ?? previous.durationMinutes,
-          rescheduleToken: result.rescheduleToken ?? previous.rescheduleToken
-        } satisfies SuccessState;
-      });
-      setIsRescheduleOpen(false);
-    } catch (error) {
-      console.error(error);
-      setRescheduleStatus("error");
-      setRescheduleFeedback(
-        "We couldn't reschedule right now. Please call or text and we'll adjust manually."
-      );
-    }
-  };
-
-  if (formState.status === "success") {
-    return (
-      <div
-        className={cn(
-          "rounded-xl bg-white p-8 shadow-float shadow-primary-900/10",
-          className
-        )}
-        {...props}
-      >
-        <h3 className="font-display text-headline text-primary-800">
-          You&apos;re on our in-person schedule!
-        </h3>
-        <div className="mt-3 space-y-2 text-neutral-600">
-          <p className="text-body">
-            {appointmentDisplay
-              ? `We'll see you ${appointmentDisplay}.`
-              : "We'll call to confirm a time that works best for you."}
-          </p>
-          <p className="text-sm text-neutral-600">{formState.message}</p>
-          {appointmentDisplay ? (
-            <p className="text-xs text-neutral-500">Times shown in {appointmentTimeZoneLabel}.</p>
-          ) : null}
-        </div>
-        {serviceTitles.length ? (
-          <div className="mt-6">
-            <h4 className="text-xs font-semibold uppercase tracking-[0.12em] text-neutral-500">
-              Services to review
-            </h4>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-neutral-600">
-              {serviceTitles.map((title) => (
-                <li key={title}>{title}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {rescheduleFeedback ? (
-          <div
-            role="status"
-            className={cn(
-              "mt-6 rounded-md border px-4 py-3 text-sm",
-              rescheduleStatus === "error"
-                ? "border-danger-200 bg-danger-50 text-danger-700"
-                : "border-accent-200 bg-accent-50 text-accent-700"
-            )}
-          >
-            {rescheduleFeedback}
-          </div>
-        ) : null}
-        {isRescheduleOpen ? (
-          <form
-            onSubmit={(event) => void handleRescheduleSubmit(event)}
-            className="mt-6 space-y-5 rounded-lg border border-neutral-200 bg-neutral-50/60 p-4"
-          >
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label htmlFor="rescheduleDate" className="text-sm font-medium text-neutral-700">
-                  New visit date
-                </label>
-                <input
-                  id="rescheduleDate"
-                  name="rescheduleDate"
-                  type="date"
-                  required
-                  value={rescheduleDate}
-                  onChange={(event) => setRescheduleDate(event.target.value)}
-                  className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-sm text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-                />
-              </div>
-              <div>
-                <span className="text-sm font-medium text-neutral-700">Preferred time window</span>
-                <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                  {availabilityWindows.map((window) => (
-                    <label
-                      key={window.id}
-                      htmlFor={`rescheduleWindow-${window.id}`}
-                      className={cn(
-                        "relative flex cursor-pointer flex-col gap-1 rounded-lg border p-3 text-xs transition",
-                        rescheduleWindow === window.id
-                          ? "border-accent-500 bg-accent-50/80 shadow-soft"
-                          : "border-neutral-200 bg-white hover:border-neutral-300"
-                      )}
-                    >
-                      <input
-                        type="radio"
-                        id={`rescheduleWindow-${window.id}`}
-                        name="rescheduleWindow"
-                        value={window.id}
-                        checked={rescheduleWindow === window.id}
-                        onChange={(event) => setRescheduleWindow(event.target.value)}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        required
-                        aria-label={window.label}
-                      />
-                      <span className="font-semibold text-neutral-700 pointer-events-none">{window.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <Button type="submit" disabled={rescheduleStatus === "submitting"}>
-                {rescheduleStatus === "submitting" ? "Saving..." : "Confirm new time"}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setIsRescheduleOpen(false);
-                  setRescheduleStatus("idle");
-                  setRescheduleFeedback(null);
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                setIsRescheduleOpen(true);
-                setRescheduleStatus("idle");
-                setRescheduleFeedback(null);
-                setRescheduleDate(formState.preferredDate ?? "");
-                setRescheduleWindow(formState.timeWindow ?? "");
-              }}
-              disabled={!formState.appointmentId || !formState.rescheduleToken}
-            >
-              Reschedule
-            </Button>
-            <Button type="button" onClick={resetForm}>
-              Schedule another estimate
-            </Button>
-          </div>
-        )}
-        <p className="mt-6 text-xs text-neutral-500">
-          Need faster help? Call{" "}
-          <a href="tel:14046920768" className="text-accent-600 underline">
-            (404) 692-0768
-          </a>{" "}
-          and mention your estimate request.
-        </p>
-      </div>
-    );
-  }
-
-  const stepDescription =
-    step === 1
-      ? "Tell us about the property so we can prep the right crew."
-      : "How can we reach you and what arrival window works best?";
+  const baseRange = quoteState.status === "ready" ? `$${quoteState.baseLow} – $${quoteState.baseHigh}` : null;
+  const discountedRange =
+    quoteState.status === "ready" ? `$${quoteState.low} – $${quoteState.high}` : null;
 
   return (
-    <div
-      className={cn(
-        "rounded-xl bg-white p-8 shadow-soft shadow-primary-900/10",
-        className
-      )}
-      {...props}
-    >
-      <div className="mb-6 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3 text-xs font-semibold uppercase tracking-[0.14em] text-neutral-500">
-          <span className="inline-flex items-center gap-2 rounded-full border border-neutral-200 px-3 py-1 text-neutral-600">
-            Step {step} of 2
-          </span>
-          <span className="text-[0.7rem] font-medium normal-case tracking-normal text-neutral-500">
-            Takes &lt; 1 minute. No spam.
-          </span>
-        </div>
-        <h3 className="font-display text-2xl text-primary-800">
-          Book your in-person estimate
-        </h3>
-        <p className="text-sm text-neutral-600">{stepDescription}</p>
+    <div className={cn("rounded-xl bg-white p-6 shadow-soft shadow-primary-900/10", className)} {...props}>
+      <div className="mb-4 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+        <span className="rounded-full border border-neutral-200 px-3 py-1">Step {step} of 2</span>
+        <span className="text-[10px] font-medium normal-case tracking-normal">Takes &lt; 1 minute. No spam.</span>
       </div>
 
-      {localError ? (
-        <div
-          role="alert"
-          aria-live="assertive"
-          className="mb-4 rounded-md border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700"
-        >
-          {localError}
+      <h3 className="font-display text-2xl text-primary-800">Show us what you need gone</h3>
+      <p className="mt-1 text-sm text-neutral-600">Photos + a few quick answers = an instant quote.</p>
+
+      {error ? (
+        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="alert">
+          {error}
         </div>
       ) : null}
 
-      {formState.status === "error" ? (
-        <div
-          role="alert"
-          aria-live="assertive"
-          className="mb-4 rounded-md border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700"
-        >
-          {formState.message}
-        </div>
-      ) : null}
-
-      <form ref={formRef} onSubmit={(event) => void handleSubmit(event)} className="space-y-6">
-        <section className={cn("space-y-3", step === 1 ? "" : "hidden")}>
-          <h4 className="text-sm font-semibold uppercase tracking-[0.14em] text-neutral-500">
-            Services to review
-          </h4>
-          <div className="grid gap-3 md:grid-cols-2">
-            {serviceOptions.map((service) => {
-              const isSelected = selectedServices.includes(service.slug);
-              return (
-                <label
-                  key={service.slug}
-                  className={cn(
-                    "flex cursor-pointer items-start gap-3 rounded-lg border p-4 transition",
-                    isSelected
-                      ? "border-accent-500 bg-accent-50/80 shadow-soft"
-                      : "border-neutral-200 bg-white hover:border-neutral-300"
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    name="selectedServices"
-                    value={service.slug}
-                    checked={isSelected}
-                    onChange={() => toggleService(service.slug)}
-                    className="mt-1 h-4 w-4 accent-accent-500"
-                  />
-                  <div className="space-y-1">
-                    <p className="font-medium text-neutral-800">{service.title}</p>
-                    {service.description ? (
-                      <p className="text-sm text-neutral-600">{service.description}</p>
-                    ) : null}
-                  </div>
-                </label>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className={cn("grid gap-4 md:grid-cols-2", step === 2 ? "" : "hidden")}>
-          <div>
-            <label htmlFor="name" className="text-sm font-medium text-neutral-700">
-              Full name
-            </label>
-            <input
-              id="name"
-              name="name"
-              type="text"
-              required
-              placeholder="Jamie Customer"
-              className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-            />
-          </div>
-          <div>
-            <label htmlFor="email" className="text-sm font-medium text-neutral-700">
-              Email
-            </label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              required
-              placeholder="you@email.com"
-              className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-            />
-          </div>
-          <div>
-            <label htmlFor="phone" className="text-sm font-medium text-neutral-700">
-              Mobile phone
-            </label>
-            <input
-              id="phone"
-              name="phone"
-              type="tel"
-              required
-              placeholder="(404) 692-0768"
-              className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-            />
-          </div>
-        </section>
-
-        <section className={cn("space-y-4", step === 1 ? "" : "hidden")}>
-          <div>
-            <label htmlFor="addressLine1" className="text-sm font-medium text-neutral-700">
-              Service address
-            </label>
-            <input
-              id="addressLine1"
-              name="addressLine1"
-              type="text"
-              required
-              placeholder="Street address"
-              className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-            />
-          </div>
-          <div className="grid gap-4 md:grid-cols-[2fr_1fr_1fr]">
+      <form
+        className="mt-4 space-y-5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (step === 1) {
+            setStep(2);
+          } else {
+            void submitQuote();
+          }
+        }}
+      >
+        {step === 1 ? (
+          <div className="space-y-4">
             <div>
-              <label htmlFor="city" className="text-sm font-medium text-neutral-700">
-                City
-              </label>
+              <label className="text-sm font-semibold text-neutral-800">What type of stuff is it?</label>
+              <p className="text-xs text-neutral-500">Choose all that apply</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {JUNK_OPTIONS.map((opt) => {
+                  const selected = types.includes(opt.id);
+                  return (
+                    <button
+                      type="button"
+                      key={opt.id}
+                      onClick={() => toggleType(opt.id)}
+                      className={cn(
+                        "flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm",
+                        selected ? "border-primary-500 bg-primary-50 text-primary-900" : "border-neutral-200 bg-white text-neutral-700"
+                      )}
+                    >
+                      <span className={cn("h-3 w-3 rounded-full border", selected ? "bg-primary-500 border-primary-500" : "border-neutral-300")} />
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-neutral-800">Add 1–4 photos for the most accurate quote</label>
+              <p className="text-xs text-neutral-500">Most people just snap a quick photo with their phone.</p>
               <input
-                id="city"
-                name="city"
-                type="text"
-                required
-                placeholder="Woodstock"
-                className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(e) => void handlePhotos(e.target.files)}
+                className="block w-full cursor-pointer rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
+              />
+              <button
+                type="button"
+                className="text-xs text-primary-700 underline"
+                onClick={() => setPhotos([])}
+              >
+                I can&apos;t add photos right now
+              </button>
+              {photos.length ? (
+                <div className="flex flex-wrap gap-2 text-xs text-neutral-600">
+                  {photos.map((_, idx) => (
+                    <span key={idx} className="rounded-full bg-neutral-100 px-2 py-1">{`Photo ${idx + 1}`}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-neutral-800">How big does the job feel?</label>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {SIZE_OPTIONS.map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={cn(
+                      "cursor-pointer rounded-lg border p-3 text-sm",
+                      perceivedSize === opt.id ? "border-primary-500 bg-primary-50" : "border-neutral-200 bg-white"
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="perceivedSize"
+                      value={opt.id}
+                      checked={perceivedSize === opt.id}
+                      onChange={() => setPerceivedSize(opt.id)}
+                      className="hidden"
+                    />
+                    <div className="font-semibold text-neutral-800">{opt.label}</div>
+                    {opt.hint ? <div className="text-xs text-neutral-500">{opt.hint}</div> : null}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-neutral-800">Anything else we should know?</label>
+              <textarea
+                rows={3}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                placeholder="Gate codes, stairs, heavy items, etc."
               />
             </div>
-            <div>
-              <label htmlFor="state" className="text-sm font-medium text-neutral-700">
-                State
-              </label>
+
+            <div className="space-y-1">
+              <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
               <input
-                id="state"
-                name="state"
                 type="text"
-                required
-                maxLength={2}
-                placeholder="GA"
-                className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 uppercase outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-              />
-            </div>
-            <div>
-              <label htmlFor="postalCode" className="text-sm font-medium text-neutral-700">
-                ZIP
-              </label>
-              <input
-                id="postalCode"
-                name="postalCode"
-                type="text"
+                value={zip}
+                onChange={(e) => setZip(e.target.value)}
                 required
                 placeholder="30189"
-                className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+                className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
               />
             </div>
-          </div>
-        </section>
 
-        <section className={cn("grid gap-4 md:grid-cols-2", step === 2 ? "" : "hidden")}>
-          <div>
-            <label htmlFor="preferredDate" className="text-sm font-medium text-neutral-700">
-              Preferred visit date
-            </label>
-            <input
-              id="preferredDate"
-              name="preferredDate"
-              type="date"
-              required
-              value={preferredDate}
-              onChange={(event) => setPreferredDate(event.target.value)}
-              className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-            />
-          </div>
-          <div>
-            <label htmlFor="alternateDate" className="text-sm font-medium text-neutral-700">
-              Alternate date (optional)
-            </label>
-            <input
-              id="alternateDate"
-              name="alternateDate"
-              type="date"
-              className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-            />
-          </div>
-        </section>
-
-        <section className={cn("space-y-3", step === 2 ? "" : "hidden")}>
-          <span className="text-sm font-medium text-neutral-700">Preferred time window</span>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {availabilityWindows.map((window) => (
-              <label
-                key={window.id}
-                htmlFor={`timeWindow-${window.id}`}
-                className={cn(
-                  "relative flex cursor-pointer flex-col gap-1 rounded-lg border p-4 text-sm transition",
-                  timeWindow === window.id
-                    ? "border-accent-500 bg-accent-50/80 shadow-soft"
-                    : "border-neutral-200 bg-white hover:border-neutral-300"
-                )}
-              >
-                <input
-                  type="radio"
-                  id={`timeWindow-${window.id}`}
-                  name="timeWindow"
-                  value={window.id}
-                  checked={timeWindow === window.id}
-                  onChange={(event) => setTimeWindow(event.target.value)}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  required
-                  aria-label={window.label}
-                />
-                <span className="text-sm font-semibold text-neutral-700 pointer-events-none">{window.label}</span>
-                <span className="text-xs text-neutral-500 pointer-events-none">
-                  Crews arrive within this window; we&apos;ll send an SMS when we&apos;re on the way.
-                </span>
-              </label>
-            ))}
-          </div>
-        </section>
-
-        <section className={cn("space-y-3", step === 2 ? "" : "hidden")}>
-          <label htmlFor="notes" className="text-sm font-medium text-neutral-700">
-            Notes for the crew (gate codes, surfaces, pets)
-          </label>
-          <textarea
-            id="notes"
-            name="notes"
-            rows={4}
-            placeholder="Deck square footage, stains to tackle, parking notes, etc."
-            className="mt-2 w-full rounded-md border border-neutral-300/60 bg-white px-3 py-2 text-body text-neutral-700 outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-          />
-        </section>
-
-        <div className={cn("flex items-start gap-3 rounded-md bg-neutral-100/60 p-4", step === 2 ? "" : "hidden")}>
-          <input
-            id="consent"
-            name="consent"
-            type="checkbox"
-            className="mt-1 h-4 w-4 accent-accent-500"
-          />
-          <label htmlFor="consent" className="text-sm text-neutral-600">
-            I agree to receive appointment updates and service tips from Stonegate. Text messaging rates may
-            apply. Reply STOP to opt out anytime.
-          </label>
-        </div>
-
-        <input type="hidden" name="utm" value={JSON.stringify(utm)} />
-        <input type="hidden" name="gclid" value={utm.gclid ?? ""} />
-        <input type="hidden" name="fbclid" value={utm.fbclid ?? ""} />
-        <input type="text" name="company" className="hidden" tabIndex={-1} autoComplete="off" />
-
-        {step === 1 ? (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <Button
-              type="button"
-              variant="primary"
-              onClick={goToStepTwo}
-              className="w-full justify-center sm:w-auto"
-            >
-              Next: Contact &amp; time
-            </Button>
-            <p className="text-center text-xs text-neutral-500 sm:text-left">
-              We&apos;ll ask for scheduling details on the next step.
-            </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <Button type="submit" className="w-full justify-center sm:w-auto">
+                Next: Your details
+              </Button>
+              <p className="text-xs text-neutral-500">On the next step we’ll grab your name and number and show your quote on screen.</p>
+            </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-              <Button
-                type="submit"
-                variant="primary"
-                disabled={formState.status === "submitting"}
-                className="w-full justify-center sm:w-auto"
-              >
-                {formState.status === "submitting" ? "Scheduling..." : "Book in-person estimate"}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={handleBackToStepOne}
-                className="w-full justify-center sm:w-auto"
-              >
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-sm font-semibold text-neutral-800">Name</label>
+                <input
+                  type="text"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                  placeholder="Jamie Customer"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-neutral-800">Mobile number</label>
+                <input
+                  type="tel"
+                  required
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                  placeholder="(404) 692-0768"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-neutral-800">How soon do you need this done?</label>
+              <div className="grid gap-2 sm:grid-cols-4">
+                {TIMEFRAME_OPTIONS.map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={cn(
+                      "cursor-pointer rounded-lg border p-3 text-sm",
+                      timeframe === opt.id ? "border-primary-500 bg-primary-50" : "border-neutral-200 bg-white"
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="timeframe"
+                      value={opt.id}
+                      checked={timeframe === opt.id}
+                      onChange={() => setTimeframe(opt.id)}
+                      className="hidden"
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <Button type="submit" className="w-full justify-center" disabled={quoteState.status === "loading"}>
+              {quoteState.status === "loading" ? "Calculating your quote..." : "Get my instant quote"}
+            </Button>
+
+            {quoteState.status === "ready" ? (
+              <div className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/70 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-primary-900">
+                  <span className="rounded-full bg-primary-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
+                    15% off
+                  </span>
+                  Here&apos;s your instant quote
+                </div>
+                <div className="text-2xl font-semibold text-primary-900">
+                  ${quoteState.low} – ${quoteState.high}
+                  <span className="ml-2 text-sm font-normal text-neutral-500 line-through">
+                    {quoteState.discountPercent > 0 ? baseRange : null}
+                  </span>
+                </div>
+                <div className="text-sm text-neutral-700">{quoteState.tier}</div>
+                <div className="text-xs text-neutral-600">{quoteState.reason}</div>
+                <div className="text-xs text-neutral-600">
+                  We&apos;ll confirm the exact price on-site before we start. If we use less space than expected, your price goes down.
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <Button type="button" className="justify-center">
+                    Book this pickup
+                  </Button>
+                  <a
+                    href="tel:14046920768"
+                    className="inline-flex items-center justify-center rounded-md border border-neutral-300 px-3 py-2 text-sm font-semibold text-neutral-700"
+                  >
+                    Call to confirm &amp; book
+                  </a>
+                </div>
+                <div className="text-[11px] text-neutral-500">
+                  We’ve saved your quote with your contact info so we can help if you have questions.
+                </div>
+              </div>
+            ) : quoteState.status === "error" ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {quoteState.message}
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-between">
+              <Button type="button" variant="ghost" onClick={() => setStep(1)}>
                 Back
               </Button>
+              <p className="text-xs text-neutral-500">We’ll save this quote for follow-up.</p>
             </div>
-            <p className="text-center text-xs text-neutral-500 sm:text-right">
-              We confirm instantly and send text updates.
-            </p>
           </div>
         )}
       </form>
@@ -964,4 +392,11 @@ export function LeadForm({ services, className, ...props }: LeadFormProps) {
   );
 }
 
-
+async function toDataUrl(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(file);
+  });
+}

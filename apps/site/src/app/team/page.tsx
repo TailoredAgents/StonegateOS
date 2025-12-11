@@ -9,6 +9,7 @@ import {
 import { MyDaySection } from "./components/MyDaySection";
 import { EstimatesSection } from "./components/EstimatesSection";
 import { QuotesSection } from "./components/QuotesSection";
+import { InstantQuotesSection } from "./components/InstantQuotesSection";
 import { ContactsSection } from "./components/ContactsSection";
 import { PipelineSection } from "./components/PipelineSection";
 import { QuoteBuilderSection } from "./components/QuoteBuilderSection";
@@ -212,7 +213,10 @@ export default async function TeamPage({
               </div>
             }
           >
-            <QuotesSection />
+            <div className="space-y-4">
+              <QuotesSection />
+              <InstantQuotesSection />
+            </div>
           </React.Suspense>
         ) : null}
 
