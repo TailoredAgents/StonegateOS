@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, instantQuotes } from "@/db";
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { isAdminRequest } from "../../web/admin";
 
 export async function GET(request: NextRequest) {
@@ -11,6 +11,6 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const id = searchParams.get("id");
   const baseQuery = db.select().from(instantQuotes).orderBy(desc(instantQuotes.createdAt));
-  const rows = id ? await baseQuery.where(instantQuotes.id.eq(id)).limit(1) : await baseQuery.limit(50);
+  const rows = id ? await baseQuery.where(eq(instantQuotes.id, id)).limit(1) : await baseQuery.limit(50);
   return NextResponse.json({ quotes: rows });
 }
