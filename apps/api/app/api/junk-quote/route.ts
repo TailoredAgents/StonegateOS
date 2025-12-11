@@ -67,26 +67,30 @@ export async function POST(request: NextRequest) {
     const priceHighDiscounted = Math.round(base.priceHigh * (1 - discount));
 
     const db = getDb();
-    await db.insert(instantQuotes).values({
-      source: body.source ?? "public_site",
-      contactName: body.contact.name.trim(),
-      contactPhone: body.contact.phone.trim(),
-      timeframe: body.contact.timeframe,
-      zip: body.job.zip.trim(),
-      jobTypes: body.job.types,
-      perceivedSize: body.job.perceivedSize,
-      notes: body.job.notes ?? null,
-      photoUrls: body.job.photoUrls ?? [],
-      aiResult: {
-        ...base,
-        discountPercent: discount,
-        priceLowDiscounted,
-        priceHighDiscounted
-      }
-    });
+    const [quoteRow] = await db
+      .insert(instantQuotes)
+      .values({
+        source: body.source ?? "public_site",
+        contactName: body.contact.name.trim(),
+        contactPhone: body.contact.phone.trim(),
+        timeframe: body.contact.timeframe,
+        zip: body.job.zip.trim(),
+        jobTypes: body.job.types,
+        perceivedSize: body.job.perceivedSize,
+        notes: body.job.notes ?? null,
+        photoUrls: body.job.photoUrls ?? [],
+        aiResult: {
+          ...base,
+          discountPercent: discount,
+          priceLowDiscounted,
+          priceHighDiscounted
+        }
+      })
+      .returning({ id: instantQuotes.id });
 
     return NextResponse.json({
       ok: true,
+      quoteId: quoteRow?.id ?? null,
       quote: {
         ...base,
         discountPercent: discount,

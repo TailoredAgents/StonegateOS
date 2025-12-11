@@ -8,6 +8,7 @@ type QuoteState =
   | { status: "idle" | "loading" }
   | {
       status: "ready";
+      quoteId: string | null;
       baseLow: number;
       baseHigh: number;
       discountPercent: number;
@@ -68,6 +69,14 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [timeframe, setTimeframe] = React.useState<Timeframe>("this_week");
   const [quoteState, setQuoteState] = React.useState<QuoteState>({ status: "idle" });
   const [error, setError] = React.useState<string | null>(null);
+  const [addressLine1, setAddressLine1] = React.useState("");
+  const [city, setCity] = React.useState("");
+  const [stateField, setStateField] = React.useState("GA");
+  const [postalCode, setPostalCode] = React.useState("");
+  const [preferredDate, setPreferredDate] = React.useState("");
+  const [timeWindow, setTimeWindow] = React.useState("");
+  const [bookingStatus, setBookingStatus] = React.useState<"idle" | "loading" | "success" | "error">("idle");
+  const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
 
   const apiBase = process.env["NEXT_PUBLIC_API_BASE_URL"]?.replace(/\/$/, "") ?? "";
 
@@ -130,6 +139,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       if (!data.ok || !data.quote) throw new Error("Quote unavailable");
       setQuoteState({
         status: "ready",
+        quoteId: data.quoteId ?? null,
         baseLow: data.quote.priceLow,
         baseHigh: data.quote.priceHigh,
         low: data.quote.priceLowDiscounted ?? data.quote.priceLow,
@@ -141,6 +151,44 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       });
     } catch (err) {
       setQuoteState({ status: "error", message: (err as Error).message });
+    }
+  };
+
+  const submitBooking = async () => {
+    if (quoteState.status !== "ready") return;
+    if (!addressLine1 || !city || !stateField || !postalCode) {
+      setBookingStatus("error");
+      setBookingMessage("Please enter address details.");
+      return;
+    }
+    setBookingStatus("loading");
+    setBookingMessage(null);
+    try {
+      const res = await fetch(`${apiBase}/api/junk-quote/book`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instantQuoteId: quoteState.quoteId,
+          name: name.trim(),
+          phone: phone.trim(),
+          addressLine1,
+          city,
+          state: stateField,
+          postalCode,
+          preferredDate: preferredDate || null,
+          timeWindow: timeWindow || null,
+          notes: notes || null
+        })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt.slice(0, 160));
+      }
+      setBookingStatus("success");
+      setBookingMessage("Thanks! We saved your request. We’ll confirm your arrival window shortly.");
+    } catch (err) {
+      setBookingStatus("error");
+      setBookingMessage((err as Error).message);
     }
   };
 
@@ -358,19 +406,80 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 <div className="text-xs text-neutral-600">
                   We&apos;ll confirm the exact price on-site before we start. If we use less space than expected, your price goes down.
                 </div>
-                <div className="flex flex-wrap gap-3">
-                  <Button type="button" className="justify-center">
-                    Book this pickup
-                  </Button>
-                  <a
-                    href="tel:14046920768"
-                    className="inline-flex items-center justify-center rounded-md border border-neutral-300 px-3 py-2 text-sm font-semibold text-neutral-700"
-                  >
-                    Call to confirm &amp; book
-                  </a>
-                </div>
-                <div className="text-[11px] text-neutral-500">
-                  We’ve saved your quote with your contact info so we can help if you have questions.
+                <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
+                  <div className="text-xs font-semibold text-neutral-700">Book this pickup</div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <input
+                      type="text"
+                      placeholder="Street address"
+                      value={addressLine1}
+                      onChange={(e) => setAddressLine1(e.target.value)}
+                      className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                    />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input
+                        type="text"
+                        placeholder="City"
+                        value={city}
+                        onChange={(e) => setCity(e.target.value)}
+                        className="col-span-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                      />
+                      <input
+                        type="text"
+                        placeholder="GA"
+                        maxLength={2}
+                        value={stateField}
+                        onChange={(e) => setStateField(e.target.value.toUpperCase())}
+                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 uppercase"
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="ZIP"
+                      value={postalCode}
+                      onChange={(e) => setPostalCode(e.target.value)}
+                      className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="date"
+                        value={preferredDate}
+                        onChange={(e) => setPreferredDate(e.target.value)}
+                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Time window (e.g., 8-12)"
+                        value={timeWindow}
+                        onChange={(e) => setTimeWindow(e.target.value)}
+                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <Button type="button" className="justify-center" onClick={() => void submitBooking()} disabled={bookingStatus === "loading"}>
+                      {bookingStatus === "loading" ? "Booking..." : "Book this pickup"}
+                    </Button>
+                    <a
+                      href="tel:14046920768"
+                      className="inline-flex items-center justify-center rounded-md border border-neutral-300 px-3 py-2 text-sm font-semibold text-neutral-700"
+                    >
+                      Call to confirm &amp; book
+                    </a>
+                  </div>
+                  {bookingMessage ? (
+                    <div
+                      className={cn(
+                        "text-xs",
+                        bookingStatus === "error" ? "text-amber-700" : "text-emerald-700"
+                      )}
+                    >
+                      {bookingMessage}
+                    </div>
+                  ) : null}
+                  <div className="text-[11px] text-neutral-500">
+                    We’ve saved your quote with your contact info so we can help if you have questions.
+                  </div>
                 </div>
               </div>
             ) : quoteState.status === "error" ? (

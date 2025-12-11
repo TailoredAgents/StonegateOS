@@ -157,14 +157,15 @@ export const leads = pgTable(
     utmTerm: text("utm_term"),
     utmContent: text("utm_content"),
     gclid: text("gclid"),
-    fbclid: text("fbclid"),
-    referrer: text("referrer"),
-    formPayload: jsonb("form_payload").$type<Record<string, unknown>>(),
-    quoteEstimate: numeric("quote_estimate"),
-    quoteId: text("quote_id"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
+  fbclid: text("fbclid"),
+  referrer: text("referrer"),
+  formPayload: jsonb("form_payload").$type<Record<string, unknown>>(),
+  instantQuoteId: uuid("instant_quote_id").references(() => instantQuotes.id, { onDelete: "set null" }),
+  quoteEstimate: numeric("quote_estimate"),
+  quoteId: text("quote_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
       .notNull()
       .$onUpdate(() => new Date())
   },
