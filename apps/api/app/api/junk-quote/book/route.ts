@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     const timeWindow = body.timeWindow ?? null;
 
     const leadResult = await db.transaction(async (tx) => {
-      const [contact] = await tx
+      const insertedContacts = await tx
         .insert(contacts)
         .values({
           firstName,
@@ -56,8 +56,12 @@ export async function POST(request: NextRequest) {
           updatedAt: new Date()
         })
         .returning();
+      const contact = insertedContacts[0];
+      if (!contact) {
+        throw new Error("contact_insert_failed");
+      }
 
-      const [property] = await tx
+      const insertedProperties = await tx
         .insert(properties)
         .values({
           contactId: contact.id,
@@ -68,8 +72,12 @@ export async function POST(request: NextRequest) {
           gated: false
         })
         .returning();
+      const property = insertedProperties[0];
+      if (!property) {
+        throw new Error("property_insert_failed");
+      }
 
-      const [lead] = await tx
+      const insertedLeads = await tx
         .insert(leads)
         .values({
           contactId: contact.id,
@@ -90,6 +98,11 @@ export async function POST(request: NextRequest) {
           }
         })
         .returning();
+
+      const lead = insertedLeads[0];
+      if (!lead) {
+        throw new Error("lead_insert_failed");
+      }
 
       return { lead };
     });

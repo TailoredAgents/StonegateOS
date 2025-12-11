@@ -124,12 +124,13 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       }
       const data = (await res.json()) as {
         ok?: boolean;
+        quoteId?: string | null;
         quote?: {
           loadFractionEstimate: number;
           priceLow: number;
           priceHigh: number;
-          priceLowDiscounted: number;
-          priceHighDiscounted: number;
+          priceLowDiscounted?: number;
+          priceHighDiscounted?: number;
           displayTierLabel: string;
           reasonSummary: string;
           discountPercent?: number;
