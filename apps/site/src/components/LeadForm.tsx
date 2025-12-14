@@ -238,17 +238,20 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 {JUNK_OPTIONS.map((opt) => {
                   const selected = types.includes(opt.id);
+                  const checkboxId = `junk-type-${opt.id}`;
                   return (
                     <label
                       key={opt.id}
+                      htmlFor={checkboxId}
                       className={cn(
                         "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
                         selected ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm" : "border-neutral-200 bg-white text-neutral-700"
                       )}
                     >
                       <input
+                        id={checkboxId}
                         type="checkbox"
-                        className="hidden"
+                        className="sr-only"
                         checked={selected}
                         onChange={() => toggleType(opt.id)}
                         aria-label={opt.label}
@@ -256,7 +259,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                       <span
                         className={cn(
                           "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
-                          selected ? "border-primary-600 bg-primary-600 text-white" : "border-neutral-300 bg-white text-transparent"
+                          selected ? "border-primary-700 bg-primary-700 text-white" : "border-neutral-300 bg-white text-black/0"
                         )}
                       >
                         ✓
@@ -297,26 +300,31 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             <div className="space-y-2">
               <label className="text-sm font-semibold text-neutral-800">How big does the job feel?</label>
               <div className="grid gap-2 sm:grid-cols-2">
-                {SIZE_OPTIONS.map((opt) => (
-                  <label
-                    key={opt.id}
-                    className={cn(
-                      "cursor-pointer rounded-lg border p-3 text-sm",
-                      perceivedSize === opt.id ? "border-primary-600 bg-primary-50 shadow-sm" : "border-neutral-200 bg-white"
-                    )}
-                  >
-                    <input
-                      type="radio"
-                      name="perceivedSize"
-                      value={opt.id}
-                      checked={perceivedSize === opt.id}
-                      onChange={() => setPerceivedSize(opt.id)}
-                      className="hidden"
-                    />
-                    <div className="font-semibold text-neutral-800">{opt.label}</div>
-                    {opt.hint ? <div className="text-xs text-neutral-500">{opt.hint}</div> : null}
-                  </label>
-                ))}
+                {SIZE_OPTIONS.map((opt) => {
+                  const radioId = `size-${opt.id}`;
+                  return (
+                    <label
+                      key={opt.id}
+                      htmlFor={radioId}
+                      className={cn(
+                        "cursor-pointer rounded-lg border p-3 text-sm transition",
+                        perceivedSize === opt.id ? "border-primary-600 bg-primary-50 shadow-sm" : "border-neutral-200 bg-white"
+                      )}
+                    >
+                      <input
+                        id={radioId}
+                        type="radio"
+                        name="perceivedSize"
+                        value={opt.id}
+                        checked={perceivedSize === opt.id}
+                        onChange={() => setPerceivedSize(opt.id)}
+                        className="sr-only"
+                      />
+                      <div className="font-semibold text-neutral-800">{opt.label}</div>
+                      {opt.hint ? <div className="text-xs text-neutral-500">{opt.hint}</div> : null}
+                    </label>
+                  );
+                })}
               </div>
             </div>
 
