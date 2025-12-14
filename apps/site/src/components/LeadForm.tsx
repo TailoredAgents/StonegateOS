@@ -317,7 +317,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                         name="perceivedSize"
                         value={opt.id}
                         checked={perceivedSize === opt.id}
-                        onChange={() => setPerceivedSize(opt.id)}
+                        onChange={(e) => setPerceivedSize(e.target.value as PerceivedSize)}
                         className="sr-only"
                       />
                       <div className="font-semibold text-neutral-800">{opt.label}</div>
