@@ -3,7 +3,6 @@ import { z } from "zod";
 import { getDb, contacts, properties, leads, instantQuotes } from "@/db";
 import { eq } from "drizzle-orm";
 import { normalizeName, normalizePhone } from "../../web/utils";
-import { DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
 
 const BookingSchema = z.object({
   instantQuoteId: z.string().uuid(),
