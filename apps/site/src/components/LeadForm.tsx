@@ -243,7 +243,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                       key={opt.id}
                       className={cn(
                         "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
-                        selected ? "border-primary-500 bg-primary-50 text-primary-900" : "border-neutral-200 bg-white text-neutral-700"
+                        selected ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm" : "border-neutral-200 bg-white text-neutral-700"
                       )}
                     >
                       <input
@@ -256,7 +256,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                       <span
                         className={cn(
                           "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
-                          selected ? "border-primary-500 bg-primary-500 text-white" : "border-neutral-300 bg-white text-transparent"
+                          selected ? "border-primary-600 bg-primary-600 text-white" : "border-neutral-300 bg-white text-transparent"
                         )}
                       >
                         ✓
@@ -302,7 +302,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                     key={opt.id}
                     className={cn(
                       "cursor-pointer rounded-lg border p-3 text-sm",
-                      perceivedSize === opt.id ? "border-primary-500 bg-primary-50" : "border-neutral-200 bg-white"
+                      perceivedSize === opt.id ? "border-primary-600 bg-primary-50 shadow-sm" : "border-neutral-200 bg-white"
                     )}
                   >
                     <input
