@@ -103,6 +103,12 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     setError(null);
     setQuoteState({ status: "loading" });
     try {
+      if (!types.length) {
+        setStep(1);
+        setQuoteState({ status: "idle" });
+        setError("Pick at least one type of junk.");
+        return;
+      }
       const res = await fetch(`${apiBase}/api/junk-quote`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -233,18 +239,30 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 {JUNK_OPTIONS.map((opt) => {
                   const selected = types.includes(opt.id);
                   return (
-                    <button
-                      type="button"
+                    <label
                       key={opt.id}
-                      onClick={() => toggleType(opt.id)}
                       className={cn(
-                        "flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm",
+                        "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
                         selected ? "border-primary-500 bg-primary-50 text-primary-900" : "border-neutral-200 bg-white text-neutral-700"
                       )}
                     >
-                      <span className={cn("h-3 w-3 rounded-full border", selected ? "bg-primary-500 border-primary-500" : "border-neutral-300")} />
-                      {opt.label}
-                    </button>
+                      <input
+                        type="checkbox"
+                        className="hidden"
+                        checked={selected}
+                        onChange={() => toggleType(opt.id)}
+                        aria-label={opt.label}
+                      />
+                      <span
+                        className={cn(
+                          "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
+                          selected ? "border-primary-500 bg-primary-500 text-white" : "border-neutral-300 bg-white text-transparent"
+                        )}
+                      >
+                        ✓
+                      </span>
+                      <span>{opt.label}</span>
+                    </label>
                   );
                 })}
               </div>
