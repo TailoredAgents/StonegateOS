@@ -77,6 +77,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [timeWindow, setTimeWindow] = React.useState("");
   const [bookingStatus, setBookingStatus] = React.useState<"idle" | "loading" | "success" | "error">("idle");
   const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
+  const [photoSkipped, setPhotoSkipped] = React.useState(false);
 
   const apiBase = process.env["NEXT_PUBLIC_API_BASE_URL"]?.replace(/\/$/, "") ?? "";
 
@@ -93,6 +94,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       if (url) dataUrls.push(url);
     }
     setPhotos(dataUrls);
+    setPhotoSkipped(false);
   };
 
   const submitQuote = async () => {
@@ -284,7 +286,10 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <button
                 type="button"
                 className="text-xs text-primary-700 underline"
-                onClick={() => setPhotos([])}
+                onClick={() => {
+                  setPhotos([]);
+                  setPhotoSkipped(true);
+                }}
               >
                 I can&apos;t add photos right now
               </button>
@@ -294,6 +299,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                     <span key={idx} className="rounded-full bg-neutral-100 px-2 py-1">{`Photo ${idx + 1}`}</span>
                   ))}
                 </div>
+              ) : photoSkipped ? (
+                <div className="text-xs text-neutral-600">No photos added (you can still continue).</div>
               ) : null}
             </div>
 
@@ -310,6 +317,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                         "cursor-pointer rounded-lg border p-3 text-sm transition",
                         perceivedSize === opt.id ? "border-primary-600 bg-primary-50 shadow-sm" : "border-neutral-200 bg-white"
                       )}
+                      onClick={() => setPerceivedSize(opt.id)}
                     >
                       <input
                         id={radioId}
