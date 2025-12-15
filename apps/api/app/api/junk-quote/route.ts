@@ -3,6 +3,23 @@ import { z } from "zod";
 import { getDb, instantQuotes } from "@/db";
 
 const DISCOUNT = Number(process.env["INSTANT_QUOTE_DISCOUNT"] ?? 0);
+const ALLOWED_ORIGIN = process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+
+function applyCors(response: NextResponse, origin = ALLOWED_ORIGIN): NextResponse {
+  response.headers.set("Access-Control-Allow-Origin", origin);
+  response.headers.set("Access-Control-Allow-Methods", "POST,OPTIONS");
+  response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  response.headers.set("Access-Control-Max-Age", "86400");
+  return response;
+}
+
+function corsJson(body: unknown, init?: ResponseInit): NextResponse {
+  return applyCors(NextResponse.json(body, init));
+}
+
+export function OPTIONS(): NextResponse {
+  return applyCors(new NextResponse(null, { status: 204 }));
+}
 
 const RequestSchema = z.object({
   source: z.string().optional().default("public_site"),
@@ -54,7 +71,7 @@ export async function POST(request: NextRequest) {
   try {
     const parsed = RequestSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return NextResponse.json({ error: "invalid_payload", details: parsed.error.flatten() }, { status: 400 });
+      return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, { status: 400 });
     }
     const body = parsed.data;
 
@@ -88,7 +105,7 @@ export async function POST(request: NextRequest) {
       })
       .returning({ id: instantQuotes.id });
 
-    return NextResponse.json({
+    return corsJson({
       ok: true,
       quoteId: quoteRow?.id ?? null,
       quote: {
@@ -100,7 +117,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[junk-quote] server_error", error);
-    return NextResponse.json({ error: "server_error" }, { status: 500 });
+    return corsJson({ error: "server_error" }, { status: 500 });
   }
 }
 

@@ -4,6 +4,24 @@ import { getDb, contacts, properties, leads, instantQuotes } from "@/db";
 import { eq } from "drizzle-orm";
 import { normalizeName, normalizePhone } from "../../web/utils";
 
+const ALLOWED_ORIGIN = process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+
+function applyCors(response: NextResponse, origin = ALLOWED_ORIGIN): NextResponse {
+  response.headers.set("Access-Control-Allow-Origin", origin);
+  response.headers.set("Access-Control-Allow-Methods", "POST,OPTIONS");
+  response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  response.headers.set("Access-Control-Max-Age", "86400");
+  return response;
+}
+
+function corsJson(body: unknown, init?: ResponseInit): NextResponse {
+  return applyCors(NextResponse.json(body, init));
+}
+
+export function OPTIONS(): NextResponse {
+  return applyCors(new NextResponse(null, { status: 204 }));
+}
+
 const BookingSchema = z.object({
   instantQuoteId: z.string().uuid(),
   name: z.string().min(2),
@@ -21,14 +39,14 @@ export async function POST(request: NextRequest) {
   try {
     const parsed = BookingSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return NextResponse.json({ error: "invalid_payload", details: parsed.error.flatten() }, { status: 400 });
+      return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, { status: 400 });
     }
     const body = parsed.data;
     const db = getDb();
 
     const [quote] = await db.select().from(instantQuotes).where(eq(instantQuotes.id, body.instantQuoteId)).limit(1);
     if (!quote) {
-      return NextResponse.json({ error: "quote_not_found" }, { status: 404 });
+      return corsJson({ error: "quote_not_found" }, { status: 404 });
     }
 
     let normalizedPhone: { raw: string; e164: string };
@@ -36,7 +54,7 @@ export async function POST(request: NextRequest) {
       const norm = normalizePhone(body.phone);
       normalizedPhone = { raw: norm.raw, e164: norm.e164 };
     } catch {
-      return NextResponse.json({ error: "invalid_phone" }, { status: 400 });
+      return corsJson({ error: "invalid_phone" }, { status: 400 });
     }
 
     const { firstName, lastName } = normalizeName(body.name);
@@ -107,9 +125,9 @@ export async function POST(request: NextRequest) {
       return { lead };
     });
 
-    return NextResponse.json({ ok: true, leadId: leadResult.lead.id });
+    return corsJson({ ok: true, leadId: leadResult.lead.id });
   } catch (error) {
     console.error("[junk-quote-book] server_error", error);
-    return NextResponse.json({ error: "server_error" }, { status: 500 });
+    return corsJson({ error: "server_error" }, { status: 500 });
   }
 }
