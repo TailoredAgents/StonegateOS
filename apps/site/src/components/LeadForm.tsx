@@ -403,26 +403,36 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
 
             <div className="space-y-2">
               <label className="text-sm font-semibold text-neutral-800">How soon do you need this done?</label>
-              <div className="grid gap-2 sm:grid-cols-4">
-                {TIMEFRAME_OPTIONS.map((opt) => (
-                  <label
-                    key={opt.id}
-                    className={cn(
-                      "cursor-pointer rounded-lg border p-3 text-sm",
-                      timeframe === opt.id ? "border-primary-500 bg-primary-50" : "border-neutral-200 bg-white"
-                    )}
-                  >
-                    <input
-                      type="radio"
-                      name="timeframe"
-                      value={opt.id}
-                      checked={timeframe === opt.id}
-                      onChange={() => setTimeframe(opt.id)}
-                      className="hidden"
-                    />
-                    {opt.label}
-                  </label>
-                ))}
+              <div className="grid gap-2 sm:grid-cols-4" role="radiogroup" aria-label="How soon do you need this done?">
+                {TIMEFRAME_OPTIONS.map((opt) => {
+                  const selected = timeframe === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setTimeframe(opt.id)}
+                      className={cn(
+                        "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
+                        selected
+                          ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                          : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                          selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                        )}
+                        aria-hidden="true"
+                      >
+                        <Check className="h-3 w-3" strokeWidth={3} />
+                      </span>
+                      <span className="font-semibold text-neutral-900">{opt.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
