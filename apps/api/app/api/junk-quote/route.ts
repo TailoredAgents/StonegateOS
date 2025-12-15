@@ -159,7 +159,6 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: JSON.stringify(body.job) }
       ],
-      modalities: ["text"],
       text: {
         format: {
           type: "json_schema",
