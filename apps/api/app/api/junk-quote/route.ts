@@ -197,9 +197,31 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
     throw new Error(`ai_failed_${res.status}: ${text.slice(0, 200)}`);
   }
 
-  const data = (await res.json().catch(() => ({}))) as { output_text?: string };
-  const raw = typeof data.output_text === "string" && data.output_text.trim().length ? data.output_text : "{}";
-  return JSON.parse(raw);
+  const data = (await res.json().catch(() => ({}))) as {
+    output_text?: string | null;
+    output?: Array<{
+      type?: string;
+      content?: Array<{ type?: string; text?: string }>;
+    }>;
+  };
+
+  const rawFromSdk = typeof data.output_text === "string" ? data.output_text.trim() : "";
+  if (rawFromSdk) {
+    return JSON.parse(rawFromSdk);
+  }
+
+  const rawFromOutput = (data.output ?? [])
+    .flatMap((item) => item.content ?? [])
+    .filter((part) => part.type === "output_text")
+    .map((part) => part.text ?? "")
+    .join("\n")
+    .trim();
+
+  if (!rawFromOutput) {
+    throw new Error("ai_empty_output_text");
+  }
+
+  return JSON.parse(rawFromOutput);
 }
 
 const SYSTEM_PROMPT = `
