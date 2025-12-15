@@ -88,7 +88,10 @@ export async function POST(request: NextRequest) {
     }
     const body = parsed.data;
 
-    const aiResult = await getQuoteFromAi(body).catch(() => FALLBACK_AI);
+    const aiResult = await getQuoteFromAi(body).catch((err) => {
+      console.error("[junk-quote] ai_failed", err instanceof Error ? err.message : err);
+      return FALLBACK_AI;
+    });
     const aiValidated = AiResponseSchema.safeParse(aiResult);
     const base = aiValidated.success ? aiValidated.data : FALLBACK_AI;
 
