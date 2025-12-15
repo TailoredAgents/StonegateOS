@@ -159,30 +159,33 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: JSON.stringify(body.job) }
       ],
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "junk_quote",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              loadFractionEstimate: { type: "number" },
-              priceLow: { type: "number" },
-              priceHigh: { type: "number" },
-              displayTierLabel: { type: "string" },
-              reasonSummary: { type: "string" },
-              needsInPersonEstimate: { type: "boolean" }
-            },
-            required: [
-              "loadFractionEstimate",
-              "priceLow",
-              "priceHigh",
-              "displayTierLabel",
-              "reasonSummary",
-              "needsInPersonEstimate"
-            ]
+      modalities: ["text"],
+      text: {
+        format: {
+          type: "json_schema",
+          json_schema: {
+            name: "junk_quote",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                loadFractionEstimate: { type: "number" },
+                priceLow: { type: "number" },
+                priceHigh: { type: "number" },
+                displayTierLabel: { type: "string" },
+                reasonSummary: { type: "string" },
+                needsInPersonEstimate: { type: "boolean" }
+              },
+              required: [
+                "loadFractionEstimate",
+                "priceLow",
+                "priceHigh",
+                "displayTierLabel",
+                "reasonSummary",
+                "needsInPersonEstimate"
+              ]
+            }
           }
         }
       },
