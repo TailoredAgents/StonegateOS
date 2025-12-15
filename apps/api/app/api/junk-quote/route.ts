@@ -196,30 +196,61 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
   }
 
   const data = (await res.json().catch(() => ({}))) as {
-    output_text?: string | null;
-    output?: Array<{
-      type?: string;
-      content?: Array<{ type?: string; text?: string }>;
-    }>;
+    status?: string;
+    error?: { code?: string | null; message?: string } | null;
+    output?: unknown;
   };
 
-  const rawFromSdk = typeof data.output_text === "string" ? data.output_text.trim() : "";
-  if (rawFromSdk) {
-    return JSON.parse(rawFromSdk);
+  const status = typeof data.status === "string" ? data.status : "unknown";
+  if (status !== "completed") {
+    const code = typeof data.error?.code === "string" ? data.error.code : "unknown";
+    const message = typeof data.error?.message === "string" ? data.error.message : "no_message";
+    throw new Error(`ai_${status}_${code}: ${message}`.slice(0, 220));
   }
 
-  const rawFromOutput = (data.output ?? [])
-    .flatMap((item) => item.content ?? [])
-    .filter((part) => part.type === "output_text")
-    .map((part) => part.text ?? "")
-    .join("\n")
-    .trim();
+  const outputItems = Array.isArray(data.output) ? data.output : [];
+  const outputTextParts: string[] = [];
+  const refusalParts: string[] = [];
+  const anyTextParts: string[] = [];
 
-  if (!rawFromOutput) {
+  for (const item of outputItems) {
+    if (!item || typeof item !== "object") continue;
+    const content = (item as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const typed = part as { type?: unknown; text?: unknown; refusal?: unknown };
+      const partType = typeof typed.type === "string" ? typed.type : "";
+      if (partType === "output_text" && typeof typed.text === "string") {
+        outputTextParts.push(typed.text);
+      }
+      if (partType === "refusal" && typeof typed.refusal === "string") {
+        refusalParts.push(typed.refusal);
+      }
+      if (typeof typed.text === "string") {
+        anyTextParts.push(typed.text);
+      }
+    }
+  }
+
+  const raw = outputTextParts.join("\n").trim() || anyTextParts.join("\n").trim();
+  if (!raw) {
+    if (refusalParts.length) {
+      throw new Error(`ai_refusal: ${refusalParts.join(" ").slice(0, 200)}`);
+    }
     throw new Error("ai_empty_output_text");
   }
 
-  return JSON.parse(rawFromOutput);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      return JSON.parse(raw.slice(start, end + 1));
+    }
+    throw new Error("ai_invalid_json_output");
+  }
 }
 
 const SYSTEM_PROMPT = `
