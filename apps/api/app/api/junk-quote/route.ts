@@ -12,7 +12,7 @@ function resolveOrigin(requestOrigin: string | null): string {
   if (!allowed.length) return "*";
   const origin = requestOrigin?.trim().replace(/\/+$/u, "") ?? null;
   if (origin && allowed.includes(origin)) return origin;
-  return allowed[0];
+  return allowed[0] ?? "*";
 }
 
 function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
