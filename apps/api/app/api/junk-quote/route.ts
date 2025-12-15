@@ -155,10 +155,9 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
     },
     body: JSON.stringify({
       model,
-      input: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: JSON.stringify(body.job) }
-      ],
+      instructions: SYSTEM_PROMPT,
+      input: JSON.stringify(body.job),
+      tool_choice: "none",
       text: {
         format: {
           type: "json_schema",
@@ -238,6 +237,32 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
     if (refusalParts.length) {
       throw new Error(`ai_refusal: ${refusalParts.join(" ").slice(0, 200)}`);
     }
+    try {
+      const outputSummary = outputItems.slice(0, 3).map((item) => {
+        if (!item || typeof item !== "object") return { kind: typeof item };
+        const record = item as Record<string, unknown>;
+        const type = typeof record["type"] === "string" ? record["type"] : "unknown";
+        const itemStatus = typeof record["status"] === "string" ? record["status"] : undefined;
+        const content = record["content"];
+        const summary = record["summary"];
+        return {
+          type,
+          status: itemStatus,
+          keys: Object.keys(record).slice(0, 12),
+          contentTypes: Array.isArray(content)
+            ? content
+                .slice(0, 5)
+                .map((part) => (part && typeof part === "object" ? (part as Record<string, unknown>)["type"] : typeof part))
+            : undefined,
+          summaryTypes: Array.isArray(summary)
+            ? summary
+                .slice(0, 5)
+                .map((part) => (part && typeof part === "object" ? (part as Record<string, unknown>)["type"] : typeof part))
+            : undefined
+        };
+      });
+      console.error("[junk-quote] ai_empty_output_debug", { status, error: data.error, outputLen: outputItems.length, outputSummary });
+    } catch {}
     throw new Error("ai_empty_output_text");
   }
 
