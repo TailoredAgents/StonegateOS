@@ -163,29 +163,27 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
       text: {
         format: {
           type: "json_schema",
-          json_schema: {
-            name: "junk_quote",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                loadFractionEstimate: { type: "number" },
-                priceLow: { type: "number" },
-                priceHigh: { type: "number" },
-                displayTierLabel: { type: "string" },
-                reasonSummary: { type: "string" },
-                needsInPersonEstimate: { type: "boolean" }
-              },
-              required: [
-                "loadFractionEstimate",
-                "priceLow",
-                "priceHigh",
-                "displayTierLabel",
-                "reasonSummary",
-                "needsInPersonEstimate"
-              ]
-            }
+          name: "junk_quote",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              loadFractionEstimate: { type: "number" },
+              priceLow: { type: "number" },
+              priceHigh: { type: "number" },
+              displayTierLabel: { type: "string" },
+              reasonSummary: { type: "string" },
+              needsInPersonEstimate: { type: "boolean" }
+            },
+            required: [
+              "loadFractionEstimate",
+              "priceLow",
+              "priceHigh",
+              "displayTierLabel",
+              "reasonSummary",
+              "needsInPersonEstimate"
+            ]
           }
         }
       },
@@ -206,7 +204,7 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
 
 const SYSTEM_PROMPT = `
 You are the quoting assistant for Stonegate Junk Removal in Woodstock, Georgia.
-Stonegate uses one large 7×16×4 dump trailer. Pricing anchors:
+Stonegate uses one large 7x16x4 dump trailer. Pricing anchors:
 - 1/4 trailer: $200
 - 1/2 trailer: $400
 - 3/4 trailer: $600
@@ -217,9 +215,9 @@ Rules:
 - Always give a price range, never a single number.
 - Map perceived size to trailer fraction:
   few_items -> ~0.25
-  small_area -> 0.25–0.5
-  one_room_or_half_garage -> 0.5–0.75
-  big_cleanout -> 0.75–1.0+
+  small_area -> 0.25-0.5
+  one_room_or_half_garage -> 0.5-0.75
+  big_cleanout -> 0.75-1.0+
   not_sure -> err on 0.5+ unless clearly tiny
 - Use the pricing anchors to set ranges (never below $150). Adjust up for dense/heavy or large/commercial jobs.
 - If job seems more than one trailer or complex, set needsInPersonEstimate=true.
