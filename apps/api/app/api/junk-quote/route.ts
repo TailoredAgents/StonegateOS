@@ -94,6 +94,9 @@ export async function POST(request: NextRequest) {
     });
     const aiValidated = AiResponseSchema.safeParse(aiResult);
     const base = aiValidated.success ? aiValidated.data : FALLBACK_AI;
+    if (!aiValidated.success) {
+      console.error("[junk-quote] ai_invalid_response", aiResult);
+    }
 
     const discount = DISCOUNT > 0 && DISCOUNT < 1 ? DISCOUNT : 0;
     const priceLowDiscounted = Math.round(base.priceLow * (1 - discount));
