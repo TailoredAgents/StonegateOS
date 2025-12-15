@@ -8,6 +8,48 @@
       "when": 1762117716996,
       "tag": "0000_amusing_paladin",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1762117717000,
+      "tag": "0001_plaid_finance",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1762117717001,
+      "tag": "0002_assignments",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1762117717002,
+      "tag": "0003_attachments",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1762117717003,
+      "tag": "0004_appt_tasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1762117717004,
+      "tag": "0005_instant_quotes",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1762117717005,
+      "tag": "0006_leads_instant_quote",
+      "breakpoints": true
     }
   ]
 }
