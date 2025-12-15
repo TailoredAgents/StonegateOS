@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Button, cn } from "@myst-os/ui";
+import { Check } from "lucide-react";
 import { useUTM } from "../lib/use-utm";
 
 type QuoteState =
@@ -42,7 +43,7 @@ const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
 ];
 
 const SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
-  { id: "few_items", label: "Just a few items", hint: "1–3 items" },
+  { id: "few_items", label: "Just a few items", hint: "1-3 items" },
   { id: "small_area", label: "One small area", hint: "Corner, closet, or small pile" },
   { id: "one_room_or_half_garage", label: "One full room or half a garage", hint: "" },
   { id: "big_cleanout", label: "Big cleanout", hint: "Full garage, basement, or multiple rooms" },
@@ -194,16 +195,16 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         throw new Error(txt.slice(0, 160));
       }
       setBookingStatus("success");
-      setBookingMessage("Thanks! We saved your request. We’ll confirm your arrival window shortly.");
+      setBookingMessage("Thanks! We saved your request. We'll confirm your arrival window shortly.");
     } catch (err) {
       setBookingStatus("error");
       setBookingMessage((err as Error).message);
     }
   };
 
-  const baseRange = quoteState.status === "ready" ? `$${quoteState.baseLow} – $${quoteState.baseHigh}` : null;
+  const baseRange = quoteState.status === "ready" ? `$${quoteState.baseLow} - $${quoteState.baseHigh}` : null;
   const discountedRange =
-    quoteState.status === "ready" ? `$${quoteState.low} – $${quoteState.high}` : null;
+    quoteState.status === "ready" ? `$${quoteState.low} - $${quoteState.high}` : null;
 
   return (
     <div className={cn("rounded-xl bg-white p-6 shadow-soft shadow-primary-900/10", className)} {...props}>
@@ -260,11 +261,12 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                       />
                       <span
                         className={cn(
-                          "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
-                          selected ? "border-primary-700 bg-primary-700 text-white" : "border-neutral-300 bg-white text-black/0"
+                          "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                          selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
                         )}
+                        aria-hidden="true"
                       >
-                        ✓
+                        <Check className="h-3.5 w-3.5" strokeWidth={3} />
                       </span>
                       <span>{opt.label}</span>
                     </label>
@@ -274,7 +276,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-neutral-800">Add 1–4 photos for the most accurate quote</label>
+              <label className="text-sm font-semibold text-neutral-800">Add 1-4 photos for the most accurate quote</label>
               <p className="text-xs text-neutral-500">Most people just snap a quick photo with their phone.</p>
               <input
                 type="file"
@@ -306,31 +308,37 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
 
             <div className="space-y-2">
               <label className="text-sm font-semibold text-neutral-800">How big does the job feel?</label>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How big does the job feel?">
                 {SIZE_OPTIONS.map((opt) => {
-                  const radioId = `size-${opt.id}`;
+                  const selected = perceivedSize === opt.id;
                   return (
-                    <label
+                    <button
                       key={opt.id}
-                      htmlFor={radioId}
-                      className={cn(
-                        "cursor-pointer rounded-lg border p-3 text-sm transition",
-                        perceivedSize === opt.id ? "border-primary-600 bg-primary-50 shadow-sm" : "border-neutral-200 bg-white"
-                      )}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
                       onClick={() => setPerceivedSize(opt.id)}
+                      className={cn(
+                        "group relative flex items-start gap-3 rounded-lg border p-3 text-sm transition",
+                        selected
+                          ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                          : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                      )}
                     >
-                      <input
-                        id={radioId}
-                        type="radio"
-                        name="perceivedSize"
-                        value={opt.id}
-                        checked={perceivedSize === opt.id}
-                        onChange={(e) => setPerceivedSize(e.target.value as PerceivedSize)}
-                        className="sr-only"
-                      />
-                      <div className="font-semibold text-neutral-800">{opt.label}</div>
-                      {opt.hint ? <div className="text-xs text-neutral-500">{opt.hint}</div> : null}
-                    </label>
+                      <span
+                        className={cn(
+                          "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                          selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                        )}
+                        aria-hidden="true"
+                      >
+                        <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                      </span>
+                      <div className="space-y-0.5">
+                        <div className="font-semibold text-neutral-900">{opt.label}</div>
+                        {opt.hint ? <div className="text-xs text-neutral-500">{opt.hint}</div> : null}
+                      </div>
+                    </button>
                   );
                 })}
               </div>
@@ -363,7 +371,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <Button type="submit" className="w-full justify-center sm:w-auto">
                 Next: Your details
               </Button>
-              <p className="text-xs text-neutral-500">On the next step we’ll grab your name and number and show your quote on screen.</p>
+              <p className="text-xs text-neutral-500">On the next step we'll grab your name and number and show your quote on screen.</p>
             </div>
           </div>
         ) : (
@@ -431,7 +439,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                   Here&apos;s your instant quote
                 </div>
                 <div className="text-2xl font-semibold text-primary-900">
-                  ${quoteState.low} – ${quoteState.high}
+                  ${quoteState.low} - ${quoteState.high}
                   <span className="ml-2 text-sm font-normal text-neutral-500 line-through">
                     {quoteState.discountPercent > 0 ? baseRange : null}
                   </span>
@@ -513,7 +521,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                     </div>
                   ) : null}
                   <div className="text-[11px] text-neutral-500">
-                    We’ve saved your quote with your contact info so we can help if you have questions.
+                    We've saved your quote with your contact info so we can help if you have questions.
                   </div>
                 </div>
               </div>
@@ -527,7 +535,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <Button type="button" variant="ghost" onClick={() => setStep(1)}>
                 Back
               </Button>
-              <p className="text-xs text-neutral-500">We’ll save this quote for follow-up.</p>
+              <p className="text-xs text-neutral-500">We'll save this quote for follow-up.</p>
             </div>
           </div>
         )}
