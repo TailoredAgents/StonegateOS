@@ -187,7 +187,6 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
         }
       },
       max_output_tokens: 400,
-      temperature: 0.3
     })
   });
 
