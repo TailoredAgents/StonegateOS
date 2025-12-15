@@ -147,134 +147,208 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
     throw new Error("missing_api_key");
   }
 
-  const res = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model,
-      instructions: SYSTEM_PROMPT,
-      input: JSON.stringify(body.job),
-      tool_choice: "none",
-      text: {
-        format: {
-          type: "json_schema",
-          name: "junk_quote",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              loadFractionEstimate: { type: "number" },
-              priceLow: { type: "number" },
-              priceHigh: { type: "number" },
-              displayTierLabel: { type: "string" },
-              reasonSummary: { type: "string" },
-              needsInPersonEstimate: { type: "boolean" }
-            },
-            required: [
-              "loadFractionEstimate",
-              "priceLow",
-              "priceHigh",
-              "displayTierLabel",
-              "reasonSummary",
-              "needsInPersonEstimate"
-            ]
-          }
-        }
+  type TextFormat = "json_schema" | "json_object";
+
+  const jsonSchemaFormat = {
+    type: "json_schema",
+    name: "junk_quote",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        loadFractionEstimate: { type: "number" },
+        priceLow: { type: "number" },
+        priceHigh: { type: "number" },
+        displayTierLabel: { type: "string" },
+        reasonSummary: { type: "string" },
+        needsInPersonEstimate: { type: "boolean" }
       },
-      max_output_tokens: 400,
-    })
-  });
+      required: [
+        "loadFractionEstimate",
+        "priceLow",
+        "priceHigh",
+        "displayTierLabel",
+        "reasonSummary",
+        "needsInPersonEstimate"
+      ]
+    }
+  } as const;
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`ai_failed_${res.status}: ${text.slice(0, 200)}`);
-  }
+  async function requestOpenAi(format: TextFormat) {
+    const res = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        instructions: SYSTEM_PROMPT,
+        input: JSON.stringify(body.job),
+        tools: [],
+        tool_choice: "none",
+        reasoning: {
+          effort: "minimal"
+        },
+        text: {
+          format: format === "json_schema" ? jsonSchemaFormat : { type: "json_object" }
+        },
+        max_output_tokens: 1200
+      })
+    });
 
-  const data = (await res.json().catch(() => ({}))) as {
-    status?: string;
-    error?: { code?: string | null; message?: string } | null;
-    output?: unknown;
-  };
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`ai_failed_${res.status}: ${text.slice(0, 200)}`);
+    }
 
-  const status = typeof data.status === "string" ? data.status : "unknown";
-  if (status !== "completed") {
+    const data = (await res.json().catch(() => ({}))) as {
+      id?: string;
+      status?: string;
+      error?: { code?: string | null; message?: string } | null;
+      incomplete_details?: { reason?: string } | null;
+      usage?: unknown;
+      output?: unknown;
+    };
+
+    const responseId = typeof data.id === "string" ? data.id : "unknown";
+    const status = typeof data.status === "string" ? data.status : "unknown";
+    const incompleteReason =
+      typeof data.incomplete_details?.reason === "string" ? data.incomplete_details.reason : "unknown";
     const code = typeof data.error?.code === "string" ? data.error.code : "unknown";
     const message = typeof data.error?.message === "string" ? data.error.message : "no_message";
-    throw new Error(`ai_${status}_${code}: ${message}`.slice(0, 220));
-  }
 
-  const outputItems = Array.isArray(data.output) ? data.output : [];
-  const outputTextParts: string[] = [];
-  const refusalParts: string[] = [];
-  const anyTextParts: string[] = [];
+    const outputItems = Array.isArray(data.output) ? data.output : [];
+    const outputTextParts: string[] = [];
+    const refusalParts: string[] = [];
+    const anyTextParts: string[] = [];
 
-  for (const item of outputItems) {
-    if (!item || typeof item !== "object") continue;
-    const content = (item as { content?: unknown }).content;
-    if (!Array.isArray(content)) continue;
-    for (const part of content) {
-      if (!part || typeof part !== "object") continue;
-      const typed = part as { type?: unknown; text?: unknown; refusal?: unknown };
-      const partType = typeof typed.type === "string" ? typed.type : "";
-      if (partType === "output_text" && typeof typed.text === "string") {
-        outputTextParts.push(typed.text);
+    const getText = (value: unknown): string | null => {
+      if (typeof value === "string") return value;
+      if (value && typeof value === "object") {
+        const record = value as Record<string, unknown>;
+        if (typeof record["value"] === "string") return record["value"];
       }
-      if (partType === "refusal" && typeof typed.refusal === "string") {
-        refusalParts.push(typed.refusal);
+      return null;
+    };
+
+    const pushText = (text: string | null) => {
+      if (!text) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      anyTextParts.push(trimmed);
+    };
+
+    for (const item of outputItems) {
+      if (!item || typeof item !== "object") continue;
+      const record = item as Record<string, unknown>;
+
+      const content = record["content"];
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (!part || typeof part !== "object") continue;
+          const typed = part as Record<string, unknown>;
+          const partType = typeof typed["type"] === "string" ? typed["type"] : "";
+
+          const text = getText(typed["text"]);
+          if (partType === "output_text" && text) {
+            outputTextParts.push(text);
+          }
+          if (partType === "refusal" && typeof typed["refusal"] === "string") {
+            refusalParts.push(typed["refusal"]);
+          }
+          pushText(text);
+        }
       }
-      if (typeof typed.text === "string") {
-        anyTextParts.push(typed.text);
+
+      const summary = record["summary"];
+      if (Array.isArray(summary)) {
+        for (const part of summary) {
+          if (!part || typeof part !== "object") continue;
+          const typed = part as Record<string, unknown>;
+          pushText(getText(typed["text"]));
+        }
       }
     }
-  }
 
-  const raw = outputTextParts.join("\n").trim() || anyTextParts.join("\n").trim();
-  if (!raw) {
+    const raw = outputTextParts.join("\n").trim() || anyTextParts.join("\n").trim();
+    if (raw) {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        const start = raw.indexOf("{");
+        const end = raw.lastIndexOf("}");
+        if (start !== -1 && end !== -1 && end > start) {
+          return JSON.parse(raw.slice(start, end + 1));
+        }
+        throw new Error("ai_invalid_json_output");
+      }
+    }
+
+    const logDebug = (label: string) => {
+      try {
+        const outputSummary = outputItems.slice(0, 3).map((item) => {
+          if (!item || typeof item !== "object") return { kind: typeof item };
+          const record = item as Record<string, unknown>;
+          const itemType = typeof record["type"] === "string" ? record["type"] : "unknown";
+          const itemStatus = typeof record["status"] === "string" ? record["status"] : undefined;
+          const content = record["content"];
+          const summary = record["summary"];
+          return {
+            type: itemType,
+            status: itemStatus,
+            keys: Object.keys(record).slice(0, 12),
+            contentTypes: Array.isArray(content)
+              ? content
+                  .slice(0, 5)
+                  .map((part) =>
+                    part && typeof part === "object" ? (part as Record<string, unknown>)["type"] : typeof part
+                  )
+              : undefined,
+            summaryTypes: Array.isArray(summary)
+              ? summary
+                  .slice(0, 5)
+                  .map((part) =>
+                    part && typeof part === "object" ? (part as Record<string, unknown>)["type"] : typeof part
+                  )
+              : undefined
+          };
+        });
+        console.error(label, {
+          responseId,
+          status,
+          incomplete_details: data.incomplete_details,
+          error: data.error,
+          usage: data.usage,
+          outputLen: outputItems.length,
+          outputSummary
+        });
+      } catch {}
+    };
+
+    if (status !== "completed") {
+      logDebug("[junk-quote] ai_noncompleted_debug");
+      const suffix = status === "incomplete" ? `_${incompleteReason}` : `_${code}`;
+      throw new Error(`ai_${status}${suffix}: ${message}`.slice(0, 220));
+    }
+
     if (refusalParts.length) {
       throw new Error(`ai_refusal: ${refusalParts.join(" ").slice(0, 200)}`);
     }
-    try {
-      const outputSummary = outputItems.slice(0, 3).map((item) => {
-        if (!item || typeof item !== "object") return { kind: typeof item };
-        const record = item as Record<string, unknown>;
-        const type = typeof record["type"] === "string" ? record["type"] : "unknown";
-        const itemStatus = typeof record["status"] === "string" ? record["status"] : undefined;
-        const content = record["content"];
-        const summary = record["summary"];
-        return {
-          type,
-          status: itemStatus,
-          keys: Object.keys(record).slice(0, 12),
-          contentTypes: Array.isArray(content)
-            ? content
-                .slice(0, 5)
-                .map((part) => (part && typeof part === "object" ? (part as Record<string, unknown>)["type"] : typeof part))
-            : undefined,
-          summaryTypes: Array.isArray(summary)
-            ? summary
-                .slice(0, 5)
-                .map((part) => (part && typeof part === "object" ? (part as Record<string, unknown>)["type"] : typeof part))
-            : undefined
-        };
-      });
-      console.error("[junk-quote] ai_empty_output_debug", { status, error: data.error, outputLen: outputItems.length, outputSummary });
-    } catch {}
+
+    logDebug("[junk-quote] ai_empty_output_debug");
     throw new Error("ai_empty_output_text");
   }
 
   try {
-    return JSON.parse(raw);
-  } catch {
-    const start = raw.indexOf("{");
-    const end = raw.lastIndexOf("}");
-    if (start !== -1 && end !== -1 && end > start) {
-      return JSON.parse(raw.slice(start, end + 1));
+    return await requestOpenAi("json_schema");
+  } catch (error) {
+    if (error instanceof Error && error.message === "missing_api_key") {
+      throw error;
     }
-    throw new Error("ai_invalid_json_output");
+    console.error("[junk-quote] ai_retrying_with_json_object", error instanceof Error ? error.message : error);
+    return await requestOpenAi("json_object");
   }
 }
 
