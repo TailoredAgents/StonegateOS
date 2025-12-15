@@ -3,22 +3,34 @@ import { z } from "zod";
 import { getDb, instantQuotes } from "@/db";
 
 const DISCOUNT = Number(process.env["INSTANT_QUOTE_DISCOUNT"] ?? 0);
-const ALLOWED_ORIGIN = process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+const RAW_ALLOWED_ORIGINS =
+  process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
 
-function applyCors(response: NextResponse, origin = ALLOWED_ORIGIN): NextResponse {
+function resolveOrigin(requestOrigin: string | null): string {
+  if (RAW_ALLOWED_ORIGINS === "*") return "*";
+  const allowed = RAW_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/+$/u, "")).filter(Boolean);
+  if (!allowed.length) return "*";
+  const origin = requestOrigin?.trim().replace(/\/+$/u, "") ?? null;
+  if (origin && allowed.includes(origin)) return origin;
+  return allowed[0];
+}
+
+function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
+  const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
+  response.headers.set("Vary", "Origin");
   response.headers.set("Access-Control-Allow-Methods", "POST,OPTIONS");
   response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
   response.headers.set("Access-Control-Max-Age", "86400");
   return response;
 }
 
-function corsJson(body: unknown, init?: ResponseInit): NextResponse {
-  return applyCors(NextResponse.json(body, init));
+function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseInit): NextResponse {
+  return applyCors(NextResponse.json(body, init), requestOrigin);
 }
 
-export function OPTIONS(): NextResponse {
-  return applyCors(new NextResponse(null, { status: 204 }));
+export function OPTIONS(request: NextRequest): NextResponse {
+  return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
 }
 
 const RequestSchema = z.object({
@@ -69,9 +81,10 @@ const FALLBACK_AI = {
 
 export async function POST(request: NextRequest) {
   try {
+    const requestOrigin = request.headers.get("origin");
     const parsed = RequestSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, { status: 400 });
+      return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
     }
     const body = parsed.data;
 
@@ -114,10 +127,10 @@ export async function POST(request: NextRequest) {
         priceLowDiscounted,
         priceHighDiscounted
       }
-    });
+    }, requestOrigin);
   } catch (error) {
     console.error("[junk-quote] server_error", error);
-    return corsJson({ error: "server_error" }, { status: 500 });
+    return corsJson({ error: "server_error" }, null, { status: 500 });
   }
 }
 

@@ -4,22 +4,34 @@ import { getDb, contacts, properties, leads, instantQuotes } from "@/db";
 import { eq } from "drizzle-orm";
 import { normalizeName, normalizePhone } from "../../web/utils";
 
-const ALLOWED_ORIGIN = process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+const RAW_ALLOWED_ORIGINS =
+  process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
 
-function applyCors(response: NextResponse, origin = ALLOWED_ORIGIN): NextResponse {
+function resolveOrigin(requestOrigin: string | null): string {
+  if (RAW_ALLOWED_ORIGINS === "*") return "*";
+  const allowed = RAW_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/+$/u, "")).filter(Boolean);
+  if (!allowed.length) return "*";
+  const origin = requestOrigin?.trim().replace(/\/+$/u, "") ?? null;
+  if (origin && allowed.includes(origin)) return origin;
+  return allowed[0];
+}
+
+function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
+  const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
+  response.headers.set("Vary", "Origin");
   response.headers.set("Access-Control-Allow-Methods", "POST,OPTIONS");
   response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
   response.headers.set("Access-Control-Max-Age", "86400");
   return response;
 }
 
-function corsJson(body: unknown, init?: ResponseInit): NextResponse {
-  return applyCors(NextResponse.json(body, init));
+function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseInit): NextResponse {
+  return applyCors(NextResponse.json(body, init), requestOrigin);
 }
 
-export function OPTIONS(): NextResponse {
-  return applyCors(new NextResponse(null, { status: 204 }));
+export function OPTIONS(request: NextRequest): NextResponse {
+  return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
 }
 
 const BookingSchema = z.object({
@@ -37,16 +49,17 @@ const BookingSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
+    const requestOrigin = request.headers.get("origin");
     const parsed = BookingSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, { status: 400 });
+      return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
     }
     const body = parsed.data;
     const db = getDb();
 
     const [quote] = await db.select().from(instantQuotes).where(eq(instantQuotes.id, body.instantQuoteId)).limit(1);
     if (!quote) {
-      return corsJson({ error: "quote_not_found" }, { status: 404 });
+      return corsJson({ error: "quote_not_found" }, requestOrigin, { status: 404 });
     }
 
     let normalizedPhone: { raw: string; e164: string };
@@ -54,7 +67,7 @@ export async function POST(request: NextRequest) {
       const norm = normalizePhone(body.phone);
       normalizedPhone = { raw: norm.raw, e164: norm.e164 };
     } catch {
-      return corsJson({ error: "invalid_phone" }, { status: 400 });
+      return corsJson({ error: "invalid_phone" }, requestOrigin, { status: 400 });
     }
 
     const { firstName, lastName } = normalizeName(body.name);
@@ -125,9 +138,9 @@ export async function POST(request: NextRequest) {
       return { lead };
     });
 
-    return corsJson({ ok: true, leadId: leadResult.lead.id });
+    return corsJson({ ok: true, leadId: leadResult.lead.id }, requestOrigin);
   } catch (error) {
     console.error("[junk-quote-book] server_error", error);
-    return corsJson({ error: "server_error" }, { status: 500 });
+    return corsJson({ error: "server_error" }, request.headers.get("origin"), { status: 500 });
   }
 }
