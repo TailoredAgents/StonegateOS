@@ -20,8 +20,8 @@ function applyCors(response: NextResponse, requestOrigin: string | null): NextRe
   const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.set("Vary", "Origin");
-  response.headers.set("Access-Control-Allow-Methods", "POST,OPTIONS");
-  response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  response.headers.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  response.headers.set("Access-Control-Allow-Headers", "*");
   response.headers.set("Access-Control-Max-Age", "86400");
   return response;
 }
