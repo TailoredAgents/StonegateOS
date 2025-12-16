@@ -210,6 +210,9 @@ export async function POST(request: NextRequest) {
           currentProperty.addressLine1.trim().startsWith("[Instant Quote");
 
         if (isPlaceholder) {
+          // If the placeholder property is updated to a real address that already exists, Postgres will raise a
+          // constraint error and the whole transaction becomes "aborted" unless we roll back to a savepoint.
+          await tx.execute(sql`savepoint junk_quote_book_property_update`);
           try {
             const [updatedProperty] = await tx
               .update(properties)
@@ -228,7 +231,10 @@ export async function POST(request: NextRequest) {
             if (!updatedProperty?.id) {
               throw new Error("property_update_failed");
             }
+            await tx.execute(sql`release savepoint junk_quote_book_property_update`);
           } catch (error) {
+            await tx.execute(sql`rollback to savepoint junk_quote_book_property_update`);
+            await tx.execute(sql`release savepoint junk_quote_book_property_update`);
             console.warn("[junk-quote-book] placeholder_property_conflict", {
               quoteId: quote.id,
               propertyId,
@@ -243,17 +249,6 @@ export async function POST(request: NextRequest) {
               gated: false
             });
             nextPropertyId = upserted.id;
-
-            if (propertyId !== nextPropertyId) {
-              const refs = await tx
-                .select({ id: leads.id })
-                .from(leads)
-                .where(eq(leads.propertyId, propertyId))
-                .limit(2);
-              if (refs.length <= 1) {
-                await tx.delete(properties).where(eq(properties.id, propertyId));
-              }
-            }
           }
         } else {
           const upserted = await upsertProperty(tx, {
