@@ -61,14 +61,39 @@ const RequestSchema = z.object({
   })
 });
 
-const QuoteResultSchema = z.object({
-  loadFractionEstimate: z.number(),
-  priceLow: z.number(),
-  priceHigh: z.number(),
-  displayTierLabel: z.string(),
-  reasonSummary: z.string(),
-  needsInPersonEstimate: z.boolean()
-});
+const QuoteResultSchema = z
+  .object({
+    loadFractionEstimate: z.number(),
+    priceLow: z.number(),
+    priceHigh: z.number(),
+    displayTierLabel: z.string(),
+    reasonSummary: z.string(),
+    needsInPersonEstimate: z.boolean()
+  })
+  .superRefine((value, ctx) => {
+    if (!Number.isFinite(value.priceLow) || !Number.isFinite(value.priceHigh)) return;
+    if (value.priceLow > value.priceHigh) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "priceLow must be <= priceHigh",
+        path: ["priceLow"]
+      });
+    }
+    if (value.priceLow < 200 || value.priceHigh < 200) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "prices must be >= 200",
+        path: ["priceLow"]
+      });
+    }
+    if (value.priceLow % 200 !== 0 || value.priceHigh % 200 !== 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "prices must be in $200 (quarter-load) increments",
+        path: ["priceLow"]
+      });
+    }
+  });
 
 const VOLUME_PRICING = {
   quarter: 200,
@@ -77,7 +102,7 @@ const VOLUME_PRICING = {
   full: 800
 } as const;
 
-function getVolumeQuote(perceivedSize: z.infer<typeof RequestSchema>["job"]["perceivedSize"]) {
+function getFallbackQuote(perceivedSize: z.infer<typeof RequestSchema>["job"]["perceivedSize"]) {
   const p = VOLUME_PRICING;
   switch (perceivedSize) {
     case "few_items":
@@ -109,12 +134,12 @@ function getVolumeQuote(perceivedSize: z.infer<typeof RequestSchema>["job"]["per
       };
     case "big_cleanout":
       return {
-        loadFractionEstimate: 0.875,
+        loadFractionEstimate: 1.1,
         priceLow: p.threeQuarter,
-        priceHigh: p.full,
-        displayTierLabel: "3/4 to full trailer",
-        reasonSummary: "Based on your selected size, this looks like a large load between three-quarters and a full trailer.",
-        needsInPersonEstimate: false
+        priceHigh: 1200,
+        displayTierLabel: "3/4 to 1.5 trailer loads",
+        reasonSummary: "Big cleanouts can take more than one load, so this range covers 3/4 up to about 1.5 trailer loads.",
+        needsInPersonEstimate: true
       };
     case "not_sure":
     default:
@@ -138,16 +163,20 @@ export async function POST(request: NextRequest) {
     }
     const body = parsed.data;
 
-    const base = getVolumeQuote(body.job.perceivedSize);
-    const validatedBase = QuoteResultSchema.safeParse(base);
-    if (!validatedBase.success) {
-      console.error("[junk-quote] volume_quote_invalid", validatedBase.error.flatten());
-      return corsJson({ error: "server_error" }, requestOrigin, { status: 500 });
+    const fallback = getFallbackQuote(body.job.perceivedSize);
+    const aiResult = await getQuoteFromAi(body).catch((err) => {
+      console.error("[junk-quote] ai_failed", err instanceof Error ? err.message : err);
+      return fallback;
+    });
+    const aiValidated = QuoteResultSchema.safeParse(aiResult);
+    const base = aiValidated.success ? aiValidated.data : fallback;
+    if (!aiValidated.success) {
+      console.error("[junk-quote] ai_invalid_response", aiResult);
     }
 
     const discount = DISCOUNT > 0 && DISCOUNT < 1 ? DISCOUNT : 0;
-    const priceLowDiscounted = Math.round(validatedBase.data.priceLow * (1 - discount));
-    const priceHighDiscounted = Math.round(validatedBase.data.priceHigh * (1 - discount));
+    const priceLowDiscounted = Math.round(base.priceLow * (1 - discount));
+    const priceHighDiscounted = Math.round(base.priceHigh * (1 - discount));
 
     const db = getDb();
     const [quoteRow] = await db
@@ -163,7 +192,7 @@ export async function POST(request: NextRequest) {
         notes: body.job.notes ?? null,
         photoUrls: body.job.photoUrls ?? [],
         aiResult: {
-          ...validatedBase.data,
+          ...base,
           discountPercent: discount,
           priceLowDiscounted,
           priceHighDiscounted
@@ -175,7 +204,7 @@ export async function POST(request: NextRequest) {
       ok: true,
       quoteId: quoteRow?.id ?? null,
       quote: {
-        ...validatedBase.data,
+        ...base,
         discountPercent: discount,
         priceLowDiscounted,
         priceHighDiscounted
@@ -401,11 +430,22 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
 
 const SYSTEM_PROMPT = `
 You are the quoting assistant for Stonegate Junk Removal in Woodstock, Georgia.
-Stonegate uses one large 7x16x4 dump trailer. Pricing anchors:
+Stonegate uses one large 7x16x4 dump trailer. Pricing is STRICTLY based on trailer volume only.
+Do NOT add charges for weight, stairs, distance, time, urgency, heavy/bulky items, or difficulty.
+
+Base volume prices (BEFORE discounts):
 - 1/4 trailer: $200
 - 1/2 trailer: $400
 - 3/4 trailer: $600
 - Full trailer: $800
+
+Multi-load jobs:
+- If you believe the job can require more than one load, you may quote above $800.
+- Prices MUST always be in $200 increments (quarter-trailer units). Example ranges:
+  - 1 to 2 trailer loads: $800 - $1600
+  - 1.5 to 2.5 trailer loads: $1200 - $2000
+  - 2 to 3 trailer loads: $1600 - $2400
+Return base prices only; discounts are applied separately by the server.
 
 Rules:
 - Respond ONLY with JSON: { "loadFractionEstimate": number, "priceLow": number, "priceHigh": number, "displayTierLabel": string, "reasonSummary": string, "needsInPersonEstimate": boolean }
@@ -414,10 +454,10 @@ Rules:
   few_items -> ~0.25
   small_area -> 0.25-0.5
   one_room_or_half_garage -> 0.5-0.75
-  big_cleanout -> 0.75-1.0+
+  big_cleanout -> 0.75-1.0+ (can be multiple loads)
   not_sure -> err on 0.5+ unless clearly tiny
-- Use the pricing anchors to set ranges (never below $150). Adjust up for dense/heavy or large/commercial jobs.
-- If job seems more than one trailer or complex, set needsInPersonEstimate=true.
+- Use ONLY the base volume prices above (and their $200 increments for multi-load). Do not invent other prices.
+- If the job seems uncertain or could be multiple loads, widen the range and set needsInPersonEstimate=true.
 - displayTierLabel: short category like "Small load", "Half trailer", "Large to full trailer", "Multi-trailer project".
 - reasonSummary: one friendly sentence.
 `.trim();
