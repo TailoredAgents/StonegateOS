@@ -88,6 +88,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [availabilityShowMore, setAvailabilityShowMore] = React.useState(false);
   const [availabilitySelectedDay, setAvailabilitySelectedDay] = React.useState<string | null>(null);
   const [selectedSlotStartAt, setSelectedSlotStartAt] = React.useState<string | null>(null);
+  const selectedSlotStartAtRef = React.useRef<string | null>(null);
   const [bookingStatus, setBookingStatus] = React.useState<"idle" | "loading" | "success" | "error">("idle");
   const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
   const [photoSkipped, setPhotoSkipped] = React.useState(false);
@@ -99,6 +100,10 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     city.trim().length >= 2 &&
     stateField.trim().length === 2 &&
     postalCode.trim().length >= 3;
+
+  React.useEffect(() => {
+    selectedSlotStartAtRef.current = selectedSlotStartAt;
+  }, [selectedSlotStartAt]);
 
   const formatSlotLabel = React.useCallback(
     (iso: string) => {
@@ -231,6 +236,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       setAvailabilityStatus("loading");
       setAvailabilityMessage(null);
       try {
+        const selectedSlotAtRequestStart = selectedSlotStartAtRef.current;
         const res = await fetch(`${apiBase}/api/junk-quote/availability`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -288,8 +294,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
           if (!availableDays.length) return null;
           if (typeof prev === "string" && availableDays.some((d) => d.date === prev)) return prev;
           const bySelectedSlot =
-            typeof selectedSlotStartAt === "string"
-              ? availableDays.find((d) => d.slots.some((s) => s.startAt === selectedSlotStartAt))
+            typeof selectedSlotAtRequestStart === "string"
+              ? availableDays.find((d) => d.slots.some((s) => s.startAt === selectedSlotAtRequestStart))
               : null;
           return bySelectedSlot?.date ?? availableDays[0]?.date ?? null;
         });
@@ -308,7 +314,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         setSelectedSlotStartAt(null);
       }
     },
-    [addressComplete, addressLine1, apiBase, city, postalCode, quoteId, selectedSlotStartAt, stateField]
+    [addressComplete, addressLine1, apiBase, city, postalCode, quoteId, stateField]
   );
 
   React.useEffect(() => {
