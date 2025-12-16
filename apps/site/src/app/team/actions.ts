@@ -87,6 +87,27 @@ export async function deleteQuoteAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function deleteInstantQuoteAction(formData: FormData) {
+  const jar = await cookies();
+  const id = formData.get("instantQuoteId");
+  if (typeof id !== "string" || id.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Instant quote ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/admin/instant-quotes/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to delete instant quote");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Instant quote deleted", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function attachPaymentAction(formData: FormData) {
   const id = formData.get("paymentId");
   const appt = formData.get("appointmentId");

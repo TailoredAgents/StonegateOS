@@ -1,5 +1,7 @@
 import React from "react";
 import { callAdminApi } from "../lib/api";
+import { deleteInstantQuoteAction } from "../actions";
+import { DeleteInstantQuoteForm } from "./DeleteInstantQuoteForm";
 
 type InstantQuoteDto = {
   id: string;
@@ -91,12 +93,15 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
         </div>
       ) : null}
       <div className="pt-2">
-        <a
-          href={`/team/instant-quotes/${quote.id}?${prefill}`}
-          className="inline-flex items-center rounded-md bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700"
-        >
-          Book from this quote
-        </a>
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href={`/team/instant-quotes/${quote.id}?${prefill}`}
+            className="inline-flex items-center rounded-md bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700"
+          >
+            Book from this quote
+          </a>
+          <DeleteInstantQuoteForm instantQuoteId={quote.id} action={deleteInstantQuoteAction} />
+        </div>
       </div>
     </div>
   );
