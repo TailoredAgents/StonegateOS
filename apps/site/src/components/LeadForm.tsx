@@ -22,6 +22,7 @@ type QuoteState =
   | { status: "error"; message: string };
 
 type AvailabilitySlot = { startAt: string; endAt: string; reason: string };
+type AvailabilityDay = { date: string; slots: AvailabilitySlot[] };
 
 type Timeframe = "today" | "tomorrow" | "this_week" | "flexible";
 type PerceivedSize = "few_items" | "small_area" | "one_room_or_half_garage" | "big_cleanout" | "not_sure";
@@ -83,6 +84,9 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [availabilityTimezone, setAvailabilityTimezone] = React.useState("America/New_York");
   const [availabilityDurationMinutes, setAvailabilityDurationMinutes] = React.useState<number | null>(null);
   const [availabilitySlots, setAvailabilitySlots] = React.useState<AvailabilitySlot[]>([]);
+  const [availabilityDays, setAvailabilityDays] = React.useState<AvailabilityDay[]>([]);
+  const [availabilityShowMore, setAvailabilityShowMore] = React.useState(false);
+  const [availabilitySelectedDay, setAvailabilitySelectedDay] = React.useState<string | null>(null);
   const [selectedSlotStartAt, setSelectedSlotStartAt] = React.useState<string | null>(null);
   const [bookingStatus, setBookingStatus] = React.useState<"idle" | "loading" | "success" | "error">("idle");
   const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
@@ -106,6 +110,33 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         day: "numeric",
         hour: "numeric",
         minute: "2-digit",
+        timeZone: availabilityTimezone
+      }).format(date);
+    },
+    [availabilityTimezone]
+  );
+
+  const formatSlotTimeLabel = React.useCallback(
+    (iso: string) => {
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return iso;
+      return new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: availabilityTimezone
+      }).format(date);
+    },
+    [availabilityTimezone]
+  );
+
+  const formatDayLabel = React.useCallback(
+    (dayIso: string) => {
+      const date = new Date(`${dayIso}T12:00:00Z`);
+      if (Number.isNaN(date.getTime())) return dayIso;
+      return new Intl.DateTimeFormat("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
         timeZone: availabilityTimezone
       }).format(date);
     },
@@ -218,6 +249,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               timezone?: string;
               durationMinutes?: number;
               suggestions?: AvailabilitySlot[];
+              days?: AvailabilityDay[];
               error?: string;
             }
           | null;
@@ -230,6 +262,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
           setAvailabilityStatus("error");
           setAvailabilityMessage(message);
           setAvailabilitySlots([]);
+          setAvailabilityDays([]);
+          setAvailabilitySelectedDay(null);
           setSelectedSlotStartAt(null);
           return;
         }
@@ -237,17 +271,30 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         const tz = typeof data.timezone === "string" && data.timezone.length ? data.timezone : "America/New_York";
         const duration = typeof data.durationMinutes === "number" && Number.isFinite(data.durationMinutes) ? data.durationMinutes : null;
         const slots = Array.isArray(data.suggestions) ? data.suggestions : [];
+        const days = Array.isArray(data.days) ? data.days : [];
+        const allSlots = slots.concat(days.flatMap((d) => (Array.isArray(d.slots) ? d.slots : [])));
 
         setAvailabilityTimezone(tz);
         setAvailabilityDurationMinutes(duration);
         setAvailabilitySlots(slots);
+        setAvailabilityDays(days);
         setAvailabilityStatus("ready");
         setSelectedSlotStartAt((prev) => {
-          if (typeof prev === "string" && slots.some((s) => s.startAt === prev)) return prev;
-          return slots[0]?.startAt ?? null;
+          if (typeof prev === "string" && allSlots.some((s) => s.startAt === prev)) return prev;
+          return slots[0]?.startAt ?? allSlots[0]?.startAt ?? null;
+        });
+        setAvailabilitySelectedDay((prev) => {
+          const availableDays = days.filter((d) => Array.isArray(d.slots) && d.slots.length > 0);
+          if (!availableDays.length) return null;
+          if (typeof prev === "string" && availableDays.some((d) => d.date === prev)) return prev;
+          const bySelectedSlot =
+            typeof selectedSlotStartAt === "string"
+              ? availableDays.find((d) => d.slots.some((s) => s.startAt === selectedSlotStartAt))
+              : null;
+          return bySelectedSlot?.date ?? availableDays[0]?.date ?? null;
         });
         setAvailabilityMessage(
-          slots.length
+          allSlots.length
             ? null
             : "No times available in the next two weeks. Please call to confirm & book."
         );
@@ -256,16 +303,21 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         setAvailabilityStatus("error");
         setAvailabilityMessage("Availability check failed. Please try again.");
         setAvailabilitySlots([]);
+        setAvailabilityDays([]);
+        setAvailabilitySelectedDay(null);
         setSelectedSlotStartAt(null);
       }
     },
-    [addressComplete, addressLine1, apiBase, city, postalCode, quoteId, stateField]
+    [addressComplete, addressLine1, apiBase, city, postalCode, quoteId, selectedSlotStartAt, stateField]
   );
 
   React.useEffect(() => {
     if (step !== 2 || !quoteId || !addressComplete) {
       setAvailabilityStatus("idle");
       setAvailabilitySlots([]);
+      setAvailabilityDays([]);
+      setAvailabilityShowMore(false);
+      setAvailabilitySelectedDay(null);
       setSelectedSlotStartAt(null);
       setAvailabilityMessage(null);
       return;
@@ -672,29 +724,118 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                         <div className="text-xs text-amber-700">
                           {availabilityMessage ?? "Availability check failed. Please try again."}
                         </div>
-                      ) : availabilitySlots.length ? (
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          {availabilitySlots.map((slot) => {
-                            const selected = slot.startAt === selectedSlotStartAt;
+                      ) : availabilitySlots.length || availabilityDays.some((d) => d.slots.length > 0) ? (
+                        <div className="space-y-3">
+                          {availabilitySlots.length ? (
+                            <div className="space-y-2">
+                              <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+                                Recommended times
+                              </div>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                {availabilitySlots.map((slot) => {
+                                  const selected = slot.startAt === selectedSlotStartAt;
+                                  return (
+                                    <button
+                                      key={slot.startAt}
+                                      type="button"
+                                      onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                                      className={cn(
+                                        "rounded-md border px-3 py-2 text-left transition",
+                                        selected
+                                          ? "border-primary-400 bg-primary-50"
+                                          : "border-neutral-200 bg-white hover:border-neutral-300"
+                                      )}
+                                    >
+                                      <div className="text-sm font-semibold text-neutral-900">
+                                        {formatSlotLabel(slot.startAt)}
+                                      </div>
+                                      <div className="text-[11px] text-neutral-600">{slot.reason}</div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {(() => {
+                            const availableDays = availabilityDays.filter((d) => d.slots.length > 0);
+                            if (!availableDays.length) return null;
+
+                            const selectedDay =
+                              typeof availabilitySelectedDay === "string" && availabilitySelectedDay.length
+                                ? availabilitySelectedDay
+                                : availableDays[0]?.date ?? null;
+                            const selectedDaySlots =
+                              selectedDay ? availableDays.find((d) => d.date === selectedDay)?.slots ?? [] : [];
+
                             return (
-                              <button
-                                key={slot.startAt}
-                                type="button"
-                                onClick={() => setSelectedSlotStartAt(slot.startAt)}
-                                className={cn(
-                                  "rounded-md border px-3 py-2 text-left transition",
-                                  selected
-                                    ? "border-primary-400 bg-primary-50"
-                                    : "border-neutral-200 bg-white hover:border-neutral-300"
-                                )}
-                              >
-                                <div className="text-sm font-semibold text-neutral-900">
-                                  {formatSlotLabel(slot.startAt)}
-                                </div>
-                                <div className="text-[11px] text-neutral-600">{slot.reason}</div>
-                              </button>
+                              <div className="space-y-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setAvailabilityShowMore((prev) => !prev)}
+                                  className="text-xs font-semibold text-primary-700 underline"
+                                >
+                                  {availabilityShowMore ? "Hide more times" : "See more times"}
+                                </button>
+
+                                {availabilityShowMore ? (
+                                  <div className="space-y-2">
+                                    <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+                                      Pick a day
+                                    </label>
+                                    <select
+                                      value={selectedDay ?? ""}
+                                      onChange={(e) => {
+                                        const next = e.target.value;
+                                        setAvailabilitySelectedDay(next);
+                                        const daySlots = availableDays.find((d) => d.date === next)?.slots ?? [];
+                                        setSelectedSlotStartAt((prev) => {
+                                          if (typeof prev === "string" && daySlots.some((s) => s.startAt === prev)) return prev;
+                                          return daySlots[0]?.startAt ?? null;
+                                        });
+                                      }}
+                                      className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                                    >
+                                      {availableDays.map((day) => (
+                                        <option key={day.date} value={day.date}>
+                                          {formatDayLabel(day.date)}
+                                        </option>
+                                      ))}
+                                    </select>
+
+                                    {selectedDaySlots.length ? (
+                                      <div className="grid gap-2 sm:grid-cols-3">
+                                        {selectedDaySlots.map((slot) => {
+                                          const selected = slot.startAt === selectedSlotStartAt;
+                                          return (
+                                            <button
+                                              key={slot.startAt}
+                                              type="button"
+                                              onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                                              className={cn(
+                                                "rounded-md border px-3 py-2 text-left transition",
+                                                selected
+                                                  ? "border-primary-400 bg-primary-50"
+                                                  : "border-neutral-200 bg-white hover:border-neutral-300"
+                                              )}
+                                              title={slot.reason}
+                                            >
+                                              <div className="text-sm font-semibold text-neutral-900">
+                                                {formatSlotTimeLabel(slot.startAt)}
+                                              </div>
+                                              <div className="truncate text-[11px] text-neutral-600">{slot.reason}</div>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    ) : (
+                                      <div className="text-xs text-neutral-600">No times available on this day.</div>
+                                    )}
+                                  </div>
+                                ) : null}
+                              </div>
                             );
-                          })}
+                          })()}
                         </div>
                       ) : (
                         <div className="text-xs text-neutral-600">

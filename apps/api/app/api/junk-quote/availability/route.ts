@@ -275,6 +275,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     const suggestions: Suggestion[] = [];
+    const days: Array<{ date: string; slots: Suggestion[] }> = [];
     const nowLocal = DateTime.now().setZone(APPOINTMENT_TIME_ZONE);
 
     for (let day = 0; day < WINDOW_DAYS; day++) {
@@ -283,6 +284,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       const dayKey = baseDay.toISODate();
       if (!dayKey) continue;
+      const daySlots: Suggestion[] = [];
       const dayBlocks = blocks.filter((b) => formatDayLocal(b.start) === dayKey);
       const dayCounts = dayCityCounts.get(dayKey);
       const topCount =
@@ -312,7 +314,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
         if (overlapsCount(blocks, slotStart, slotEnd) >= capacity) continue;
 
-        suggestions.push({
+        const slot: Suggestion = {
           startAt: slotStart.toISOString(),
           endAt: slotEnd.toISOString(),
           reason:
@@ -321,8 +323,13 @@ export async function POST(request: NextRequest): Promise<Response> {
               : topCount && topCount > 0
                 ? `Aligned with ${topCount} nearby job(s) on this day`
                 : `No conflicts; ${durationMinutes} min slot`
-        });
+        };
+        suggestions.push(slot);
+        daySlots.push(slot);
       }
+
+      daySlots.sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt));
+      days.push({ date: dayKey, slots: daySlots });
     }
 
     const clusterPicks = sortSuggestions(suggestions).slice(0, 3);
@@ -339,7 +346,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         travelBufferMinutes,
         capacity,
         slotIntervalMinutes: SLOT_INTERVAL_MIN,
-        suggestions: merged
+        suggestions: merged,
+        days
       },
       requestOrigin
     );
