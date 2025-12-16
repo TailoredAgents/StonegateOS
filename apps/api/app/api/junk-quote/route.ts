@@ -102,56 +102,221 @@ const VOLUME_PRICING = {
   full: 800
 } as const;
 
-function getFallbackQuote(perceivedSize: z.infer<typeof RequestSchema>["job"]["perceivedSize"]) {
-  const p = VOLUME_PRICING;
-  switch (perceivedSize) {
+const UNIT_PRICE = 200;
+type JobInput = z.infer<typeof RequestSchema>["job"];
+type QuoteResult = z.infer<typeof QuoteResultSchema>;
+
+type QuoteBounds = {
+  minUnits: number;
+  maxUnits: number;
+  minHighUnits?: number;
+};
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  if (value < min) return min;
+  if (value > max) return max;
+  return Math.trunc(value);
+}
+
+function unitsToPrice(units: number): number {
+  return units * UNIT_PRICE;
+}
+
+function priceToUnits(price: number): number {
+  return Math.round(price / UNIT_PRICE);
+}
+
+function getQuoteBounds(job: JobInput): QuoteBounds {
+  let minUnits = 2;
+  let maxUnits = 4;
+  let minHighUnits: number | undefined;
+
+  switch (job.perceivedSize) {
     case "few_items":
-      return {
-        loadFractionEstimate: 0.25,
-        priceLow: p.quarter,
-        priceHigh: p.quarter,
-        displayTierLabel: "1/4 trailer",
-        reasonSummary: "Based on your selected size, this looks like about a quarter-trailer load.",
-        needsInPersonEstimate: false
-      };
+      minUnits = 1;
+      maxUnits = 1;
+      break;
     case "small_area":
-      return {
-        loadFractionEstimate: 0.375,
-        priceLow: p.quarter,
-        priceHigh: p.half,
-        displayTierLabel: "1/4 to 1/2 trailer",
-        reasonSummary: "Based on your selected size, this looks like a small load between a quarter and half trailer.",
-        needsInPersonEstimate: false
-      };
+      minUnits = 1;
+      maxUnits = 2;
+      break;
     case "one_room_or_half_garage":
-      return {
-        loadFractionEstimate: 0.625,
-        priceLow: p.half,
-        priceHigh: p.threeQuarter,
-        displayTierLabel: "Half to 3/4 trailer",
-        reasonSummary: "Based on your selected size, this looks like about a half to three-quarters trailer load.",
-        needsInPersonEstimate: false
-      };
+      minUnits = 2;
+      maxUnits = 3;
+      break;
     case "big_cleanout":
-      return {
-        loadFractionEstimate: 1.1,
-        priceLow: p.threeQuarter,
-        priceHigh: 1200,
-        displayTierLabel: "3/4 to 1.5 trailer loads",
-        reasonSummary: "Big cleanouts can take more than one load, so this range covers 3/4 up to about 1.5 trailer loads.",
-        needsInPersonEstimate: true
-      };
+      minUnits = 3;
+      maxUnits = 6;
+      minHighUnits = 5;
+      break;
     case "not_sure":
     default:
-      return {
-        loadFractionEstimate: 0.65,
-        priceLow: p.half,
-        priceHigh: p.full,
-        displayTierLabel: "Half to full trailer",
-        reasonSummary: "Since you're not sure on size yet, we're quoting a broad half-to-full trailer range.",
-        needsInPersonEstimate: true
-      };
+      minUnits = 2;
+      maxUnits = 4;
+      break;
   }
+
+  const types = new Set(job.types);
+  if (types.has("hot_tub_playset")) {
+    minUnits = Math.max(minUnits, 3);
+    maxUnits = Math.max(maxUnits, 6);
+    minHighUnits = Math.max(minHighUnits ?? 0, 4) || undefined;
+  }
+
+  if (types.has("business_commercial") && job.perceivedSize === "big_cleanout") {
+    minUnits = Math.max(minUnits, 4);
+    maxUnits = Math.max(maxUnits, 8);
+    minHighUnits = Math.max(minHighUnits ?? 0, 6) || undefined;
+  }
+
+  return {
+    minUnits: clampInt(minUnits, 1, 50),
+    maxUnits: clampInt(maxUnits, 1, 50),
+    minHighUnits: typeof minHighUnits === "number" ? clampInt(minHighUnits, 1, 50) : undefined
+  };
+}
+
+function formatLoadCount(units: number): string {
+  const loads = units / 4;
+  return Number.isInteger(loads) ? String(loads) : loads.toFixed(2).replace(/\.?0+$/u, "");
+}
+
+function formatFraction(units: number): string {
+  if (units === 1) return "1/4";
+  if (units === 2) return "1/2";
+  if (units === 3) return "3/4";
+  if (units === 4) return "Full";
+  return formatLoadCount(units);
+}
+
+function formatTierLabel(minUnits: number, maxUnits: number): string {
+  if (minUnits === maxUnits) {
+    if (minUnits <= 4) return minUnits === 4 ? "Full trailer" : `${formatFraction(minUnits)} trailer`;
+    return `${formatLoadCount(minUnits)} trailer loads`;
+  }
+
+  if (maxUnits <= 4) {
+    const left = minUnits === 2 ? "Half" : formatFraction(minUnits);
+    const right = maxUnits === 2 ? "Half" : formatFraction(maxUnits);
+    return `${left} to ${right} trailer`;
+  }
+
+  const left = minUnits === 4 ? "1" : minUnits < 4 ? formatFraction(minUnits) : formatLoadCount(minUnits);
+  return `${left} to ${formatLoadCount(maxUnits)} trailer loads`;
+}
+
+function shouldMentionMultiLoad(job: JobInput, bounds: QuoteBounds, priceHigh: number): boolean {
+  if (job.perceivedSize === "big_cleanout") return true;
+  if ((bounds.minHighUnits ?? 0) > 4) return true;
+  return priceHigh > VOLUME_PRICING.full;
+}
+
+function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBounds): QuoteResult {
+  const minUnits = Math.max(1, bounds.minUnits);
+  const maxUnits = Math.max(minUnits, bounds.maxUnits);
+  const minPrice = unitsToPrice(minUnits);
+  const maxPrice = unitsToPrice(maxUnits);
+  const minHighUnits = bounds.minHighUnits ? clampInt(bounds.minHighUnits, minUnits, maxUnits) : undefined;
+  const minHighPrice = typeof minHighUnits === "number" ? unitsToPrice(minHighUnits) : null;
+
+  let priceLow = quote.priceLow;
+  let priceHigh = quote.priceHigh;
+  if (!Number.isFinite(priceLow)) priceLow = minPrice;
+  if (!Number.isFinite(priceHigh)) priceHigh = maxPrice;
+
+  priceLow = clampInt(priceLow, minPrice, maxPrice);
+  priceHigh = clampInt(priceHigh, minPrice, maxPrice);
+
+  // Re-align to $200 increments inside the allowed bounds.
+  priceLow = clampInt(Math.round(priceLow / UNIT_PRICE) * UNIT_PRICE, minPrice, maxPrice);
+  priceHigh = clampInt(Math.round(priceHigh / UNIT_PRICE) * UNIT_PRICE, minPrice, maxPrice);
+
+  if (minHighPrice && priceHigh < minHighPrice) {
+    priceHigh = minHighPrice;
+  }
+  if (priceLow > priceHigh) {
+    priceLow = priceHigh;
+  }
+
+  const lowUnits = priceToUnits(priceLow);
+  const highUnits = priceToUnits(priceHigh);
+  const avgUnits = (lowUnits + highUnits) / 2;
+  const loadFractionEstimate = Math.round((avgUnits / 4) * 100) / 100;
+
+  const tier = formatTierLabel(lowUnits, highUnits);
+  const needsInPersonEstimate = Boolean(
+    quote.needsInPersonEstimate ||
+      job.perceivedSize === "not_sure" ||
+      job.perceivedSize === "big_cleanout"
+  );
+
+  const forcedMultiLoad = shouldMentionMultiLoad(job, bounds, priceHigh);
+  const genericReason = forcedMultiLoad
+    ? "Based on your answers, this may take more than one trailer load, so the range includes possible multiple loads."
+    : "Based on your answers, this range matches our trailer volume pricing.";
+
+  const mentionsMultipleLoads = (text: string): boolean => {
+    const normalized = text.toLowerCase();
+    if (normalized.includes("more than one")) return true;
+    if (normalized.includes("multiple")) return true;
+    if (normalized.includes("multi-trailer") || normalized.includes("multi trailer")) return true;
+    if (/\b([2-9]|[1-9]\d+|two|three|four|five)\s*(trailer\s*)?loads?\b/iu.test(normalized)) return true;
+    if (/\b1\.\d+\s*(trailer\s*)?loads?\b/iu.test(normalized)) return true;
+    return false;
+  };
+
+  const providedReason = typeof quote.reasonSummary === "string" ? quote.reasonSummary.trim() : "";
+  let reasonSummary = providedReason || genericReason;
+
+  if (forcedMultiLoad && !mentionsMultipleLoads(reasonSummary)) {
+    reasonSummary = genericReason;
+  }
+  if (!forcedMultiLoad && mentionsMultipleLoads(reasonSummary)) {
+    reasonSummary = genericReason;
+  }
+
+  return {
+    ...quote,
+    loadFractionEstimate,
+    priceLow,
+    priceHigh,
+    displayTierLabel: tier,
+    reasonSummary,
+    needsInPersonEstimate
+  };
+}
+
+function getFallbackQuote(job: JobInput, bounds: QuoteBounds): QuoteResult {
+  const minUnits = Math.max(1, bounds.minUnits);
+  const maxUnits = Math.max(minUnits, bounds.maxUnits);
+  const minHighUnits = bounds.minHighUnits ? clampInt(bounds.minHighUnits, minUnits, maxUnits) : undefined;
+  const highUnits = Math.max(maxUnits, minHighUnits ?? maxUnits);
+
+  const priceLow = unitsToPrice(minUnits);
+  const priceHigh = unitsToPrice(highUnits);
+  const tier = formatTierLabel(minUnits, highUnits);
+
+  const avgUnits = (minUnits + highUnits) / 2;
+  const loadFractionEstimate = Math.round((avgUnits / 4) * 100) / 100;
+
+  const needsInPersonEstimate =
+    job.perceivedSize === "not_sure" ||
+    job.perceivedSize === "big_cleanout";
+
+  const mentionMultiLoad = shouldMentionMultiLoad(job, bounds, priceHigh);
+  const reasonSummary = mentionMultiLoad
+    ? "Based on your selected size, this may take more than one trailer load, so the range includes possible multiple loads."
+    : "Based on your selected size, this range matches our trailer volume pricing.";
+
+  return {
+    loadFractionEstimate,
+    priceLow,
+    priceHigh,
+    displayTierLabel: tier,
+    reasonSummary,
+    needsInPersonEstimate
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -163,16 +328,19 @@ export async function POST(request: NextRequest) {
     }
     const body = parsed.data;
 
-    const fallback = getFallbackQuote(body.job.perceivedSize);
-    const aiResult = await getQuoteFromAi(body).catch((err) => {
+    const bounds = getQuoteBounds(body.job);
+    const fallback = getFallbackQuote(body.job, bounds);
+    const aiResult = await getQuoteFromAi(body, bounds).catch((err) => {
       console.error("[junk-quote] ai_failed", err instanceof Error ? err.message : err);
       return fallback;
     });
     const aiValidated = QuoteResultSchema.safeParse(aiResult);
-    const base = aiValidated.success ? aiValidated.data : fallback;
+    const baseCandidate = aiValidated.success ? aiValidated.data : fallback;
     if (!aiValidated.success) {
       console.error("[junk-quote] ai_invalid_response", aiResult);
     }
+
+    const base = applyBoundsToQuote(baseCandidate, body.job, bounds);
 
     const discount = DISCOUNT > 0 && DISCOUNT < 1 ? DISCOUNT : 0;
     const priceLowDiscounted = Math.round(base.priceLow * (1 - discount));
@@ -216,7 +384,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
+async function getQuoteFromAi(body: z.infer<typeof RequestSchema>, bounds: QuoteBounds) {
   const apiKey = process.env["OPENAI_API_KEY"];
   const model = (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
   if (!apiKey) {
@@ -252,6 +420,24 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
   } as const;
 
   async function requestOpenAi(format: TextFormat) {
+    const allowedUnits = Array.from(
+      { length: Math.max(0, bounds.maxUnits - bounds.minUnits + 1) },
+      (_, i) => bounds.minUnits + i
+    );
+    const allowedPrices = allowedUnits.map((u) => unitsToPrice(u));
+    const minHighPrice = typeof bounds.minHighUnits === "number" ? unitsToPrice(bounds.minHighUnits) : null;
+
+    const mustMentionMultiLoad = shouldMentionMultiLoad(body.job, bounds, minHighPrice ?? unitsToPrice(bounds.maxUnits));
+    const dynamicRules = [
+      `Allowed prices for this request are ONLY: ${allowedPrices.join(", ")} (in $200 increments).`,
+      minHighPrice ? `Because of the job size/type, priceHigh MUST be >= ${minHighPrice}.` : null,
+      mustMentionMultiLoad
+        ? `Your reasonSummary MUST mention that the job may require more than one trailer load.`
+        : `Do NOT mention multi-loads unless it could realistically be multiple loads.`
+    ]
+      .filter(Boolean)
+      .join("\n");
+
     const res = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -260,7 +446,7 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
       },
       body: JSON.stringify({
         model,
-        instructions: SYSTEM_PROMPT,
+        instructions: `${SYSTEM_PROMPT}\n\n${dynamicRules}`,
         input: JSON.stringify(body.job),
         tools: [],
         tool_choice: "none",
@@ -297,6 +483,7 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
 
     const outputItems = Array.isArray(data.output) ? data.output : [];
     const outputTextParts: string[] = [];
+    const outputJsonParts: unknown[] = [];
     const refusalParts: string[] = [];
     const anyTextParts: string[] = [];
 
@@ -331,6 +518,12 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
           if (partType === "output_text" && text) {
             outputTextParts.push(text);
           }
+          if (partType === "output_json") {
+            const jsonValue = typed["json"] ?? typed["output"] ?? typed["value"];
+            if (jsonValue != null) {
+              outputJsonParts.push(jsonValue);
+            }
+          }
           if (partType === "refusal" && typeof typed["refusal"] === "string") {
             refusalParts.push(typed["refusal"]);
           }
@@ -360,6 +553,14 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>) {
         }
         throw new Error("ai_invalid_json_output");
       }
+    }
+
+    if (outputJsonParts.length) {
+      const candidate = outputJsonParts[0];
+      if (typeof candidate === "string") {
+        return JSON.parse(candidate);
+      }
+      return candidate;
     }
 
     const logDebug = (label: string) => {
