@@ -369,12 +369,19 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         })
       });
       if (!res.ok) {
-        const errorPayload = (await res.json().catch(() => null)) as { error?: string } | null;
+        const errorPayload = (await res.json().catch(() => null)) as { error?: string; errorId?: string } | null;
         if (errorPayload?.error === "slot_full") {
           setBookingStatus("error");
           setBookingMessage("That time just filled up. Please pick another time.");
           void fetchAvailability();
           return;
+        }
+        if (errorPayload?.error === "server_error") {
+          const suffix =
+            typeof errorPayload.errorId === "string" && errorPayload.errorId.length
+              ? ` (ref ${errorPayload.errorId})`
+              : "";
+          throw new Error(`Booking failed on our end. Please try again or call us.${suffix}`);
         }
         const message =
           typeof errorPayload?.error === "string" && errorPayload.error.length
@@ -739,21 +746,40 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                                       key={slot.startAt}
                                       type="button"
                                       onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                                      aria-pressed={selected}
                                       className={cn(
-                                        "rounded-md border px-3 py-2 text-left transition",
+                                        "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
                                         selected
-                                          ? "border-primary-400 bg-primary-50"
-                                          : "border-neutral-200 bg-white hover:border-neutral-300"
+                                          ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
+                                          : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50"
                                       )}
                                     >
-                                      <div className="text-sm font-semibold text-neutral-900">
+                                      <div
+                                        className={cn(
+                                          "text-sm font-semibold",
+                                          selected ? "text-white" : "text-neutral-900"
+                                        )}
+                                      >
                                         {formatSlotLabel(slot.startAt)}
                                       </div>
-                                      <div className="text-[11px] text-neutral-600">{slot.reason}</div>
+                                      <div
+                                        className={cn(
+                                          "text-[11px]",
+                                          selected ? "text-primary-100" : "text-neutral-600"
+                                        )}
+                                      >
+                                        {slot.reason}
+                                      </div>
                                     </button>
                                   );
                                 })}
                               </div>
+                            </div>
+                          ) : null}
+
+                          {selectedSlotStartAt ? (
+                            <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-900">
+                              Selected time: <span className="font-semibold">{formatSlotLabel(selectedSlotStartAt)}</span>
                             </div>
                           ) : null}
 
@@ -815,18 +841,31 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                                               key={slot.startAt}
                                               type="button"
                                               onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                                              aria-pressed={selected}
                                               className={cn(
-                                                "rounded-md border px-3 py-2 text-left transition",
+                                                "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
                                                 selected
-                                                  ? "border-primary-400 bg-primary-50"
-                                                  : "border-neutral-200 bg-white hover:border-neutral-300"
+                                                  ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
+                                                  : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50"
                                               )}
                                               title={slot.reason}
                                             >
-                                              <div className="text-sm font-semibold text-neutral-900">
+                                              <div
+                                                className={cn(
+                                                  "text-sm font-semibold",
+                                                  selected ? "text-white" : "text-neutral-900"
+                                                )}
+                                              >
                                                 {formatSlotTimeLabel(slot.startAt)}
                                               </div>
-                                              <div className="truncate text-[11px] text-neutral-600">{slot.reason}</div>
+                                              <div
+                                                className={cn(
+                                                  "truncate text-[11px]",
+                                                  selected ? "text-primary-100" : "text-neutral-600"
+                                                )}
+                                              >
+                                                {slot.reason}
+                                              </div>
                                             </button>
                                           );
                                         })}

@@ -462,7 +462,8 @@ export async function POST(request: NextRequest) {
     if (error instanceof BookingError) {
       return corsJson({ error: error.code }, request.headers.get("origin"), { status: error.status });
     }
-    console.error("[junk-quote-book] server_error", error);
-    return corsJson({ error: "server_error" }, request.headers.get("origin"), { status: 500 });
+    const errorId = nanoid(10);
+    console.error("[junk-quote-book] server_error", { errorId, error });
+    return corsJson({ error: "server_error", errorId }, request.headers.get("origin"), { status: 500 });
   }
 }
