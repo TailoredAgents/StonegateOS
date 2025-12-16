@@ -59,6 +59,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function extractPgMeta(error: unknown): { code?: string; constraint?: string } {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : undefined;
+  const directConstraint =
+    direct && typeof direct["constraint_name"] === "string" ? direct["constraint_name"] : undefined;
+  if (directCode || directConstraint) return { code: directCode, constraint: directConstraint };
+
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : undefined;
+  const causeConstraint = cause && typeof cause["constraint_name"] === "string" ? cause["constraint_name"] : undefined;
+  return { code: causeCode, constraint: causeConstraint };
+}
+
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
   return aStart < bEnd && bStart < aEnd;
 }
@@ -180,6 +193,69 @@ export async function POST(request: NextRequest) {
         source: "instant_quote"
       });
 
+      const safeUpsertPropertyId = async (input: {
+        contactId: string;
+        addressLine1: string;
+        city: string;
+        state: string;
+        postalCode: string;
+        gated: boolean;
+      }): Promise<{ id: string }> => {
+        const trimmedAddress = input.addressLine1.trim();
+        const trimmedCity = input.city.trim();
+        const normalizedState = input.state.trim().toUpperCase();
+        const trimmedPostalCode = input.postalCode.trim();
+        const gated = Boolean(input.gated);
+
+        await tx.execute(sql`savepoint junk_quote_book_property_upsert`);
+        try {
+          const property = await upsertProperty(tx, {
+            contactId: input.contactId,
+            addressLine1: trimmedAddress,
+            city: trimmedCity,
+            state: normalizedState,
+            postalCode: trimmedPostalCode,
+            gated
+          });
+          await tx.execute(sql`release savepoint junk_quote_book_property_upsert`);
+          return { id: property.id };
+        } catch (error) {
+          const meta = extractPgMeta(error);
+          await tx.execute(sql`rollback to savepoint junk_quote_book_property_upsert`);
+          await tx.execute(sql`release savepoint junk_quote_book_property_upsert`);
+
+          if (meta.code !== "23505" || (meta.constraint && meta.constraint !== "properties_address_key")) {
+            throw error;
+          }
+
+          const [existing] = await tx
+            .select({ id: properties.id })
+            .from(properties)
+            .where(
+              and(
+                eq(properties.addressLine1, trimmedAddress),
+                eq(properties.postalCode, trimmedPostalCode),
+                eq(properties.state, normalizedState)
+              )
+            )
+            .limit(1);
+
+          if (!existing?.id) throw error;
+
+          await tx
+            .update(properties)
+            .set({
+              contactId: input.contactId,
+              city: trimmedCity,
+              gated,
+              updatedAt: new Date()
+            })
+            .where(eq(properties.id, existing.id));
+
+          return { id: existing.id };
+        }
+      };
+
       const [existingLead] = await tx
         .select({ id: leads.id, propertyId: leads.propertyId, formPayload: leads.formPayload })
         .from(leads)
@@ -235,12 +311,15 @@ export async function POST(request: NextRequest) {
           } catch (error) {
             await tx.execute(sql`rollback to savepoint junk_quote_book_property_update`);
             await tx.execute(sql`release savepoint junk_quote_book_property_update`);
+            const meta = extractPgMeta(error);
             console.warn("[junk-quote-book] placeholder_property_conflict", {
               quoteId: quote.id,
               propertyId,
+              code: meta.code,
+              constraint: meta.constraint,
               error: String(error)
             });
-            const upserted = await upsertProperty(tx, {
+            const upserted = await safeUpsertPropertyId({
               contactId: contact.id,
               addressLine1,
               city,
@@ -251,7 +330,7 @@ export async function POST(request: NextRequest) {
             nextPropertyId = upserted.id;
           }
         } else {
-          const upserted = await upsertProperty(tx, {
+          const upserted = await safeUpsertPropertyId({
             contactId: contact.id,
             addressLine1,
             city,
@@ -298,7 +377,7 @@ export async function POST(request: NextRequest) {
         leadId = updatedLead?.id ?? existingLead.id;
         propertyId = nextPropertyId;
       } else {
-        const property = await upsertProperty(tx, {
+        const property = await safeUpsertPropertyId({
           contactId: contact.id,
           addressLine1,
           city,
