@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, gte, lte, eq } from "drizzle-orm";
+import { and, gte, lte, eq, ne } from "drizzle-orm";
 import { getDb, appointments, properties } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { forwardGeocode } from "@/lib/geocode";
@@ -10,6 +10,7 @@ type SuggestRequest = {
   windowDays?: number;
   startHour?: number;
   endHour?: number;
+  capacity?: number;
   targetLat?: number;
   targetLng?: number;
   radiusKm?: number;
@@ -34,6 +35,7 @@ const DEFAULT_DURATION_MIN = 60;
 const DEFAULT_WINDOW_DAYS = 5;
 const DEFAULT_START_HOUR = 8;
 const DEFAULT_END_HOUR = 18;
+const DEFAULT_CAPACITY = 2;
 
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -57,6 +59,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     typeof payload.endHour === "number" && payload.endHour > startHour && payload.endHour <= 24
       ? payload.endHour
       : DEFAULT_END_HOUR;
+  const capacity =
+    typeof payload.capacity === "number" && Number.isFinite(payload.capacity) && payload.capacity > 0
+      ? Math.min(8, Math.floor(payload.capacity))
+      : DEFAULT_CAPACITY;
   const targetLat = typeof payload.targetLat === "number" ? payload.targetLat : null;
   const targetLng = typeof payload.targetLng === "number" ? payload.targetLng : null;
   const radiusKm =
@@ -93,6 +99,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       startAt: appointments.startAt,
       durationMinutes: appointments.durationMinutes,
       travelBufferMinutes: appointments.travelBufferMinutes,
+      status: appointments.status,
       city: properties.city,
       state: properties.state,
       lat: properties.lat,
@@ -100,7 +107,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     })
     .from(appointments)
     .leftJoin(properties, eq(appointments.propertyId, properties.id))
-    .where(and(gte(appointments.startAt, windowStart), lte(appointments.startAt, windowEnd)));
+    .where(
+      and(gte(appointments.startAt, windowStart), lte(appointments.startAt, windowEnd), ne(appointments.status, "canceled"))
+    );
 
   const blocks = existing
     .filter((row) => row.startAt)
@@ -143,7 +152,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       slotStart.setHours(hour, 0, 0, 0);
       if (slotStart < now) continue;
       const slotEnd = new Date(slotStart.getTime() + durationMinutes * 60_000);
-      if (conflictsWith(blocks, slotStart, slotEnd)) continue;
+      if (conflictsWith(blocks, slotStart, slotEnd, capacity)) continue;
       suggestions.push({
         startAt: slotStart.toISOString(),
         endAt: slotEnd.toISOString(),
@@ -166,9 +175,17 @@ export async function POST(request: NextRequest): Promise<Response> {
 function conflictsWith(
   blocks: Array<{ start: Date; end: Date }>,
   start: Date,
-  end: Date
+  end: Date,
+  capacity: number
 ): boolean {
-  return blocks.some((block) => overlaps(start, end, block.start, block.end));
+  let overlapsCount = 0;
+  for (const block of blocks) {
+    if (overlaps(start, end, block.start, block.end)) {
+      overlapsCount += 1;
+      if (overlapsCount >= capacity) return true;
+    }
+  }
+  return false;
 }
 
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {

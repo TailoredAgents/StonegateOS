@@ -21,6 +21,8 @@ type QuoteState =
     }
   | { status: "error"; message: string };
 
+type AvailabilitySlot = { startAt: string; endAt: string; reason: string };
+
 type Timeframe = "today" | "tomorrow" | "this_week" | "flexible";
 type PerceivedSize = "few_items" | "small_area" | "one_room_or_half_garage" | "big_cleanout" | "not_sure";
 type JunkType =
@@ -74,13 +76,41 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [city, setCity] = React.useState("");
   const [stateField, setStateField] = React.useState("GA");
   const [postalCode, setPostalCode] = React.useState("");
-  const [preferredDate, setPreferredDate] = React.useState("");
-  const [timeWindow, setTimeWindow] = React.useState("");
+  const [availabilityStatus, setAvailabilityStatus] = React.useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [availabilityMessage, setAvailabilityMessage] = React.useState<string | null>(null);
+  const [availabilityTimezone, setAvailabilityTimezone] = React.useState("America/New_York");
+  const [availabilityDurationMinutes, setAvailabilityDurationMinutes] = React.useState<number | null>(null);
+  const [availabilitySlots, setAvailabilitySlots] = React.useState<AvailabilitySlot[]>([]);
+  const [selectedSlotStartAt, setSelectedSlotStartAt] = React.useState<string | null>(null);
   const [bookingStatus, setBookingStatus] = React.useState<"idle" | "loading" | "success" | "error">("idle");
   const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
   const [photoSkipped, setPhotoSkipped] = React.useState(false);
 
   const apiBase = process.env["NEXT_PUBLIC_API_BASE_URL"]?.replace(/\/$/, "") ?? "";
+  const quoteId = quoteState.status === "ready" ? quoteState.quoteId : null;
+  const addressComplete =
+    addressLine1.trim().length >= 5 &&
+    city.trim().length >= 2 &&
+    stateField.trim().length === 2 &&
+    postalCode.trim().length >= 3;
+
+  const formatSlotLabel = React.useCallback(
+    (iso: string) => {
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return iso;
+      return new Intl.DateTimeFormat("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: availabilityTimezone
+      }).format(date);
+    },
+    [availabilityTimezone]
+  );
 
   const toggleType = (id: JunkType) => {
     setTypes((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
@@ -164,11 +194,108 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     }
   };
 
+  const fetchAvailability = React.useCallback(
+    async (signal?: AbortSignal) => {
+      if (!quoteId || !addressComplete) return;
+      setAvailabilityStatus("loading");
+      setAvailabilityMessage(null);
+      try {
+        const res = await fetch(`${apiBase}/api/junk-quote/availability`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            instantQuoteId: quoteId,
+            addressLine1: addressLine1.trim(),
+            city: city.trim(),
+            state: stateField.trim(),
+            postalCode: postalCode.trim()
+          }),
+          signal
+        });
+        const data = (await res.json().catch(() => null)) as
+          | {
+              ok?: boolean;
+              timezone?: string;
+              durationMinutes?: number;
+              suggestions?: AvailabilitySlot[];
+              error?: string;
+            }
+          | null;
+
+        if (!res.ok || !data?.ok) {
+          const message =
+            typeof data?.error === "string"
+              ? data.error
+              : `Availability failed (HTTP ${res.status})`;
+          setAvailabilityStatus("error");
+          setAvailabilityMessage(message);
+          setAvailabilitySlots([]);
+          setSelectedSlotStartAt(null);
+          return;
+        }
+
+        const tz = typeof data.timezone === "string" && data.timezone.length ? data.timezone : "America/New_York";
+        const duration = typeof data.durationMinutes === "number" && Number.isFinite(data.durationMinutes) ? data.durationMinutes : null;
+        const slots = Array.isArray(data.suggestions) ? data.suggestions : [];
+
+        setAvailabilityTimezone(tz);
+        setAvailabilityDurationMinutes(duration);
+        setAvailabilitySlots(slots);
+        setAvailabilityStatus("ready");
+        setSelectedSlotStartAt((prev) => {
+          if (typeof prev === "string" && slots.some((s) => s.startAt === prev)) return prev;
+          return slots[0]?.startAt ?? null;
+        });
+        setAvailabilityMessage(
+          slots.length
+            ? null
+            : "No times available in the next two weeks. Please call to confirm & book."
+        );
+      } catch (err) {
+        if ((err as any)?.name === "AbortError") return;
+        setAvailabilityStatus("error");
+        setAvailabilityMessage("Availability check failed. Please try again.");
+        setAvailabilitySlots([]);
+        setSelectedSlotStartAt(null);
+      }
+    },
+    [addressComplete, addressLine1, apiBase, city, postalCode, quoteId, stateField]
+  );
+
+  React.useEffect(() => {
+    if (step !== 2 || !quoteId || !addressComplete) {
+      setAvailabilityStatus("idle");
+      setAvailabilitySlots([]);
+      setSelectedSlotStartAt(null);
+      setAvailabilityMessage(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const handle = window.setTimeout(() => {
+      void fetchAvailability(controller.signal);
+    }, 450);
+    return () => {
+      window.clearTimeout(handle);
+      controller.abort();
+    };
+  }, [addressComplete, fetchAvailability, quoteId, step]);
+
   const submitBooking = async () => {
     if (quoteState.status !== "ready") return;
+    if (!quoteId) {
+      setBookingStatus("error");
+      setBookingMessage("Quote is missing. Please refresh and try again.");
+      return;
+    }
     if (!addressLine1 || !city || !stateField || !postalCode) {
       setBookingStatus("error");
       setBookingMessage("Please enter address details.");
+      return;
+    }
+    if (!selectedSlotStartAt) {
+      setBookingStatus("error");
+      setBookingMessage("Please choose an available time.");
       return;
     }
     setBookingStatus("loading");
@@ -178,24 +305,35 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          instantQuoteId: quoteState.quoteId,
+          instantQuoteId: quoteId,
           name: name.trim(),
           phone: phone.trim(),
-          addressLine1,
-          city,
-          state: stateField,
-          postalCode,
-          preferredDate: preferredDate || null,
-          timeWindow: timeWindow || null,
+          addressLine1: addressLine1.trim(),
+          city: city.trim(),
+          state: stateField.trim(),
+          postalCode: postalCode.trim(),
+          startAt: selectedSlotStartAt,
           notes: notes || null
         })
       });
       if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(txt.slice(0, 160));
+        const errorPayload = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (errorPayload?.error === "slot_full") {
+          setBookingStatus("error");
+          setBookingMessage("That time just filled up. Please pick another time.");
+          void fetchAvailability();
+          return;
+        }
+        const message =
+          typeof errorPayload?.error === "string" && errorPayload.error.length
+            ? errorPayload.error
+            : `Booking failed (HTTP ${res.status})`;
+        throw new Error(message);
       }
+      const data = (await res.json().catch(() => null)) as { startAt?: string | null } | null;
+      const bookedAt = typeof data?.startAt === "string" && data.startAt.length ? data.startAt : selectedSlotStartAt;
       setBookingStatus("success");
-      setBookingMessage("Thanks! We saved your request. We'll confirm your arrival window shortly.");
+      setBookingMessage(`You're booked for ${formatSlotLabel(bookedAt)}. We'll text you a confirmation.`);
     } catch (err) {
       setBookingStatus("error");
       setBookingMessage((err as Error).message);
@@ -507,24 +645,71 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                       onChange={(e) => setPostalCode(e.target.value)}
                       className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                     />
-                    <div className="grid grid-cols-2 gap-2">
-                      <input
-                        type="date"
-                        value={preferredDate}
-                        onChange={(e) => setPreferredDate(e.target.value)}
-                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                      />
-                      <input
-                        type="text"
-                        placeholder="Time window (e.g., 8-12)"
-                        value={timeWindow}
-                        onChange={(e) => setTimeWindow(e.target.value)}
-                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                      />
+                    <div className="md:col-span-2 space-y-2 rounded-md border border-neutral-200 bg-white p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-xs font-semibold text-neutral-700">Choose a time</div>
+                        <button
+                          type="button"
+                          onClick={() => void fetchAvailability()}
+                          disabled={!addressComplete || availabilityStatus === "loading"}
+                          className="text-[11px] font-semibold text-primary-700 transition hover:text-primary-800 disabled:text-neutral-400"
+                        >
+                          {availabilityStatus === "loading" ? "Checking..." : "Refresh"}
+                        </button>
+                      </div>
+                      {availabilityDurationMinutes ? (
+                        <div className="text-[11px] text-neutral-500">
+                          Estimated job time: {availabilityDurationMinutes} min
+                        </div>
+                      ) : null}
+                      {!addressComplete ? (
+                        <div className="text-xs text-neutral-600">
+                          Enter your address to see available times.
+                        </div>
+                      ) : availabilityStatus === "loading" ? (
+                        <div className="text-xs text-neutral-600">Checking availability...</div>
+                      ) : availabilityStatus === "error" ? (
+                        <div className="text-xs text-amber-700">
+                          {availabilityMessage ?? "Availability check failed. Please try again."}
+                        </div>
+                      ) : availabilitySlots.length ? (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {availabilitySlots.map((slot) => {
+                            const selected = slot.startAt === selectedSlotStartAt;
+                            return (
+                              <button
+                                key={slot.startAt}
+                                type="button"
+                                onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                                className={cn(
+                                  "rounded-md border px-3 py-2 text-left transition",
+                                  selected
+                                    ? "border-primary-400 bg-primary-50"
+                                    : "border-neutral-200 bg-white hover:border-neutral-300"
+                                )}
+                              >
+                                <div className="text-sm font-semibold text-neutral-900">
+                                  {formatSlotLabel(slot.startAt)}
+                                </div>
+                                <div className="text-[11px] text-neutral-600">{slot.reason}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-neutral-600">
+                          {availabilityMessage ?? "No times available right now. Please call to confirm & book."}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-3">
-                    <Button type="button" className="justify-center" onClick={() => void submitBooking()} disabled={bookingStatus === "loading"}>
+                    <Button
+                      type="button"
+                      className="justify-center"
+                      onClick={() => void submitBooking()}
+                      disabled={bookingStatus === "loading" || !selectedSlotStartAt || availabilityStatus === "loading"}
+                    >
                       {bookingStatus === "loading" ? "Booking..." : "Book this pickup"}
                     </Button>
                     <a
