@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getDb, contacts, properties, leads, instantQuotes } from "@/db";
+import { getDb, instantQuotes, leads, properties } from "@/db";
 import { eq } from "drizzle-orm";
+import { upsertContact, upsertProperty } from "../../web/persistence";
 import { normalizeName, normalizePhone } from "../../web/utils";
 
 const RAW_ALLOWED_ORIGINS =
@@ -75,46 +76,143 @@ export async function POST(request: NextRequest) {
     const timeWindow = body.timeWindow ?? null;
 
     const leadResult = await db.transaction(async (tx) => {
-      const insertedContacts = await tx
-        .insert(contacts)
-        .values({
-          firstName,
-          lastName,
-          phone: normalizedPhone.raw,
-          phoneE164: normalizedPhone.e164,
-          source: "instant_quote",
-          createdAt: new Date(),
-          updatedAt: new Date()
-        })
-        .returning();
-      const contact = insertedContacts[0];
-      if (!contact) {
-        throw new Error("contact_insert_failed");
+      const contact = await upsertContact(tx, {
+        firstName,
+        lastName,
+        phoneRaw: normalizedPhone.raw,
+        phoneE164: normalizedPhone.e164,
+        source: "instant_quote"
+      });
+
+      const [existingLead] = await tx
+        .select({ id: leads.id, propertyId: leads.propertyId, formPayload: leads.formPayload })
+        .from(leads)
+        .where(eq(leads.instantQuoteId, quote.id))
+        .limit(1);
+
+      const addressLine1 = body.addressLine1.trim();
+      const city = body.city.trim();
+      const state = body.state.trim().toUpperCase();
+      const postalCode = body.postalCode.trim();
+      const notes = body.notes ?? quote.notes ?? null;
+
+      if (existingLead?.id) {
+        const propertyId = existingLead.propertyId;
+        let nextPropertyId = propertyId;
+
+        const [currentProperty] = await tx
+          .select({ id: properties.id, addressLine1: properties.addressLine1 })
+          .from(properties)
+          .where(eq(properties.id, propertyId))
+          .limit(1);
+
+        const isPlaceholder =
+          typeof currentProperty?.addressLine1 === "string" &&
+          currentProperty.addressLine1.trim().startsWith("[Instant Quote");
+
+        if (isPlaceholder) {
+          try {
+            const [updatedProperty] = await tx
+              .update(properties)
+              .set({
+                contactId: contact.id,
+                addressLine1,
+                city,
+                state,
+                postalCode,
+                gated: false,
+                updatedAt: new Date()
+              })
+              .where(eq(properties.id, propertyId))
+              .returning({ id: properties.id });
+
+            if (!updatedProperty?.id) {
+              throw new Error("property_update_failed");
+            }
+          } catch (error) {
+            console.warn("[junk-quote-book] placeholder_property_conflict", {
+              quoteId: quote.id,
+              propertyId,
+              error: String(error)
+            });
+            const upserted = await upsertProperty(tx, {
+              contactId: contact.id,
+              addressLine1,
+              city,
+              state,
+              postalCode,
+              gated: false
+            });
+            nextPropertyId = upserted.id;
+
+            if (propertyId !== nextPropertyId) {
+              const refs = await tx.select({ id: leads.id }).from(leads).where(eq(leads.propertyId, propertyId)).limit(2);
+              if (refs.length <= 1) {
+                await tx.delete(properties).where(eq(properties.id, propertyId));
+              }
+            }
+          }
+        } else {
+          const upserted = await upsertProperty(tx, {
+            contactId: contact.id,
+            addressLine1,
+            city,
+            state,
+            postalCode,
+            gated: false
+          });
+          nextPropertyId = upserted.id;
+        }
+
+        const previousPayload =
+          existingLead.formPayload && typeof existingLead.formPayload === "object"
+            ? (existingLead.formPayload as Record<string, unknown>)
+            : {};
+
+        const nextPayload = {
+          ...previousPayload,
+          booking: {
+            addressLine1,
+            city,
+            state,
+            postalCode,
+            preferredDate,
+            timeWindow,
+            notes
+          }
+        };
+
+        const [updatedLead] = await tx
+          .update(leads)
+          .set({
+            contactId: contact.id,
+            propertyId: nextPropertyId,
+            notes,
+            formPayload: nextPayload,
+            updatedAt: new Date()
+          })
+          .where(eq(leads.id, existingLead.id))
+          .returning({ id: leads.id });
+
+        return { lead: { id: updatedLead?.id ?? existingLead.id } };
       }
 
-      const insertedProperties = await tx
-        .insert(properties)
-        .values({
-          contactId: contact.id,
-          addressLine1: body.addressLine1.trim(),
-          city: body.city.trim(),
-          state: body.state.trim().toUpperCase(),
-          postalCode: body.postalCode.trim(),
-          gated: false
-        })
-        .returning();
-      const property = insertedProperties[0];
-      if (!property) {
-        throw new Error("property_insert_failed");
-      }
+      const property = await upsertProperty(tx, {
+        contactId: contact.id,
+        addressLine1,
+        city,
+        state,
+        postalCode,
+        gated: false
+      });
 
-      const insertedLeads = await tx
+      const [lead] = await tx
         .insert(leads)
         .values({
           contactId: contact.id,
           propertyId: property.id,
           servicesRequested: quote.jobTypes ?? [],
-          notes: body.notes ?? quote.notes ?? null,
+          notes,
           status: "new",
           source: "instant_quote",
           instantQuoteId: quote.id,
@@ -125,12 +223,16 @@ export async function POST(request: NextRequest) {
             photoUrls: quote.photoUrls,
             aiResult: quote.aiResult,
             preferredDate,
-            timeWindow
+            timeWindow,
+            notes,
+            addressLine1,
+            city,
+            state,
+            postalCode
           }
         })
-        .returning();
+        .returning({ id: leads.id });
 
-      const lead = insertedLeads[0];
       if (!lead) {
         throw new Error("lead_insert_failed");
       }

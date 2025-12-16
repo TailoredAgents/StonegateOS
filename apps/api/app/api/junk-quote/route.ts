@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { getDb, instantQuotes } from "@/db";
+import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
+import { desc, eq } from "drizzle-orm";
+import { upsertContact, upsertProperty } from "../web/persistence";
+import { normalizeName, normalizePhone } from "../web/utils";
 
 const DISCOUNT = Number(process.env["INSTANT_QUOTE_DISCOUNT"] ?? 0);
 const RAW_ALLOWED_ORIGINS =
@@ -58,7 +61,18 @@ const RequestSchema = z.object({
     notes: z.string().optional().nullable(),
     zip: z.string().min(3),
     photoUrls: z.array(z.string().url()).max(4).default([])
-  })
+  }),
+  utm: z
+    .object({
+      source: z.string().optional(),
+      medium: z.string().optional(),
+      campaign: z.string().optional(),
+      term: z.string().optional(),
+      content: z.string().optional(),
+      gclid: z.string().optional(),
+      fbclid: z.string().optional()
+    })
+    .optional()
 });
 
 const QuoteResultSchema = z
@@ -345,6 +359,12 @@ export async function POST(request: NextRequest) {
     const discount = DISCOUNT > 0 && DISCOUNT < 1 ? DISCOUNT : 0;
     const priceLowDiscounted = Math.round(base.priceLow * (1 - discount));
     const priceHighDiscounted = Math.round(base.priceHigh * (1 - discount));
+    const storedAiResult = {
+      ...base,
+      discountPercent: discount,
+      priceLowDiscounted,
+      priceHighDiscounted
+    };
 
     const db = getDb();
     const [quoteRow] = await db
@@ -359,18 +379,116 @@ export async function POST(request: NextRequest) {
         perceivedSize: body.job.perceivedSize,
         notes: body.job.notes ?? null,
         photoUrls: body.job.photoUrls ?? [],
-        aiResult: {
-          ...base,
-          discountPercent: discount,
-          priceLowDiscounted,
-          priceHighDiscounted
-        }
+        aiResult: storedAiResult
       })
       .returning({ id: instantQuotes.id });
 
+    const quoteId = quoteRow?.id ?? null;
+    if (quoteId) {
+      try {
+        const { firstName, lastName } = normalizeName(body.contact.name);
+        const normalizedPhone = normalizePhone(body.contact.phone);
+        const utm = body.utm ?? {};
+        const referrer = request.headers.get("referer") ?? undefined;
+
+        await db.transaction(async (tx) => {
+          const contact = await upsertContact(tx, {
+            firstName,
+            lastName,
+            phoneRaw: normalizedPhone.raw,
+            phoneE164: normalizedPhone.e164,
+            source: "instant_quote"
+          });
+
+          const [existingProperty] = await tx
+            .select({ id: properties.id })
+            .from(properties)
+            .where(eq(properties.contactId, contact.id))
+            .orderBy(desc(properties.createdAt))
+            .limit(1);
+
+          const property =
+            existingProperty?.id
+              ? { id: existingProperty.id }
+              : await upsertProperty(tx, {
+                  contactId: contact.id,
+                  addressLine1: `[Instant Quote ${quoteId.split("-")[0] ?? quoteId}] ZIP ${body.job.zip.trim()} (address pending)`,
+                  city: "Unknown",
+                  state: "GA",
+                  postalCode: body.job.zip.trim(),
+                  gated: false
+                });
+
+          const [leadRow] = await tx
+            .insert(leads)
+            .values({
+              contactId: contact.id,
+              propertyId: property.id,
+              servicesRequested: body.job.types,
+              notes: body.job.notes ?? null,
+              status: "new",
+              source: "instant_quote",
+              utmSource: utm.source,
+              utmMedium: utm.medium,
+              utmCampaign: utm.campaign,
+              utmTerm: utm.term,
+              utmContent: utm.content,
+              gclid: utm.gclid,
+              fbclid: utm.fbclid,
+              referrer,
+              formPayload: {
+                instantQuoteId: quoteId,
+                timeframe: body.contact.timeframe,
+                zip: body.job.zip.trim(),
+                jobTypes: body.job.types,
+                perceivedSize: body.job.perceivedSize,
+                notes: body.job.notes ?? null,
+                aiResult: storedAiResult,
+                utm
+              },
+              instantQuoteId: quoteId
+            })
+            .returning({ id: leads.id });
+
+          const [pipelineRow] = await tx
+            .select({ stage: crmPipeline.stage })
+            .from(crmPipeline)
+            .where(eq(crmPipeline.contactId, contact.id))
+            .limit(1);
+
+          const previousStage = typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
+          if (previousStage !== "quoted") {
+            await tx
+              .insert(crmPipeline)
+              .values({ contactId: contact.id, stage: "quoted" })
+              .onConflictDoUpdate({
+                target: crmPipeline.contactId,
+                set: { stage: "quoted", updatedAt: new Date() }
+              });
+
+            await tx.insert(outboxEvents).values({
+              type: "pipeline.auto_stage_change",
+              payload: {
+                contactId: contact.id,
+                fromStage: previousStage,
+                toStage: "quoted",
+                reason: "instant_quote.created",
+                meta: {
+                  instantQuoteId: quoteId,
+                  leadId: leadRow?.id ?? null
+                }
+              }
+            });
+          }
+        });
+      } catch (error) {
+        console.error("[junk-quote] lead_create_failed", { quoteId, error: String(error) });
+      }
+    }
+
     return corsJson({
       ok: true,
-      quoteId: quoteRow?.id ?? null,
+      quoteId,
       quote: {
         ...base,
         discountPercent: discount,
