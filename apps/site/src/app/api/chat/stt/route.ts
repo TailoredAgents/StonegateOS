@@ -1,9 +1,15 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const adminKey = getAdminKey();
+  if (!adminKey || req.cookies.get(ADMIN_SESSION_COOKIE)?.value !== adminKey) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const apiKey = process.env["OPENAI_API_KEY"];
   if (!apiKey) {
     return NextResponse.json({ error: "openai_not_configured" }, { status: 503 });

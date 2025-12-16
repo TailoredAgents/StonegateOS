@@ -1,11 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
+import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 
-const SYSTEM_PROMPT = `You are Stonegate Assist, the warm front-office voice for Stonegate Junk Removal in North Metro Atlanta. Think like a friendly teammate, not a call script.
+const SYSTEM_PROMPT = `You are Stonegate Assist, the warm front-office voice for Stonegate Junk Removal in North Metro Atlanta. Think like a helpful local office rep, not a call script.
 
 Principles:
-- Keep replies short (usually 2-4 sentences). Sound natural, confident, and approachable.
+- Keep replies short (usually 1-3 sentences). Use contractions and plain language. Sound natural, confident, and approachable.
 - Reference only the services or details that fit the question. Typical offerings include: furniture removal, mattress disposal, appliance hauling, garage/attic cleanouts, yard waste, and light construction debris (no hazardous waste).
 - Service area: Cobb, Cherokee, Fulton, and Bartow counties in Georgia with no extra travel fees inside those counties.
 - Pricing: Stonegate pricing is STRICTLY based on trailer volume only. Never add charges for stairs, weight, difficulty, time, or urgency.
@@ -15,7 +16,7 @@ Principles:
   Speak in ranges only and never promise an exact total.
 - Process notes (use when relevant): licensed and insured two-person crews, careful in-home handling, responsible disposal and recycling when possible.
 - Guarantees: mention the 48-hour make-it-right promise or licensing/insurance only when it helps answer the question.
-- Scheduling: if the user hints at booking and a contact/property is provided, offer a short confirmation and suggested slots. Otherwise, mention the "Schedule Estimate" button (#schedule-estimate) or call (404) 692-0768 only when the user asks about booking, timing, or next steps.
+- Scheduling: if the user asks to book, collect what you need (name, address, phone) and offer a couple of available 1-hour windows to choose from. Mention the "Schedule Estimate" button (#schedule-estimate) or call (404) 692-0768 only when the user asks about booking, timing, or next steps.
 - Preparation tips (share only if asked): separate items for pickup, ensure clear pathways, and mention any mattresses/paint/tire quantities if they have them.
 - Escalate politely to a human if the request is hazardous, urgent, or needs a firm commitment.
 - Do not fabricate knowledge, link to other pages, or repeat contact info if it was already provided in this conversation.
@@ -56,6 +57,7 @@ type ChatRequest = {
     postalCode?: string;
   };
   mode?: "team" | "public" | string;
+  action?: { type?: string; startAt?: string } | null;
 };
 
 type CreateContactAction = {
@@ -143,12 +145,408 @@ function getAdminContext() {
   return { apiBase: apiBase.replace(/\/$/, ""), adminKey };
 }
 
+function hasOwnerSession(request: NextRequest): boolean {
+  const adminKey = getAdminKey();
+  if (!adminKey) return false;
+  return request.cookies.get(ADMIN_SESSION_COOKIE)?.value === adminKey;
+}
+
+const PUBLIC_BOOKING_COOKIE = "myst-public-booking";
+const PUBLIC_BOOKING_COOKIE_MAX_AGE_S = 60 * 30; // 30 minutes
+
+type PublicBookingPhase = "idle" | "awaiting_name" | "awaiting_address" | "awaiting_phone" | "suggesting";
+
+type PublicBookingState = {
+  phase: PublicBookingPhase;
+  contactName?: string;
+  phone?: string;
+  email?: string;
+  addressLine1?: string;
+  addressLine2?: string | null;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  contactId?: string;
+  propertyId?: string;
+  suggestions?: Array<{ startAt: string; endAt: string }>;
+  updatedAt?: number;
+};
+
+function bookingCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: process.env["NODE_ENV"] === "production",
+    path: "/",
+    maxAge: PUBLIC_BOOKING_COOKIE_MAX_AGE_S
+  };
+}
+
+function readPublicBookingState(request: NextRequest): PublicBookingState | null {
+  const raw = request.cookies.get(PUBLIC_BOOKING_COOKIE)?.value;
+  if (!raw) return null;
+  const parsed = safeJsonParse(raw);
+  if (!parsed || typeof parsed !== "object") return null;
+  const phase = typeof parsed["phase"] === "string" ? (parsed["phase"] as string) : "idle";
+  const allowed: PublicBookingPhase[] = ["idle", "awaiting_name", "awaiting_address", "awaiting_phone", "suggesting"];
+  if (!allowed.includes(phase as PublicBookingPhase)) return null;
+
+  const suggestionsRaw = parsed["suggestions"];
+  const suggestions =
+    Array.isArray(suggestionsRaw)
+      ? suggestionsRaw
+          .map((s) => ({
+            startAt: typeof s?.["startAt"] === "string" ? s["startAt"] : "",
+            endAt: typeof s?.["endAt"] === "string" ? s["endAt"] : ""
+          }))
+          .filter((s) => s.startAt.length > 0 && s.endAt.length > 0)
+          .slice(0, 6)
+      : undefined;
+
+  return {
+    phase: phase as PublicBookingPhase,
+    contactName: typeof parsed["contactName"] === "string" ? parsed["contactName"] : undefined,
+    phone: typeof parsed["phone"] === "string" ? parsed["phone"] : undefined,
+    email: typeof parsed["email"] === "string" ? parsed["email"] : undefined,
+    addressLine1: typeof parsed["addressLine1"] === "string" ? parsed["addressLine1"] : undefined,
+    addressLine2: typeof parsed["addressLine2"] === "string" ? parsed["addressLine2"] : null,
+    city: typeof parsed["city"] === "string" ? parsed["city"] : undefined,
+    state: typeof parsed["state"] === "string" ? parsed["state"] : undefined,
+    postalCode: typeof parsed["postalCode"] === "string" ? parsed["postalCode"] : undefined,
+    contactId: typeof parsed["contactId"] === "string" ? parsed["contactId"] : undefined,
+    propertyId: typeof parsed["propertyId"] === "string" ? parsed["propertyId"] : undefined,
+    suggestions,
+    updatedAt: typeof parsed["updatedAt"] === "number" ? parsed["updatedAt"] : undefined
+  };
+}
+
+function writePublicBookingState(response: NextResponse, state: PublicBookingState | null) {
+  if (!state) {
+    response.cookies.set({ name: PUBLIC_BOOKING_COOKIE, value: "", path: "/", maxAge: 0 });
+    return;
+  }
+  response.cookies.set(PUBLIC_BOOKING_COOKIE, JSON.stringify({ ...state, updatedAt: Date.now() }), bookingCookieOptions());
+}
+
+function looksLikeBookingIntent(message: string): boolean {
+  const lower = message.toLowerCase();
+  return ["book", "schedule", "appointment", "estimate", "slot", "time", "tomorrow", "today"].some((kw) =>
+    lower.includes(kw)
+  );
+}
+
+function looksLikeCancelIntent(message: string): boolean {
+  const lower = message.toLowerCase();
+  return ["cancel", "never mind", "nevermind", "stop", "forget it", "start over", "reset"].some((kw) =>
+    lower.includes(kw)
+  );
+}
+
+function fmtBookingTime(iso: string): string {
+  const tz = process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "that time";
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    }).format(date);
+  } catch {
+    return date.toISOString();
+  }
+}
+
+async function createContactAndPropertyFromState(
+  state: PublicBookingState
+): Promise<{ contactId: string; propertyId: string } | null> {
+  const { apiBase, adminKey } = getAdminContext();
+  if (!adminKey) return null;
+
+  const res = await fetch(`${apiBase}/api/admin/tools/contact`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": adminKey
+    },
+    body: JSON.stringify({
+      contactName: state.contactName,
+      phone: state.phone,
+      email: state.email,
+      addressLine1: state.addressLine1,
+      addressLine2: state.addressLine2 ?? undefined,
+      city: state.city,
+      state: state.state,
+      postalCode: state.postalCode,
+      source: "public_chat"
+    })
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.warn("[chat] public contact create failed", res.status, detail.slice(0, 160));
+    return null;
+  }
+
+  const data = (await res.json().catch(() => ({}))) as { contactId?: string; propertyId?: string };
+  const contactId = typeof data.contactId === "string" ? data.contactId : null;
+  const propertyId = typeof data.propertyId === "string" ? data.propertyId : null;
+  if (!contactId || !propertyId) return null;
+  return { contactId, propertyId };
+}
+
+async function bookSlotForState(
+  state: PublicBookingState,
+  startAt: string
+): Promise<{ ok: boolean; appointmentId?: string; startAt?: string; error?: string }> {
+  const { apiBase, adminKey } = getAdminContext();
+  if (!adminKey) return { ok: false, error: "admin_key_missing" };
+
+  const res = await fetch(`${apiBase}/api/admin/booking/book`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": adminKey
+    },
+    body: JSON.stringify({
+      contactId: state.contactId,
+      propertyId: state.propertyId,
+      startAt,
+      durationMinutes: 60,
+      travelBufferMinutes: 30,
+      services: ["junk_removal_primary"]
+    })
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.warn("[chat] public booking failed", res.status, detail.slice(0, 160));
+    return { ok: false, error: `booking_failed_${res.status}` };
+  }
+
+  const data = (await res.json().catch(() => ({}))) as { appointmentId?: string; startAt?: string };
+  return { ok: true, appointmentId: data.appointmentId, startAt: data.startAt };
+}
+
+function extractContactNameFromMessage(message: string): string | null {
+  const cleaned = message.replace(/\s+/g, " ").trim();
+  const patterns = [
+    /\bmy name is\s+([a-z][a-z' .-]{1,60})/i,
+    /\bi am\s+([a-z][a-z' .-]{1,60})/i,
+    /\bi'm\s+([a-z][a-z' .-]{1,60})/i,
+    /\bthis is\s+([a-z][a-z' .-]{1,60})/i
+  ];
+  for (const pattern of patterns) {
+    const match = cleaned.match(pattern);
+    const candidate = match?.[1]?.trim();
+    if (!candidate) continue;
+    if (candidate.length < 2 || candidate.length > 60) continue;
+    if (/[0-9]/.test(candidate)) continue;
+    return candidate;
+  }
+  return null;
+}
+
+function normalizeNameInput(message: string): string | null {
+  const cleaned = message.replace(/\s+/g, " ").trim();
+  if (cleaned.length < 2 || cleaned.length > 60) return null;
+  if (/[0-9]/.test(cleaned)) return null;
+  if (cleaned.includes("@")) return null;
+  if (cleaned.includes(",")) return null;
+  return cleaned;
+}
+
+async function handlePublicBookingMessage(
+  message: string,
+  existingState: PublicBookingState | null
+): Promise<{ reply: string; state: PublicBookingState | null; booking?: BookingPayload }> {
+  if (looksLikeCancelIntent(message)) {
+    return {
+      reply: "No problem - I stopped the booking. If you want to schedule later, just say \"book me\".",
+      state: null
+    };
+  }
+
+  const state: PublicBookingState = existingState ?? { phase: "idle" };
+
+  if (state.phase === "suggesting" && state.suggestions?.length) {
+    return {
+      reply: "Tap one of the time buttons above and I'll lock it in.",
+      state
+    };
+  }
+
+  const email = extractEmailFromText(message);
+  if (email && !state.email) {
+    state.email = email;
+  }
+
+  const phone = extractPhoneFromText(message);
+  if (phone && !state.phone) {
+    state.phone = phone;
+  }
+
+  const parsedName = extractContactNameFromMessage(message);
+  if (parsedName && !state.contactName) {
+    state.contactName = parsedName;
+  } else if (!state.contactName && state.phase === "awaiting_name") {
+    const fallbackName = normalizeNameInput(message);
+    if (fallbackName) {
+      state.contactName = fallbackName;
+    }
+  }
+
+  const parsedAddress = parseAddress(message) ?? (extractAddressFromMessage(message) ? parseAddress(extractAddressFromMessage(message)!) : null);
+  if (parsedAddress) {
+    state.addressLine1 = parsedAddress.addressLine1;
+    state.addressLine2 = parsedAddress.addressLine2 ?? null;
+    state.city = parsedAddress.city;
+    state.state = parsedAddress.state;
+    state.postalCode = parsedAddress.postalCode;
+  }
+
+  if (!state.contactName) {
+    state.phase = "awaiting_name";
+    return {
+      reply: "Absolutely - what's your name?",
+      state
+    };
+  }
+
+  if (!state.addressLine1 || !state.city || !state.state || !state.postalCode) {
+    state.phase = "awaiting_address";
+    return {
+      reply: `Thanks, ${state.contactName.split(" ")[0] ?? state.contactName}. What's the pickup address? (Street, City, ST ZIP)`,
+      state
+    };
+  }
+
+  if (!state.phone) {
+    state.phase = "awaiting_phone";
+    return {
+      reply: "Perfect - what's the best phone number to confirm?",
+      state
+    };
+  }
+
+  if (!state.contactId || !state.propertyId) {
+    const created = await createContactAndPropertyFromState(state);
+    if (!created) {
+      state.phase = "awaiting_address";
+      return {
+        reply: "Quick check - can you resend the address as Street, City, ST ZIP so I can lock this in?",
+        state
+      };
+    }
+    state.contactId = created.contactId;
+    state.propertyId = created.propertyId;
+  }
+
+  const suggestions = await fetchBookingSuggestions({
+    property: {
+      addressLine1: state.addressLine1,
+      city: state.city,
+      state: state.state,
+      postalCode: state.postalCode
+    }
+  });
+
+  if (!suggestions || !suggestions.length) {
+    state.phase = "idle";
+    return {
+      reply: "I'm not seeing open times right now - want to try again, or would you rather call (404) 692-0768?",
+      state
+    };
+  }
+
+  state.phase = "suggesting";
+  state.suggestions = suggestions.map((s) => ({ startAt: s.startAt, endAt: s.endAt }));
+
+  return {
+    reply: "Awesome - here are a few openings. Tap one to lock it in:",
+    state,
+    booking: {
+      contactId: state.contactId,
+      propertyId: state.propertyId,
+      suggestions,
+      propertyLabel: `${state.addressLine1}, ${state.city}`
+    }
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const { message, contactId, propertyId, property, mode } = (await request.json()) as ChatRequest;
-    const audience = mode === "team" ? "team" : "public";
+    const body = (await request.json().catch(() => ({}))) as ChatRequest;
+    const message = typeof body.message === "string" ? body.message : "";
+    const trimmedMessage = message.trim();
+    const contactId = body.contactId;
+    const propertyId = body.propertyId;
+    const property = body.property;
+    const requestedAudience = body.mode === "team" ? "team" : "public";
+    const action = body.action ?? null;
+
+    const audience = requestedAudience === "team" && hasOwnerSession(request) ? "team" : "public";
     const isTeamChat = audience === "team";
-    const trimmedMessage = message?.trim() ?? "";
+
+    if (audience === "public") {
+      const actionType = typeof action?.type === "string" ? action.type : null;
+      if (actionType === "reset_booking") {
+        const res = NextResponse.json({ ok: true, reply: "Done - starting fresh. What can I help with?" });
+        writePublicBookingState(res, null);
+        return res;
+      }
+
+      if (actionType === "select_booking_slot") {
+        const startAt = typeof action?.startAt === "string" ? action.startAt : "";
+        const state = readPublicBookingState(request);
+        const allowed = state?.suggestions?.some((s) => s.startAt === startAt) ?? false;
+        if (!state || state.phase !== "suggesting" || !state.contactId || !state.propertyId || !allowed) {
+          const res = NextResponse.json(
+            { ok: false, error: "booking_state_missing", reply: "I don't have a slot queued up - say \"book me\" and I'll grab times again." },
+            { status: 409 }
+          );
+          writePublicBookingState(res, null);
+          return res;
+        }
+
+        const booked = await bookSlotForState(state, startAt);
+        if (!booked.ok) {
+          const res = NextResponse.json(
+            {
+              ok: false,
+              error: booked.error ?? "booking_failed",
+              reply: "That time just got snagged - want me to pull a few more options?"
+            },
+            { status: 409 }
+          );
+          writePublicBookingState(res, { ...state, phase: "idle", suggestions: undefined });
+          return res;
+        }
+
+        const when = booked.startAt ? fmtBookingTime(booked.startAt) : fmtBookingTime(startAt);
+        const confirmation = `You're booked for ${when}. We'll reach out shortly to confirm details.`;
+        const res = NextResponse.json({ ok: true, reply: confirmation, booked: { appointmentId: booked.appointmentId, startAt: booked.startAt ?? startAt } });
+        writePublicBookingState(res, null);
+        return res;
+      }
+
+      const existing = readPublicBookingState(request);
+      const inFlow = existing?.phase && existing.phase !== "idle";
+      if (trimmedMessage && (inFlow || looksLikeBookingIntent(trimmedMessage))) {
+        const result = await handlePublicBookingMessage(trimmedMessage, existing);
+        const res = NextResponse.json({
+          ok: true,
+          reply: result.reply,
+          ...(result.booking ? { booking: result.booking } : {})
+        });
+        writePublicBookingState(res, result.state);
+        return res;
+      }
+    }
+
     if (!trimmedMessage) {
       return NextResponse.json({ error: "missing_message" }, { status: 400 });
     }
@@ -173,8 +571,8 @@ export async function POST(request: NextRequest) {
         { role: "user" as const, content: trimmedMessage }
       ],
       reasoning: { effort: "low" as const },
-      text: { verbosity: "medium" as const },
-      max_output_tokens: 500
+      text: { verbosity: "low" as const },
+      max_output_tokens: 400
     };
 
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -224,12 +622,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (!isTeamChat) {
+      return NextResponse.json({ ok: true, reply });
+    }
+
     const booking = await maybeGetSuggestions(trimmedMessage, {
       contactId,
       propertyId,
       property
     });
-    const classification = isTeamChat && CLASSIFIER_ENABLED ? await classifyIntent(trimmedMessage) : null;
+    const classification = CLASSIFIER_ENABLED ? await classifyIntent(trimmedMessage) : null;
     const wantsSchedule = looksLikeScheduleQuestion(trimmedMessage);
     const wantsRevenue = looksLikeRevenueQuestion(trimmedMessage);
     const range = wantsSchedule || wantsRevenue ? pickRange(trimmedMessage) : "this_week";
@@ -239,43 +641,21 @@ export async function POST(request: NextRequest) {
       wantsRevenue ? fetchRevenueForecast(range) : Promise.resolve(null)
     ]);
 
-    const actions = isTeamChat
-      ? await buildActionSuggestions(
-          trimmedMessage,
-          {
-            contactId,
-            propertyId,
-            property
-          },
-          booking,
-          classification
-        )
-      : [];
-    const actionNote =
-      isTeamChat && actions.length
-        ? actions.map((action) => `Action: ${action.summary}`).join("\n")
-        : null;
+    const actions = await buildActionSuggestions(
+      trimmedMessage,
+      {
+        contactId,
+        propertyId,
+        property
+      },
+      booking,
+      classification
+    );
+    const actionNote = actions.length ? actions.map((action) => `Action: ${action.summary}`).join("\n") : null;
 
     const replyParts = [reply];
-
-    if (booking && booking.suggestions.length) {
-      replyParts.push(
-        `Suggested slots:\n${booking.suggestions
-          .map(
-            (s) =>
-              `- ${new Date(s.startAt).toLocaleString()} - ${new Date(s.endAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} (${s.reason})`
-          )
-          .join("\n")}`
-      );
-    }
-
-    if (scheduleText) {
-      replyParts.push(scheduleText);
-    }
-
-    if (revenueText) {
-      replyParts.push(revenueText);
-    }
+    if (scheduleText) replyParts.push(scheduleText);
+    if (revenueText) replyParts.push(revenueText);
 
     const finalReply = replyParts.join("\n\n").trim();
 
@@ -862,7 +1242,7 @@ function buildTaskTitle(message: string, note?: string | null): string {
     .trim();
   const base = cleaned.length >= 4 ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : "Follow up on this job";
   if (note && note.trim().length > 0) {
-    return `${base} — ${note.trim()}`;
+    return `${base} - ${note.trim()}`;
   }
   return base;
 }

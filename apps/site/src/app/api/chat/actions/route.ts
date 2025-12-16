@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
+import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 
 type CreateContactPayload = {
   contactName: string;
@@ -54,6 +55,12 @@ const ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
 const ACTION_RATE_LIMIT_MS = Number(process.env["CHAT_ACTION_RATE_MS"] ?? 0);
 const lastActionByType = new Map<string, number>();
 
+function hasOwnerSession(request: NextRequest): boolean {
+  const adminKey = getAdminKey();
+  if (!adminKey) return false;
+  return request.cookies.get(ADMIN_SESSION_COOKIE)?.value === adminKey;
+}
+
 function getAdminContext() {
   const apiBase =
     process.env["API_BASE_URL"] ??
@@ -64,6 +71,10 @@ function getAdminContext() {
 }
 
 export async function POST(request: NextRequest) {
+  if (!hasOwnerSession(request)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const payload = (await request.json().catch(() => null)) as ActionRequest | null;
   if (!payload || typeof payload !== "object" || !("type" in payload)) {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });

@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
+import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 
 type BookRequest = {
   contactId?: string;
@@ -20,7 +21,17 @@ function getAdminContext() {
   return { apiBase: apiBase.replace(/\/$/, ""), adminKey };
 }
 
+function hasOwnerSession(request: NextRequest): boolean {
+  const adminKey = getAdminKey();
+  if (!adminKey) return false;
+  return request.cookies.get(ADMIN_SESSION_COOKIE)?.value === adminKey;
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  if (!hasOwnerSession(request)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   const payload = (await request.json().catch(() => null)) as BookRequest | null;
   const contactId = payload?.contactId;
   const propertyId = payload?.propertyId;

@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
+import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 
 type ScheduleSummary = {
   ok: boolean;
@@ -58,6 +59,11 @@ function fmtMoney(cents: number, currency: string | null): string {
 }
 
 export async function POST(request: NextRequest) {
+  const adminKey = getAdminKey();
+  if (!adminKey || request.cookies.get(ADMIN_SESSION_COOKIE)?.value !== adminKey) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
   try {
     const { message } = (await request.json()) as ChatRequest;
     const trimmedMessage = message?.trim() ?? "";
@@ -128,8 +134,7 @@ Guidelines:
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "OpenAI-Beta": "assistants=v2"
+        Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify(payload)
     });
