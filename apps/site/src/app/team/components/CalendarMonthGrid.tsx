@@ -54,7 +54,9 @@ export function CalendarMonthGrid({ events, conflicts, onSelectEvent }: Props): 
         return (
           <div
             key={key + idx}
-            className={`min-h-[120px] rounded-xl border p-2 ${inMonth ? "border-slate-200 bg-white/90" : "border-slate-100 bg-slate-50"}`}
+            className={`min-h-[120px] min-w-0 overflow-hidden rounded-xl border p-2 ${
+              inMonth ? "border-slate-200 bg-white/90" : "border-slate-100 bg-slate-50"
+            }`}
           >
             <div className="mb-1 text-[11px] font-semibold uppercase text-slate-500">
               {day.toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}
@@ -68,14 +70,14 @@ export function CalendarMonthGrid({ events, conflicts, onSelectEvent }: Props): 
                   .map((evt) => (
                     <button
                       key={evt.id}
-                      className={`rounded border px-1 py-0.5 text-[11px] ${
+                      className={`block w-full max-w-full overflow-hidden rounded border px-1 py-0.5 text-left text-[11px] ${
                         evt.source === "db" ? "border-primary-200 bg-primary-50/70" : "border-slate-200 bg-slate-100"
                       } ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
                       onClick={() => onSelectEvent?.(evt.id)}
                       type="button"
                     >
-                      <span className="font-semibold text-slate-800">{formatTime(evt.start)}</span>{" "}
-                      <span className="text-slate-700">{evt.title}</span>
+                      <span className="font-semibold text-slate-800 whitespace-nowrap">{formatTime(evt.start)}</span>{" "}
+                      <span className="truncate text-slate-700">{evt.title}</span>
                       {evt.status ? <span className="ml-1 rounded bg-white px-1 text-[10px] uppercase text-primary-700">{evt.status}</span> : null}
                     </button>
                   ))

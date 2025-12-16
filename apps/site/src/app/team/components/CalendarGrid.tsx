@@ -49,7 +49,10 @@ export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React
         const key = day.toISOString().slice(0, 10);
         const bucket = dayBuckets[key] ?? [];
         return (
-          <div key={key} className="rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+          <div
+            key={key}
+            className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm"
+          >
             <div className="mb-2 text-xs font-semibold uppercase text-slate-500">
               {day.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
             </div>
@@ -62,14 +65,14 @@ export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React
                   .map((evt) => (
                     <button
                       key={evt.id}
-                      className={`rounded-lg border px-2 py-1 ${
+                      className={`block w-full max-w-full overflow-hidden rounded-lg border px-2 py-1 text-left ${
                         evt.source === "db" ? "border-primary-200 bg-primary-50/70" : "border-slate-200 bg-slate-50"
                       } ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
                       onClick={() => onSelectEvent?.(evt.id)}
                       type="button"
                     >
-                      <div className="flex items-center gap-1 text-[11px] text-slate-600">
-                        <span className="font-semibold text-slate-800">
+                      <div className="flex flex-wrap items-center gap-1 text-[11px] text-slate-600">
+                        <span className="font-semibold text-slate-800 whitespace-nowrap">
                           {formatTime(evt.start)} - {formatTime(evt.end)}
                         </span>
                         <span className="rounded-full bg-white px-1.5 text-[10px] uppercase text-slate-500">
@@ -87,7 +90,7 @@ export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React
                         ) : null}
                       </div>
                       <div className="text-xs font-semibold text-slate-900">{evt.title}</div>
-                      {evt.address ? <div className="text-[11px] text-slate-500">{evt.address}</div> : null}
+                      {evt.address ? <div className="truncate text-[11px] text-slate-500">{evt.address}</div> : null}
                     </button>
                   ))
               )}
