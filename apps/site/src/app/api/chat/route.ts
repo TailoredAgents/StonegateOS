@@ -5,14 +5,18 @@ import { headers } from "next/headers";
 const SYSTEM_PROMPT = `You are Stonegate Assist, the warm front-office voice for Stonegate Junk Removal in North Metro Atlanta. Think like a friendly teammate, not a call script.
 
 Principles:
-- Keep replies to 1-2 sentences and under ~45 words. Sound natural, confident, and approachable.
+- Keep replies short (usually 2-4 sentences). Sound natural, confident, and approachable.
 - Reference only the services or details that fit the question. Typical offerings include: furniture removal, mattress disposal, appliance hauling, garage/attic cleanouts, yard waste, and light construction debris (no hazardous waste).
 - Service area: Cobb, Cherokee, Fulton, and Bartow counties in Georgia with no extra travel fees inside those counties.
-- Pricing: speak in ranges only (single items $75-$125, quarter load $150-$250, half load $280-$420, full load $480-$780). Never promise an exact total.
+- Pricing: Stonegate pricing is STRICTLY based on trailer volume only. Never add charges for stairs, weight, difficulty, time, or urgency.
+  Base volume prices (before any promos): 1/4 trailer $200, 1/2 $400, 3/4 $600, full $800.
+  Big cleanouts can be multiple loads; keep ranges in $200 increments (e.g. $800-$1600).
+  Extra disposal pass-through fees: +$50 per mattress, +$30 per paint container, +$10 per tire (only if applicable).
+  Speak in ranges only and never promise an exact total.
 - Process notes (use when relevant): licensed and insured two-person crews, careful in-home handling, responsible disposal and recycling when possible.
 - Guarantees: mention the 48-hour make-it-right promise or licensing/insurance only when it helps answer the question.
 - Scheduling: if the user hints at booking and a contact/property is provided, offer a short confirmation and suggested slots. Otherwise, mention the "Schedule Estimate" button (#schedule-estimate) or call (404) 692-0768 only when the user asks about booking, timing, or next steps.
-- Preparation tips (share only if asked): separate items for pickup, ensure clear pathways, and note stairs or heavy items.
+- Preparation tips (share only if asked): separate items for pickup, ensure clear pathways, and mention any mattresses/paint/tire quantities if they have them.
 - Escalate politely to a human if the request is hazardous, urgent, or needs a firm commitment.
 - Do not fabricate knowledge, link to other pages, or repeat contact info if it was already provided in this conversation.
 
@@ -177,8 +181,7 @@ export async function POST(request: NextRequest) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "OpenAI-Beta": "assistants=v2"
+        Authorization: `Bearer ${apiKey}`
       },
       body: JSON.stringify(payload)
     });
@@ -881,9 +884,32 @@ Keep note short (<120 chars). If unsure, use intent "none".
       { role: "system" as const, content: systemPrompt },
       { role: "user" as const, content: message }
     ],
-    text: { verbosity: "low" as const },
+    reasoning: { effort: "low" as const },
+    text: {
+      verbosity: "low" as const,
+      format: {
+        type: "json_schema" as const,
+        name: "intent_classification",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            intent: {
+              type: "string",
+              enum: ["booking", "contact", "quote", "task", "none"]
+            },
+            contactName: { type: "string" },
+            address: { type: "string" },
+            services: { type: "array", items: { type: "string" } },
+            note: { type: "string" },
+            when: { type: "string" }
+          },
+          required: ["intent"]
+        }
+      }
+    },
     max_output_tokens: 180,
-    response_format: { type: "json_object" as const }
   };
 
   try {
@@ -891,8 +917,7 @@ Keep note short (<120 chars). If unsure, use intent "none".
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "OpenAI-Beta": "assistants=v2"
+        "Content-Type": "application/json"
       },
       body: JSON.stringify(payload)
     });
@@ -901,8 +926,20 @@ Keep note short (<120 chars). If unsure, use intent "none".
       console.warn("[chat] intent classify failed", res.status, text.slice(0, 120));
       return null;
     }
-    const data = (await res.json()) as { output_text?: string };
-    const raw = data.output_text ?? "";
+    const data = (await res.json()) as {
+      output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      output_text?: string;
+    };
+
+    const raw =
+      data.output_text?.trim() ??
+      data.output
+        ?.flatMap((item) => item?.content ?? [])
+        ?.map((chunk) => chunk?.text ?? "")
+        ?.filter((chunk) => typeof chunk === "string" && chunk.trim().length > 0)
+        ?.join("\n")
+        ?.trim() ??
+      "";
     const parsed = safeJsonParse(raw);
     if (parsed && typeof parsed["intent"] === "string") {
       const intent = ["booking", "contact", "quote", "task"].includes(parsed["intent"])
