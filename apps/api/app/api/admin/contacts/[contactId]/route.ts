@@ -1,9 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getDb, contacts } from "@/db";
+import { getDb, contacts, instantQuotes } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { normalizePhone } from "../../../web/utils";
-import { eq } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 
 type RouteContext = {
   params: Promise<{ contactId?: string }>;
@@ -134,14 +134,57 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   }
 
   const db = getDb();
-  const [result] = await db
-    .delete(contacts)
+  const [existing] = await db
+    .select({ id: contacts.id, phone: contacts.phone, phoneE164: contacts.phoneE164 })
+    .from(contacts)
     .where(eq(contacts.id, contactId))
-    .returning({ id: contacts.id });
+    .limit(1);
 
-  if (!result) {
+  if (!existing) {
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
   }
 
-  return NextResponse.json({ deleted: true });
+  const digitsSet = new Set<string>();
+  const addDigits = (value: string | null | undefined) => {
+    if (!value) return;
+    const digits = value.replace(/[^0-9]/gu, "");
+    if (!digits) return;
+    digitsSet.add(digits);
+    if (digits.length === 11 && digits.startsWith("1")) {
+      digitsSet.add(digits.slice(1));
+    }
+    if (digits.length === 10) {
+      digitsSet.add(`1${digits}`);
+    }
+  };
+
+  addDigits(existing.phone);
+  addDigits(existing.phoneE164);
+
+  const phoneDigits = Array.from(digitsSet);
+
+  const result = await db.transaction(async (tx) => {
+    let deletedInstantQuotes = 0;
+    if (phoneDigits.length > 0) {
+      const normalizedPhone = sql<string>`regexp_replace(${instantQuotes.contactPhone}, '[^0-9]', '', 'g')`;
+      const deletedRows = await tx
+        .delete(instantQuotes)
+        .where(inArray(normalizedPhone, phoneDigits))
+        .returning({ id: instantQuotes.id });
+      deletedInstantQuotes = deletedRows.length;
+    }
+
+    const [deletedContact] = await tx
+      .delete(contacts)
+      .where(eq(contacts.id, contactId))
+      .returning({ id: contacts.id });
+
+    if (!deletedContact?.id) {
+      throw new Error("contact_not_found");
+    }
+
+    return { deletedInstantQuotes };
+  });
+
+  return NextResponse.json({ deleted: true, deletedInstantQuotes: result.deletedInstantQuotes });
 }
