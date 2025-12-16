@@ -29,6 +29,7 @@ type CalendarFeedResponse = {
 
 const DEFAULT_DAYS_FORWARD = 30;
 const DEFAULT_DAYS_BACK = 1;
+const DEFAULT_APPOINTMENT_CAPACITY = 2;
 
 export async function GET(request: NextRequest): Promise<NextResponse<CalendarFeedResponse>> {
   if (!isAdminRequest(request)) {
@@ -140,19 +141,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
     }
   }
 
-  const conflicts: Array<{ a: string; b: string }> = [];
   const allEvents: CalendarEvent[] = [...appointmentsEvents, ...externalEvents];
-  for (let i = 0; i < allEvents.length; i++) {
-    const a = allEvents[i];
-    if (!a) continue;
-    for (let j = i + 1; j < allEvents.length; j++) {
-      const b = allEvents[j];
-      if (!b) continue;
-      if (overlaps(a, b)) {
-        conflicts.push({ a: a.id, b: b.id });
-      }
-    }
-  }
+  const conflicts = computeCapacityConflicts(allEvents, DEFAULT_APPOINTMENT_CAPACITY);
 
   return NextResponse.json({
     ok: true,
@@ -168,4 +158,69 @@ function overlaps(a: CalendarEvent, b: CalendarEvent): boolean {
   const bStart = Date.parse(b.start);
   const bEnd = Date.parse(b.end);
   return aStart < bEnd && bStart < aEnd;
+}
+
+function computeCapacityConflicts(
+  events: CalendarEvent[],
+  rawCapacity: number
+): Array<{ a: string; b: string }> {
+  const capacity =
+    typeof rawCapacity === "number" && Number.isFinite(rawCapacity) && rawCapacity > 0
+      ? Math.floor(rawCapacity)
+      : 1;
+  if (capacity <= 1) {
+    const conflicts: Array<{ a: string; b: string }> = [];
+    for (let i = 0; i < events.length; i++) {
+      const a = events[i];
+      if (!a) continue;
+      for (let j = i + 1; j < events.length; j++) {
+        const b = events[j];
+        if (!b) continue;
+        if (overlaps(a, b)) conflicts.push({ a: a.id, b: b.id });
+      }
+    }
+    return conflicts;
+  }
+
+  type Point = { t: number; type: "start" | "end"; id: string };
+  const points: Point[] = [];
+  for (const evt of events) {
+    const start = Date.parse(evt.start);
+    const end = Date.parse(evt.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    points.push({ t: start, type: "start", id: evt.id });
+    points.push({ t: end, type: "end", id: evt.id });
+  }
+
+  points.sort((a, b) => {
+    if (a.t !== b.t) return a.t - b.t;
+    if (a.type === b.type) return 0;
+    // End events first so adjacent events don't count as overlaps.
+    return a.type === "end" ? -1 : 1;
+  });
+
+  const active = new Set<string>();
+  const conflictPairs = new Set<string>();
+
+  for (const point of points) {
+    if (point.type === "end") {
+      active.delete(point.id);
+      continue;
+    }
+
+    active.add(point.id);
+    if (active.size <= capacity) continue;
+
+    for (const otherId of active) {
+      if (otherId === point.id) continue;
+      const a = otherId < point.id ? otherId : point.id;
+      const b = otherId < point.id ? point.id : otherId;
+      conflictPairs.add(`${a}|${b}`);
+    }
+  }
+
+  return Array.from(conflictPairs).map((key) => {
+    const [a, b] = key.split("|");
+    return { a: a ?? "", b: b ?? "" };
+  });
 }
