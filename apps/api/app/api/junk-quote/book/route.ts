@@ -207,6 +207,32 @@ export async function POST(request: NextRequest) {
         const trimmedPostalCode = input.postalCode.trim();
         const gated = Boolean(input.gated);
 
+        const [existingByAddress] = await tx
+          .select({ id: properties.id })
+          .from(properties)
+          .where(
+            and(
+              eq(properties.addressLine1, trimmedAddress),
+              eq(properties.postalCode, trimmedPostalCode),
+              eq(properties.state, normalizedState)
+            )
+          )
+          .limit(1);
+
+        if (existingByAddress?.id) {
+          await tx
+            .update(properties)
+            .set({
+              contactId: input.contactId,
+              city: trimmedCity,
+              gated,
+              updatedAt: new Date()
+            })
+            .where(eq(properties.id, existingByAddress.id));
+
+          return { id: existingByAddress.id };
+        }
+
         await tx.execute(sql`savepoint junk_quote_book_property_upsert`);
         try {
           const property = await upsertProperty(tx, {
