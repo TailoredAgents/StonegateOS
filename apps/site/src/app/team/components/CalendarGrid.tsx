@@ -44,7 +44,7 @@ export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React
   const isConflict = (id: string) => conflicts.some((c) => c.a === id || c.b === id);
 
   return (
-    <div className="grid grid-cols-7 gap-2 text-sm">
+    <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-7">
       {days.map((day) => {
         const key = day.toISOString().slice(0, 10);
         const bucket = dayBuckets[key] ?? [];
@@ -71,26 +71,30 @@ export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React
                       onClick={() => onSelectEvent?.(evt.id)}
                       type="button"
                     >
-                      <div className="flex flex-wrap items-center gap-1 text-[11px] text-slate-600">
-                        <span className="font-semibold text-slate-800 whitespace-nowrap">
-                          {formatTime(evt.start)} - {formatTime(evt.end)}
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="whitespace-nowrap font-semibold tabular-nums text-slate-800">
+                          {formatTimeRange(evt.start, evt.end)}
                         </span>
-                        <span className="rounded-full bg-white px-1.5 text-[10px] uppercase text-slate-500">
-                          {evt.source === "db" ? "appt" : "google"}
-                        </span>
-                        {evt.status ? (
-                          <span className="rounded-full bg-white px-1.5 text-[10px] uppercase text-primary-700">
-                            {evt.status}
+                        <div className="flex flex-wrap items-center justify-end gap-1 text-[11px] text-slate-600">
+                          <span className="hidden rounded-full bg-white px-1.5 text-[10px] uppercase text-slate-500 sm:inline-flex">
+                            {evt.source === "db" ? "appt" : "google"}
                           </span>
-                        ) : null}
-                        {isConflict(evt.id) ? (
-                          <span className="rounded-full bg-rose-100 px-1.5 text-[10px] uppercase text-rose-700">
-                            conflict
-                          </span>
-                        ) : null}
+                          {evt.status ? (
+                            <span className="rounded-full bg-white px-1.5 text-[10px] uppercase text-primary-700">
+                              {evt.status}
+                            </span>
+                          ) : null}
+                          {isConflict(evt.id) ? (
+                            <span className="rounded-full bg-rose-100 px-1.5 text-[10px] uppercase text-rose-700">
+                              conflict
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
-                      <div className="text-xs font-semibold text-slate-900">{evt.title}</div>
-                      {evt.address ? <div className="truncate text-[11px] text-slate-500">{evt.address}</div> : null}
+                      <div className="mt-0.5 truncate text-xs font-semibold text-slate-900">{evt.title}</div>
+                      {evt.address ? (
+                        <div className="hidden truncate text-[11px] text-slate-500 md:block">{evt.address}</div>
+                      ) : null}
                     </button>
                   ))
               )}
@@ -104,5 +108,20 @@ export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (Number.isNaN(d.getTime())) return iso;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  }).formatToParts(d);
+  const hour = parts.find((p) => p.type === "hour")?.value ?? "";
+  const minute = parts.find((p) => p.type === "minute")?.value ?? "";
+  const dayPeriodRaw = parts.find((p) => p.type === "dayPeriod")?.value ?? "";
+  const dayPeriod = dayPeriodRaw ? dayPeriodRaw.toLowerCase().slice(0, 1) : "";
+  const minutePart = minute && minute !== "00" ? `:${minute}` : "";
+  return `${hour}${minutePart}${dayPeriod}`;
+}
+
+function formatTimeRange(startIso: string, endIso: string): string {
+  return `${formatTime(startIso)}–${formatTime(endIso)}`;
 }
