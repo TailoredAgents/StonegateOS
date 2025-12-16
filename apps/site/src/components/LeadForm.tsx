@@ -770,13 +770,16 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
 
                             return (
                               <div className="space-y-2">
-                                <button
+                                <Button
                                   type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  aria-expanded={availabilityShowMore}
                                   onClick={() => setAvailabilityShowMore((prev) => !prev)}
-                                  className="text-xs font-semibold text-primary-700 underline"
+                                  className="w-full justify-center sm:w-auto"
                                 >
                                   {availabilityShowMore ? "Hide more times" : "See more times"}
-                                </button>
+                                </Button>
 
                                 {availabilityShowMore ? (
                                   <div className="space-y-2">
@@ -853,12 +856,11 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                     >
                       {bookingStatus === "loading" ? "Booking..." : "Book this pickup"}
                     </Button>
-                    <a
-                      href="tel:14046920768"
-                      className="inline-flex items-center justify-center rounded-md border border-neutral-300 px-3 py-2 text-sm font-semibold text-neutral-700"
-                    >
-                      Call to confirm &amp; book
-                    </a>
+                    <Button asChild variant="secondary" className="justify-center">
+                      <a href="tel:+14046920768" aria-label="Call to confirm and book">
+                        Call to confirm &amp; book
+                      </a>
+                    </Button>
                   </div>
                   {bookingMessage ? (
                     <div

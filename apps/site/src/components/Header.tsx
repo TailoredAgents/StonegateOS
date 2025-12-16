@@ -130,7 +130,7 @@ export function Header() {
               size="lg"
               className="w-full border border-neutral-300/70 text-primary-800 hover:border-primary-300"
             >
-              <a href="tel:14046920768">Call (404) 692-0768</a>
+              <a href="tel:+14046920768">Call (404) 692-0768</a>
             </Button>
           </div>
         </div>
@@ -138,5 +138,4 @@ export function Header() {
     </header>
   );
 }
-
 
