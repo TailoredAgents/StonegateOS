@@ -100,3 +100,24 @@ export async function GET(
   });
 }
 
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+): Promise<Response> {
+  if (!isAdminRequest(request)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const { id } = await context.params;
+  if (!id) {
+    return NextResponse.json({ error: "missing_id" }, { status: 400 });
+  }
+
+  const db = getDb();
+  const [deleted] = await db.delete(quotes).where(eq(quotes.id, id)).returning({ id: quotes.id });
+  if (!deleted?.id) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
+  return NextResponse.json({ ok: true, quoteId: deleted.id });
+}

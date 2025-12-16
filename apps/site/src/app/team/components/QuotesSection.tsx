@@ -1,7 +1,7 @@
 import React, { type ReactElement } from "react";
 import { QuotesList } from "../QuotesList";
 import { callAdminApi } from "../lib/api";
-import { quoteDecisionAction, sendQuoteAction } from "../actions";
+import { deleteQuoteAction, quoteDecisionAction, sendQuoteAction } from "../actions";
 
 interface QuoteDto {
   id: string;
@@ -23,5 +23,12 @@ export async function QuotesSection(): Promise<ReactElement> {
   if (!res.ok) throw new Error("Failed to load quotes");
 
   const payload = (await res.json()) as { quotes: QuoteDto[] };
-  return <QuotesList initial={payload.quotes} sendAction={sendQuoteAction} decisionAction={quoteDecisionAction} />;
+  return (
+    <QuotesList
+      initial={payload.quotes}
+      sendAction={sendQuoteAction}
+      decisionAction={quoteDecisionAction}
+      deleteAction={deleteQuoteAction}
+    />
+  );
 }

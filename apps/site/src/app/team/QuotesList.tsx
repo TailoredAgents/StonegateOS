@@ -23,11 +23,13 @@ type ServerAction = (formData: FormData) => void;
 export function QuotesList({
   initial,
   sendAction,
-  decisionAction
+  decisionAction,
+  deleteAction
 }: {
   initial: Quote[];
   sendAction: ServerAction;
   decisionAction: ServerAction;
+  deleteAction: ServerAction;
 }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<string>("all");
@@ -92,6 +94,19 @@ export function QuotesList({
                 <input type="hidden" name="decision" value="declined" />
                 <SubmitButton className="rounded-md border border-rose-400 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700" pendingLabel="Saving...">Mark declined</SubmitButton>
               </form>
+              <form
+                action={deleteAction}
+                onSubmit={(e) => {
+                  if (!window.confirm("Delete this quote? This cannot be undone.")) {
+                    e.preventDefault();
+                  }
+                }}
+              >
+                <input type="hidden" name="quoteId" value={q.id} />
+                <SubmitButton className="rounded-md border border-neutral-300 bg-white px-3 py-1 text-xs font-semibold text-neutral-700" pendingLabel="Deleting...">
+                  Delete
+                </SubmitButton>
+              </form>
               {q.shareToken ? (
                 <a href={`/quote/${q.shareToken}`} target="_blank" rel="noreferrer" className="rounded-md border border-neutral-300 px-3 py-1 text-xs text-neutral-700">Open link</a>
               ) : null}
@@ -102,5 +117,4 @@ export function QuotesList({
     </section>
   );
 }
-
 
