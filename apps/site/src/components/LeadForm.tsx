@@ -202,9 +202,18 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     }
   };
 
-  const baseRange = quoteState.status === "ready" ? `$${quoteState.baseLow} - $${quoteState.baseHigh}` : null;
+  const baseRange =
+    quoteState.status === "ready"
+      ? quoteState.baseLow === quoteState.baseHigh
+        ? `$${quoteState.baseLow}`
+        : `$${quoteState.baseLow} - $${quoteState.baseHigh}`
+      : null;
   const discountedRange =
-    quoteState.status === "ready" ? `$${quoteState.low} - $${quoteState.high}` : null;
+    quoteState.status === "ready"
+      ? quoteState.low === quoteState.high
+        ? `$${quoteState.low}`
+        : `$${quoteState.low} - $${quoteState.high}`
+      : null;
 
   return (
     <div className={cn("rounded-xl bg-white p-6 shadow-soft shadow-primary-900/10", className)} {...props}>
@@ -443,19 +452,24 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             {quoteState.status === "ready" ? (
               <div className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/70 p-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-primary-900">
-                  <span className="rounded-full bg-primary-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
-                    15% off
-                  </span>
+                  {quoteState.discountPercent > 0 ? (
+                    <span className="rounded-full bg-primary-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
+                      {Math.round(quoteState.discountPercent * 100)}% off
+                    </span>
+                  ) : null}
                   Here&apos;s your instant quote
                 </div>
                 <div className="text-2xl font-semibold text-primary-900">
-                  ${quoteState.low} - ${quoteState.high}
+                  {discountedRange}
                   <span className="ml-2 text-sm font-normal text-neutral-500 line-through">
                     {quoteState.discountPercent > 0 ? baseRange : null}
                   </span>
                 </div>
                 <div className="text-sm text-neutral-700">{quoteState.tier}</div>
                 <div className="text-xs text-neutral-600">{quoteState.reason}</div>
+                <div className="text-xs text-neutral-600">
+                  Disposal fees may apply: $50 per mattress, $30 per paint container, $10 per tire (pass-through dump fees).
+                </div>
                 <div className="text-xs text-neutral-600">
                   We&apos;ll confirm the exact price on-site before we start. If we use less space than expected, your price goes down.
                 </div>

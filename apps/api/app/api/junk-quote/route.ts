@@ -61,7 +61,7 @@ const RequestSchema = z.object({
   })
 });
 
-const AiResponseSchema = z.object({
+const QuoteResultSchema = z.object({
   loadFractionEstimate: z.number(),
   priceLow: z.number(),
   priceHigh: z.number(),
@@ -70,14 +70,64 @@ const AiResponseSchema = z.object({
   needsInPersonEstimate: z.boolean()
 });
 
-const FALLBACK_AI = {
-  loadFractionEstimate: 0.5,
-  priceLow: 350,
-  priceHigh: 800,
-  displayTierLabel: "Estimate unavailable",
-  reasonSummary: "AI quote service failed; fallback range used.",
-  needsInPersonEstimate: true
-};
+const VOLUME_PRICING = {
+  quarter: 200,
+  half: 400,
+  threeQuarter: 600,
+  full: 800
+} as const;
+
+function getVolumeQuote(perceivedSize: z.infer<typeof RequestSchema>["job"]["perceivedSize"]) {
+  const p = VOLUME_PRICING;
+  switch (perceivedSize) {
+    case "few_items":
+      return {
+        loadFractionEstimate: 0.25,
+        priceLow: p.quarter,
+        priceHigh: p.quarter,
+        displayTierLabel: "1/4 trailer",
+        reasonSummary: "Based on your selected size, this looks like about a quarter-trailer load.",
+        needsInPersonEstimate: false
+      };
+    case "small_area":
+      return {
+        loadFractionEstimate: 0.375,
+        priceLow: p.quarter,
+        priceHigh: p.half,
+        displayTierLabel: "1/4 to 1/2 trailer",
+        reasonSummary: "Based on your selected size, this looks like a small load between a quarter and half trailer.",
+        needsInPersonEstimate: false
+      };
+    case "one_room_or_half_garage":
+      return {
+        loadFractionEstimate: 0.625,
+        priceLow: p.half,
+        priceHigh: p.threeQuarter,
+        displayTierLabel: "Half to 3/4 trailer",
+        reasonSummary: "Based on your selected size, this looks like about a half to three-quarters trailer load.",
+        needsInPersonEstimate: false
+      };
+    case "big_cleanout":
+      return {
+        loadFractionEstimate: 0.875,
+        priceLow: p.threeQuarter,
+        priceHigh: p.full,
+        displayTierLabel: "3/4 to full trailer",
+        reasonSummary: "Based on your selected size, this looks like a large load between three-quarters and a full trailer.",
+        needsInPersonEstimate: false
+      };
+    case "not_sure":
+    default:
+      return {
+        loadFractionEstimate: 0.65,
+        priceLow: p.half,
+        priceHigh: p.full,
+        displayTierLabel: "Half to full trailer",
+        reasonSummary: "Since you're not sure on size yet, we're quoting a broad half-to-full trailer range.",
+        needsInPersonEstimate: true
+      };
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -88,19 +138,16 @@ export async function POST(request: NextRequest) {
     }
     const body = parsed.data;
 
-    const aiResult = await getQuoteFromAi(body).catch((err) => {
-      console.error("[junk-quote] ai_failed", err instanceof Error ? err.message : err);
-      return FALLBACK_AI;
-    });
-    const aiValidated = AiResponseSchema.safeParse(aiResult);
-    const base = aiValidated.success ? aiValidated.data : FALLBACK_AI;
-    if (!aiValidated.success) {
-      console.error("[junk-quote] ai_invalid_response", aiResult);
+    const base = getVolumeQuote(body.job.perceivedSize);
+    const validatedBase = QuoteResultSchema.safeParse(base);
+    if (!validatedBase.success) {
+      console.error("[junk-quote] volume_quote_invalid", validatedBase.error.flatten());
+      return corsJson({ error: "server_error" }, requestOrigin, { status: 500 });
     }
 
     const discount = DISCOUNT > 0 && DISCOUNT < 1 ? DISCOUNT : 0;
-    const priceLowDiscounted = Math.round(base.priceLow * (1 - discount));
-    const priceHighDiscounted = Math.round(base.priceHigh * (1 - discount));
+    const priceLowDiscounted = Math.round(validatedBase.data.priceLow * (1 - discount));
+    const priceHighDiscounted = Math.round(validatedBase.data.priceHigh * (1 - discount));
 
     const db = getDb();
     const [quoteRow] = await db
@@ -116,7 +163,7 @@ export async function POST(request: NextRequest) {
         notes: body.job.notes ?? null,
         photoUrls: body.job.photoUrls ?? [],
         aiResult: {
-          ...base,
+          ...validatedBase.data,
           discountPercent: discount,
           priceLowDiscounted,
           priceHighDiscounted
@@ -128,7 +175,7 @@ export async function POST(request: NextRequest) {
       ok: true,
       quoteId: quoteRow?.id ?? null,
       quote: {
-        ...base,
+        ...validatedBase.data,
         discountPercent: discount,
         priceLowDiscounted,
         priceHighDiscounted
