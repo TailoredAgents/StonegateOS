@@ -123,9 +123,9 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
   const end = start.plus({ minutes: appointment.durationMinutes ?? 60 });
   const stamp = DateTime.utc();
 
-  const summary = `Stonegate Estimate - ${contact.name}`;
+  const summary = `Stonegate Junk Removal - ${contact.name}`;
   const descriptionLines = [
-    `Services: ${payload.services.join(", ") || "General exterior cleaning"}`,
+    `Services: ${payload.services.join(", ") || "Junk removal"}`,
     payload.notes ? `Notes: ${payload.notes}` : null,
     appointment.rescheduleUrl ? `Reschedule: ${appointment.rescheduleUrl}` : null
   ]
@@ -137,7 +137,7 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
   const content = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Stonegate//Estimate Scheduler//EN",
+    "PRODID:-//Stonegate//Appointment Scheduler//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:REQUEST",
     "BEGIN:VEVENT",
@@ -153,7 +153,7 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
   ].join("\r\n");
 
   return {
-    filename: "stonegate-estimate.ics",
+    filename: "stonegate-appointment.ics",
     content,
     contentType: "text/calendar; charset=utf-8; method=REQUEST"
   };
@@ -268,13 +268,13 @@ function getQuoteAlertRecipients(): string[] {
 
 function servicesSummary(services: string[]): string {
   if (!services.length) {
-    return "Exterior cleaning";
+    return "Junk removal";
   }
 
   const [first, ...rest] = services.filter((service): service is string => Boolean(service && service.length));
 
   if (!first) {
-    return "Exterior cleaning";
+    return "Junk removal";
   }
 
   if (rest.length === 0) {
@@ -296,7 +296,7 @@ function buildRescheduleUrl(appointment: EstimateNotificationPayload["appointmen
 }
 
 function joinServices(services: string[]): string {
-  return services.length ? services.join(", ") : "Exterior cleaning";
+  return services.length ? services.join(", ") : "Junk removal";
 }
 
 export async function sendEstimateConfirmation(
@@ -308,7 +308,7 @@ export async function sendEstimateConfirmation(
   const rescheduleUrl = buildRescheduleUrl(appointment);
   const headline = reason === "requested" ? "You're booked!" : "Appointment updated";
 
-  const fallbackSubject = `Stonegate Estimate - ${when}`;
+  const fallbackSubject = `Stonegate Junk Removal - ${when}`;
   const fallbackBody = [
     `${headline} We'll see you ${when}.`,
     `Location: ${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}`,
@@ -323,8 +323,8 @@ export async function sendEstimateConfirmation(
 
   const fallbackSms =
     reason === "requested"
-      ? `Stonegate confirm: estimate on ${when}. Need to adjust? ${rescheduleUrl}`
-      : `Stonegate update: new estimate time ${when}. Need changes? ${rescheduleUrl}`;
+      ? `Stonegate confirm: appointment on ${when}. Need to adjust? ${rescheduleUrl}`
+      : `Stonegate update: new appointment time ${when}. Need changes? ${rescheduleUrl}`;
 
   let generated = null;
   try {
@@ -371,14 +371,14 @@ async function sendEstimateReminderInternal(
   const rescheduleUrl = buildRescheduleUrl(appointment);
   const windowHours = Math.round(options.windowMinutes / 60);
 
-  const fallbackSms = `Stonegate reminder: estimate in ${windowHours}h (${when}). Need to reschedule? ${rescheduleUrl}`;
+  const fallbackSms = `Stonegate reminder: appointment in ${windowHours}h (${when}). Need to reschedule? ${rescheduleUrl}`;
   const fallbackEmailBody = [
-    `Quick reminder: your Stonegate Junk Removal estimate is in ${windowHours} hours (${when}).`,
+    `Quick reminder: your Stonegate Junk Removal appointment is in ${windowHours} hours (${when}).`,
     `Location: ${payload.property.addressLine1}, ${payload.property.city}, ${payload.property.state} ${payload.property.postalCode}`,
     "",
     `Need to adjust? ${rescheduleUrl}`
   ].join("\n");
-  const fallbackSubject = `Reminder: Stonegate estimate ${when}`;
+  const fallbackSubject = `Reminder: Stonegate appointment ${when}`;
 
   let generated = null;
   try {
@@ -457,13 +457,13 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
   const fallbackBody = [
     `Hi ${payload.contact.name},`,
     "",
-    `Your quote for ${payload.services.join(", ") || "exterior cleaning"} is ready.`,
+    `Your quote for ${payload.services.join(", ") || "junk removal"} is ready.`,
     `Total: ${formatCurrency(payload.total)}.`,
     "No deposit is required; payment is due after the work is complete.",
     `Review and approve: ${payload.shareUrl}`,
     expiresIso ? `Expires: ${expiresIso}` : null,
     "",
-    "We appreciate the opportunity to care for your property."
+    "We appreciate the opportunity to help."
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -547,7 +547,7 @@ export async function sendQuoteDecisionNotification(
     payload.decision === "accepted"
       ? "Thanks for approving your quote! We'll reach out to lock in the service window."
       : "We've recorded your decision. If you'd like revisions or have questions, we're happy to help.",
-    `Services: ${payload.services.join(", ") || "Exterior cleaning"}`,
+    `Services: ${payload.services.join(", ") || "Junk removal"}`,
     `Total: ${formatCurrency(payload.total)}.`,
     "No deposit is required; payment will be collected after service.",
     `Quote link: ${payload.shareUrl}`,

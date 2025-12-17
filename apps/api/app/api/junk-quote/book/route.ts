@@ -115,6 +115,7 @@ const BookingSchema = z.object({
   instantQuoteId: z.string().uuid(),
   name: z.string().min(2),
   phone: z.string().min(7),
+  email: z.string().email().optional().nullable(),
   addressLine1: z.string().min(5),
   city: z.string().min(2),
   state: z.string().min(2).max(2),
@@ -190,6 +191,7 @@ export async function POST(request: NextRequest) {
         lastName,
         phoneRaw: normalizedPhone.raw,
         phoneE164: normalizedPhone.e164,
+        email: body.email ?? null,
         source: "instant_quote"
       });
 

@@ -70,6 +70,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [photos, setPhotos] = React.useState<string[]>([]);
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
+  const [email, setEmail] = React.useState("");
   const [timeframe, setTimeframe] = React.useState<Timeframe>("this_week");
   const [quoteState, setQuoteState] = React.useState<QuoteState>({ status: "idle" });
   const [error, setError] = React.useState<string | null>(null);
@@ -362,18 +363,19 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       const res = await fetch(`${apiBase}/api/junk-quote/book`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          instantQuoteId: quoteId,
-          name: name.trim(),
-          phone: phone.trim(),
-          addressLine1: addressLine1.trim(),
-          city: city.trim(),
-          state: stateField.trim(),
-          postalCode: postalCode.trim(),
-          startAt: selectedSlotStartAt,
-          notes: notes || null
-        })
-      });
+         body: JSON.stringify({
+           instantQuoteId: quoteId,
+           name: name.trim(),
+           phone: phone.trim(),
+           email: email.trim().length ? email.trim() : null,
+           addressLine1: addressLine1.trim(),
+           city: city.trim(),
+           state: stateField.trim(),
+           postalCode: postalCode.trim(),
+           startAt: selectedSlotStartAt,
+           notes: notes || null
+         })
+       });
       if (!res.ok) {
         const errorPayload = (await res.json().catch(() => null)) as { error?: string; errorId?: string } | null;
         if (errorPayload?.error === "slot_full") {
@@ -398,7 +400,9 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       const data = (await res.json().catch(() => null)) as { startAt?: string | null } | null;
       const bookedAt = typeof data?.startAt === "string" && data.startAt.length ? data.startAt : selectedSlotStartAt;
       setBookingStatus("success");
-      setBookingMessage(`You're booked for ${formatSlotLabel(bookedAt)}. We'll text you a confirmation.`);
+      setBookingMessage(
+        `You're booked for ${formatSlotLabel(bookedAt)}. We'll text${email.trim().length ? " (and email)" : ""} you a confirmation.`
+      );
     } catch (err) {
       setBookingStatus("error");
       setBookingMessage((err as Error).message);
@@ -609,6 +613,16 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                   onChange={(e) => setPhone(e.target.value)}
                   className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                   placeholder="(404) 692-0768"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-sm font-semibold text-neutral-800">Email (optional)</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                  placeholder="you@example.com"
                 />
               </div>
             </div>
