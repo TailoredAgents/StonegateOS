@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 
+const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
+const PUBLIC_VOICE_MODEL = "gpt-4.1-mini";
+const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
+
 const SYSTEM_PROMPT = `You are Stonegate Assist, the warm front-office voice for Stonegate Junk Removal in North Metro Atlanta. Think like a helpful local office rep, not a call script.
 
 Principles:
@@ -22,6 +26,56 @@ Principles:
 - Do not fabricate knowledge, link to other pages, or repeat contact info if it was already provided in this conversation.
 
 Stay personable, concise, and helpful.`;
+
+type OpenAIResponsesData = {
+  output?: Array<{ content?: Array<{ text?: string }> }>;
+  output_text?: string;
+};
+
+function extractOpenAIResponseText(data: OpenAIResponsesData): string {
+  return (
+    data.output_text?.trim() ??
+    data.output
+      ?.flatMap((item) => item?.content ?? [])
+      ?.map((chunk) => chunk?.text ?? "")
+      ?.filter((chunk) => typeof chunk === "string" && chunk.trim().length > 0)
+      ?.join("\n")
+      ?.trim() ??
+    ""
+  );
+}
+
+async function fetchOpenAIText(
+  apiKey: string,
+  payload: Record<string, unknown>,
+  modelLabel: string
+): Promise<{ ok: true; text: string } | { ok: false; status: number; error: string }> {
+  const response = await fetch(OPENAI_RESPONSES_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => "");
+    console.error(
+      `[chat] OpenAI error for model '${modelLabel}' status ${response.status}: ${bodyText.slice(0, 300)}`
+    );
+    return { ok: false, status: response.status, error: bodyText };
+  }
+
+  const data = (await response.json()) as OpenAIResponsesData;
+  const text = extractOpenAIResponseText(data);
+  if (!text) {
+    console.error(`[chat] OpenAI returned empty output for model '${modelLabel}'.`);
+    return { ok: false, status: 502, error: "openai_empty" };
+  }
+
+  return { ok: true, text };
+}
 
 type BookingSuggestion = { startAt: string; endAt: string; reason: string; services?: string[] };
 
@@ -240,6 +294,160 @@ function looksLikeCancelIntent(message: string): boolean {
   return ["cancel", "never mind", "nevermind", "stop", "forget it", "start over", "reset"].some((kw) =>
     lower.includes(kw)
   );
+}
+
+function looksLikePricingQuestion(message: string): boolean {
+  const lower = message.toLowerCase();
+  if (lower.includes("$")) return true;
+  const keywords = [
+    "how much",
+    "price",
+    "pricing",
+    "cost",
+    "quote",
+    "estimate",
+    "rate",
+    "discount",
+    "promo",
+    "coupon",
+    "percent",
+    "fee",
+    "fees",
+    "mattress",
+    "paint",
+    "tire",
+    "trailer",
+    "load",
+    "loads"
+  ];
+  return keywords.some((kw) => lower.includes(kw));
+}
+
+function normalizeLockedToken(token: string): string {
+  return token.replace(/\s+/g, "").toLowerCase();
+}
+
+function extractLockedTokens(text: string): string[] {
+  const out = new Set<string>();
+  const patterns = [
+    /\$\s*\d[\d,]*(?:\.\d+)?/g, // money
+    /\b\d+(?:\.\d+)?\s*%/g, // percent
+    /\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b/gi, // times
+    /\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g // phone-like
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const raw = match[0]?.trim();
+      if (!raw) continue;
+      out.add(normalizeLockedToken(raw));
+    }
+  }
+  return Array.from(out);
+}
+
+function rewritePreservesLockedTokens(draft: string, rewritten: string): boolean {
+  const required = extractLockedTokens(draft);
+  if (!required.length) return true;
+  const candidate = new Set(extractLockedTokens(rewritten));
+  return required.every((token) => candidate.has(token));
+}
+
+function rewriteDoesNotIntroducePricingTokens(draft: string, rewritten: string): boolean {
+  const draftPricing = new Set(
+    Array.from(draft.matchAll(/\$\s*\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s*%/g)).map((m) =>
+      normalizeLockedToken(m[0] ?? "")
+    )
+  );
+  const rewrittenPricing = new Set(
+    Array.from(rewritten.matchAll(/\$\s*\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s*%/g)).map((m) =>
+      normalizeLockedToken(m[0] ?? "")
+    )
+  );
+  for (const token of rewrittenPricing) {
+    if (!draftPricing.has(token)) return false;
+  }
+  return true;
+}
+
+async function generatePublicFactualDraft(
+  message: string,
+  apiKey: string,
+  model: string
+): Promise<string | null> {
+  const systemPrompt = `${SYSTEM_PROMPT}
+
+Return ONLY JSON with the key "answerDraft".
+- "answerDraft" must be short (1-3 sentences) and follow the pricing rules above exactly.
+- Use $ amounts and ranges (never exact totals). Use $200 increments and allow multi-load ranges when relevant.
+`.trim();
+
+  const payload = {
+    model,
+    input: [
+      { role: "system" as const, content: systemPrompt },
+      { role: "user" as const, content: message }
+    ],
+    reasoning: { effort: "low" as const },
+    text: {
+      verbosity: "low" as const,
+      format: {
+        type: "json_schema" as const,
+        name: "public_answer_draft",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            answerDraft: { type: "string" }
+          },
+          required: ["answerDraft"]
+        }
+      }
+    },
+    max_output_tokens: 300
+  };
+
+  const res = await fetchOpenAIText(apiKey, payload, model);
+  if (!res.ok) return null;
+
+  const parsed = safeJsonParse(res.text);
+  const draft = typeof parsed?.["answerDraft"] === "string" ? (parsed["answerDraft"] as string).trim() : "";
+  return draft.length ? draft : null;
+}
+
+async function rewritePublicDraft(
+  message: string,
+  draft: string,
+  apiKey: string
+): Promise<string | null> {
+  const systemPrompt = `You rewrite a draft response into a short, natural customer-service reply.
+Rules:
+- Do NOT change any numbers, $ amounts, percentages, times, phone numbers, or addresses.
+- Do NOT introduce any new numbers or pricing.
+- Keep it 1-3 sentences, friendly, and human.
+- Output ONLY the rewritten text.`.trim();
+
+  const payload = {
+    model: PUBLIC_VOICE_MODEL,
+    input: [
+      { role: "system" as const, content: systemPrompt },
+      {
+        role: "user" as const,
+        content: `Customer message:\n${message}\n\nFactual draft to rewrite (do not change facts):\n${draft}`
+      }
+    ],
+    reasoning: { effort: "low" as const },
+    text: { verbosity: "low" as const },
+    max_output_tokens: 220
+  };
+
+  const res = await fetchOpenAIText(apiKey, payload, PUBLIC_VOICE_MODEL);
+  if (!res.ok) return null;
+  const rewritten = res.text.trim();
+  if (!rewritten) return null;
+  if (!rewritePreservesLockedTokens(draft, rewritten)) return null;
+  if (!rewriteDoesNotIntroducePricingTokens(draft, rewritten)) return null;
+  return rewritten;
 }
 
 function fmtBookingTime(iso: string): string {
@@ -552,7 +760,7 @@ export async function POST(request: NextRequest) {
     }
 
     const apiKey = process.env["OPENAI_API_KEY"];
-    const model = (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
+    const brainModel = (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() || DEFAULT_BRAIN_MODEL;
 
     if (!apiKey) {
       return NextResponse.json(
@@ -564,8 +772,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const payload = {
-      model,
+    const buildChatPayload = (modelName: string) => ({
+      model: modelName,
       input: [
         { role: "system" as const, content: SYSTEM_PROMPT },
         { role: "user" as const, content: trimmedMessage }
@@ -573,20 +781,54 @@ export async function POST(request: NextRequest) {
       reasoning: { effort: "low" as const },
       text: { verbosity: "low" as const },
       max_output_tokens: 400
-    };
-
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(payload)
     });
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      console.error(`[chat] OpenAI error for model '${model}' status ${response.status}: ${body.slice(0, 300)}`);
+    if (!isTeamChat) {
+      if (looksLikePricingQuestion(trimmedMessage)) {
+        const draft = await generatePublicFactualDraft(trimmedMessage, apiKey, brainModel);
+        if (draft) {
+          const rewritten = await rewritePublicDraft(trimmedMessage, draft, apiKey);
+          if (!rewritten) {
+            console.warn("[chat] public pricing rewrite failed validation; using factual draft");
+          }
+          return NextResponse.json({ ok: true, reply: rewritten ?? draft });
+        }
+
+        console.warn("[chat] public pricing draft failed; falling back to brain model response");
+        const res = await fetchOpenAIText(apiKey, buildChatPayload(brainModel), brainModel);
+        if (!res.ok) {
+          return NextResponse.json(
+            {
+              error: "openai_error",
+              message: "Assistant is unavailable right now."
+            },
+            { status: 502 }
+          );
+        }
+        return NextResponse.json({ ok: true, reply: res.text.trim() });
+      }
+
+      const voiceRes = await fetchOpenAIText(apiKey, buildChatPayload(PUBLIC_VOICE_MODEL), PUBLIC_VOICE_MODEL);
+      if (voiceRes.ok) {
+        return NextResponse.json({ ok: true, reply: voiceRes.text.trim() });
+      }
+
+      console.warn("[chat] public voice model failed; falling back to brain model");
+      const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel), brainModel);
+      if (!brainRes.ok) {
+        return NextResponse.json(
+          {
+            error: "openai_error",
+            message: "Assistant is unavailable right now."
+          },
+          { status: 502 }
+        );
+      }
+      return NextResponse.json({ ok: true, reply: brainRes.text.trim() });
+    }
+
+    const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel), brainModel);
+    if (!brainRes.ok) {
       return NextResponse.json(
         {
           error: "openai_error",
@@ -596,35 +838,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const data = (await response.json()) as {
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-      output_text?: string;
-    };
-
-    let reply =
-      data.output_text?.trim() ??
-      data.output
-        ?.flatMap((item) => item?.content ?? [])
-        ?.map((chunk) => chunk?.text ?? "")
-        ?.filter((chunk) => typeof chunk === "string" && chunk.trim().length > 0)
-        ?.join("\n")
-        ?.trim() ??
-      "";
-
-    if (!reply) {
-      console.error("[chat] OpenAI returned empty output for site chatbot.");
-      return NextResponse.json(
-        {
-          error: "openai_empty",
-          message: "Assistant did not return a response."
-        },
-        { status: 502 }
-      );
-    }
-
-    if (!isTeamChat) {
-      return NextResponse.json({ ok: true, reply });
-    }
+    const reply = brainRes.text.trim();
 
     const booking = await maybeGetSuggestions(trimmedMessage, {
       contactId,
@@ -1249,7 +1463,7 @@ function buildTaskTitle(message: string, note?: string | null): string {
 
 async function classifyIntent(message: string): Promise<IntentClassification | null> {
   const apiKey = process.env["OPENAI_API_KEY"];
-  const model = (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
+  const model = (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() || DEFAULT_BRAIN_MODEL;
   if (!apiKey) return null;
 
   const systemPrompt = `
@@ -1293,34 +1507,12 @@ Keep note short (<120 chars). If unsure, use intent "none".
   };
 
   try {
-    const res = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
+    const res = await fetchOpenAIText(apiKey, payload, model);
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.warn("[chat] intent classify failed", res.status, text.slice(0, 120));
+      console.warn("[chat] intent classify failed", res.status, res.error.slice(0, 120));
       return null;
     }
-    const data = (await res.json()) as {
-      output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
-      output_text?: string;
-    };
-
-    const raw =
-      data.output_text?.trim() ??
-      data.output
-        ?.flatMap((item) => item?.content ?? [])
-        ?.map((chunk) => chunk?.text ?? "")
-        ?.filter((chunk) => typeof chunk === "string" && chunk.trim().length > 0)
-        ?.join("\n")
-        ?.trim() ??
-      "";
-    const parsed = safeJsonParse(raw);
+    const parsed = safeJsonParse(res.text);
     if (parsed && typeof parsed["intent"] === "string") {
       const intent = ["booking", "contact", "quote", "task"].includes(parsed["intent"])
         ? (parsed["intent"] as IntentClassification["intent"])
