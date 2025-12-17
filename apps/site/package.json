@@ -19,12 +19,15 @@
         "next-contentlayer": "0.3.4",
         "react": "19.1.0",
         "react-dom": "19.1.0",
+        "react-markdown": "^10.1.0",
+        "remark-gfm": "^4.0.1",
         "tailwindcss-animate": "^1.0.7",
         "zod": "^3.24.1"
     },
     "devDependencies": {
         "@eslint/eslintrc": "^3",
         "@myst-os/config": "workspace:*",
+        "@tailwindcss/typography": "^0.5.19",
         "@types/mdx": "^2.0.13",
         "@types/node": "^20",
         "@types/react": "^19",

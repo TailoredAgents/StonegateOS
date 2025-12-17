@@ -338,6 +338,41 @@ export const instantQuotes = pgTable("instant_quotes", {
 export type InstantQuote = typeof instantQuotes.$inferSelect;
 export type InstantQuoteInsert = typeof instantQuotes.$inferInsert;
 
+// SEO / Blog posts (public content)
+export const blogPosts = pgTable(
+  "blog_posts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    slug: text("slug").notNull(),
+    title: text("title").notNull(),
+    excerpt: text("excerpt"),
+    contentMarkdown: text("content_markdown").notNull(),
+    metaTitle: text("meta_title"),
+    metaDescription: text("meta_description"),
+    topicKey: text("topic_key"),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    slugKey: uniqueIndex("blog_posts_slug_key").on(table.slug),
+    publishedIdx: index("blog_posts_published_idx").on(table.publishedAt),
+    topicKeyIdx: index("blog_posts_topic_key_idx").on(table.topicKey)
+  })
+);
+
+export const seoAgentState = pgTable("seo_agent_state", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").$type<Record<string, unknown>>().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date())
+});
+
 export const contactRelations = relations(contacts, ({ many, one }) => ({
   properties: many(properties),
   leads: many(leads),
@@ -586,7 +621,6 @@ export const payments = pgTable(
     appointmentIdx: index("payments_appointment_idx").on(table.appointmentId)
   })
 );
-
 
 
 

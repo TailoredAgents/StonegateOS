@@ -13,6 +13,7 @@ const navItems = [
   { href: "/pricing", label: "Pricing" },
   { href: "/reviews", label: "Reviews" },
   { href: "/gallery", label: "Gallery" },
+  { href: "/blog", label: "Blog" },
   { href: "/about", label: "About" },
   { href: "/contact", label: "Contact" }
 ] satisfies Array<{ href: Route; label: string }>;
@@ -138,4 +139,3 @@ export function Header() {
     </header>
   );
 }
-

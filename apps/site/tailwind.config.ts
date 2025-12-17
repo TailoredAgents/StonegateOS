@@ -1,5 +1,6 @@
 import type { Config } from "tailwindcss";
 import tailwindcssAnimate from "tailwindcss-animate";
+import typography from "@tailwindcss/typography";
 import { createDesignSystemPlugin } from "../../packages/ui/src/theme/tokens";
 
 const config: Config = {
@@ -70,8 +71,7 @@ const config: Config = {
       }
     }
   },
-  plugins: [createDesignSystemPlugin(), tailwindcssAnimate]
+  plugins: [createDesignSystemPlugin(), tailwindcssAnimate, typography]
 };
 
 export default config;
-

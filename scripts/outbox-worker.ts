@@ -23,27 +23,44 @@ async function sleep(ms: number) {
 }
 
 async function runOnce(limit: number) {
-  registerAliases();
   const { processOutboxBatch } = await import("../apps/api/src/lib/outbox-processor");
   const stats = await processOutboxBatch({ limit });
   console.log(JSON.stringify({ ok: true, ...stats }, null, 2));
   return stats;
 }
 
+async function runSeoOnce() {
+  const { maybeAutopublishBlogPost } = await import("../apps/api/src/lib/seo/agent");
+  const result = await maybeAutopublishBlogPost();
+  console.log(JSON.stringify({ ok: true, seo: result }, null, 2));
+}
+
 async function main() {
+  registerAliases();
   const limit = Number(process.env["OUTBOX_BATCH_SIZE"] ?? 10);
   const pollIntervalMs = Number(process.env["OUTBOX_POLL_INTERVAL_MS"] ?? 0);
+  const seoIntervalMs = Number(process.env["SEO_AUTOPUBLISH_INTERVAL_MS"] ?? 6 * 60 * 60 * 1000);
+  let nextSeoAt = Date.now();
 
   if (pollIntervalMs > 0) {
     // Continuous polling loop
     while (true) {
       const stats = await runOnce(limit);
+      if (Date.now() >= nextSeoAt) {
+        try {
+          await runSeoOnce();
+        } catch (error) {
+          console.warn("[seo] autopublish.loop_failed", String(error));
+        }
+        nextSeoAt = Date.now() + (Number.isFinite(seoIntervalMs) && seoIntervalMs > 60_000 ? seoIntervalMs : 6 * 60 * 60 * 1000);
+      }
       if (stats.total === 0) {
         await sleep(pollIntervalMs);
       }
     }
   } else {
     await runOnce(limit);
+    await runSeoOnce();
   }
 }
 
@@ -51,4 +68,3 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
-

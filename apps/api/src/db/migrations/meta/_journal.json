@@ -50,6 +50,13 @@
       "when": 1762117717005,
       "tag": "0006_leads_instant_quote",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1765933191096,
+      "tag": "0007_seo_blog",
+      "breakpoints": true
     }
   ]
 }
