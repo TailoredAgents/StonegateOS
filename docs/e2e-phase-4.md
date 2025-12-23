@@ -1,5 +1,8 @@
 # E2E Testing Program – Phase 4 Cross-Cutting Capabilities
 
+> Note: This phase doc is a planning artifact. For current setup, see tests/e2e, playwright.config.ts, and devops/docker-compose.yml.
+
+
 Phase 4 adds the shared infrastructure needed for reliable journeys: deterministic auth helpers, data-tagging + cleanup, notification capture, and worker orchestration hooks. These improvements keep the suite hermetic while making failures highly diagnosable.
 
 ## 1. Auth Helper Stack
@@ -8,7 +11,7 @@ Phase 4 adds the shared infrastructure needed for reliable journeys: determinist
 - `tests/e2e/support/auth.ts` exposes `bootstrapVisitorStorage` (blank state) and `bootstrapAdminStorage` (session bootstrap) so suites can opt into the right persona with a single helper call.
 
 ## 2. Data Tagging & Cleanup
-- Every seed or factory-generated record now embeds the `E2E_RUN_ID` tag (configurable via `.env.e2e`). Utilities in `tests/e2e/support/run-context.ts` + `data-factories.ts` guarantee lead emails look like `e2e+lead-{runId}@mystos.test`.
+- Every seed or factory-generated record now embeds the `E2E_RUN_ID` tag (configurable via `.env.e2e`). Utilities in `tests/e2e/support/run-context.ts` + `data-factories.ts` guarantee lead emails look like `e2e+lead-{runId}@StonegateOS.test`.
 - `scripts/seed-e2e.ts` writes tagged contacts/leads/quotes/appointments so tests, DB dumps, and analytics can tie rows back to a specific run.
 - `scripts/cleanup-e2e.ts` (wired via `pnpm cleanup:e2e`) purges tagged contacts and any matching outbox events. This protects shared dev DBs if a test aborts mid-run.
 

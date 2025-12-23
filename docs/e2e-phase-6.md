@@ -1,5 +1,8 @@
 # E2E Testing Program – Phase 6 Diagnostics & Reliability
 
+> Note: This phase doc is a planning artifact. For current setup, see tests/e2e, playwright.config.ts, and devops/docker-compose.yml.
+
+
 Phase 6 focuses on making the suite trustworthy: deterministic dependency checks, structured logging, and automatic cleanup reduce flake risk and speed up triage.
 
 ## 1. Dependency Health & Skips

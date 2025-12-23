@@ -1,5 +1,8 @@
 # E2E Testing Program – Phase 8 Expansion & Maintenance
 
+> Note: This phase doc is a planning artifact. For current setup, see tests/e2e, playwright.config.ts, and devops/docker-compose.yml.
+
+
 Phase 8 ensures the suite keeps pace with feature growth and stays observable. It introduces a shared "testing SDK", regression-pack scaffolding, and flake-metrics tooling so future journeys plug in quickly.
 
 ## 1. Testing SDK (`tests/e2e/support/sdk.ts`)

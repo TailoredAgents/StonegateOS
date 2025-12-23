@@ -1,5 +1,8 @@
 # E2E Testing Program – Phase 2 Environment & Data Foundations
 
+> Note: This phase doc is a planning artifact. For current setup, see tests/e2e, playwright.config.ts, and devops/docker-compose.yml.
+
+
 This phase implements the hermetic environment required by our Playwright suite: deterministic env files, dockerized dependencies (MailHog, LocalStack, Twilio mock), a reusable seeding CLI, and a convenience script that boots the API, site, and worker together with prefixed logs.
 
 ## 1. Local Dependency Stack (`devops/docker-compose.yml`)

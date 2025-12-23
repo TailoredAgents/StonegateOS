@@ -1,5 +1,8 @@
 # E2E Testing Program – Phase 3 Playwright Scaffolding
 
+> Note: This phase doc is a planning artifact. For current setup, see tests/e2e, playwright.config.ts, and devops/docker-compose.yml.
+
+
 Phase 3 introduces a fully wired Playwright test harness with multi-project coverage, global setup hooks that seed/verify the environment, and a support layer for data + service helpers. This is the foundation for building the Phase 5 core journeys.
 
 ## 1. Runner Configuration

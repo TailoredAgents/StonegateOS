@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Stonegate API App
 
-## Getting Started
+This is the Next.js API application that powers StonegateOS. It exposes REST-style endpoints under `/api` and hosts business logic for leads, appointments, quotes, notifications, payments, and calendar sync.
 
-First, run the development server:
+## Key Responsibilities
+- Lead intake and appointment scheduling (`/api/web/lead-intake`, `/api/appointments`, `/api/web/appointments/...`).
+- Quote lifecycle (`/api/quotes`, `/api/quotes/:id/send`, public `/api/public/quotes/:token`).
+- Notifications + outbox processing (`apps/api/src/lib/notifications.ts`, `apps/api/src/lib/outbox-processor.ts`).
+- Stripe and Plaid ingestion (`/api/payments`, `/api/admin/stripe/backfill`, Plaid admin routes).
+- Calendar sync and webhook processing (`/api/calendar/status`, `/api/calendar/webhook`).
 
+## Local Development
+From the repo root:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm --filter api dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The API runs at `http://localhost:3001` by default.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment Variables
+Required:
+- `DATABASE_URL`
+- `ADMIN_API_KEY`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Common optional integrations:
+- `OPENAI_API_KEY`, `OPENAI_MODEL`
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`, `GOOGLE_CALENDAR_WEBHOOK_URL`
+- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+- `QUOTE_ALERT_EMAIL`
 
-## Learn More
+## Migrations
+Run from the repo root:
+```bash
+pnpm -w db:migrate
+```
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes
+The API app is part of a monorepo. See the root `README.md` for full setup and environment guidance.

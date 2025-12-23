@@ -1,6 +1,9 @@
 # E2E Testing Program – Phase 1 Architecture & Tooling Decisions
 
-This document captures the architecture and tooling blueprint for MystOS end-to-end testing. It converts the Phase 0 discovery outcomes into specific runner choices, environment orchestration steps, data-access patterns, and remote execution/diagnostics plans.
+> Note: This phase doc is a planning artifact. For current setup, see tests/e2e, playwright.config.ts, and devops/docker-compose.yml.
+
+
+This document captures the architecture and tooling blueprint for StonegateOS end-to-end testing. It converts the Phase 0 discovery outcomes into specific runner choices, environment orchestration steps, data-access patterns, and remote execution/diagnostics plans.
 
 ## 1. Test Runner & Repo Layout
 
@@ -36,7 +39,7 @@ This document captures the architecture and tooling blueprint for MystOS end-to-
   - Drops/creates schema or truncates tables.
   - Inserts deterministic fixtures (services catalog, pricing contexts, baseline admin user).
   - Accepts `--with-quotes`, `--with-payments` flags so specialized suites can extend baseline data quickly.
-- **Data tagging**: Shared utility `tests/e2e/support/data-tags.ts` exports `makeTestEmail("lead")` etc., ensuring every record is namespaced (`e2e+${suite}+timestamp@mystos.test`). Cleanup script uses this tag to purge or verify isolation.
+- **Data tagging**: Shared utility `tests/e2e/support/data-tags.ts` exports `makeTestEmail("lead")` etc., ensuring every record is namespaced (`e2e+${suite}+timestamp@StonegateOS.test`). Cleanup script uses this tag to purge or verify isolation.
 - **Auth helpers**: 
   - Customer flows: log in through UI for realism; optionally use MailHog API to capture magic-link tokens.
   - Admin flows: call `POST /api/admin/sessions` with `ADMIN_API_KEY` and set returned session cookie directly into Playwright storage state to bypass redundant UI steps while remaining zero-mock.
@@ -45,7 +48,7 @@ This document captures the architecture and tooling blueprint for MystOS end-to-
 
 - **Logging**: Pipe `apps/site`, `apps/api`, and worker stdout to `artifacts/e2e/logs/*.log` using `pino-multi-stream` or `concurrently`’s `--names` output capture. Attach these logs plus Docker service logs (Postgres, MailHog) to CI artifacts.
 - **Tracing/video**: Configure `use: { trace: "on-first-retry" }` for local runs to limit noise, but override to `retain-on-failure` in CI via `PW_TRACE_MODE` env.
-- **DB snapshotting**: Add optional toggle `E2E_DEBUG_SNAPSHOT=1` that triggers `pg_dump --schema-only mystos > artifacts/e2e/db.sql` when tests fail to ease forensic analysis.
+- **DB snapshotting**: Add optional toggle `E2E_DEBUG_SNAPSHOT=1` that triggers `pg_dump --schema-only StonegateOS > artifacts/e2e/db.sql` when tests fail to ease forensic analysis.
 - **Telemetry hooks**: Wrap Playwright steps with `test.step` + structured logging so flakes show meaningful context (`await logStep("Wait for lead intake webhook", async () => { ... })`).
 - **Package additions**: 
   - `@playwright/test`, `@testing-library/playwright`, `ts-node` for config, `dotenv-flow` or `dotenv-safe`.

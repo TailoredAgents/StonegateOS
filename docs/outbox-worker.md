@@ -1,6 +1,6 @@
 # Outbox Worker
 
-MystOS now records customer-facing follow-ups (notifications, analytics hooks, etc.) in the `outbox_events` table. A small worker drains that queue so the API stays fast and resilient.
+StonegateOS records customer-facing follow-ups (notifications, analytics hooks, etc.) in the `outbox_events` table. A small worker drains that queue so the API stays fast and resilient. The worker also runs the SEO autopublisher on an interval.
 
 ## Environment
 
@@ -10,8 +10,10 @@ The worker reads the same `.env` values as the API plus a couple of optional kno
 | --- | --- | --- |
 | `OUTBOX_BATCH_SIZE` | Max events to process per cycle | `10` |
 | `OUTBOX_POLL_INTERVAL_MS` | Milliseconds to sleep between cycles. `0` runs once and exits. | `0` |
+| `SEO_AUTOPUBLISH_INTERVAL_MS` | How often to attempt SEO autopublish checks | `21600000` (6 hours) |
+| `SEO_AUTOPUBLISH_DISABLED` | Set to `1` to disable SEO autopublish | unset |
 
-Ensure the worker can see `DATABASE_URL`, `OPENAI_API_KEY`, Twilio/SMTP credentials, and any other integrations it needs to fan out notifications.
+Ensure the worker can see `DATABASE_URL`, `OPENAI_API_KEY`, Twilio/SMTP credentials, and any other integrations it needs to fan out notifications or publish SEO posts.
 
 ## Local Usage
 
@@ -30,11 +32,11 @@ Pick one of these lightweight strategies so the worker runs beside the API.
 ### PM2 (recommended)
 
 ```bash
-pm2 start pnpm --name myst-outbox --interpreter pnpm -- \
+pm2 start pnpm --name stonegate-outbox --interpreter pnpm -- \
   outbox:worker
 
 # Optional: poll every 5 seconds
-pm2 start pnpm --name myst-outbox --interpreter pnpm -- \
+pm2 start pnpm --name stonegate-outbox --interpreter pnpm -- \
   env OUTBOX_POLL_INTERVAL_MS=5000 pnpm outbox:worker
 
 pm2 save
@@ -46,16 +48,16 @@ pm2 save
 
    ```ini
    [Unit]
-   Description=MystOS Outbox Worker
+Description=StonegateOS Outbox Worker
    After=network.target
 
    [Service]
    WorkingDirectory=/opt/mystos
    Environment=NODE_ENV=production
    Environment=OUTBOX_POLL_INTERVAL_MS=5000
-   ExecStart=/usr/bin/pnpm outbox:worker
+ExecStart=/usr/bin/pnpm outbox:worker
    Restart=always
-   User=myst
+User=stonegate
 
    [Install]
    WantedBy=multi-user.target

@@ -1,6 +1,9 @@
 # E2E Testing Program – Phase 0 Discovery
 
-This document satisfies the Phase 0 (“Discovery & Success Criteria”) deliverable for MystOS end-to-end (E2E) testing. It inventories the user journeys we must protect, enumerates technical preconditions, locks in non-functional requirements, and codifies ownership plus the definition of done for “E2E v1.”
+> Note: This phase doc is a planning artifact. For current setup, see tests/e2e, playwright.config.ts, and devops/docker-compose.yml.
+
+
+This document satisfies the Phase 0 (“Discovery & Success Criteria”) deliverable for StonegateOS end-to-end (E2E) testing. It inventories the user journeys we must protect, enumerates technical preconditions, locks in non-functional requirements, and codifies ownership plus the definition of done for “E2E v1.”
 
 ## Critical Journeys & Preconditions
 
@@ -32,7 +35,7 @@ This document satisfies the Phase 0 (“Discovery & Success Criteria”) deliver
 
 | Dependency | Purpose | Notes for E2E |
 | --- | --- | --- |
-| `ADMIN_API_KEY` | Auth gate for admin boards + worker hooks | Store in `.env.e2e`; rotate via 1Password item `MystOS Admin Key`. |
+| `ADMIN_API_KEY` | Auth gate for admin boards + worker hooks | Store in `.env.e2e`; rotate via 1Password item `StonegateOS Admin Key`. |
 | Postgres (Docker) | Primary datastore | `devops/docker-compose.yml` currently starts Postgres 16; Phase 2 will add Redis/MailHog. |
 | Redis (planned) | Session/cache tier | Needed once background jobs rely on caching; include in compose expansion. |
 | MailHog / SMTP sandbox | Capture customer emails | Add in compose + use HTTP API to fetch confirmation copy during tests. |
@@ -48,7 +51,7 @@ This document satisfies the Phase 0 (“Discovery & Success Criteria”) deliver
   - CI: Headless Chromium + WebKit (mobile emulation optional) on Ubuntu via Playwright container images. 
   - Local: Headed Chromium by default with optional `PWDEBUG=1`; engineers run against Docker Compose stack using `.env.e2e.local`.
 - **Secrets & config:** All environment configuration flows from `.env.e2e` committed to the repo with placeholder values plus `.env.e2e.local` (gitignored) for developer overrides. `pnpm e2e:env` (Phase 2) will sync .env files before each run.
-- **Data determinism:** Dedicated schema (`mystos_e2e`) or isolated tenant ID per run; seeding CLI resets + truncates via Drizzle. Every test creates namespaced records (`e2e+timestamp@mystos.test`) for safe cleanup.
+- **Data determinism:** Dedicated schema (`StonegateOS_e2e`) or isolated tenant ID per run; seeding CLI resets + truncates via Drizzle. Every test creates namespaced records (`e2e+timestamp@StonegateOS.test`) for safe cleanup.
 - **Artifacts & diagnostics:** Playwright trace/video retained on failure for 14 days, DB logs piped to artifacts, server stdout/stderr captured alongside test reports to accelerate triage.
 - **CI resource usage:** Tests run after build/lint succeed; job caches PNPM store + Playwright browsers to keep cold-start <5 minutes.
 

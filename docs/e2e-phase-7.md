@@ -1,5 +1,8 @@
 # E2E Testing Program – Phase 7 CI/CD Integration & Gating
 
+> Note: This phase doc is a planning artifact. For current setup, see tests/e2e, playwright.config.ts, and devops/docker-compose.yml.
+
+
 Phase 7 wires the hermetic Playwright suite into GitHub Actions so every PR/push exercises real browser flows before merging. The workflow mirrors local `pnpm dev:e2e` semantics, captures diagnostics, and publishes artifacts for triage.
 
 ## 1. GitHub Actions Workflow (`.github/workflows/e2e.yml`)

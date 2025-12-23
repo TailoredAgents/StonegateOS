@@ -1,5 +1,8 @@
 # E2E Testing Program – Phase 5 Core Journey Coverage
 
+> Note: This phase doc is a planning artifact. For current setup, see tests/e2e, playwright.config.ts, and devops/docker-compose.yml.
+
+
 Phase 5 brings the first two must-have journeys to Playwright: lead intake (site funnel) and the quote lifecycle (admin issue → customer decision). Both scenarios exercise UI + API + background workers with zero mocks.
 
 ## 1. Lead Intake Journey (`tests/e2e/specs/lead-intake.spec.ts`)
