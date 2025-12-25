@@ -16,6 +16,20 @@
 
 ## Phase 1 - Launch critical (Dec 27)
 
+### Business Settings / Policy Center (cross-cutting)
+Goal: Central place to configure business rules instead of hardcoding.
+
+Task sequence:
+1) Business hours + quiet hours per channel.
+2) Service area boundaries + travel fee rules.
+3) Default booking windows + buffers + max jobs/day/crew.
+4) Standard job definition (what AI can auto-book).
+5) Item policies (what you don’t take / extra fees).
+6) Templates library (first touch, follow-up, confirmations, reviews).
+
+Done when:
+- Ops can adjust policies without code changes.
+
 ### A) Unified Inbox + Conversation Threads
 Goal: One timeline per lead with all channels and replies from the console.
 
@@ -26,6 +40,8 @@ Task sequence:
 4) Team Console: inbox list, thread view, send panel, and lead linkage.
 5) Automation hooks: "new inbound message" outbox event for alerts.
 6) Identity/merge rules: phone/email exact match -> same contact; address + similar name -> suggest merge; manual merge action; pick primary thread when sources collide.
+7) Conversation state machine: new → qualifying → photos received → estimated → offered times → booked → reminder → completed → review. Guardrails to avoid re-asking answered questions; limit asks to 1–2 at a time.
+8) Message delivery state: queued → sent → delivered/failed (where provider supports); retry rules; failed-sends queue; provider health indicator (SMS/email/calendar).
 
 Done when:
 - Every lead shows a single threaded timeline.
@@ -44,6 +60,7 @@ Task sequence:
 3) Wire FB/Nextdoor inbound -> auto reply + lead creation/merge.
 4) Add "auto-reply sent" markers on the lead timeline.
 5) Geo policy: enforce service area boundaries; travel fee rules; polite decline/alternative when out of area.
+6) Channel sequencing: Phase 1 v1 focuses on SMS + missed call + email as fully controlled; FB/Nextdoor ingest/respond but steer to SMS for booking if platform limits show.
 
 Done when:
 - Missed calls create a lead and start an SMS thread.
@@ -81,6 +98,7 @@ Task sequence:
 3) Implement stop rules (reply, booking, decline).
 4) Surface follow-up status in Team Console.
 5) Compliance: STOP handling for SMS, email unsubscribe, quiet hours per channel, per-channel prefs.
+6) Kill switches: per-lead "pause all automations," per-channel "Do Not Contact," and "human takeover" mode to block AI replies until released.
 
 Done when:
 - Each lead shows "follow-up running" with next step/time.
@@ -183,7 +201,8 @@ Goal: Booked CPA by channel.
 Task sequence:
 1) Normalize lead source tagging across channels.
 2) Attribute bookings to sources.
-3) Owner brief: spend, leads, booked, CPA.
+3) Spend ingestion: manual daily spend entry (v1) or upload/ingest (v2) by channel/campaign/day.
+4) Owner brief: spend, leads, booked, CPA.
 
 Done when:
 - CPA by channel is visible daily.
@@ -216,11 +235,13 @@ Goal: Service + area pages, schema, internal linking, proof blocks.
 - Nextdoor automation may be limited; route to SMS/email where possible.
 - Bank export formats vary; define the first supported format (CSV or OFX).
 - Define "standard job" boundaries and default booking windows/buffers.
+- Provider health: define expected SMS/email/calendar provider status/alerts.
 
 ## Rollout and testing
 - Add E2E coverage for each Phase 1 feature before launch.
 - Staged rollout: enable automations for a subset of leads first.
 - Add monitoring for outbox backlog, failed sends, booking errors; system status view in Owner Hub.
+- Data migration/backfill: create default threads for legacy leads/quotes; pick primary thread; backfill visibility so old records show in the new inbox.
 
 ## Metrics and KPIs
 - Speed-to-lead (target < 2 minutes)
