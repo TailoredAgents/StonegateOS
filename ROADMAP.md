@@ -14,6 +14,19 @@
 - SMS/email capability via Twilio and SMTP when configured.
 - Public/team/owner chat endpoints.
 
+## Foundations to add (prereqs for the roadmap)
+- Access control & audit: roles/permissions and an audit log for sends/bookings/merges/policy changes.
+- Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited).
+- Policy center storage: configurable business hours/quiet hours, booking windows/buffers, standard job definition, item policies, templates.
+- Automation modes/kill switches: per-channel autonomy levels, lead-level pause/DNC, human takeover, follow-up state machine.
+- Booking holds + confirmation loop: hold/reservation model, “standard job” enforcement, YES/NO confirmation cadence.
+- Escalation routing/SLA: assignment, timers, hot-lead flags.
+- Owner brief + spend ingestion: daily digest and CPA inputs (manual spend entry v1).
+- Review/referral sequences: triggers and outbox schedules.
+- Bank upload/reconciliation: CSV/OFX ingest, categorization, matching UI/logic.
+- Manual overrides: resend/force-book/restart follow-up/mark paid-unpaid tools in console.
+- Migration/backfill: create default threads for legacy leads/quotes and mark a primary thread so old records appear in the new inbox.
+
 ## Phase 1 - Launch critical (Dec 27)
 
 ### Business Settings / Policy Center (cross-cutting)
