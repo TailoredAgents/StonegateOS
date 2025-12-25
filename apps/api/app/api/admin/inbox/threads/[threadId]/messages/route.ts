@@ -28,13 +28,13 @@ function isDirection(value: string | null): value is Direction {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { threadId: string } }
+  context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const threadId = params.threadId;
+  const { threadId } = await context.params;
   if (!threadId) {
     return NextResponse.json({ error: "thread_id_required" }, { status: 400 });
   }

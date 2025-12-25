@@ -66,7 +66,9 @@ export async function AuditLogSection(): Promise<React.ReactElement> {
                     <span className="text-xs text-slate-500">{formatAgo(event.createdAt)}</span>
                   </div>
                   <div className="mt-2 text-sm font-medium text-slate-900">
-                    {actorLabel} -> {event.entityType}
+                    {actorLabel}
+                    {" -> "}
+                    {event.entityType}
                     {event.entityId ? ` (${event.entityId})` : ""}
                   </div>
                   {event.meta ? (

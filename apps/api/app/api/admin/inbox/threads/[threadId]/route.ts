@@ -24,13 +24,13 @@ function isStatus(value: string | null): value is ThreadStatus {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { threadId: string } }
+  context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const threadId = params.threadId;
+  const { threadId } = await context.params;
   if (!threadId) {
     return NextResponse.json({ error: "thread_id_required" }, { status: 400 });
   }
@@ -247,13 +247,13 @@ export async function GET(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { threadId: string } }
+  context: { params: Promise<{ threadId: string }> }
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const threadId = params.threadId;
+  const { threadId } = await context.params;
   if (!threadId) {
     return NextResponse.json({ error: "thread_id_required" }, { status: 400 });
   }

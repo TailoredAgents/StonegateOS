@@ -7,13 +7,13 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { roleId: string } }
+  context: { params: Promise<{ roleId: string }> }
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const roleId = params.roleId;
+  const { roleId } = await context.params;
   if (!roleId) {
     return NextResponse.json({ error: "role_id_required" }, { status: 400 });
   }

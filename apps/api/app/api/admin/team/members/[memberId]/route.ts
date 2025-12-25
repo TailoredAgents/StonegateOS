@@ -7,13 +7,13 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { memberId: string } }
+  context: { params: Promise<{ memberId: string }> }
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const memberId = params.memberId;
+  const { memberId } = await context.params;
   if (!memberId) {
     return NextResponse.json({ error: "member_id_required" }, { status: 400 });
   }
@@ -84,13 +84,13 @@ export async function PATCH(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { memberId: string } }
+  context: { params: Promise<{ memberId: string }> }
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const memberId = params.memberId;
+  const { memberId } = await context.params;
   if (!memberId) {
     return NextResponse.json({ error: "member_id_required" }, { status: 400 });
   }
