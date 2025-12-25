@@ -1,5 +1,17 @@
 import { asc, eq, isNull } from "drizzle-orm";
-import { getDb, outboxEvents, appointments, leads, contacts, properties, quotes, crmPipeline } from "@/db";
+import {
+  getDb,
+  outboxEvents,
+  appointments,
+  leads,
+  contacts,
+  properties,
+  quotes,
+  crmPipeline,
+  conversationMessages,
+  conversationThreads,
+  messageDeliveryEvents
+} from "@/db";
 import type { EstimateNotificationPayload, QuoteNotificationPayload } from "@/lib/notifications";
 import {
   sendEstimateConfirmation,
@@ -8,6 +20,8 @@ import {
 } from "@/lib/notifications";
 import type { AppointmentCalendarPayload } from "@/lib/calendar";
 import { createCalendarEventWithRetry, updateCalendarEventWithRetry } from "@/lib/calendar-events";
+import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
+import { recordAuditEvent } from "@/lib/audit";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -651,6 +665,124 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
           status: payload?.["status"] ?? null
         });
       }
+      return "processed";
+    }
+
+    case "message.send": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const messageId = typeof payload?.["messageId"] === "string" ? payload["messageId"] : null;
+      if (!messageId) {
+        console.warn("[outbox] message.send.missing_id", { id: event.id });
+        return "skipped";
+      }
+
+      const db = getDb();
+      const rows = await db
+        .select({
+          id: conversationMessages.id,
+          threadId: conversationMessages.threadId,
+          channel: conversationMessages.channel,
+          body: conversationMessages.body,
+          subject: conversationMessages.subject,
+          toAddress: conversationMessages.toAddress,
+          sentAt: conversationMessages.sentAt,
+          contactId: conversationThreads.contactId,
+          contactPhone: contacts.phone,
+          contactPhoneE164: contacts.phoneE164,
+          contactEmail: contacts.email
+        })
+        .from(conversationMessages)
+        .leftJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+        .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+        .where(eq(conversationMessages.id, messageId))
+        .limit(1);
+
+      const message = rows[0];
+      if (!message) {
+        console.warn("[outbox] message.send.not_found", { messageId });
+        return "skipped";
+      }
+
+      const channel = message.channel ?? "sms";
+      const subject = message.subject ?? "Stonegate message";
+      const body = message.body ?? "";
+      let toAddress = message.toAddress ?? null;
+
+      if (!toAddress) {
+        if (channel === "sms") {
+          toAddress = message.contactPhoneE164 ?? message.contactPhone ?? null;
+        } else if (channel === "email") {
+          toAddress = message.contactEmail ?? null;
+        }
+      }
+
+      const now = new Date();
+
+      if (!toAddress) {
+        await db
+          .update(conversationMessages)
+          .set({ deliveryStatus: "failed" })
+          .where(eq(conversationMessages.id, message.id));
+        await db.insert(messageDeliveryEvents).values({
+          messageId: message.id,
+          status: "failed",
+          detail: "missing_recipient",
+          provider: null,
+          occurredAt: now
+        });
+        await recordAuditEvent({
+          actor: { type: "worker", label: "outbox" },
+          action: "message.failed",
+          entityType: "conversation_message",
+          entityId: message.id,
+          meta: { channel, reason: "missing_recipient" }
+        });
+        return "processed";
+      }
+
+      let result: Awaited<ReturnType<typeof sendSmsMessage>>;
+      if (channel === "sms") {
+        result = await sendSmsMessage(toAddress, body);
+      } else if (channel === "email") {
+        result = await sendEmailMessage(toAddress, subject, body);
+      } else {
+        result = { ok: false, provider: "unknown", detail: "unsupported_channel" };
+      }
+
+      const status = result.ok ? "sent" : "failed";
+
+      await db
+        .update(conversationMessages)
+        .set({
+          deliveryStatus: status,
+          provider: result.provider ?? null,
+          providerMessageId: result.providerMessageId ?? null,
+          sentAt: result.ok ? now : message.sentAt ?? null,
+          toAddress
+        })
+        .where(eq(conversationMessages.id, message.id));
+
+      await db.insert(messageDeliveryEvents).values({
+        messageId: message.id,
+        status,
+        detail: result.detail ?? null,
+        provider: result.provider ?? null,
+        occurredAt: now
+      });
+
+      await recordAuditEvent({
+        actor: { type: "worker", label: "outbox" },
+        action: result.ok ? "message.sent" : "message.failed",
+        entityType: "conversation_message",
+        entityId: message.id,
+        meta: {
+          channel,
+          toAddress,
+          provider: result.provider ?? null,
+          detail: result.detail ?? null
+        }
+      });
+
       return "processed";
     }
 

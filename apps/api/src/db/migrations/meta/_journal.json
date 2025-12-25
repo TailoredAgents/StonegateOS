@@ -57,6 +57,13 @@
       "when": 1765933191096,
       "tag": "0007_seo_blog",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1766683638713,
+      "tag": "0008_foundations_phase1",
+      "breakpoints": true
     }
   ]
 }

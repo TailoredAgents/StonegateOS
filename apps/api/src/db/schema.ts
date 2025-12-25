@@ -31,6 +31,43 @@ export const appointmentStatusEnum = pgEnum("appointment_status", [
   "no_show",
   "canceled"
 ]);
+export const auditActorTypeEnum = pgEnum("audit_actor_type", ["human", "ai", "system", "worker"]);
+export const conversationChannelEnum = pgEnum("conversation_channel", [
+  "sms",
+  "email",
+  "dm",
+  "call",
+  "web"
+]);
+export const conversationThreadStatusEnum = pgEnum("conversation_thread_status", [
+  "open",
+  "pending",
+  "closed"
+]);
+export const conversationParticipantTypeEnum = pgEnum("conversation_participant_type", [
+  "contact",
+  "team",
+  "system"
+]);
+export const messageDirectionEnum = pgEnum("message_direction", [
+  "inbound",
+  "outbound",
+  "internal"
+]);
+export const messageDeliveryStatusEnum = pgEnum("message_delivery_status", [
+  "queued",
+  "sent",
+  "delivered",
+  "failed"
+]);
+export const automationChannelEnum = pgEnum("automation_channel", [
+  "sms",
+  "email",
+  "dm",
+  "call",
+  "web"
+]);
+export const automationModeEnum = pgEnum("automation_mode", ["draft", "assist", "auto"]);
 
 export const contacts = pgTable(
   "contacts",
@@ -173,6 +210,211 @@ export const leads = pgTable(
     contactIdx: index("leads_contact_idx").on(table.contactId),
     propertyIdx: index("leads_property_idx").on(table.propertyId),
     quoteIdx: uniqueIndex("leads_quote_idx").on(table.quoteId)
+  })
+);
+
+export const teamRoles = pgTable(
+  "team_roles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    permissions: text("permissions").array().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    slugIdx: uniqueIndex("team_roles_slug_key").on(table.slug)
+  })
+);
+
+export const teamMembers = pgTable(
+  "team_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    email: text("email"),
+    roleId: uuid("role_id").references(() => teamRoles.id, { onDelete: "set null" }),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    emailIdx: index("team_members_email_idx").on(table.email),
+    roleIdx: index("team_members_role_idx").on(table.roleId)
+  })
+);
+
+export const auditLogs = pgTable(
+  "audit_logs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    actorType: auditActorTypeEnum("actor_type").default("system").notNull(),
+    actorId: uuid("actor_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    actorLabel: text("actor_label"),
+    actorRole: text("actor_role"),
+    action: text("action").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id"),
+    meta: jsonb("meta").$type<Record<string, unknown> | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    actorIdx: index("audit_logs_actor_idx").on(table.actorId),
+    entityIdx: index("audit_logs_entity_idx").on(table.entityType, table.entityId),
+    createdIdx: index("audit_logs_created_idx").on(table.createdAt)
+  })
+);
+
+export const policySettings = pgTable("policy_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").$type<Record<string, unknown>>().notNull(),
+  updatedBy: uuid("updated_by").references(() => teamMembers.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date())
+});
+
+export const automationSettings = pgTable("automation_settings", {
+  channel: automationChannelEnum("channel").primaryKey(),
+  mode: automationModeEnum("mode").default("draft").notNull(),
+  updatedBy: uuid("updated_by").references(() => teamMembers.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date())
+});
+
+export const leadAutomationStates = pgTable(
+  "lead_automation_state",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    leadId: uuid("lead_id")
+      .notNull()
+      .references(() => leads.id, { onDelete: "cascade" }),
+    channel: automationChannelEnum("channel").notNull(),
+    paused: boolean("paused").default(false).notNull(),
+    dnc: boolean("dnc").default(false).notNull(),
+    humanTakeover: boolean("human_takeover").default(false).notNull(),
+    followupState: text("followup_state"),
+    followupStep: integer("followup_step").default(0).notNull(),
+    nextFollowupAt: timestamp("next_followup_at", { withTimezone: true }),
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+    pausedBy: uuid("paused_by").references(() => teamMembers.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    leadIdx: index("lead_automation_lead_idx").on(table.leadId),
+    leadChannelIdx: uniqueIndex("lead_automation_lead_channel_key").on(table.leadId, table.channel)
+  })
+);
+
+export const conversationThreads = pgTable(
+  "conversation_threads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
+    status: conversationThreadStatusEnum("status").default("open").notNull(),
+    channel: conversationChannelEnum("channel").default("sms").notNull(),
+    subject: text("subject"),
+    lastMessagePreview: text("last_message_preview"),
+    lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
+    assignedTo: uuid("assigned_to").references(() => teamMembers.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    leadIdx: index("conversation_threads_lead_idx").on(table.leadId),
+    contactIdx: index("conversation_threads_contact_idx").on(table.contactId),
+    statusIdx: index("conversation_threads_status_idx").on(table.status),
+    lastMessageIdx: index("conversation_threads_last_message_idx").on(table.lastMessageAt)
+  })
+);
+
+export const conversationParticipants = pgTable(
+  "conversation_participants",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => conversationThreads.id, { onDelete: "cascade" }),
+    participantType: conversationParticipantTypeEnum("participant_type").notNull(),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    teamMemberId: uuid("team_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    externalAddress: text("external_address"),
+    displayName: text("display_name"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    threadIdx: index("conversation_participants_thread_idx").on(table.threadId)
+  })
+);
+
+export const conversationMessages = pgTable(
+  "conversation_messages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => conversationThreads.id, { onDelete: "cascade" }),
+    participantId: uuid("participant_id").references(() => conversationParticipants.id, {
+      onDelete: "set null"
+    }),
+    direction: messageDirectionEnum("direction").notNull(),
+    channel: conversationChannelEnum("channel").notNull(),
+    subject: text("subject"),
+    body: text("body").notNull(),
+    mediaUrls: text("media_urls").array().notNull().default([]),
+    toAddress: text("to_address"),
+    fromAddress: text("from_address"),
+    deliveryStatus: messageDeliveryStatusEnum("delivery_status").default("queued").notNull(),
+    provider: text("provider"),
+    providerMessageId: text("provider_message_id"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    receivedAt: timestamp("received_at", { withTimezone: true }),
+    metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    threadIdx: index("conversation_messages_thread_idx").on(table.threadId),
+    statusIdx: index("conversation_messages_status_idx").on(table.deliveryStatus),
+    sentIdx: index("conversation_messages_sent_idx").on(table.sentAt)
+  })
+);
+
+export const messageDeliveryEvents = pgTable(
+  "message_delivery_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    messageId: uuid("message_id")
+      .notNull()
+      .references(() => conversationMessages.id, { onDelete: "cascade" }),
+    status: messageDeliveryStatusEnum("status").notNull(),
+    detail: text("detail"),
+    provider: text("provider"),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    messageIdx: index("message_delivery_message_idx").on(table.messageId),
+    statusIdx: index("message_delivery_status_idx").on(table.status),
+    occurredIdx: index("message_delivery_occurred_idx").on(table.occurredAt)
   })
 );
 
@@ -621,7 +863,6 @@ export const payments = pgTable(
     appointmentIdx: index("payments_appointment_idx").on(table.appointmentId)
   })
 );
-
 
 
 

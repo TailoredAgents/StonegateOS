@@ -15,6 +15,8 @@ export async function callAdminApi(path: string, init?: RequestInit): Promise<Re
     headers: {
       "Content-Type": "application/json",
       "x-api-key": ADMIN_API_KEY,
+      "x-actor-type": "human",
+      "x-actor-label": "team-console",
       ...(init?.headers ?? {})
     },
     cache: "no-store"

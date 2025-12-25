@@ -16,6 +16,11 @@ import { QuoteBuilderSection } from "./components/QuoteBuilderSection";
 import { ChatSection } from "./components/ChatSection";
 import { CalendarSection } from "./components/CalendarSection";
 import { OwnerSection } from "./components/OwnerSection";
+import { InboxSection } from "./components/InboxSection";
+import { PolicyCenterSection } from "./components/PolicyCenterSection";
+import { AutomationSection } from "./components/AutomationSection";
+import { AccessSection } from "./components/AccessSection";
+import { AuditLogSection } from "./components/AuditLogSection";
 import { TabNav, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 
@@ -27,7 +32,7 @@ export const metadata = { title: "Stonegate Team Console" };
 export default async function TeamPage({
   searchParams
 }: {
-  searchParams: Promise<{ tab?: string; q?: string; offset?: string; contactId?: string }>;
+  searchParams: Promise<{ tab?: string; q?: string; offset?: string; contactId?: string; threadId?: string; status?: string }>;
 }) {
   const params = await searchParams;
   const cookieStore = await cookies();
@@ -44,6 +49,8 @@ export default async function TeamPage({
     }
   }
   const quoteContactId = typeof params?.contactId === "string" ? params.contactId : undefined;
+  const inboxThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
+  const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
 
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
@@ -52,11 +59,16 @@ export default async function TeamPage({
     { id: "estimates", label: "Estimates", href: "/team?tab=estimates", requires: "owner" },
     { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "owner" },
     { id: "quote-builder", label: "Quote Builder", href: "/team?tab=quote-builder", requires: "crew" },
+    { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "owner" },
     { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "owner" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
     { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
+    { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "owner" },
+    { id: "automation", label: "Automation", href: "/team?tab=automation", requires: "owner" },
+    { id: "access", label: "Access", href: "/team?tab=access", requires: "owner" },
+    { id: "audit", label: "Audit Log", href: "/team?tab=audit", requires: "owner" },
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
@@ -181,6 +193,18 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
+        {tab === "inbox" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
+                Loading inbox
+              </div>
+            }
+          >
+            <InboxSection threadId={inboxThreadId} status={inboxStatus} />
+          </React.Suspense>
+        ) : null}
+
         {tab === "calendar" && hasOwner ? (
           <React.Suspense
             fallback={
@@ -253,6 +277,54 @@ export default async function TeamPage({
             }
           >
             <OwnerSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "policy" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
+                Loading policy center
+              </div>
+            }
+          >
+            <PolicyCenterSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "automation" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
+                Loading automation
+              </div>
+            }
+          >
+            <AutomationSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "access" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
+                Loading access controls
+              </div>
+            }
+          >
+            <AccessSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "audit" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
+                Loading audit log
+              </div>
+            }
+          >
+            <AuditLogSection />
           </React.Suspense>
         ) : null}
 

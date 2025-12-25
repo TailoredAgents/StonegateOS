@@ -754,6 +754,375 @@ export async function deleteTaskAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function updatePolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const key = formData.get("key");
+  const value = formData.get("value");
+
+  if (typeof key !== "string" || key.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Policy key missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Policy value missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    jar.set({ name: "myst-flash-error", value: "Invalid JSON", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/policy", {
+    method: "POST",
+    body: JSON.stringify({ key: key.trim(), value: parsed })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update policy");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Policy updated", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function updateAutomationModeAction(formData: FormData) {
+  const jar = await cookies();
+  const channel = formData.get("channel");
+  const mode = formData.get("mode");
+
+  if (typeof channel !== "string" || channel.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Channel missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  if (typeof mode !== "string" || mode.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Mode missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/automation", {
+    method: "POST",
+    body: JSON.stringify({ channel: channel.trim(), mode: mode.trim() })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update automation mode");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Automation updated", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function updateLeadAutomationAction(formData: FormData) {
+  const jar = await cookies();
+  const leadId = formData.get("leadId");
+  const channel = formData.get("channel");
+  const paused = formData.get("paused");
+  const dnc = formData.get("dnc");
+  const humanTakeover = formData.get("humanTakeover");
+  const followupState = formData.get("followupState");
+  const followupStep = formData.get("followupStep");
+  const nextFollowupAt = formData.get("nextFollowupAt");
+
+  if (typeof leadId !== "string" || leadId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Lead ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  if (typeof channel !== "string" || channel.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Channel missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  let nextFollowupIso: string | null = null;
+  if (typeof nextFollowupAt === "string" && nextFollowupAt.trim().length > 0) {
+    const parsed = new Date(nextFollowupAt);
+    if (Number.isNaN(parsed.getTime())) {
+      jar.set({ name: "myst-flash-error", value: "Invalid follow-up date", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+    nextFollowupIso = parsed.toISOString();
+  }
+
+  const payload: Record<string, unknown> = {
+    leadId: leadId.trim(),
+    channel: channel.trim(),
+    paused: paused === "on",
+    dnc: dnc === "on",
+    humanTakeover: humanTakeover === "on"
+  };
+
+  if (typeof followupState === "string" && followupState.trim().length > 0) {
+    payload["followupState"] = followupState.trim();
+  }
+  if (typeof followupStep === "string" && followupStep.trim().length > 0) {
+    const step = Number(followupStep);
+    if (!Number.isNaN(step)) {
+      payload["followupStep"] = step;
+    }
+  }
+  if (nextFollowupIso) {
+    payload["nextFollowupAt"] = nextFollowupIso;
+  }
+
+  const response = await callAdminApi("/api/admin/automation/lead", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update lead automation");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Lead automation updated", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function createRoleAction(formData: FormData) {
+  const jar = await cookies();
+  const name = formData.get("name");
+  const slug = formData.get("slug");
+  const permissions = formData.get("permissions");
+
+  if (typeof name !== "string" || name.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Role name required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  if (typeof slug !== "string" || slug.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Role slug required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const perms =
+    typeof permissions === "string" && permissions.trim().length > 0
+      ? permissions
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0)
+      : [];
+
+  const response = await callAdminApi("/api/admin/roles", {
+    method: "POST",
+    body: JSON.stringify({ name: name.trim(), slug: slug.trim(), permissions: perms })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to create role");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Role created", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function createTeamMemberAction(formData: FormData) {
+  const jar = await cookies();
+  const name = formData.get("name");
+  const email = formData.get("email");
+  const roleId = formData.get("roleId");
+  const active = formData.get("active");
+
+  if (typeof name !== "string" || name.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Member name required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    name: name.trim(),
+    active: active === "on"
+  };
+
+  if (typeof email === "string" && email.trim().length > 0) {
+    payload["email"] = email.trim();
+  }
+  if (typeof roleId === "string" && roleId.trim().length > 0) {
+    payload["roleId"] = roleId.trim();
+  }
+
+  const response = await callAdminApi("/api/admin/team/members", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to create member");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Team member added", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function updateTeamMemberAction(formData: FormData) {
+  const jar = await cookies();
+  const memberId = formData.get("memberId");
+  if (typeof memberId !== "string" || memberId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Member ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    active: formData.get("active") === "on"
+  };
+
+  const roleId = formData.get("roleId");
+  if (typeof roleId === "string") {
+    payload["roleId"] = roleId.trim();
+  }
+
+  const response = await callAdminApi(`/api/admin/team/members/${memberId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update member");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Member updated", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function createThreadAction(formData: FormData) {
+  const jar = await cookies();
+  const contactId = formData.get("contactId");
+  const channel = formData.get("channel");
+  const subject = formData.get("subject");
+
+  if (typeof contactId !== "string" || contactId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    contactId: contactId.trim(),
+    channel: typeof channel === "string" && channel.trim().length > 0 ? channel.trim() : "sms"
+  };
+
+  if (typeof subject === "string" && subject.trim().length > 0) {
+    payload["subject"] = subject.trim();
+  }
+
+  const response = await callAdminApi("/api/admin/inbox/threads", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to create thread");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Thread created", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function updateThreadAction(formData: FormData) {
+  const jar = await cookies();
+  const threadId = formData.get("threadId");
+  const status = formData.get("status");
+
+  if (typeof threadId !== "string" || threadId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload: Record<string, unknown> = {};
+  if (typeof status === "string" && status.trim().length > 0) {
+    payload["status"] = status.trim();
+  }
+
+  const response = await callAdminApi(`/api/admin/inbox/threads/${threadId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update thread");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Thread updated", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function sendThreadMessageAction(formData: FormData) {
+  const jar = await cookies();
+  const threadId = formData.get("threadId");
+  const body = formData.get("body");
+  const subject = formData.get("subject");
+
+  if (typeof threadId !== "string" || threadId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  if (typeof body !== "string" || body.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Message body required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    body: body.trim(),
+    direction: "outbound"
+  };
+  if (typeof subject === "string" && subject.trim().length > 0) {
+    payload["subject"] = subject.trim();
+  }
+
+  const response = await callAdminApi(`/api/admin/inbox/threads/${threadId}/messages`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to send message");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Message queued", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function logoutCrew() {
   const jar = await cookies();
   jar.set({ name: "myst-crew-session", value: "", path: "/", maxAge: 0 });
