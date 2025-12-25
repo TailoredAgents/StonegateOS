@@ -30,6 +30,17 @@ Task sequence:
 Done when:
 - Ops can adjust policies without code changes.
 
+### Access Control & Audit (cross-cutting)
+Goal: Controlled access and traceability for automations and actions.
+
+Task sequence:
+1) Roles: Owner / Office / Crew / Read-only.
+2) Permissions: who can send messages, modify policies, mark paid, merge contacts, etc.
+3) Audit log: who/what did what (AI/worker/human), when, and context.
+
+Done when:
+- You can answer “who sent/booked/paused/merged and why” instantly.
+
 ### A) Unified Inbox + Conversation Threads
 Goal: One timeline per lead with all channels and replies from the console.
 
@@ -40,8 +51,9 @@ Task sequence:
 4) Team Console: inbox list, thread view, send panel, and lead linkage.
 5) Automation hooks: "new inbound message" outbox event for alerts.
 6) Identity/merge rules: phone/email exact match -> same contact; address + similar name -> suggest merge; manual merge action; pick primary thread when sources collide.
-7) Conversation state machine: new → qualifying → photos received → estimated → offered times → booked → reminder → completed → review. Guardrails to avoid re-asking answered questions; limit asks to 1–2 at a time.
-8) Message delivery state: queued → sent → delivered/failed (where provider supports); retry rules; failed-sends queue; provider health indicator (SMS/email/calendar).
+7) Merge review queue: suggested merges with confidence; approve/decline; never auto-merge on weak signals.
+8) Conversation state machine: new → qualifying → photos received → estimated → offered times → booked → reminder → completed → review. Guardrails to avoid re-asking answered questions; limit asks to 1–2 at a time.
+9) Message delivery state: queued → sent → delivered/failed (where provider supports); retry rules; failed-sends queue; provider health indicator (SMS/email/calendar).
 
 Done when:
 - Every lead shows a single threaded timeline.
@@ -61,6 +73,7 @@ Task sequence:
 4) Add "auto-reply sent" markers on the lead timeline.
 5) Geo policy: enforce service area boundaries; travel fee rules; polite decline/alternative when out of area.
 6) Channel sequencing: Phase 1 v1 focuses on SMS + missed call + email as fully controlled; FB/Nextdoor ingest/respond but steer to SMS for booking if platform limits show.
+7) Automation modes per channel: Draft-only, Auto reply + human book, Full auto for standard jobs.
 
 Done when:
 - Missed calls create a lead and start an SMS thread.
@@ -80,6 +93,7 @@ Task sequence:
 3) Confirm booking: create appointment and send confirmation + reminders; define "standard job" constraints (size/complexity).
 4) Reschedule flow: self-serve updates and calendar sync.
 5) Confirmation loop: night-before YES/NO; morning-of if unconfirmed; auto-reschedule link if no response.
+6) Automation modes: AI drafts vs full auto booking; per channel/job type.
 
 Done when:
 - Assistant offers two windows and can book a standard job end-to-end.
@@ -99,6 +113,7 @@ Task sequence:
 4) Surface follow-up status in Team Console.
 5) Compliance: STOP handling for SMS, email unsubscribe, quiet hours per channel, per-channel prefs.
 6) Kill switches: per-lead "pause all automations," per-channel "Do Not Contact," and "human takeover" mode to block AI replies until released.
+7) Automation modes: draft-only, approval required, auto-send; per channel.
 
 Done when:
 - Each lead shows "follow-up running" with next step/time.
@@ -128,6 +143,7 @@ Task sequence:
 2) Add "needs human" state on threads and leads.
 3) Add a one-click "take over" button in the console.
 4) Service-area/complexity triggers: out-of-area, commercial, heavy/specialty items route to human.
+5) Escalation SLA: assign to owner/assistant; SLA timers and re-pings; "hot lead" indicator (same-day intent, photos, price asks).
 
 Done when:
 - Leads are flagged with a reason.
@@ -141,6 +157,7 @@ Task sequence:
 2) Operational proof: before/after photos, dump ticket upload, crew notes in timeline.
 3) Store closeout data on appointment/job records.
 4) Surface unpaid vs paid jobs in Owner Hub.
+5) Manual overrides: mark paid/unpaid with reason; resend confirmation; restart follow-up; force book (bypass hold) in emergencies.
 
 Done when:
 - Every completed job has final price and payment method.
@@ -203,6 +220,7 @@ Task sequence:
 2) Attribute bookings to sources.
 3) Spend ingestion: manual daily spend entry (v1) or upload/ingest (v2) by channel/campaign/day.
 4) Owner brief: spend, leads, booked, CPA.
+5) Funnel events: lead created, qualified, quote sent, appointment booked, job completed, paid (manual), review left.
 
 Done when:
 - CPA by channel is visible daily.
