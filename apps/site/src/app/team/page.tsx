@@ -21,7 +21,7 @@ import { PolicyCenterSection } from "./components/PolicyCenterSection";
 import { AutomationSection } from "./components/AutomationSection";
 import { AccessSection } from "./components/AccessSection";
 import { AuditLogSection } from "./components/AuditLogSection";
-import { TabNav, type TabNavItem } from "./components/TabNav";
+import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 
 const ADMIN_COOKIE = "myst-admin-session";
@@ -70,6 +70,13 @@ export default async function TeamPage({
     { id: "access", label: "Access", href: "/team?tab=access", requires: "owner" },
     { id: "audit", label: "Audit Log", href: "/team?tab=audit", requires: "owner" },
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
+  ];
+  const tabGroups: TabNavGroup[] = [
+    { id: "ops", label: "Ops", itemIds: ["myday", "calendar", "inbox", "chat"] },
+    { id: "sales", label: "Sales", itemIds: ["estimates", "quotes", "quote-builder", "pipeline", "contacts"] },
+    { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
+    { id: "control", label: "Control", itemIds: ["policy", "automation", "access", "audit"] },
+    { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
   const activeRequirement = activeTab?.requires;
@@ -132,7 +139,7 @@ export default async function TeamPage({
             </div>
           </div>
           <div className="mt-6">
-            <TabNav items={tabs} activeId={tab} hasOwner={hasOwner} hasCrew={hasCrew} />
+            <TabNav items={tabs} groups={tabGroups} activeId={tab} hasOwner={hasOwner} hasCrew={hasCrew} />
           </div>
         </header>
 
