@@ -5,12 +5,17 @@ import { isAdminRequest } from "../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
 const CHANNELS = ["sms", "email", "dm", "call", "web"] as const;
-const MODES = new Set(["draft", "assist", "auto"]);
+const MODES = ["draft", "assist", "auto"] as const;
 
 type AutomationChannel = (typeof CHANNELS)[number];
+type AutomationMode = (typeof MODES)[number];
 
 function isChannel(value: string): value is AutomationChannel {
   return (CHANNELS as readonly string[]).includes(value);
+}
+
+function isMode(value: string): value is AutomationMode {
+  return (MODES as readonly string[]).includes(value);
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -62,10 +67,12 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "invalid_channel" }, { status: 400 });
   }
 
-  if (typeof payload.mode !== "string" || !MODES.has(payload.mode)) {
+  if (typeof payload.mode !== "string" || !isMode(payload.mode)) {
     return NextResponse.json({ error: "invalid_mode" }, { status: 400 });
   }
 
+  const channel = payload.channel;
+  const mode = payload.mode;
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
   const now = new Date();
@@ -73,15 +80,15 @@ export async function POST(request: NextRequest): Promise<Response> {
   await db
     .insert(automationSettings)
     .values({
-      channel: payload.channel,
-      mode: payload.mode,
+      channel,
+      mode,
       updatedBy: actor.id ?? null,
       updatedAt: now
     })
     .onConflictDoUpdate({
       target: automationSettings.channel,
       set: {
-        mode: payload.mode,
+        mode,
         updatedBy: actor.id ?? null,
         updatedAt: now
       }
@@ -91,9 +98,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     actor,
     action: "automation.mode.update",
     entityType: "automation_setting",
-    entityId: payload.channel,
-    meta: { mode: payload.mode }
+    entityId: channel,
+    meta: { mode }
   });
 
-  return NextResponse.json({ ok: true, channel: payload.channel, mode: payload.mode });
+  return NextResponse.json({ ok: true, channel, mode });
 }
