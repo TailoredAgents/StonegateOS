@@ -36,16 +36,18 @@ type AutoReplyOutcome = {
 const AUTO_REPLY_MIN_DELAY_MS = 10_000;
 const AUTO_REPLY_MAX_DELAY_MS = 30_000;
 
-function resolveReplyChannel(inboundChannel: string | null | undefined): AutoReplyChannel | null {
-  switch ((inboundChannel ?? "").toLowerCase()) {
+function resolveCandidateChannels(inboundChannel: string): AutoReplyChannel[] {
+  switch (inboundChannel.toLowerCase()) {
     case "sms":
-      return "sms";
-    case "email":
-      return "email";
+      return ["sms"];
     case "call":
-      return "sms";
+      return ["sms"];
+    case "email":
+    case "dm":
+    case "web":
+      return ["sms", "email"];
     default:
-      return null;
+      return ["sms", "email"];
   }
 }
 
@@ -151,8 +153,8 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
   }
 
   const inboundChannel = row.channel ?? "sms";
-  const replyChannel = resolveReplyChannel(inboundChannel);
-  if (!replyChannel) {
+  const candidates = resolveCandidateChannels(inboundChannel);
+  if (candidates.length === 0) {
     await recordAuditEvent({
       actor: { type: "ai", label: "auto-reply" },
       action: "auto_reply.skipped",
@@ -162,53 +164,59 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
     });
     return { status: "skipped" };
   }
+  const attempted: Array<{ channel: AutoReplyChannel; reason: string }> = [];
+  let selectedChannel: AutoReplyChannel | null = null;
+  let selectedMode: AutomationMode | null = null;
 
-  const mode = await getAutomationMode(db, replyChannel);
-  if (mode === "draft") {
+  for (const channel of candidates) {
+    const mode = await getAutomationMode(db, channel);
+    if (mode === "draft") {
+      attempted.push({ channel, reason: "mode_draft" });
+      continue;
+    }
+
+    if (row.leadId) {
+      const state = await getLeadAutomationState(db, row.leadId, channel);
+      if (state?.paused || state?.dnc || state?.humanTakeover) {
+        attempted.push({ channel, reason: "lead_kill_switch" });
+        continue;
+      }
+    }
+
+    const toAddress =
+      channel === "sms"
+        ? row.contactPhoneE164 ?? row.contactPhone ?? null
+        : row.contactEmail ?? null;
+    if (!toAddress) {
+      attempted.push({ channel, reason: "missing_recipient" });
+      continue;
+    }
+
+    selectedChannel = channel;
+    selectedMode = mode;
+    break;
+  }
+
+  if (!selectedChannel) {
     await recordAuditEvent({
       actor: { type: "ai", label: "auto-reply" },
       action: "auto_reply.skipped",
       entityType: "conversation_message",
       entityId: row.messageId,
-      meta: { reason: "mode_draft", channel: replyChannel }
+      meta: {
+        reason: "no_eligible_channel",
+        inboundChannel,
+        attempted
+      }
     });
     return { status: "skipped" };
   }
 
-  if (row.leadId) {
-    const state = await getLeadAutomationState(db, row.leadId, replyChannel);
-    if (state?.paused || state?.dnc || state?.humanTakeover) {
-      await recordAuditEvent({
-        actor: { type: "ai", label: "auto-reply" },
-        action: "auto_reply.skipped",
-        entityType: "conversation_message",
-        entityId: row.messageId,
-        meta: {
-          reason: "lead_kill_switch",
-          channel: replyChannel,
-          paused: state.paused,
-          dnc: state.dnc,
-          humanTakeover: state.humanTakeover
-        }
-      });
-      return { status: "skipped" };
-    }
-  }
-
+  const replyChannel = selectedChannel;
   const toAddress =
     replyChannel === "sms"
       ? row.contactPhoneE164 ?? row.contactPhone ?? null
       : row.contactEmail ?? null;
-  if (!toAddress) {
-    await recordAuditEvent({
-      actor: { type: "ai", label: "auto-reply" },
-      action: "auto_reply.skipped",
-      entityType: "conversation_message",
-      entityId: row.messageId,
-      meta: { reason: "missing_recipient", channel: replyChannel }
-    });
-    return { status: "skipped" };
-  }
 
   const [existingAutoReply] = await db
     .select({ id: conversationMessages.id })
@@ -296,6 +304,7 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
           autoReplyToMessageId: row.messageId,
           autoReplyDelayMs: delayMs,
           inboundChannel,
+          replyChannel,
           outOfArea: isOutOfArea || undefined
         },
         createdAt: now
@@ -327,13 +336,14 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
 
   await recordAuditEvent({
     actor: { type: "ai", label: "auto-reply" },
-      action: "auto_reply.queued",
-      entityType: "conversation_message",
-      entityId: created.id,
+    action: "auto_reply.queued",
+    entityType: "conversation_message",
+    entityId: created.id,
     meta: {
       inboundMessageId: row.messageId,
       threadId,
       channel: replyChannel,
+      mode: selectedMode,
       delayMs
     }
   });

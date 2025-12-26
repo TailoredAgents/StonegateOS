@@ -28,6 +28,8 @@ export type InboundMessageInput = {
   metadata?: Record<string, unknown> | null;
   receivedAt?: Date;
   senderName?: string | null;
+  contactPhone?: string | null;
+  contactEmail?: string | null;
 };
 
 type ContactMatch = {
@@ -319,13 +321,49 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         contact = await ensureContactEmail(tx, contact, parsed.email);
       }
     } else {
-      const name = resolveContactName(senderName);
-      contact = await createContact({
-        db: tx,
-        firstName: name.firstName,
-        lastName: name.lastName,
-        source: "inbound"
-      });
+      const normalizedContactEmail =
+        typeof input.contactEmail === "string" && input.contactEmail.trim().length > 0
+          ? input.contactEmail.trim().toLowerCase()
+          : null;
+      const rawContactPhone =
+        typeof input.contactPhone === "string" && input.contactPhone.trim().length > 0
+          ? input.contactPhone.trim()
+          : null;
+      let normalizedContactPhone: { raw: string; e164: string } | null = null;
+      if (rawContactPhone) {
+        try {
+          normalizedContactPhone = normalizePhone(rawContactPhone);
+        } catch {
+          normalizedContactPhone = null;
+        }
+      }
+
+      if (normalizedContactEmail) {
+        contact = await findContactByEmail(tx, normalizedContactEmail);
+      }
+      if (!contact && normalizedContactPhone) {
+        contact = await findContactByPhone(tx, normalizedContactPhone.e164, normalizedContactPhone.raw);
+      }
+
+      if (!contact) {
+        const name = resolveContactName(senderName);
+        contact = await createContact({
+          db: tx,
+          firstName: name.firstName,
+          lastName: name.lastName,
+          email: normalizedContactEmail,
+          phone: normalizedContactPhone?.raw ?? null,
+          phoneE164: normalizedContactPhone?.e164 ?? null,
+          source: "inbound"
+        });
+      } else {
+        if (normalizedContactEmail) {
+          contact = await ensureContactEmail(tx, contact, normalizedContactEmail);
+        }
+        if (normalizedContactPhone) {
+          contact = await ensureContactPhone(tx, contact, normalizedContactPhone.raw, normalizedContactPhone.e164);
+        }
+      }
     }
 
     if (!contact) {

@@ -81,7 +81,7 @@ Dependencies/notes:
 
 ### B) Speed-to-Lead Automations (missed call + instant reply)
 Goal: First response within 2 minutes across all channels.
-Status: in progress (missed-call webhook + SMS/email auto-reply with 10-30s delay wired; auto-reply markers + out-of-area badges in inbox/pipeline; DM/Nextdoor bridge pending).
+Status: in progress (missed-call webhook + SMS/email auto-reply with 10-30s delay wired; channel sequencing SMS->email; auto-reply markers + out-of-area badges in inbox/pipeline; DM webhook stub added; Nextdoor bridge pending).
 
 Task sequence:
 1) Define "first touch" templates by channel (SMS/FB/Nextdoor/email).
