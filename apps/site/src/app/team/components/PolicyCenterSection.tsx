@@ -18,6 +18,10 @@ const POLICY_LABELS: Record<string, { title: string; description: string }> = {
     title: "Quiet hours",
     description: "When outbound messages should pause by channel."
   },
+  service_area: {
+    title: "Service area",
+    description: "Define ZIP codes and boundaries for service coverage."
+  },
   booking_rules: {
     title: "Booking rules",
     description: "Default booking windows, buffers, and capacity caps."

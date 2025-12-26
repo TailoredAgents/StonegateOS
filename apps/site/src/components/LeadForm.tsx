@@ -195,11 +195,10 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
           utm
         })
       });
-      if (!res.ok) {
-        throw new Error(`Quote failed (HTTP ${res.status})`);
-      }
-      const data = (await res.json()) as {
+      const data = (await res.json().catch(() => null)) as {
         ok?: boolean;
+        error?: string;
+        message?: string;
         quoteId?: string | null;
         quote?: {
           loadFractionEstimate: number;
@@ -212,8 +211,17 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
           discountPercent?: number;
           needsInPersonEstimate?: boolean;
         };
-      };
-      if (!data.ok || !data.quote) throw new Error("Quote unavailable");
+      } | null;
+      if (!res.ok || !data?.ok) {
+        const message =
+          (typeof data?.message === "string" && data.message.trim().length > 0
+            ? data.message
+            : typeof data?.error === "string" && data.error.trim().length > 0
+              ? data.error
+              : null) ?? `Quote failed (HTTP ${res.status})`;
+        throw new Error(message);
+      }
+      if (!data.quote) throw new Error("Quote unavailable");
       setQuoteState({
         status: "ready",
         quoteId: data.quoteId ?? null,

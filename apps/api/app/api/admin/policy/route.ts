@@ -2,12 +2,14 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { inArray } from "drizzle-orm";
 import { getDb, policySettings } from "@/db";
+import { DEFAULT_SERVICE_AREA_POLICY, DEFAULT_TEMPLATES_POLICY } from "@/lib/policy";
 import { isAdminRequest } from "../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
 const POLICY_KEYS = [
   "business_hours",
   "quiet_hours",
+  "service_area",
   "booking_rules",
   "standard_job",
   "item_policies",
@@ -36,6 +38,7 @@ const DEFAULT_POLICY_VALUES: Record<PolicyKey, Record<string, unknown>> = {
       dm: { start: "20:00", end: "08:00" }
     }
   },
+  service_area: DEFAULT_SERVICE_AREA_POLICY,
   booking_rules: {
     bookingWindowDays: 30,
     bufferMinutes: 30,
@@ -52,27 +55,7 @@ const DEFAULT_POLICY_VALUES: Record<PolicyKey, Record<string, unknown>> = {
     declined: ["hazmat", "paint", "oil"],
     extraFees: [{ item: "mattress", fee: 25 }]
   },
-  templates: {
-    first_touch: {
-      sms: "Thanks for reaching out! We can help. What items and timeframe are you thinking?",
-      email: "Thanks for contacting Stonegate. Share a few details about your items and timing, and we will follow up.",
-      dm: "Thanks for reaching out! Share your address and a few item details and we can help.",
-      call: "Sorry we missed your call! Reply with your address and what you need hauled and we will get you scheduled.",
-      web: "Thanks for reaching out! Share your address and a few item details and we can help."
-    },
-    follow_up: {
-      sms: "Just checking in - do you want to lock in a time for your junk removal?",
-      email: "Following up on your quote request. Let us know if you want to schedule."
-    },
-    confirmations: {
-      sms: "Confirmed! We will see you at the scheduled time. Reply YES to confirm.",
-      email: "Your appointment is confirmed. Reply YES if everything looks right."
-    },
-    reviews: {
-      sms: "Thanks for choosing Stonegate! Would you leave a quick review?",
-      email: "We appreciate your business. If you have a moment, please share a review."
-    }
-  }
+  templates: DEFAULT_TEMPLATES_POLICY
 };
 
 function isPolicyKey(value: string): value is PolicyKey {

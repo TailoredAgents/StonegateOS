@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getDb, appointments, instantQuotes, leads, outboxEvents, properties } from "@/db";
 import { and, eq, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../../web/persistence";
+import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
 import { normalizeName, normalizePhone } from "../../web/utils";
 
@@ -132,6 +133,17 @@ export async function POST(request: NextRequest) {
       return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
     }
     const body = parsed.data;
+    const normalizedPostalCode = normalizePostalCode(body.postalCode);
+    const serviceArea = await getServiceAreaPolicy();
+    if (normalizedPostalCode && !isPostalCodeAllowed(normalizedPostalCode, serviceArea)) {
+      return corsJson(
+        {
+          error: await getOutOfAreaMessage("web")
+        },
+        requestOrigin,
+        { status: 400 }
+      );
+    }
     const db = getDb();
 
     const [quote] = await db.select().from(instantQuotes).where(eq(instantQuotes.id, body.instantQuoteId)).limit(1);

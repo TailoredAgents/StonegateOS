@@ -8,9 +8,16 @@ import {
   getDb,
   leadAutomationStates,
   outboxEvents,
-  policySettings
+  properties
 } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
+import {
+  getServiceAreaPolicy,
+  getTemplatesPolicy,
+  isPostalCodeAllowed,
+  normalizePostalCode,
+  resolveTemplateForChannel
+} from "@/lib/policy";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
@@ -26,20 +33,8 @@ type AutoReplyOutcome = {
   error?: string | null;
 };
 
-const DEFAULT_FIRST_TOUCH: Record<string, string> = {
-  sms: "Thanks for reaching out! We can help. What items and timeframe are you thinking?",
-  email: "Thanks for contacting Stonegate. Share a few details about your items and timing, and we will follow up.",
-  dm: "Thanks for reaching out! Share your address and a few item details and we can help.",
-  call: "Sorry we missed your call! Reply with your address and what you need hauled and we will get you scheduled.",
-  web: "Thanks for reaching out! Share your address and a few item details and we can help."
-};
-
 const AUTO_REPLY_MIN_DELAY_MS = 10_000;
 const AUTO_REPLY_MAX_DELAY_MS = 30_000;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function resolveReplyChannel(inboundChannel: string | null | undefined): AutoReplyChannel | null {
   switch ((inboundChannel ?? "").toLowerCase()) {
@@ -88,44 +83,6 @@ async function getLeadAutomationState(
   return row ?? null;
 }
 
-function resolveFirstTouchTemplate(
-  templates: Record<string, string>,
-  inboundChannel: string,
-  replyChannel: AutoReplyChannel
-): string | null {
-  const inboundKey = inboundChannel.toLowerCase();
-  if (inboundKey === "call" && templates["call"]) {
-    return templates["call"];
-  }
-  if (replyChannel === "sms" && templates["sms"]) {
-    return templates["sms"];
-  }
-  if (replyChannel === "email" && templates["email"]) {
-    return templates["email"];
-  }
-  return null;
-}
-
-async function loadFirstTouchTemplates(db: DbExecutor): Promise<Record<string, string>> {
-  const [row] = await db
-    .select({ value: policySettings.value })
-    .from(policySettings)
-    .where(eq(policySettings.key, "templates"))
-    .limit(1);
-
-  const stored = row?.value;
-  const rawFirstTouch =
-    isRecord(stored) && isRecord(stored["first_touch"]) ? (stored["first_touch"] as Record<string, unknown>) : {};
-
-  const templates: Record<string, string> = { ...DEFAULT_FIRST_TOUCH };
-  for (const [key, value] of Object.entries(rawFirstTouch)) {
-    if (typeof value === "string" && value.trim().length > 0) {
-      templates[key] = value.trim();
-    }
-  }
-  return templates;
-}
-
 async function ensureSystemParticipant(db: DbExecutor, threadId: string, createdAt: Date): Promise<string | null> {
   const [existing] = await db
     .select({ id: conversationParticipants.id })
@@ -168,6 +125,7 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
       threadSubject: conversationThreads.subject,
       leadId: conversationThreads.leadId,
       contactId: conversationThreads.contactId,
+      propertyPostalCode: properties.postalCode,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
       contactEmail: contacts.email,
@@ -177,6 +135,7 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
     .from(conversationMessages)
     .leftJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
     .where(eq(conversationMessages.id, messageId))
     .limit(1);
 
@@ -284,15 +243,27 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
     return { status: "skipped" };
   }
 
-  const templates = await loadFirstTouchTemplates(db);
-  const template = resolveFirstTouchTemplate(templates, inboundChannel, replyChannel);
+  const templatesPolicy = await getTemplatesPolicy(db);
+  const serviceArea = await getServiceAreaPolicy(db);
+  const normalizedPostalCode = normalizePostalCode(row.propertyPostalCode ?? null);
+  const isOutOfArea =
+    normalizedPostalCode !== null && !isPostalCodeAllowed(normalizedPostalCode, serviceArea);
+  const templateGroup = isOutOfArea ? templatesPolicy.out_of_area : templatesPolicy.first_touch;
+  const template = resolveTemplateForChannel(templateGroup, {
+    inboundChannel,
+    replyChannel
+  });
   if (!template) {
     await recordAuditEvent({
       actor: { type: "ai", label: "auto-reply" },
       action: "auto_reply.skipped",
       entityType: "conversation_message",
       entityId: row.messageId,
-      meta: { reason: "missing_template", channel: replyChannel }
+      meta: {
+        reason: "missing_template",
+        channel: replyChannel,
+        outOfArea: isOutOfArea
+      }
     });
     return { status: "skipped" };
   }
@@ -324,7 +295,8 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
           autoReply: true,
           autoReplyToMessageId: row.messageId,
           autoReplyDelayMs: delayMs,
-          inboundChannel
+          inboundChannel,
+          outOfArea: isOutOfArea || undefined
         },
         createdAt: now
       })

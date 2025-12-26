@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
+import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
 import { normalizeName, normalizePhone } from "../web/utils";
@@ -337,12 +338,22 @@ export async function POST(request: NextRequest) {
   try {
     const requestOrigin = request.headers.get("origin");
     const parsed = RequestSchema.safeParse(await request.json());
-    if (!parsed.success) {
-      return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
-    }
-    const body = parsed.data;
+      if (!parsed.success) {
+        return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
+      }
+      const body = parsed.data;
 
-    const bounds = getQuoteBounds(body.job);
+      const normalizedPostalCode = normalizePostalCode(body.job.zip);
+      const serviceArea = await getServiceAreaPolicy();
+      if (normalizedPostalCode && !isPostalCodeAllowed(normalizedPostalCode, serviceArea)) {
+        return corsJson({
+          ok: false,
+          error: "out_of_area",
+          message: await getOutOfAreaMessage("web")
+        }, requestOrigin);
+      }
+
+      const bounds = getQuoteBounds(body.job);
     const fallback = getFallbackQuote(body.job, bounds);
     const aiResult = await getQuoteFromAi(body, bounds).catch((err) => {
       console.error("[junk-quote] ai_failed", err instanceof Error ? err.message : err);

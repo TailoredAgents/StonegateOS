@@ -5,6 +5,7 @@ import { DateTime } from "luxon";
 import { and, eq, gte, lte, ne } from "drizzle-orm";
 import { getDb, appointments, instantQuotes, properties } from "@/db";
 import { forwardGeocode } from "@/lib/geocode";
+import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
 
 const RAW_ALLOWED_ORIGINS =
@@ -194,6 +195,19 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     const body = parsed.data;
+    const normalizedPostalCode = normalizePostalCode(body.postalCode);
+    const serviceArea = await getServiceAreaPolicy();
+    if (normalizedPostalCode && !isPostalCodeAllowed(normalizedPostalCode, serviceArea)) {
+      return corsJson(
+        {
+          ok: false,
+          error: await getOutOfAreaMessage("web")
+        },
+        requestOrigin,
+        { status: 400 }
+      );
+    }
+
     const db = getDb();
     const [quote] = await db
       .select({ id: instantQuotes.id, aiResult: instantQuotes.aiResult, perceivedSize: instantQuotes.perceivedSize })

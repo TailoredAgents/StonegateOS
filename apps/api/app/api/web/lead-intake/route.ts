@@ -5,6 +5,7 @@ import { z } from "zod";
 import { nanoid } from "nanoid";
 import { getDb, leads, outboxEvents, appointments } from "@/db";
 import { sendConversion } from "@/lib/ga";
+import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 import { normalizeName, normalizePhone, resolveClientIp } from "../utils";
 import { upsertContact, upsertProperty } from "../persistence";
 import { DEFAULT_TRAVEL_BUFFER_MIN, resolveAppointmentTiming } from "../scheduling";
@@ -148,6 +149,19 @@ export async function POST(request: NextRequest) {
   const normalizedState = payload.state.trim().toUpperCase();
   const addressLine1 = payload.addressLine1.trim();
   const postalCode = payload.postalCode.trim();
+  const normalizedPostalCode = normalizePostalCode(postalCode);
+
+  const serviceArea = await getServiceAreaPolicy();
+  if (normalizedPostalCode && !isPostalCodeAllowed(normalizedPostalCode, serviceArea)) {
+    return corsJson(
+      {
+        ok: false,
+        error: "out_of_area",
+        message: await getOutOfAreaMessage("web")
+      },
+      { status: 200 }
+    );
+  }
 
   const leadResult = await db.transaction(async (tx) => {
     const contact = await upsertContact(tx, {
