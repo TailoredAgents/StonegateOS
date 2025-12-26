@@ -15,22 +15,23 @@
 - Public/team/owner chat endpoints.
 
 ## Foundations to add (prereqs for the roadmap)
-- Access control & audit: roles/permissions and an audit log for sends/bookings/merges/policy changes.
-- Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited).
-- Policy center storage: configurable business hours/quiet hours, booking windows/buffers, standard job definition, item policies, templates.
-- Automation modes/kill switches: per-channel autonomy levels, lead-level pause/DNC, human takeover, follow-up state machine.
-- Booking holds + confirmation loop: hold/reservation model, “standard job” enforcement, YES/NO confirmation cadence.
-- Escalation routing/SLA: assignment, timers, hot-lead flags.
-- Owner brief + spend ingestion: daily digest and CPA inputs (manual spend entry v1).
-- Review/referral sequences: triggers and outbox schedules.
-- Bank upload/reconciliation: CSV/OFX ingest, categorization, matching UI/logic.
-- Manual overrides: resend/force-book/restart follow-up/mark paid-unpaid tools in console.
-- Migration/backfill: create default threads for legacy leads/quotes and mark a primary thread so old records appear in the new inbox.
+- Access control & audit: roles/permissions and an audit log for sends/bookings/merges/policy changes. Status: partial (roles + audit log storage/API/UI in place; enforcement + broader audit coverage pending).
+- Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited). Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events; inbound ingestion + merge queue + state machine pending).
+- Policy center storage: configurable business hours/quiet hours, booking windows/buffers, standard job definition, item policies, templates. Status: done (storage + admin UI); enforcement pending in Phase 1 tasks.
+- Automation modes/kill switches: per-channel autonomy levels, lead-level pause/DNC, human takeover, follow-up state machine. Status: partial (data model + admin API + UI for channel modes + lead kill switches; automation enforcement + follow-up state machine pending).
+- Booking holds + confirmation loop: hold/reservation model, “standard job” enforcement, YES/NO confirmation cadence. Status: todo.
+- Escalation routing/SLA: assignment, timers, hot-lead flags. Status: todo.
+- Owner brief + spend ingestion: daily digest and CPA inputs (manual spend entry v1). Status: todo.
+- Review/referral sequences: triggers and outbox schedules. Status: todo.
+- Bank upload/reconciliation: CSV/OFX ingest, categorization, matching UI/logic. Status: todo.
+- Manual overrides: resend/force-book/restart follow-up/mark paid-unpaid tools in console. Status: todo.
+- Migration/backfill: create default threads for legacy leads/quotes and mark a primary thread so old records appear in the new inbox. Status: todo.
 
 ## Phase 1 - Launch critical (Dec 27)
 
 ### Business Settings / Policy Center (cross-cutting)
 Goal: Central place to configure business rules instead of hardcoding.
+Status: partial (policy storage + admin UI done; policy enforcement pending).
 
 Task sequence:
 1) Business hours + quiet hours per channel.
@@ -45,6 +46,7 @@ Done when:
 
 ### Access Control & Audit (cross-cutting)
 Goal: Controlled access and traceability for automations and actions.
+Status: partial (roles + audit log storage/API/UI done; permission enforcement + wider audit coverage pending).
 
 Task sequence:
 1) Roles: Owner / Office / Crew / Read-only.
@@ -56,6 +58,7 @@ Done when:
 
 ### A) Unified Inbox + Conversation Threads
 Goal: One timeline per lead with all channels and replies from the console.
+Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events done; inbound ingestion + merge queue + state machine pending).
 
 Task sequence:
 1) Data model: add conversation threads, messages, participants, and channel metadata.
@@ -78,6 +81,7 @@ Dependencies/notes:
 
 ### B) Speed-to-Lead Automations (missed call + instant reply)
 Goal: First response within 2 minutes across all channels.
+Status: not started.
 
 Task sequence:
 1) Define "first touch" templates by channel (SMS/FB/Nextdoor/email).
@@ -99,6 +103,7 @@ Dependencies/notes:
 
 ### C) Booking Flow: Two time options + appointment hold
 Goal: Convert chats into scheduled appointments without human involvement for standard jobs.
+Status: not started.
 
 Task sequence:
 1) Availability model: generate two time windows based on capacity and geography.
@@ -118,6 +123,7 @@ Dependencies/notes:
 
 ### D) Follow-up sequences (quoted-but-not-booked)
 Goal: Automated follow-up that stops when the lead replies or books.
+Status: not started.
 
 Task sequence:
 1) Define sequence templates and timing (new lead, quote sent, no response).
