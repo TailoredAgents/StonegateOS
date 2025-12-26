@@ -47,6 +47,14 @@ type ContactStats = {
   lastLeadAt: Date;
 };
 
+type SimilarityBreakdown = {
+  sameLastName: boolean;
+  sameFirstName: boolean;
+  sameFirstInitial: boolean;
+  sameEmail: boolean;
+  samePhoneLast4: boolean;
+};
+
 export type MergeContactsResult = {
   sourceContactId: string;
   targetContactId: string;
@@ -93,8 +101,11 @@ function lastFourDigits(phone: string | null | undefined): string {
   return digits.slice(-4);
 }
 
-function scoreSimilarity(primary: ContactRow, secondary: ContactRow): { score: number; breakdown: Record<string, boolean> } {
-  const breakdown: Record<string, boolean> = {
+function scoreSimilarity(
+  primary: ContactRow,
+  secondary: ContactRow
+): { score: number; breakdown: SimilarityBreakdown } {
+  const breakdown: SimilarityBreakdown = {
     sameLastName: false,
     sameFirstName: false,
     sameFirstInitial: false,
