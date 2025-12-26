@@ -65,6 +65,7 @@ type MessageDetail = {
   deliveryStatus: string;
   participantName: string | null;
   createdAt: string;
+  metadata?: Record<string, unknown> | null;
 };
 
 type ThreadResponse = {
@@ -172,6 +173,17 @@ function formatTimestamp(value: string | null): string {
 function formatFailureDetail(detail: string | null): string {
   if (!detail) return "Send failed";
   return detail.replace(/_/g, " ");
+}
+
+function readMetaNumber(meta: Record<string, unknown> | null | undefined, key: string): number | null {
+  if (!meta) return null;
+  const value = meta[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function isAutoReply(meta: Record<string, unknown> | null | undefined): boolean {
+  if (!meta) return false;
+  return meta["autoReply"] === true;
 }
 
 function getAllowedStates(currentState: string | null | undefined): string[] {
@@ -502,6 +514,8 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                 ) : (
                   activeMessages.map((message) => {
                     const isOutbound = message.direction !== "inbound";
+                    const autoReply = isAutoReply(message.metadata ?? null);
+                    const autoReplyDelayMs = readMetaNumber(message.metadata ?? null, "autoReplyDelayMs");
                     return (
                       <div key={message.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                         <div
@@ -509,6 +523,14 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                             isOutbound ? "bg-primary-100 text-slate-900" : "bg-slate-100 text-slate-700"
                           }`}
                         >
+                          {autoReply ? (
+                            <div className="mb-1 inline-flex items-center gap-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                              Auto reply
+                              {typeof autoReplyDelayMs === "number"
+                                ? `(${Math.round(autoReplyDelayMs / 1000)}s delay)`
+                                : null}
+                            </div>
+                          ) : null}
                           {message.subject ? (
                             <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
                               {message.subject}

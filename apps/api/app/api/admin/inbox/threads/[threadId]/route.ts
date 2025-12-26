@@ -140,6 +140,7 @@ export async function GET(
       providerMessageId: conversationMessages.providerMessageId,
       sentAt: conversationMessages.sentAt,
       receivedAt: conversationMessages.receivedAt,
+      metadata: conversationMessages.metadata,
       createdAt: conversationMessages.createdAt,
       participantType: conversationParticipants.participantType,
       participantName: conversationParticipants.displayName,
@@ -202,6 +203,7 @@ export async function GET(
       providerMessageId: row.providerMessageId ?? null,
       sentAt: row.sentAt ? row.sentAt.toISOString() : null,
       receivedAt: row.receivedAt ? row.receivedAt.toISOString() : null,
+      metadata: row.metadata ?? null,
       createdAt: row.createdAt.toISOString(),
       deliveryEvents:
         deliveryMap.get(row.id)?.map((event) => ({
