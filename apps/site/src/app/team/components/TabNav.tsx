@@ -229,6 +229,9 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
 
               if (isSingle) {
                 const item = group.items[0];
+                if (!item) {
+                  return null;
+                }
                 const allowed = resolveAllowed(item.requires);
                 const isRestricted =
                   item.requires === "owner"
