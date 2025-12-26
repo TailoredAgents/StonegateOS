@@ -9,6 +9,7 @@ import {
   quotes,
   crmTasks
 } from "@/db";
+import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 import { isAdminRequest } from "../../../web/admin";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { PIPELINE_STAGES } from "./stages";
@@ -42,6 +43,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       lanes: PIPELINE_STAGES.map((stage) => ({ stage, contacts: [] }))
     });
   }
+
+  const serviceArea = await getServiceAreaPolicy(db);
 
   const contactIds = pipelineRows.map((row) => row.contactId).filter((id): id is string => Boolean(id));
 
@@ -144,6 +147,9 @@ export async function GET(request: NextRequest): Promise<Response> {
     if (!lane) continue;
 
     const property = primaryPropertyByContact.get(contactId);
+    const normalizedPostalCode = property?.postalCode ? normalizePostalCode(property.postalCode) : null;
+    const outOfArea =
+      normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
     const appointmentStat = appointmentMap.get(contactId);
     const quoteStat = quoteMap.get(contactId);
     const openTasks = openTaskMap.get(contactId) ?? 0;
@@ -177,7 +183,8 @@ export async function GET(request: NextRequest): Promise<Response> {
             addressLine1: property.addressLine1,
             city: property.city,
             state: property.state,
-            postalCode: property.postalCode
+            postalCode: property.postalCode,
+            outOfArea
           }
         : null,
       stats: {

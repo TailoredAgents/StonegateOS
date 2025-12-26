@@ -15,6 +15,7 @@ export type PipelineContact = {
     city: string;
     state: string;
     postalCode: string;
+    outOfArea?: boolean | null;
   } | null;
   stats: {
     appointments: number;

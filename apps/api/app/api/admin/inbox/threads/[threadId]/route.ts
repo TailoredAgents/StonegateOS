@@ -16,6 +16,7 @@ import {
   isConversationState,
   type ConversationState
 } from "@/lib/conversation-state";
+import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -79,6 +80,11 @@ export async function GET(
   if (!threadRow) {
     return NextResponse.json({ error: "thread_not_found" }, { status: 404 });
   }
+
+  const serviceArea = await getServiceAreaPolicy(db);
+  const normalizedPostalCode = normalizePostalCode(threadRow.propertyPostalCode ?? null);
+  const outOfArea =
+    normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
 
   const participantRows = await db
     .select({
@@ -244,7 +250,8 @@ export async function GET(
             addressLine1: threadRow.propertyAddressLine1 ?? "",
             city: threadRow.propertyCity ?? "",
             state: threadRow.propertyState ?? "",
-            postalCode: threadRow.propertyPostalCode ?? ""
+            postalCode: threadRow.propertyPostalCode ?? "",
+            outOfArea
           }
         : null,
       leadId: threadRow.leadId ?? null,

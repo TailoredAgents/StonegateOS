@@ -13,6 +13,7 @@ import {
   outboxEvents
 } from "@/db";
 import { isConversationState, type ConversationState } from "@/lib/conversation-state";
+import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 import { isAdminRequest } from "../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -165,6 +166,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     .limit(limit)
     .offset(offset);
 
+  const serviceArea = await getServiceAreaPolicy(db);
+
   const threadIds = rows.map((row) => row.id);
   const messageCounts =
     threadIds.length > 0
@@ -185,6 +188,9 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const threads = rows.map((row) => {
     const contactName = [row.contactFirstName, row.contactLastName].filter(Boolean).join(" ").trim();
+    const normalizedPostalCode = normalizePostalCode(row.propertyPostalCode ?? null);
+    const outOfArea =
+      normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
     return {
       id: row.id,
       status: row.status,
@@ -209,7 +215,8 @@ export async function GET(request: NextRequest): Promise<Response> {
             addressLine1: row.propertyAddressLine1 ?? "",
             city: row.propertyCity ?? "",
             state: row.propertyState ?? "",
-            postalCode: row.propertyPostalCode ?? ""
+            postalCode: row.propertyPostalCode ?? "",
+            outOfArea
           }
         : null,
       leadId: row.leadId ?? null,

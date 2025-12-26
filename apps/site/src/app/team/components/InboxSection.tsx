@@ -29,6 +29,7 @@ type ThreadSummary = {
     city: string;
     state: string;
     postalCode: string;
+    outOfArea?: boolean | null;
   } | null;
   messageCount: number;
 };
@@ -53,6 +54,7 @@ type ThreadDetail = {
     city: string;
     state: string;
     postalCode: string;
+    outOfArea?: boolean | null;
   } | null;
 };
 
@@ -341,10 +343,15 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                       <div className="font-semibold text-slate-900">
                         {thread.contact?.name ?? "Unknown contact"}
                       </div>
-                      <div className="flex flex-wrap items-center gap-1">
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                          {formatStateLabel(thread.state ?? "new")}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-1">
+                          {thread.property?.outOfArea ? (
+                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                              Out of area
+                            </span>
+                          ) : null}
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                            {formatStateLabel(thread.state ?? "new")}
+                          </span>
                         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                           {thread.channel}
                         </span>
@@ -467,6 +474,11 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                     {activeThread.channel.toUpperCase()} · {formatStatusLabel(activeThread.status)} ·{" "}
                     {formatStateLabel(activeThread.state ?? "new")}
                   </p>
+                  {activeThread.property?.outOfArea ? (
+                    <p className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                      Out of area
+                    </p>
+                  ) : null}
                   {activeThread.stateUpdatedAt ? (
                     <p className="text-[11px] text-slate-400">
                       State updated {formatTimestamp(activeThread.stateUpdatedAt)}

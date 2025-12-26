@@ -286,6 +286,11 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                             {labelForStage(contact.pipeline.stage)}
                           </span>
                         </div>
+                        {contact.property?.outOfArea ? (
+                          <span className="mt-2 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                            Out of area
+                          </span>
+                        ) : null}
                         {contact.property ? (
                           <p className="mt-3 text-[11px] text-slate-600">
                             {contact.property.addressLine1}, {contact.property.city}
