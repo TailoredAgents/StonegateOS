@@ -1,6 +1,7 @@
 import type { AppointmentCalendarPayload } from "./calendar";
 import { createCalendarEvent, updateCalendarEvent } from "./calendar";
 import { ensureCalendarWatch } from "./calendar-sync";
+import { recordProviderFailure, recordProviderSuccess } from "./provider-health";
 
 type RetryOptions = {
   attempts?: number;
@@ -70,17 +71,38 @@ export async function createCalendarEventWithRetry(
   payload: AppointmentCalendarPayload,
   options?: RetryOptions
 ): Promise<string | null> {
-  const eventId = await withRetry(
-    () => createCalendarEvent(payload),
-    (result) => result === null,
-    options
-  );
+  try {
+    const eventId = await withRetry(
+      () => createCalendarEvent(payload),
+      (result) => result === null,
+      options
+    );
 
-  if (eventId) {
-    void ensureCalendarWatch();
+    if (eventId) {
+      void ensureCalendarWatch();
+      try {
+        await recordProviderSuccess("calendar");
+      } catch (error) {
+        console.warn("[calendar] health_update_failed", { error: String(error) });
+      }
+    } else {
+      try {
+        await recordProviderFailure("calendar", "calendar_create_failed");
+      } catch (error) {
+        console.warn("[calendar] health_update_failed", { error: String(error) });
+      }
+    }
+
+    return eventId;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    try {
+      await recordProviderFailure("calendar", detail);
+    } catch (healthError) {
+      console.warn("[calendar] health_update_failed", { error: String(healthError) });
+    }
+    throw error;
   }
-
-  return eventId;
 }
 
 export async function updateCalendarEventWithRetry(
@@ -88,17 +110,38 @@ export async function updateCalendarEventWithRetry(
   payload: AppointmentCalendarPayload,
   options?: RetryOptions
 ): Promise<boolean> {
-  const updated = await withRetry(
-    () => updateCalendarEvent(eventId, payload),
-    (result) => result === false,
-    options
-  );
+  try {
+    const updated = await withRetry(
+      () => updateCalendarEvent(eventId, payload),
+      (result) => result === false,
+      options
+    );
 
-  if (updated) {
-    void ensureCalendarWatch();
+    if (updated) {
+      void ensureCalendarWatch();
+      try {
+        await recordProviderSuccess("calendar");
+      } catch (error) {
+        console.warn("[calendar] health_update_failed", { error: String(error) });
+      }
+    } else {
+      try {
+        await recordProviderFailure("calendar", "calendar_update_failed");
+      } catch (error) {
+        console.warn("[calendar] health_update_failed", { error: String(error) });
+      }
+    }
+
+    return updated;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    try {
+      await recordProviderFailure("calendar", detail);
+    } catch (healthError) {
+      console.warn("[calendar] health_update_failed", { error: String(healthError) });
+    }
+    throw error;
   }
-
-  return updated;
 }
 
 

@@ -1,7 +1,12 @@
 import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
-import { createThreadAction, sendThreadMessageAction, updateThreadAction } from "../actions";
+import {
+  createThreadAction,
+  retryFailedMessageAction,
+  sendThreadMessageAction,
+  updateThreadAction
+} from "../actions";
 
 type ThreadSummary = {
   id: string;
@@ -67,6 +72,29 @@ type ThreadResponse = {
   messages: MessageDetail[];
 };
 
+type ProviderHealth = {
+  provider: "sms" | "email" | "calendar";
+  status: "healthy" | "degraded" | "unknown";
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureDetail: string | null;
+};
+
+type FailedMessage = {
+  id: string;
+  threadId: string;
+  channel: string;
+  body: string;
+  provider: string | null;
+  toAddress: string | null;
+  createdAt: string;
+  sentAt: string | null;
+  failedAt: string | null;
+  failureDetail: string | null;
+  threadSubject: string | null;
+  contact: { id: string; name: string } | null;
+};
+
 const THREAD_STATUSES = ["open", "pending", "closed"];
 const THREAD_STATES = [
   "new",
@@ -94,6 +122,41 @@ function formatStateLabel(value: string): string {
     .trim();
 }
 
+function formatProviderLabel(value: ProviderHealth["provider"]): string {
+  switch (value) {
+    case "sms":
+      return "SMS";
+    case "email":
+      return "Email";
+    case "calendar":
+      return "Calendar";
+    default:
+      return value;
+  }
+}
+
+function formatProviderStatus(value: ProviderHealth["status"]): string {
+  switch (value) {
+    case "healthy":
+      return "Healthy";
+    case "degraded":
+      return "Issue";
+    default:
+      return "Unknown";
+  }
+}
+
+function providerStatusClasses(value: ProviderHealth["status"]): string {
+  switch (value) {
+    case "healthy":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "degraded":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    default:
+      return "border-slate-200 bg-slate-100 text-slate-500";
+  }
+}
+
 function formatTimestamp(value: string | null): string {
   if (!value) return "No activity yet";
   const parsed = new Date(value);
@@ -104,6 +167,11 @@ function formatTimestamp(value: string | null): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(parsed);
+}
+
+function formatFailureDetail(detail: string | null): string {
+  if (!detail) return "Send failed";
+  return detail.replace(/_/g, " ");
 }
 
 function getAllowedStates(currentState: string | null | undefined): string[] {
@@ -134,8 +202,15 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
     params.set("status", activeStatus);
   }
 
-  const threadsRes = await callAdminApi(`/api/admin/inbox/threads?${params.toString()}`);
-  const threadDetailRes = threadId ? await callAdminApi(`/api/admin/inbox/threads/${threadId}`) : null;
+  const threadDetailPromise = threadId
+    ? callAdminApi(`/api/admin/inbox/threads/${threadId}`)
+    : Promise.resolve(null);
+  const [threadsRes, providerRes, failedRes, threadDetailRes] = await Promise.all([
+    callAdminApi(`/api/admin/inbox/threads?${params.toString()}`),
+    callAdminApi("/api/admin/providers/health"),
+    callAdminApi("/api/admin/inbox/failed-sends?limit=10"),
+    threadDetailPromise
+  ]);
 
   if (!threadsRes.ok) {
     throw new Error("Failed to load inbox threads");
@@ -143,6 +218,18 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
 
   const threadsPayload = (await threadsRes.json()) as { threads?: ThreadSummary[] };
   const threads = threadsPayload.threads ?? [];
+
+  let providers: ProviderHealth[] = [];
+  if (providerRes.ok) {
+    const providerPayload = (await providerRes.json()) as { providers?: ProviderHealth[] };
+    providers = providerPayload.providers ?? [];
+  }
+
+  let failedMessages: FailedMessage[] = [];
+  if (failedRes.ok) {
+    const failedPayload = (await failedRes.json()) as { messages?: FailedMessage[] };
+    failedMessages = failedPayload.messages ?? [];
+  }
 
   let threadDetail: ThreadResponse | null = null;
   if (threadDetailRes) {
@@ -164,6 +251,29 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
         <p className="mt-1 text-sm text-slate-600">
           Track every lead conversation in one place. Threads show delivery state and keep your team in sync.
         </p>
+        {providers.length > 0 ? (
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            {providers.map((provider) => {
+              const titleParts = [
+                provider.lastSuccessAt ? `Last success: ${formatTimestamp(provider.lastSuccessAt)}` : null,
+                provider.lastFailureAt ? `Last issue: ${formatTimestamp(provider.lastFailureAt)}` : null,
+                provider.lastFailureDetail ? `Detail: ${provider.lastFailureDetail}` : null
+              ].filter(Boolean);
+              const title = titleParts.length > 0 ? titleParts.join(" • ") : undefined;
+              return (
+                <span
+                  key={provider.provider}
+                  title={title}
+                  className={`inline-flex items-center rounded-full border px-3 py-1 font-semibold ${providerStatusClasses(
+                    provider.status
+                  )}`}
+                >
+                  {formatProviderLabel(provider.provider)} {formatProviderStatus(provider.status)}
+                </span>
+              );
+            })}
+          </div>
+        ) : null}
       </header>
 
       <form method="get" className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm text-slate-600 shadow-md shadow-slate-200/50">
@@ -281,6 +391,55 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                 Create thread
               </SubmitButton>
             </form>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-slate-900">Delivery issues</h4>
+              <span className="text-xs text-slate-500">{failedMessages.length} failed</span>
+            </div>
+            {failedMessages.length === 0 ? (
+              <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/80 p-3 text-xs text-slate-500">
+                No failed sends right now.
+              </div>
+            ) : (
+              <div className="mt-3 space-y-3">
+                {failedMessages.map((message) => (
+                  <div key={message.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-semibold text-slate-900">
+                        {message.contact?.name ?? "Unknown contact"}
+                      </div>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        {message.channel}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-slate-500">{message.body}</p>
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                      <span>{formatFailureDetail(message.failureDetail)}</span>
+                      <span>{formatTimestamp(message.failedAt ?? message.createdAt)}</span>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <a
+                        href={buildThreadHref("all", message.threadId)}
+                        className="text-[11px] font-semibold text-primary-600 hover:text-primary-700"
+                      >
+                        View thread
+                      </a>
+                      <form action={retryFailedMessageAction}>
+                        <input type="hidden" name="messageId" value={message.id} />
+                        <SubmitButton
+                          className="rounded-full border border-slate-200 px-3 py-1 text-[11px] text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                          pendingLabel="Retrying..."
+                        >
+                          Retry send
+                        </SubmitButton>
+                      </form>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

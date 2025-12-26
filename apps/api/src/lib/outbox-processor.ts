@@ -1,4 +1,4 @@
-import { asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
 import {
   getDb,
   outboxEvents,
@@ -22,6 +22,7 @@ import type { AppointmentCalendarPayload } from "@/lib/calendar";
 import { createCalendarEventWithRetry, updateCalendarEventWithRetry } from "@/lib/calendar-events";
 import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
 import { recordAuditEvent } from "@/lib/audit";
+import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -36,6 +37,13 @@ export interface ProcessOutboxBatchOptions {
   limit?: number;
 }
 
+type OutboxOutcome = {
+  status: "processed" | "skipped" | "retry";
+  error?: string | null;
+};
+
+const MAX_MESSAGE_SEND_ATTEMPTS = 3;
+const MESSAGE_SEND_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
 const APPOINTMENT_STATUS_VALUES = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
 type AppointmentStatus = (typeof APPOINTMENT_STATUS_VALUES)[number];
@@ -50,6 +58,66 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isValidAppointmentStatus(value: unknown): value is AppointmentStatus {
   return typeof value === "string" && VALID_APPOINTMENT_STATUSES.has(value);
+}
+
+function getRetryDelayMs(attempt: number): number {
+  if (!Number.isFinite(attempt) || attempt <= 0) {
+    return MESSAGE_SEND_RETRY_DELAYS_MS[0] ?? 60_000;
+  }
+  const index = Math.min(attempt - 1, MESSAGE_SEND_RETRY_DELAYS_MS.length - 1);
+  return MESSAGE_SEND_RETRY_DELAYS_MS[index] ?? MESSAGE_SEND_RETRY_DELAYS_MS[0] ?? 60_000;
+}
+
+function parseSmsFailureStatus(detail: string): number | null {
+  if (!detail.startsWith("sms_failed:")) {
+    return null;
+  }
+  const parts = detail.split(":");
+  if (parts.length < 2) {
+    return null;
+  }
+  const status = Number(parts[1]);
+  return Number.isFinite(status) ? status : null;
+}
+
+function isRetryableSendFailure(detail: string | null): boolean {
+  if (!detail) {
+    return true;
+  }
+  const normalized = detail.toLowerCase();
+  if (
+    normalized.includes("not_configured") ||
+    normalized.includes("missing_recipient") ||
+    normalized.includes("unsupported_channel")
+  ) {
+    return false;
+  }
+  if (normalized.startsWith("sms_failed:")) {
+    const status = parseSmsFailureStatus(normalized);
+    if (typeof status === "number" && status >= 400 && status < 500) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function recordProviderSuccessSafe(provider: "sms" | "email" | "calendar"): Promise<void> {
+  try {
+    await recordProviderSuccess(provider);
+  } catch (error) {
+    console.warn("[provider] health_success_failed", { provider, error: String(error) });
+  }
+}
+
+async function recordProviderFailureSafe(
+  provider: "sms" | "email" | "calendar",
+  detail: string | null
+): Promise<void> {
+  try {
+    await recordProviderFailure(provider, detail ?? null);
+  } catch (error) {
+    console.warn("[provider] health_failure_failed", { provider, error: String(error) });
+  }
 }
 
 function coerceServices(input: unknown): string[] {
@@ -459,7 +527,7 @@ function mapAppointmentStatusToStage(status: string): PipelineStage {
   }
 }
 
-async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" | "skipped"> {
+async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcome> {
   switch (event.type) {
     case "estimate.requested": {
       const payload = isRecord(event.payload) ? event.payload : null;
@@ -467,7 +535,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       const appointmentId = typeof appointmentIdValue === "string" ? appointmentIdValue : null;
       if (!appointmentId) {
         console.warn("[outbox] estimate.requested.missing_appointment", { id: event.id });
-        return "skipped";
+        return { status: "skipped" };
       }
 
       const services = coerceServices(payload?.["services"]);
@@ -495,7 +563,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       });
 
       if (!notification) {
-        return "skipped";
+        return { status: "skipped" };
       }
 
       await ensureCalendarEventCreated(notification);
@@ -506,7 +574,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
         "estimate.requested",
         { appointmentId }
       );
-      return "processed";
+      return { status: "processed" };
     }
 
     case "estimate.rescheduled": {
@@ -515,7 +583,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       const appointmentId = typeof appointmentIdValue === "string" ? appointmentIdValue : null;
       if (!appointmentId) {
         console.warn("[outbox] estimate.rescheduled.missing_appointment", { id: event.id });
-        return "skipped";
+        return { status: "skipped" };
       }
 
       const notification = await buildNotificationPayload(appointmentId, {
@@ -524,7 +592,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       });
 
       if (!notification) {
-        return "skipped";
+        return { status: "skipped" };
       }
 
       await syncCalendarEventForReschedule(notification);
@@ -535,7 +603,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
         "estimate.rescheduled",
         { appointmentId }
       );
-      return "processed";
+      return { status: "processed" };
     }
 
     case "quote.sent": {
@@ -543,7 +611,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       const quoteId = typeof payload?.["quoteId"] === "string" ? payload["quoteId"] : null;
       if (!quoteId) {
         console.warn("[outbox] quote.sent.missing_id", { id: event.id });
-        return "skipped";
+        return { status: "skipped" };
       }
 
       const shareToken =
@@ -553,7 +621,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
 
       const notification = await buildQuoteNotificationPayload(quoteId, { shareToken });
       if (!notification) {
-        return "skipped";
+        return { status: "skipped" };
       }
 
       await sendQuoteSentNotification(notification);
@@ -563,7 +631,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
         "quote.sent",
         { quoteId }
       );
-      return "processed";
+      return { status: "processed" };
     }
 
     case "quote.decision": {
@@ -574,7 +642,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
         rawDecision === "accepted" || rawDecision === "declined" ? rawDecision : null;
       if (!quoteId || !decision) {
         console.warn("[outbox] quote.decision.missing_data", { id: event.id });
-        return "skipped";
+        return { status: "skipped" };
       }
 
       const rawSource = typeof payload?.["source"] === "string" ? payload["source"] : null;
@@ -584,7 +652,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
 
       const notification = await buildQuoteNotificationPayload(quoteId, { notes });
       if (!notification) {
-        return "skipped";
+        return { status: "skipped" };
       }
 
       await sendQuoteDecisionNotification({
@@ -599,7 +667,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
         "quote.decision",
         { quoteId, decision, source }
       );
-      return "processed";
+      return { status: "processed" };
     }
 
     case "estimate.status_changed":
@@ -611,7 +679,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
 
       if (!leadId) {
         console.warn("[outbox] lead.created.missing_lead", { id: event.id });
-        return "skipped";
+        return { status: "skipped" };
       }
 
       const db = getDb();
@@ -626,7 +694,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       const appointment = rows[0];
       if (!appointment?.id) {
         console.info("[outbox] lead.created.no_appointment", { id: event.id, leadId });
-        return "skipped";
+        return { status: "skipped" };
       }
 
       const notification = await buildNotificationPayload(appointment.id, {
@@ -651,7 +719,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       });
 
       if (!notification) {
-        return "skipped";
+        return { status: "skipped" };
       }
 
       await sendEstimateConfirmation(notification, "requested");
@@ -665,7 +733,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
           status: payload?.["status"] ?? null
         });
       }
-      return "processed";
+      return { status: "processed" };
     }
 
     case "message.send": {
@@ -673,7 +741,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       const messageId = typeof payload?.["messageId"] === "string" ? payload["messageId"] : null;
       if (!messageId) {
         console.warn("[outbox] message.send.missing_id", { id: event.id });
-        return "skipped";
+        return { status: "skipped" };
       }
 
       const db = getDb();
@@ -700,7 +768,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       const message = rows[0];
       if (!message) {
         console.warn("[outbox] message.send.not_found", { messageId });
-        return "skipped";
+        return { status: "skipped" };
       }
 
       const channel = message.channel ?? "sms";
@@ -717,6 +785,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
       }
 
       const now = new Date();
+      const attempt = (event.attempts ?? 0) + 1;
 
       if (!toAddress) {
         await db
@@ -737,7 +806,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
           entityId: message.id,
           meta: { channel, reason: "missing_recipient" }
         });
-        return "processed";
+        return { status: "processed" };
       }
 
       let result: Awaited<ReturnType<typeof sendSmsMessage>>;
@@ -749,45 +818,98 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<"processed" 
         result = { ok: false, provider: "unknown", detail: "unsupported_channel" };
       }
 
-      const status = result.ok ? "sent" : "failed";
+      const detail = result.detail ?? null;
+
+      if (!result.ok) {
+        const retryable = isRetryableSendFailure(detail);
+        const canRetry = retryable && attempt < MAX_MESSAGE_SEND_ATTEMPTS;
+        const providerHealth = channel === "sms" || channel === "email" ? channel : null;
+
+        await db
+          .update(conversationMessages)
+          .set({
+            deliveryStatus: canRetry ? "queued" : "failed",
+            provider: result.provider ?? null,
+            providerMessageId: result.providerMessageId ?? null,
+            toAddress
+          })
+          .where(eq(conversationMessages.id, message.id));
+
+        await db.insert(messageDeliveryEvents).values({
+          messageId: message.id,
+          status: "failed",
+          detail,
+          provider: result.provider ?? null,
+          occurredAt: now
+        });
+
+        await recordAuditEvent({
+          actor: { type: "worker", label: "outbox" },
+          action: "message.failed",
+          entityType: "conversation_message",
+          entityId: message.id,
+          meta: {
+            channel,
+            toAddress,
+            provider: result.provider ?? null,
+            detail,
+            attempt,
+            willRetry: canRetry
+          }
+        });
+
+        if (providerHealth) {
+          await recordProviderFailureSafe(providerHealth, detail);
+        }
+
+        if (canRetry) {
+          return { status: "retry", error: detail ?? "send_failed" };
+        }
+
+        return { status: "processed", error: detail ?? "send_failed" };
+      }
 
       await db
         .update(conversationMessages)
         .set({
-          deliveryStatus: status,
+          deliveryStatus: "sent",
           provider: result.provider ?? null,
           providerMessageId: result.providerMessageId ?? null,
-          sentAt: result.ok ? now : message.sentAt ?? null,
+          sentAt: now,
           toAddress
         })
         .where(eq(conversationMessages.id, message.id));
 
       await db.insert(messageDeliveryEvents).values({
         messageId: message.id,
-        status,
-        detail: result.detail ?? null,
+        status: "sent",
+        detail,
         provider: result.provider ?? null,
         occurredAt: now
       });
 
       await recordAuditEvent({
         actor: { type: "worker", label: "outbox" },
-        action: result.ok ? "message.sent" : "message.failed",
+        action: "message.sent",
         entityType: "conversation_message",
         entityId: message.id,
         meta: {
           channel,
           toAddress,
           provider: result.provider ?? null,
-          detail: result.detail ?? null
+          detail
         }
       });
 
-      return "processed";
+      if (channel === "sms" || channel === "email") {
+        await recordProviderSuccessSafe(channel);
+      }
+
+      return { status: "processed" };
     }
 
     default:
-      return "skipped";
+      return { status: "skipped" };
   }
 }
 
@@ -796,11 +918,17 @@ export async function processOutboxBatch(
 ): Promise<OutboxBatchStats> {
   const db = getDb();
   const { limit = 10 } = options;
+  const now = new Date();
 
   const events = await db
     .select()
     .from(outboxEvents)
-    .where(isNull(outboxEvents.processedAt))
+    .where(
+      and(
+        isNull(outboxEvents.processedAt),
+        or(isNull(outboxEvents.nextAttemptAt), lte(outboxEvents.nextAttemptAt, now))
+      )
+    )
     .orderBy(asc(outboxEvents.createdAt))
     .limit(limit);
 
@@ -812,28 +940,49 @@ export async function processOutboxBatch(
   };
 
   for (const event of events) {
-    let outcome: "processed" | "skipped" | "error" = "skipped";
+    let outcome: OutboxOutcome = { status: "skipped" };
     try {
-      const result = await handleOutboxEvent(event);
-      outcome = result;
+      outcome = await handleOutboxEvent(event);
     } catch (error) {
-      outcome = "error";
-      console.warn("[outbox] handler_error", { id: event.id, type: event.type, error: String(error) });
+      const message = error instanceof Error ? error.message : String(error);
+      const attempt = (event.attempts ?? 0) + 1;
+      const canRetry = event.type === "message.send" && attempt < MAX_MESSAGE_SEND_ATTEMPTS;
+      outcome = canRetry ? { status: "retry", error: message } : { status: "processed", error: message };
+      console.warn("[outbox] handler_error", { id: event.id, type: event.type, error: message });
     }
 
-    if (outcome === "processed") {
+    if (outcome.status === "processed") {
       stats.processed += 1;
-    } else if (outcome === "skipped") {
+    } else if (outcome.status === "skipped") {
       stats.skipped += 1;
     } else {
       stats.errors += 1;
     }
 
+    const attempt = (event.attempts ?? 0) + 1;
+    const lastError = outcome.error ?? null;
     try {
-      await db
-        .update(outboxEvents)
-        .set({ processedAt: new Date() })
-        .where(eq(outboxEvents.id, event.id));
+      if (outcome.status === "retry") {
+        const retryDelayMs = getRetryDelayMs(attempt);
+        await db
+          .update(outboxEvents)
+          .set({
+            attempts: attempt,
+            nextAttemptAt: new Date(Date.now() + retryDelayMs),
+            lastError
+          })
+          .where(eq(outboxEvents.id, event.id));
+      } else {
+        await db
+          .update(outboxEvents)
+          .set({
+            attempts: attempt,
+            processedAt: new Date(),
+            nextAttemptAt: null,
+            lastError
+          })
+          .where(eq(outboxEvents.id, event.id));
+      }
     } catch (error) {
       console.warn("[outbox] mark_processed_failed", { id: event.id, error: String(error) });
     }

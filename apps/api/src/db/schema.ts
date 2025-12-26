@@ -473,8 +473,22 @@ export const outboxEvents = pgTable("outbox_events", {
   id: uuid("id").defaultRandom().primaryKey(),
   type: text("type").notNull(),
   payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  attempts: integer("attempts").default(0).notNull(),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+  lastError: text("last_error"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   processedAt: timestamp("processed_at", { withTimezone: true })
+});
+
+export const providerHealth = pgTable("provider_health", {
+  provider: text("provider").primaryKey(),
+  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+  lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
+  lastFailureDetail: text("last_failure_detail"),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date())
 });
 
 export const calendarSyncState = pgTable("calendar_sync_state", {
@@ -914,4 +928,3 @@ export const payments = pgTable(
     appointmentIdx: index("payments_appointment_idx").on(table.appointmentId)
   })
 );
-
