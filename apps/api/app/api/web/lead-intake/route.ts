@@ -5,6 +5,7 @@ import { z } from "zod";
 import { nanoid } from "nanoid";
 import { getDb, leads, outboxEvents, appointments } from "@/db";
 import { sendConversion } from "@/lib/ga";
+import { getBookingRulesPolicy } from "@/lib/policy";
 import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 import { normalizeName, normalizePhone, resolveClientIp } from "../utils";
 import { upsertContact, upsertProperty } from "../persistence";
@@ -133,7 +134,11 @@ export async function POST(request: NextRequest) {
   const appointmentType = payload.appointmentType ?? "web_lead";
   const scheduling = payload.scheduling ?? {};
   const timing = resolveAppointmentTiming(scheduling.preferredDate ?? null, scheduling.timeWindow ?? null);
-  const travelBufferMinutes = DEFAULT_TRAVEL_BUFFER_MIN;
+  const bookingRules = await getBookingRulesPolicy();
+  const travelBufferMinutes =
+    typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
+      ? bookingRules.bufferMinutes
+      : DEFAULT_TRAVEL_BUFFER_MIN;
   const rescheduleToken = appointmentType === "in_person_estimate" ? nanoid(24) : null;
 
   let normalizedPhone: ReturnType<typeof normalizePhone>;

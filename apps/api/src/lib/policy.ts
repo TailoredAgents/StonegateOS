@@ -24,6 +24,13 @@ export type TemplatesPolicy = {
   out_of_area: TemplateGroup;
 };
 
+export type BookingRulesPolicy = {
+  bookingWindowDays: number;
+  bufferMinutes: number;
+  maxJobsPerDay: number;
+  maxJobsPerCrew: number;
+};
+
 export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
   mode: "zip_allowlist",
   homeBase: "Woodstock, GA",
@@ -348,6 +355,13 @@ export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
   notes: "Allowlist by ZIP (50 miles from Woodstock)."
 };
 
+export const DEFAULT_BOOKING_RULES_POLICY: BookingRulesPolicy = {
+  bookingWindowDays: 30,
+  bufferMinutes: 30,
+  maxJobsPerDay: 6,
+  maxJobsPerCrew: 3
+};
+
 export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
   first_touch: {
     sms: "Thanks for reaching out! We can help. What items and timeframe are you thinking?",
@@ -482,4 +496,35 @@ export async function getOutOfAreaMessage(
     DEFAULT_TEMPLATES_POLICY.out_of_area["sms"] ??
     "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock."
   );
+}
+
+export async function getBookingRulesPolicy(db: DbExecutor = getDb()): Promise<BookingRulesPolicy> {
+  const stored = await getPolicySetting(db, "booking_rules");
+  if (!stored) {
+    return DEFAULT_BOOKING_RULES_POLICY;
+  }
+
+  const bookingWindowDays =
+    typeof stored["bookingWindowDays"] === "number" && Number.isFinite(stored["bookingWindowDays"])
+      ? stored["bookingWindowDays"]
+      : DEFAULT_BOOKING_RULES_POLICY.bookingWindowDays;
+  const bufferMinutes =
+    typeof stored["bufferMinutes"] === "number" && Number.isFinite(stored["bufferMinutes"])
+      ? stored["bufferMinutes"]
+      : DEFAULT_BOOKING_RULES_POLICY.bufferMinutes;
+  const maxJobsPerDay =
+    typeof stored["maxJobsPerDay"] === "number" && Number.isFinite(stored["maxJobsPerDay"])
+      ? stored["maxJobsPerDay"]
+      : DEFAULT_BOOKING_RULES_POLICY.maxJobsPerDay;
+  const maxJobsPerCrew =
+    typeof stored["maxJobsPerCrew"] === "number" && Number.isFinite(stored["maxJobsPerCrew"])
+      ? stored["maxJobsPerCrew"]
+      : DEFAULT_BOOKING_RULES_POLICY.maxJobsPerCrew;
+
+  return {
+    bookingWindowDays,
+    bufferMinutes,
+    maxJobsPerDay,
+    maxJobsPerCrew
+  };
 }

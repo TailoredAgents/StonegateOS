@@ -2,7 +2,11 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { inArray } from "drizzle-orm";
 import { getDb, policySettings } from "@/db";
-import { DEFAULT_SERVICE_AREA_POLICY, DEFAULT_TEMPLATES_POLICY } from "@/lib/policy";
+import {
+  DEFAULT_BOOKING_RULES_POLICY,
+  DEFAULT_SERVICE_AREA_POLICY,
+  DEFAULT_TEMPLATES_POLICY
+} from "@/lib/policy";
 import { isAdminRequest } from "../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -39,12 +43,7 @@ const DEFAULT_POLICY_VALUES: Record<PolicyKey, Record<string, unknown>> = {
     }
   },
   service_area: DEFAULT_SERVICE_AREA_POLICY,
-  booking_rules: {
-    bookingWindowDays: 30,
-    bufferMinutes: 30,
-    maxJobsPerDay: 6,
-    maxJobsPerCrew: 3
-  },
+  booking_rules: DEFAULT_BOOKING_RULES_POLICY,
   standard_job: {
     allowedServices: ["junk_removal_primary"],
     maxVolumeCubicYards: 12,

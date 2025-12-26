@@ -5,7 +5,13 @@ import { z } from "zod";
 import { getDb, appointments, instantQuotes, leads, outboxEvents, properties } from "@/db";
 import { and, eq, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../../web/persistence";
-import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import {
+  getBookingRulesPolicy,
+  getOutOfAreaMessage,
+  getServiceAreaPolicy,
+  isPostalCodeAllowed,
+  normalizePostalCode
+} from "@/lib/policy";
 import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
 import { normalizeName, normalizePhone } from "../../web/utils";
 
@@ -145,13 +151,17 @@ export async function POST(request: NextRequest) {
       );
     }
     const db = getDb();
+    const bookingRules = await getBookingRulesPolicy(db);
 
     const [quote] = await db.select().from(instantQuotes).where(eq(instantQuotes.id, body.instantQuoteId)).limit(1);
     if (!quote) {
       return corsJson({ error: "quote_not_found" }, requestOrigin, { status: 404 });
     }
 
-    const travelBufferMinutes = DEFAULT_TRAVEL_BUFFER_MIN;
+    const travelBufferMinutes =
+      typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
+        ? bookingRules.bufferMinutes
+        : DEFAULT_TRAVEL_BUFFER_MIN;
     const durationMinutes = deriveDurationMinutes({ aiResult: quote.aiResult, perceivedSize: quote.perceivedSize });
 
     const startAt = new Date(body.startAt);
@@ -167,7 +177,11 @@ export async function POST(request: NextRequest) {
     if (startLocal < nowLocal) {
       return corsJson({ error: "start_in_past" }, requestOrigin, { status: 400 });
     }
-    if (startLocal > nowLocal.plus({ days: WINDOW_DAYS }).endOf("day")) {
+    const bookingWindowDays =
+      typeof bookingRules.bookingWindowDays === "number" && bookingRules.bookingWindowDays > 0
+        ? Math.min(Math.floor(bookingRules.bookingWindowDays), 90)
+        : WINDOW_DAYS;
+    if (startLocal > nowLocal.plus({ days: bookingWindowDays }).endOf("day")) {
       return corsJson({ error: "outside_booking_window" }, requestOrigin, { status: 400 });
     }
     if (startLocal.weekday === 7) {
@@ -196,6 +210,25 @@ export async function POST(request: NextRequest) {
       const bookingLockKey = Number(bookingDayKey);
       if (Number.isFinite(bookingLockKey) && bookingLockKey > 0) {
         await tx.execute(sql`select pg_advisory_xact_lock(${bookingLockKey})`);
+      }
+
+      if (bookingRules.maxJobsPerDay > 0) {
+        const dayStartUtc = startLocal.startOf("day").toUTC().toJSDate();
+        const dayEndUtc = startLocal.endOf("day").toUTC().toJSDate();
+        const [dayCount] = await tx
+          .select({ count: sql<number>`count(*)` })
+          .from(appointments)
+          .where(
+            and(
+              isNotNull(appointments.startAt),
+              gte(appointments.startAt, dayStartUtc),
+              lte(appointments.startAt, dayEndUtc),
+              ne(appointments.status, "canceled")
+            )
+          );
+        if (Number(dayCount?.count ?? 0) >= bookingRules.maxJobsPerDay) {
+          throw new BookingError("day_full", 409);
+        }
       }
 
       const contact = await upsertContact(tx, {

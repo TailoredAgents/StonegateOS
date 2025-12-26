@@ -5,7 +5,13 @@ import { DateTime } from "luxon";
 import { and, eq, gte, lte, ne } from "drizzle-orm";
 import { getDb, appointments, instantQuotes, properties } from "@/db";
 import { forwardGeocode } from "@/lib/geocode";
-import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import {
+  getBookingRulesPolicy,
+  getOutOfAreaMessage,
+  getServiceAreaPolicy,
+  isPostalCodeAllowed,
+  normalizePostalCode
+} from "@/lib/policy";
 import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
 
 const RAW_ALLOWED_ORIGINS =
@@ -209,6 +215,11 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     const db = getDb();
+    const bookingRules = await getBookingRulesPolicy(db);
+    const windowDays =
+      typeof bookingRules.bookingWindowDays === "number" && bookingRules.bookingWindowDays > 0
+        ? Math.min(Math.floor(bookingRules.bookingWindowDays), 90)
+        : WINDOW_DAYS;
     const [quote] = await db
       .select({ id: instantQuotes.id, aiResult: instantQuotes.aiResult, perceivedSize: instantQuotes.perceivedSize })
       .from(instantQuotes)
@@ -221,7 +232,10 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     const durationInfo = deriveDurationMinutes(quote);
     const durationMinutes = durationInfo.durationMinutes;
-    const travelBufferMinutes = DEFAULT_TRAVEL_BUFFER_MIN;
+    const travelBufferMinutes =
+      typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
+        ? bookingRules.bufferMinutes
+        : DEFAULT_TRAVEL_BUFFER_MIN;
     const capacity = DEFAULT_CAPACITY;
 
     let resolvedLat: number | null = typeof body.targetLat === "number" ? body.targetLat : null;
@@ -242,7 +256,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     const nowUtc = new Date();
     const lookbackStart = new Date(nowUtc.getTime() - 24 * 60 * 60 * 1000);
-    const windowEnd = new Date(nowUtc.getTime() + WINDOW_DAYS * 24 * 60 * 60 * 1000);
+    const windowEnd = new Date(nowUtc.getTime() + windowDays * 24 * 60 * 60 * 1000);
 
     const existing = await db
       .select({
@@ -278,6 +292,12 @@ export async function POST(request: NextRequest): Promise<Response> {
         return { start, end: new Date(start.getTime() + dur * 60_000), city, state, lat, lng };
       });
 
+    const dayTotals = new Map<string, number>();
+    for (const block of blocks) {
+      const dayKey = formatDayLocal(block.start);
+      dayTotals.set(dayKey, (dayTotals.get(dayKey) ?? 0) + 1);
+    }
+
     const dayCityCounts = new Map<string, Map<string, number>>();
     for (const b of blocks) {
       if (!b.city || !b.state) continue;
@@ -292,13 +312,17 @@ export async function POST(request: NextRequest): Promise<Response> {
     const days: Array<{ date: string; slots: Suggestion[] }> = [];
     const nowLocal = DateTime.now().setZone(APPOINTMENT_TIME_ZONE);
 
-    for (let day = 0; day < WINDOW_DAYS; day++) {
+    for (let day = 0; day < windowDays; day++) {
       const baseDay = nowLocal.plus({ days: day }).startOf("day");
       if (baseDay.weekday === 7) continue;
 
       const dayKey = baseDay.toISODate();
       if (!dayKey) continue;
       const daySlots: Suggestion[] = [];
+      if (bookingRules.maxJobsPerDay > 0 && (dayTotals.get(dayKey) ?? 0) >= bookingRules.maxJobsPerDay) {
+        days.push({ date: dayKey, slots: daySlots });
+        continue;
+      }
       const dayBlocks = blocks.filter((b) => formatDayLocal(b.start) === dayKey);
       const dayCounts = dayCityCounts.get(dayKey);
       const topCount =
