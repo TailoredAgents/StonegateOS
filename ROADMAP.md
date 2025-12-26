@@ -16,7 +16,7 @@
 
 ## Foundations to add (prereqs for the roadmap)
 - Access control & audit: roles/permissions and an audit log for sends/bookings/merges/policy changes. Status: partial (roles + audit log storage/API/UI in place; enforcement + broader audit coverage pending).
-- Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited). Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events; inbound ingestion + merge queue + state machine pending).
+- Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited). Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events; inbound ingestion + merge queue + state machine done; delivery state enhancements pending).
 - Policy center storage: configurable business hours/quiet hours, booking windows/buffers, standard job definition, item policies, templates. Status: done (storage + admin UI); enforcement pending in Phase 1 tasks.
 - Automation modes/kill switches: per-channel autonomy levels, lead-level pause/DNC, human takeover, follow-up state machine. Status: partial (data model + admin API + UI for channel modes + lead kill switches; automation enforcement + follow-up state machine pending).
 - Booking holds + confirmation loop: hold/reservation model, “standard job” enforcement, YES/NO confirmation cadence. Status: todo.
@@ -58,7 +58,7 @@ Done when:
 
 ### A) Unified Inbox + Conversation Threads
 Goal: One timeline per lead with all channels and replies from the console.
-Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events done; inbound ingestion + merge queue + state machine pending).
+Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events done; inbound ingestion + merge queue + state machine done; delivery state enhancements pending).
 
 Task sequence:
 1) Data model: add conversation threads, messages, participants, and channel metadata.
