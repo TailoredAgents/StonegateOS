@@ -65,6 +65,11 @@ type ThreadResponse = {
 
 const THREAD_STATUSES = ["open", "pending", "closed"];
 
+function formatStatusLabel(value: string): string {
+  if (!value) return "";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 function formatTimestamp(value: string | null): string {
   if (!value) return "No activity yet";
   const parsed = new Date(value);
@@ -138,7 +143,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
         >
           {THREAD_STATUSES.map((value) => (
             <option key={value} value={value}>
-              {value[0].toUpperCase() + value.slice(1)}
+              {formatStatusLabel(value)}
             </option>
           ))}
           <option value="all">All</option>
@@ -263,7 +268,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                   >
                     {THREAD_STATUSES.map((value) => (
                       <option key={value} value={value}>
-                        {value[0].toUpperCase() + value.slice(1)}
+                        {formatStatusLabel(value)}
                       </option>
                     ))}
                   </select>

@@ -31,8 +31,12 @@ export async function GET(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "lead_id_required" }, { status: 400 });
   }
 
-  if (channel && !isChannel(channel)) {
-    return NextResponse.json({ error: "invalid_channel" }, { status: 400 });
+  let channelFilter: AutomationChannel | null = null;
+  if (channel) {
+    if (!isChannel(channel)) {
+      return NextResponse.json({ error: "invalid_channel" }, { status: 400 });
+    }
+    channelFilter = channel;
   }
 
   const db = getDb();
@@ -53,7 +57,9 @@ export async function GET(request: NextRequest): Promise<Response> {
     })
     .from(leadAutomationStates)
     .where(
-      channel ? and(eq(leadAutomationStates.leadId, leadId), eq(leadAutomationStates.channel, channel)) : eq(leadAutomationStates.leadId, leadId)
+      channelFilter
+        ? and(eq(leadAutomationStates.leadId, leadId), eq(leadAutomationStates.channel, channelFilter))
+        : eq(leadAutomationStates.leadId, leadId)
     );
 
   const states = rows.map((row) => ({
