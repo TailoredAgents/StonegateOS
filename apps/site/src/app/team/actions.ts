@@ -897,6 +897,112 @@ export async function updateLeadAutomationAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function scanMergeSuggestionsAction() {
+  const jar = await cookies();
+
+  const response = await callAdminApi("/api/admin/merge-suggestions/scan", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to scan for merges");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Merge scan complete", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function approveMergeSuggestionAction(formData: FormData) {
+  const jar = await cookies();
+  const suggestionId = formData.get("suggestionId");
+  if (typeof suggestionId !== "string" || suggestionId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Suggestion ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/admin/merge-suggestions/${suggestionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action: "approve" })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to approve merge");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Contacts merged", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function declineMergeSuggestionAction(formData: FormData) {
+  const jar = await cookies();
+  const suggestionId = formData.get("suggestionId");
+  if (typeof suggestionId !== "string" || suggestionId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Suggestion ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/admin/merge-suggestions/${suggestionId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action: "decline" })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to decline merge");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Suggestion declined", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function manualMergeContactsAction(formData: FormData) {
+  const jar = await cookies();
+  const targetContactId = formData.get("targetContactId");
+  const sourceContactId = formData.get("sourceContactId");
+  const reason = formData.get("reason");
+
+  if (
+    typeof targetContactId !== "string" ||
+    targetContactId.trim().length === 0 ||
+    typeof sourceContactId !== "string" ||
+    sourceContactId.trim().length === 0
+  ) {
+    jar.set({ name: "myst-flash-error", value: "Contact IDs required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/merge", {
+    method: "POST",
+    body: JSON.stringify({
+      targetContactId: targetContactId.trim(),
+      sourceContactId: sourceContactId.trim(),
+      reason: typeof reason === "string" ? reason.trim() : undefined
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to merge contacts");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Contacts merged", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function createRoleAction(formData: FormData) {
   const jar = await cookies();
   const name = formData.get("name");

@@ -60,6 +60,11 @@ export const messageDeliveryStatusEnum = pgEnum("message_delivery_status", [
   "delivered",
   "failed"
 ]);
+export const mergeSuggestionStatusEnum = pgEnum("merge_suggestion_status", [
+  "pending",
+  "approved",
+  "declined"
+]);
 export const automationChannelEnum = pgEnum("automation_channel", [
   "sms",
   "email",
@@ -269,6 +274,36 @@ export const auditLogs = pgTable(
     actorIdx: index("audit_logs_actor_idx").on(table.actorId),
     entityIdx: index("audit_logs_entity_idx").on(table.entityType, table.entityId),
     createdIdx: index("audit_logs_created_idx").on(table.createdAt)
+  })
+);
+
+export const mergeSuggestions = pgTable(
+  "merge_suggestions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sourceContactId: uuid("source_contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    targetContactId: uuid("target_contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    status: mergeSuggestionStatusEnum("status").default("pending").notNull(),
+    reason: text("reason").notNull(),
+    confidence: integer("confidence").default(0).notNull(),
+    meta: jsonb("meta").$type<Record<string, unknown> | null>(),
+    reviewedBy: uuid("reviewed_by").references(() => teamMembers.id, { onDelete: "set null" }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    statusIdx: index("merge_suggestions_status_idx").on(table.status),
+    sourceIdx: index("merge_suggestions_source_idx").on(table.sourceContactId),
+    targetIdx: index("merge_suggestions_target_idx").on(table.targetContactId),
+    pairIdx: uniqueIndex("merge_suggestions_pair_key").on(table.sourceContactId, table.targetContactId)
   })
 );
 
@@ -863,6 +898,5 @@ export const payments = pgTable(
     appointmentIdx: index("payments_appointment_idx").on(table.appointmentId)
   })
 );
-
 
 

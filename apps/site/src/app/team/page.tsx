@@ -21,6 +21,7 @@ import { PolicyCenterSection } from "./components/PolicyCenterSection";
 import { AutomationSection } from "./components/AutomationSection";
 import { AccessSection } from "./components/AccessSection";
 import { AuditLogSection } from "./components/AuditLogSection";
+import { MergeQueueSection } from "./components/MergeQueueSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 
@@ -69,13 +70,14 @@ export default async function TeamPage({
     { id: "automation", label: "Automation", href: "/team?tab=automation", requires: "owner" },
     { id: "access", label: "Access", href: "/team?tab=access", requires: "owner" },
     { id: "audit", label: "Audit Log", href: "/team?tab=audit", requires: "owner" },
+    { id: "merge", label: "Merge Queue", href: "/team?tab=merge", requires: "owner" },
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
   ];
   const tabGroups: TabNavGroup[] = [
     { id: "ops", label: "Ops", itemIds: ["myday", "calendar", "inbox", "chat"] },
     { id: "sales", label: "Sales", itemIds: ["estimates", "quotes", "quote-builder", "pipeline", "contacts"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
-    { id: "control", label: "Control", itemIds: ["policy", "automation", "access", "audit"] },
+    { id: "control", label: "Control", itemIds: ["policy", "automation", "access", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
@@ -332,6 +334,18 @@ export default async function TeamPage({
             }
           >
             <AuditLogSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "merge" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
+                Loading merge queue
+              </div>
+            }
+          >
+            <MergeQueueSection />
           </React.Suspense>
         ) : null}
 
