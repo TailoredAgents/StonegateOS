@@ -44,6 +44,17 @@ export const conversationThreadStatusEnum = pgEnum("conversation_thread_status",
   "pending",
   "closed"
 ]);
+export const conversationStateEnum = pgEnum("conversation_state", [
+  "new",
+  "qualifying",
+  "photos_received",
+  "estimated",
+  "offered_times",
+  "booked",
+  "reminder",
+  "completed",
+  "review"
+]);
 export const conversationParticipantTypeEnum = pgEnum("conversation_participant_type", [
   "contact",
   "team",
@@ -364,11 +375,15 @@ export const conversationThreads = pgTable(
     contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
     propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
     status: conversationThreadStatusEnum("status").default("open").notNull(),
+    state: conversationStateEnum("state").default("new").notNull(),
     channel: conversationChannelEnum("channel").default("sms").notNull(),
     subject: text("subject"),
     lastMessagePreview: text("last_message_preview"),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
     assignedTo: uuid("assigned_to").references(() => teamMembers.id, { onDelete: "set null" }),
+    stateUpdatedAt: timestamp("state_updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
@@ -379,6 +394,7 @@ export const conversationThreads = pgTable(
     leadIdx: index("conversation_threads_lead_idx").on(table.leadId),
     contactIdx: index("conversation_threads_contact_idx").on(table.contactId),
     statusIdx: index("conversation_threads_status_idx").on(table.status),
+    stateIdx: index("conversation_threads_state_idx").on(table.state),
     lastMessageIdx: index("conversation_threads_last_message_idx").on(table.lastMessageAt)
   })
 );
@@ -898,5 +914,4 @@ export const payments = pgTable(
     appointmentIdx: index("payments_appointment_idx").on(table.appointmentId)
   })
 );
-
 

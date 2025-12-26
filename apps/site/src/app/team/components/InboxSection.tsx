@@ -6,6 +6,8 @@ import { createThreadAction, sendThreadMessageAction, updateThreadAction } from 
 type ThreadSummary = {
   id: string;
   status: string;
+  state?: string | null;
+  stateUpdatedAt?: string | null;
   channel: string;
   subject: string | null;
   lastMessagePreview: string | null;
@@ -29,6 +31,8 @@ type ThreadSummary = {
 type ThreadDetail = {
   id: string;
   status: string;
+  state?: string | null;
+  stateUpdatedAt?: string | null;
   channel: string;
   subject: string | null;
   lastMessageAt: string | null;
@@ -64,10 +68,30 @@ type ThreadResponse = {
 };
 
 const THREAD_STATUSES = ["open", "pending", "closed"];
+const THREAD_STATES = [
+  "new",
+  "qualifying",
+  "photos_received",
+  "estimated",
+  "offered_times",
+  "booked",
+  "reminder",
+  "completed",
+  "review"
+];
 
 function formatStatusLabel(value: string): string {
   if (!value) return "";
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatStateLabel(value: string): string {
+  if (!value) return "";
+  return value
+    .split("_")
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : ""))
+    .join(" ")
+    .trim();
 }
 
 function formatTimestamp(value: string | null): string {
@@ -80,6 +104,13 @@ function formatTimestamp(value: string | null): string {
     hour: "numeric",
     minute: "2-digit"
   }).format(parsed);
+}
+
+function getAllowedStates(currentState: string | null | undefined): string[] {
+  if (!currentState) return [...THREAD_STATES];
+  const index = THREAD_STATES.indexOf(currentState);
+  if (index === -1) return [...THREAD_STATES];
+  return THREAD_STATES.slice(index);
 }
 
 function buildThreadHref(status: string | null, threadId: string): string {
@@ -124,6 +155,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
 
   const activeThread = threadDetail?.thread ?? null;
   const activeMessages = threadDetail?.messages ?? [];
+  const allowedStates = activeThread ? getAllowedStates(activeThread.state ?? "new") : [...THREAD_STATES];
 
   return (
     <section className="space-y-6">
@@ -187,9 +219,14 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                       <div className="font-semibold text-slate-900">
                         {thread.contact?.name ?? "Unknown contact"}
                       </div>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                        {thread.channel}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                          {formatStateLabel(thread.state ?? "new")}
+                        </span>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                          {thread.channel}
+                        </span>
+                      </div>
                     </div>
                     <p className="mt-1 text-xs text-slate-500">
                       {thread.lastMessagePreview ?? "No messages yet"}
@@ -256,11 +293,28 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                     {activeThread.contact?.name ?? "Unknown contact"}
                   </h3>
                   <p className="text-xs text-slate-500">
-                    {activeThread.channel.toUpperCase()} - {activeThread.status}
+                    {activeThread.channel.toUpperCase()} · {formatStatusLabel(activeThread.status)} ·{" "}
+                    {formatStateLabel(activeThread.state ?? "new")}
                   </p>
+                  {activeThread.stateUpdatedAt ? (
+                    <p className="text-[11px] text-slate-400">
+                      State updated {formatTimestamp(activeThread.stateUpdatedAt)}
+                    </p>
+                  ) : null}
                 </div>
                 <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
                   <input type="hidden" name="threadId" value={activeThread.id} />
+                  <select
+                    name="state"
+                    defaultValue={activeThread.state ?? "new"}
+                    className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
+                  >
+                    {allowedStates.map((value) => (
+                      <option key={value} value={value}>
+                        {formatStateLabel(value)}
+                      </option>
+                    ))}
+                  </select>
                   <select
                     name="status"
                     defaultValue={activeThread.status}
@@ -276,7 +330,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                     className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
                     pendingLabel="Saving..."
                   >
-                    Update status
+                    Update thread
                   </SubmitButton>
                 </form>
               </div>

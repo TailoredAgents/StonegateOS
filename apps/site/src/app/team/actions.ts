@@ -1160,6 +1160,8 @@ export async function updateThreadAction(formData: FormData) {
   const jar = await cookies();
   const threadId = formData.get("threadId");
   const status = formData.get("status");
+  const state = formData.get("state");
+  const allowBackward = formData.get("allowBackward");
 
   if (typeof threadId !== "string" || threadId.trim().length === 0) {
     jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
@@ -1170,6 +1172,12 @@ export async function updateThreadAction(formData: FormData) {
   const payload: Record<string, unknown> = {};
   if (typeof status === "string" && status.trim().length > 0) {
     payload["status"] = status.trim();
+  }
+  if (typeof state === "string" && state.trim().length > 0) {
+    payload["state"] = state.trim();
+  }
+  if (allowBackward === "on") {
+    payload["allowBackward"] = true;
   }
 
   const response = await callAdminApi(`/api/admin/inbox/threads/${threadId}`, {

@@ -71,6 +71,13 @@
       "when": 1766790652000,
       "tag": "0009_merge_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1766793944000,
+      "tag": "0010_conversation_state",
+      "breakpoints": true
     }
   ]
 }

@@ -11,12 +11,18 @@ import {
   teamMembers,
   messageDeliveryEvents
 } from "@/db";
+import {
+  canTransitionConversationState,
+  isConversationState,
+  type ConversationState
+} from "@/lib/conversation-state";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
 const THREAD_STATUS = ["open", "pending", "closed"] as const;
 
 type ThreadStatus = (typeof THREAD_STATUS)[number];
+type ThreadState = ConversationState;
 
 function isStatus(value: string | null): value is ThreadStatus {
   return value ? (THREAD_STATUS as readonly string[]).includes(value) : false;
@@ -40,12 +46,14 @@ export async function GET(
     .select({
       id: conversationThreads.id,
       status: conversationThreads.status,
+      state: conversationThreads.state,
       channel: conversationThreads.channel,
       subject: conversationThreads.subject,
       lastMessagePreview: conversationThreads.lastMessagePreview,
       lastMessageAt: conversationThreads.lastMessageAt,
       updatedAt: conversationThreads.updatedAt,
       createdAt: conversationThreads.createdAt,
+      stateUpdatedAt: conversationThreads.stateUpdatedAt,
       contactId: conversationThreads.contactId,
       leadId: conversationThreads.leadId,
       propertyId: conversationThreads.propertyId,
@@ -212,12 +220,14 @@ export async function GET(
     thread: {
       id: threadRow.id,
       status: threadRow.status,
+      state: threadRow.state,
       channel: threadRow.channel,
       subject: threadRow.subject ?? null,
       lastMessagePreview: threadRow.lastMessagePreview ?? null,
       lastMessageAt: threadRow.lastMessageAt ? threadRow.lastMessageAt.toISOString() : null,
       updatedAt: threadRow.updatedAt ? threadRow.updatedAt.toISOString() : null,
       createdAt: threadRow.createdAt.toISOString(),
+      stateUpdatedAt: threadRow.stateUpdatedAt ? threadRow.stateUpdatedAt.toISOString() : null,
       contact: threadRow.contactId
         ? {
             id: threadRow.contactId,
@@ -262,6 +272,8 @@ export async function PATCH(
     status?: string;
     assignedTo?: string | null;
     subject?: string | null;
+    state?: string;
+    allowBackward?: boolean;
   } | null;
 
   if (!payload || typeof payload !== "object") {
@@ -283,13 +295,43 @@ export async function PATCH(
     updates["subject"] = null;
   }
 
+  const db = getDb();
+  let currentState: ThreadState | null = null;
+  if (typeof payload.state === "string") {
+    if (!isConversationState(payload.state)) {
+      return NextResponse.json({ error: "invalid_state" }, { status: 400 });
+    }
+
+    const [existing] = await db
+      .select({ state: conversationThreads.state })
+      .from(conversationThreads)
+      .where(eq(conversationThreads.id, threadId))
+      .limit(1);
+
+    if (!existing) {
+      return NextResponse.json({ error: "thread_not_found" }, { status: 404 });
+    }
+
+    currentState = existing.state as ThreadState;
+    const nextState = payload.state as ThreadState;
+    const allowBackward = payload.allowBackward === true;
+
+    if (!canTransitionConversationState(currentState, nextState, { allowBackward })) {
+      return NextResponse.json({ error: "invalid_state_transition" }, { status: 400 });
+    }
+
+    if (nextState !== currentState) {
+      updates["state"] = nextState;
+      updates["stateUpdatedAt"] = new Date();
+    }
+  }
+
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "no_updates" }, { status: 400 });
   }
 
   updates["updatedAt"] = new Date();
 
-  const db = getDb();
   const [thread] = await db
     .update(conversationThreads)
     .set(updates)
@@ -305,7 +347,7 @@ export async function PATCH(
     action: "thread.updated",
     entityType: "conversation_thread",
     entityId: threadId,
-    meta: { updates }
+    meta: { updates, previousState: currentState }
   });
 
   return NextResponse.json({ ok: true });

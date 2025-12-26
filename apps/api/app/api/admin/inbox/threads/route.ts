@@ -12,6 +12,7 @@ import {
   leads,
   outboxEvents
 } from "@/db";
+import { isConversationState, type ConversationState } from "@/lib/conversation-state";
 import { isAdminRequest } from "../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -23,6 +24,7 @@ const CHANNELS = ["sms", "email", "dm", "call", "web"] as const;
 
 type ThreadStatus = (typeof THREAD_STATUS)[number];
 type Channel = (typeof CHANNELS)[number];
+type ThreadState = ConversationState;
 
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
@@ -102,11 +104,13 @@ export async function GET(request: NextRequest): Promise<Response> {
         .select({
           id: conversationThreads.id,
           status: conversationThreads.status,
+          state: conversationThreads.state,
           channel: conversationThreads.channel,
           subject: conversationThreads.subject,
           lastMessagePreview: conversationThreads.lastMessagePreview,
           lastMessageAt: conversationThreads.lastMessageAt,
           updatedAt: conversationThreads.updatedAt,
+          stateUpdatedAt: conversationThreads.stateUpdatedAt,
           contactId: conversationThreads.contactId,
           leadId: conversationThreads.leadId,
           propertyId: conversationThreads.propertyId,
@@ -131,11 +135,13 @@ export async function GET(request: NextRequest): Promise<Response> {
         .select({
           id: conversationThreads.id,
           status: conversationThreads.status,
+          state: conversationThreads.state,
           channel: conversationThreads.channel,
           subject: conversationThreads.subject,
           lastMessagePreview: conversationThreads.lastMessagePreview,
           lastMessageAt: conversationThreads.lastMessageAt,
           updatedAt: conversationThreads.updatedAt,
+          stateUpdatedAt: conversationThreads.stateUpdatedAt,
           contactId: conversationThreads.contactId,
           leadId: conversationThreads.leadId,
           propertyId: conversationThreads.propertyId,
@@ -182,11 +188,13 @@ export async function GET(request: NextRequest): Promise<Response> {
     return {
       id: row.id,
       status: row.status,
+      state: row.state,
       channel: row.channel,
       subject: row.subject ?? null,
       lastMessagePreview: row.lastMessagePreview ?? null,
       lastMessageAt: row.lastMessageAt ? row.lastMessageAt.toISOString() : null,
       updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
+      stateUpdatedAt: row.stateUpdatedAt ? row.stateUpdatedAt.toISOString() : null,
       contact: row.contactId
         ? {
             id: row.contactId,
@@ -238,6 +246,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     leadId?: string;
     propertyId?: string;
     status?: string;
+    state?: string;
     channel?: string;
     subject?: string;
     message?: string;
@@ -250,6 +259,10 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const status = isStatus(payload.status ?? null) ? (payload.status as ThreadStatus) : "open";
   const channel = isChannel(payload.channel ?? null) ? (payload.channel as Channel) : "sms";
+  if (payload.state && !isConversationState(payload.state)) {
+    return NextResponse.json({ error: "invalid_state" }, { status: 400 });
+  }
+  const state = isConversationState(payload.state ?? null) ? (payload.state as ThreadState) : "new";
 
   let contactId = typeof payload.contactId === "string" ? payload.contactId.trim() : "";
   let leadId = typeof payload.leadId === "string" ? payload.leadId.trim() : "";
@@ -267,12 +280,42 @@ export async function POST(request: NextRequest): Promise<Response> {
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
 
-  let result: { thread: typeof conversationThreads.$inferSelect; message: typeof conversationMessages.$inferSelect | null };
+  let result: {
+    thread: typeof conversationThreads.$inferSelect;
+    message: typeof conversationMessages.$inferSelect | null;
+  };
   try {
     result = await db.transaction(async (tx) => {
       let contactRecord =
-      contactId.length > 0
-        ? await tx
+        contactId.length > 0
+          ? await tx
+              .select({
+                id: contacts.id,
+                firstName: contacts.firstName,
+                lastName: contacts.lastName,
+                email: contacts.email,
+                phone: contacts.phone,
+                phoneE164: contacts.phoneE164
+              })
+              .from(contacts)
+              .where(eq(contacts.id, contactId))
+              .limit(1)
+              .then((rows) => rows[0])
+          : undefined;
+
+      if (!contactRecord && leadId) {
+        const [leadRow] = await tx
+          .select({
+            contactId: leads.contactId,
+            propertyId: leads.propertyId
+          })
+          .from(leads)
+          .where(eq(leads.id, leadId))
+          .limit(1);
+        if (leadRow?.contactId) {
+          contactId = leadRow.contactId;
+          propertyId = propertyId || leadRow.propertyId || "";
+          contactRecord = await tx
             .select({
               id: contacts.id,
               firstName: contacts.firstName,
@@ -282,143 +325,119 @@ export async function POST(request: NextRequest): Promise<Response> {
               phoneE164: contacts.phoneE164
             })
             .from(contacts)
-            .where(eq(contacts.id, contactId))
+            .where(eq(contacts.id, leadRow.contactId))
             .limit(1)
-            .then((rows) => rows[0])
-        : undefined;
-
-    if (!contactRecord && leadId) {
-      const [leadRow] = await tx
-        .select({
-          contactId: leads.contactId,
-          propertyId: leads.propertyId
-        })
-        .from(leads)
-        .where(eq(leads.id, leadId))
-        .limit(1);
-      if (leadRow?.contactId) {
-        contactId = leadRow.contactId;
-        propertyId = propertyId || leadRow.propertyId || "";
-        contactRecord = await tx
-          .select({
-            id: contacts.id,
-            firstName: contacts.firstName,
-            lastName: contacts.lastName,
-            email: contacts.email,
-            phone: contacts.phone,
-            phoneE164: contacts.phoneE164
-          })
-          .from(contacts)
-          .where(eq(contacts.id, leadRow.contactId))
-          .limit(1)
-          .then((rows) => rows[0]);
+            .then((rows) => rows[0]);
+        }
       }
-    }
 
       if (!contactId) {
         throw new Error("contact_not_found");
       }
 
-    const [thread] = await tx
-      .insert(conversationThreads)
-      .values({
-        leadId: leadId || null,
-        contactId,
-        propertyId: propertyId || null,
-        status,
-        channel,
-        subject,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      })
-      .returning();
+      const now = new Date();
+      const [thread] = await tx
+        .insert(conversationThreads)
+        .values({
+          leadId: leadId || null,
+          contactId,
+          propertyId: propertyId || null,
+          status,
+          state,
+          channel,
+          subject,
+          stateUpdatedAt: now,
+          createdAt: now,
+          updatedAt: now
+        })
+        .returning();
 
       if (!thread) {
         throw new Error("thread_create_failed");
       }
 
-    let contactParticipantId: string | null = null;
-    if (contactRecord?.id) {
-      const displayName = [contactRecord.firstName, contactRecord.lastName].filter(Boolean).join(" ").trim();
-      const externalAddress =
-        channel === "email"
-          ? contactRecord.email
-          : contactRecord.phoneE164 ?? contactRecord.phone ?? null;
+      let contactParticipantId: string | null = null;
+      if (contactRecord?.id) {
+        const displayName = [contactRecord.firstName, contactRecord.lastName].filter(Boolean).join(" ").trim();
+        const externalAddress =
+          channel === "email"
+            ? contactRecord.email
+            : contactRecord.phoneE164 ?? contactRecord.phone ?? null;
 
-      const [participant] = await tx
-        .insert(conversationParticipants)
-        .values({
-          threadId: thread.id,
-          participantType: "contact",
-          contactId: contactRecord.id,
-          externalAddress,
-          displayName: displayName || "Contact",
-          createdAt: new Date()
-        })
-        .returning();
-
-      contactParticipantId = participant?.id ?? null;
-    }
-
-    let messageRecord: typeof conversationMessages.$inferSelect | null = null;
-
-    if (messageBody.length > 0) {
-      let participantId = contactParticipantId;
-      if (direction !== "inbound") {
-        const [teamParticipant] = await tx
+        const [participant] = await tx
           .insert(conversationParticipants)
           .values({
             threadId: thread.id,
-            participantType: "team",
-            teamMemberId: actor.id ?? null,
-            displayName: actor.label ?? "Team Console",
+            participantType: "contact",
+            contactId: contactRecord.id,
+            externalAddress,
+            displayName: displayName || "Contact",
             createdAt: new Date()
           })
           .returning();
-        participantId = teamParticipant?.id ?? null;
+
+        contactParticipantId = participant?.id ?? null;
       }
 
-      const now = new Date();
-      const deliveryStatus =
-        direction === "inbound" ? "delivered" : direction === "internal" ? "sent" : "queued";
+      let messageRecord: typeof conversationMessages.$inferSelect | null = null;
 
-      const [message] = await tx
-        .insert(conversationMessages)
-        .values({
-          threadId: thread.id,
-          participantId,
-          direction,
-          channel,
-          subject,
-          body: messageBody,
-          deliveryStatus,
-          sentAt: deliveryStatus === "sent" ? now : null,
-          receivedAt: direction === "inbound" ? now : null,
-          createdAt: now
-        })
-        .returning();
+      if (messageBody.length > 0) {
+        let participantId = contactParticipantId;
+        if (direction !== "inbound") {
+          const [teamParticipant] = await tx
+            .insert(conversationParticipants)
+            .values({
+              threadId: thread.id,
+              participantType: "team",
+              teamMemberId: actor.id ?? null,
+              displayName: actor.label ?? "Team Console",
+              createdAt: new Date()
+            })
+            .returning();
+          participantId = teamParticipant?.id ?? null;
+        }
 
-      messageRecord = message ?? null;
+        const now = new Date();
+        const deliveryStatus =
+          direction === "inbound" ? "delivered" : direction === "internal" ? "sent" : "queued";
 
-      await tx
-        .update(conversationThreads)
-        .set({
-          lastMessagePreview: messageBody.slice(0, 140),
-          lastMessageAt: now,
-          updatedAt: now
-        })
-        .where(eq(conversationThreads.id, thread.id));
+        const [message] = await tx
+          .insert(conversationMessages)
+          .values({
+            threadId: thread.id,
+            participantId,
+            direction,
+            channel,
+            subject,
+            body: messageBody,
+            deliveryStatus,
+            sentAt: deliveryStatus === "sent" ? now : null,
+            receivedAt: direction === "inbound" ? now : null,
+            createdAt: now
+          })
+          .returning();
 
-      if (direction === "outbound") {
-        await tx.insert(outboxEvents).values({
-          type: "message.send",
-          payload: {
-            messageId: message?.id ?? null
-          },
-          createdAt: now
-        });
+        messageRecord = message ?? null;
+
+        await tx
+          .update(conversationThreads)
+          .set({
+            lastMessagePreview: messageBody.slice(0, 140),
+            lastMessageAt: now,
+            updatedAt: now
+          })
+          .where(eq(conversationThreads.id, thread.id));
+
+        if (direction === "outbound") {
+          await tx.insert(outboxEvents).values({
+            type: "message.send",
+            payload: {
+              messageId: message?.id ?? null
+            },
+            createdAt: now
+          });
+        }
       }
-    }
 
       return { thread, message: messageRecord };
     });
@@ -433,7 +452,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     action: "thread.created",
     entityType: "conversation_thread",
     entityId: result.thread.id,
-    meta: { channel: result.thread.channel, status: result.thread.status }
+    meta: { channel: result.thread.channel, status: result.thread.status, state: result.thread.state }
   });
 
   if (result.message) {
@@ -450,8 +469,12 @@ export async function POST(request: NextRequest): Promise<Response> {
     thread: {
       id: result.thread.id,
       status: result.thread.status,
+      state: result.thread.state,
       channel: result.thread.channel,
       subject: result.thread.subject ?? null,
+      stateUpdatedAt: result.thread.stateUpdatedAt
+        ? result.thread.stateUpdatedAt.toISOString()
+        : null,
       leadId: result.thread.leadId ?? null,
       contactId: result.thread.contactId ?? null,
       propertyId: result.thread.propertyId ?? null
