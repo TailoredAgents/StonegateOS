@@ -37,11 +37,11 @@ async function parsePayload(request: NextRequest): Promise<Payload> {
 
   const formData = await request.formData();
   const payload: Payload = {};
-  for (const [key, value] of formData.entries()) {
+  formData.forEach((value, key) => {
     if (typeof value === "string") {
       payload[key] = value;
     }
-  }
+  });
   return payload;
 }
 
