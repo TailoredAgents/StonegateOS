@@ -31,7 +31,7 @@ export interface TabNavItem {
 
 export const teamTabTokens = {
   container:
-    "hidden grid-cols-1 gap-2 rounded-2xl border border-slate-200/80 bg-white/80 p-2 shadow-sm shadow-slate-200/50 backdrop-blur supports-[backdrop-filter]:bg-white/60 sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none sm:grid sm:sticky sm:top-4 sm:z-30",
+    "hidden gap-2 rounded-2xl border border-slate-200/80 bg-white/80 p-2 shadow-sm shadow-slate-200/50 backdrop-blur supports-[backdrop-filter]:bg-white/60 sm:flex sm:flex-wrap sm:items-center sm:justify-start sm:sticky sm:top-4 sm:z-30",
   item: {
     base:
       "relative flex min-h-[44px] items-center justify-center rounded-xl border border-transparent px-4 py-2 text-sm font-medium leading-tight transition duration-150 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white",
