@@ -21,6 +21,7 @@ import {
 import type { AppointmentCalendarPayload } from "@/lib/calendar";
 import { createCalendarEventWithRetry, updateCalendarEventWithRetry } from "@/lib/calendar-events";
 import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
+import { handleInboundAutoReply } from "@/lib/auto-replies";
 import { recordAuditEvent } from "@/lib/audit";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 
@@ -734,6 +735,17 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         });
       }
       return { status: "processed" };
+    }
+
+    case "message.received": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const messageId = typeof payload?.["messageId"] === "string" ? payload["messageId"] : null;
+      if (!messageId) {
+        console.warn("[outbox] message.received.missing_id", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      return await handleInboundAutoReply(messageId);
     }
 
     case "message.send": {

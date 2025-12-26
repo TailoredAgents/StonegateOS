@@ -55,7 +55,10 @@ const DEFAULT_POLICY_VALUES: Record<PolicyKey, Record<string, unknown>> = {
   templates: {
     first_touch: {
       sms: "Thanks for reaching out! We can help. What items and timeframe are you thinking?",
-      email: "Thanks for contacting Stonegate. Share a few details about your items and timing, and we will follow up."
+      email: "Thanks for contacting Stonegate. Share a few details about your items and timing, and we will follow up.",
+      dm: "Thanks for reaching out! Share your address and a few item details and we can help.",
+      call: "Sorry we missed your call! Reply with your address and what you need hauled and we will get you scheduled.",
+      web: "Thanks for reaching out! Share your address and a few item details and we can help."
     },
     follow_up: {
       sms: "Just checking in - do you want to lock in a time for your junk removal?",

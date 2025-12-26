@@ -280,7 +280,7 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
     let resolvedFromAddress = input.fromAddress.trim();
     let senderName = input.senderName ?? null;
 
-    if (channel === "sms") {
+    if (channel === "sms" || channel === "call") {
       let normalized;
       try {
         normalized = normalizePhone(resolvedFromAddress);
@@ -296,7 +296,7 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
           lastName: name.lastName,
           phone: normalized.raw,
           phoneE164: normalized.e164,
-          source: "sms"
+          source: channel
         });
       } else {
         contact = await ensureContactPhone(tx, contact, normalized.raw, normalized.e164);
