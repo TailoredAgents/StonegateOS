@@ -257,9 +257,6 @@ Done when:
 
 ## Phase 4 - Power ups
 
-### M) Voice AI (after-hours + overflow)
-Goal: Capture missed calls and convert to SMS/booking.
-
 ### N) Ads autopilot (guardrailed)
 Goal: Recommend budget shifts and pause low performers with audit logs.
 
