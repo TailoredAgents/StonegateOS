@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { getDb, appointments, instantQuotes, leads, outboxEvents, properties } from "@/db";
-import { and, eq, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
+import { appointmentHolds, getDb, appointments, instantQuotes, leads, outboxEvents, properties } from "@/db";
+import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../../web/persistence";
 import {
   getBookingRulesPolicy,
@@ -120,6 +120,7 @@ function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string
 
 const BookingSchema = z.object({
   instantQuoteId: z.string().uuid(),
+  holdId: z.string().uuid().optional().nullable(),
   name: z.string().min(2),
   phone: z.string().min(7),
   email: z.string().email().optional().nullable(),
@@ -139,6 +140,7 @@ export async function POST(request: NextRequest) {
       return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
     }
     const body = parsed.data;
+    const holdId = typeof body.holdId === "string" && body.holdId.length ? body.holdId : null;
     const normalizedPostalCode = normalizePostalCode(body.postalCode);
     const serviceArea = await getServiceAreaPolicy();
     if (normalizedPostalCode && !isPostalCodeAllowed(normalizedPostalCode, serviceArea)) {
@@ -212,6 +214,34 @@ export async function POST(request: NextRequest) {
         await tx.execute(sql`select pg_advisory_xact_lock(${bookingLockKey})`);
       }
 
+      const now = new Date();
+      if (holdId) {
+        const [hold] = await tx
+          .select({
+            id: appointmentHolds.id,
+            startAt: appointmentHolds.startAt,
+            expiresAt: appointmentHolds.expiresAt,
+            status: appointmentHolds.status,
+            instantQuoteId: appointmentHolds.instantQuoteId
+          })
+          .from(appointmentHolds)
+          .where(eq(appointmentHolds.id, holdId))
+          .limit(1);
+
+        if (!hold) {
+          throw new BookingError("hold_not_found", 404);
+        }
+        if (hold.status !== "active" || hold.expiresAt <= now) {
+          throw new BookingError("hold_expired", 409);
+        }
+        if (hold.instantQuoteId && hold.instantQuoteId !== quote.id) {
+          throw new BookingError("hold_mismatch", 409);
+        }
+        if (hold.startAt.getTime() !== startAt.getTime()) {
+          throw new BookingError("hold_mismatch", 409);
+        }
+      }
+
       if (bookingRules.maxJobsPerDay > 0) {
         const dayStartUtc = startLocal.startOf("day").toUTC().toJSDate();
         const dayEndUtc = startLocal.endOf("day").toUTC().toJSDate();
@@ -226,7 +256,22 @@ export async function POST(request: NextRequest) {
               ne(appointments.status, "canceled")
             )
           );
-        if (Number(dayCount?.count ?? 0) >= bookingRules.maxJobsPerDay) {
+        const holdConditions = [
+          gte(appointmentHolds.startAt, dayStartUtc),
+          lte(appointmentHolds.startAt, dayEndUtc),
+          eq(appointmentHolds.status, "active"),
+          gt(appointmentHolds.expiresAt, now)
+        ];
+        if (holdId) {
+          holdConditions.push(ne(appointmentHolds.id, holdId));
+        }
+        const [holdCount] = await tx
+          .select({ count: sql<number>`count(*)` })
+          .from(appointmentHolds)
+          .where(and(...holdConditions));
+
+        const totalCount = Number(dayCount?.count ?? 0) + Number(holdCount?.count ?? 0);
+        if (totalCount >= bookingRules.maxJobsPerDay) {
           throw new BookingError("day_full", 409);
         }
       }
@@ -526,6 +571,25 @@ export async function POST(request: NextRequest) {
           )
         );
 
+      const holdOverlapConditions = [
+        gte(appointmentHolds.startAt, lookbackStart),
+        lte(appointmentHolds.startAt, lookaheadEnd),
+        eq(appointmentHolds.status, "active"),
+        gt(appointmentHolds.expiresAt, now)
+      ];
+      if (holdId) {
+        holdOverlapConditions.push(ne(appointmentHolds.id, holdId));
+      }
+      const nearbyHolds = await tx
+        .select({
+          id: appointmentHolds.id,
+          startAt: appointmentHolds.startAt,
+          durationMinutes: appointmentHolds.durationMinutes,
+          travelBufferMinutes: appointmentHolds.travelBufferMinutes
+        })
+        .from(appointmentHolds)
+        .where(and(...holdOverlapConditions));
+
       const blocks = nearbyAppts
         .filter((row) => row.startAt && row.id !== existingAppt?.id)
         .map((row) => {
@@ -533,6 +597,16 @@ export async function POST(request: NextRequest) {
           const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
           return { start, end: new Date(start.getTime() + dur * 60_000) };
         });
+
+      const holdBlocks = nearbyHolds
+        .filter((row) => row.startAt)
+        .map((row) => {
+          const start = row.startAt as Date;
+          const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
+          return { start, end: new Date(start.getTime() + dur * 60_000) };
+        });
+
+      blocks.push(...holdBlocks);
 
       if (overlapsCount(blocks, startAt, slotEnd) >= DEFAULT_CAPACITY) {
         throw new BookingError("slot_full", 409);
@@ -596,6 +670,20 @@ export async function POST(request: NextRequest) {
             notes
           }
         });
+      }
+
+      if (holdId) {
+        await tx
+          .update(appointmentHolds)
+          .set({
+            status: "consumed",
+            consumedAt: new Date(),
+            contactId: contact.id,
+            leadId,
+            propertyId,
+            updatedAt: new Date()
+          })
+          .where(eq(appointmentHolds.id, holdId));
       }
 
       return { leadId, appointmentId, startAt: startAt.toISOString() };

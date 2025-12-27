@@ -535,6 +535,34 @@ export const appointments = pgTable(
   (table) => ({
     startIdx: index("appointments_start_idx").on(table.startAt),
     statusIdx: index("appointments_status_idx").on(table.status)
+    })
+  );
+
+export const appointmentHolds = pgTable(
+  "appointment_holds",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    instantQuoteId: uuid("instant_quote_id").references(() => instantQuotes.id, { onDelete: "set null" }),
+    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
+    startAt: timestamp("start_at", { withTimezone: true }).notNull(),
+    durationMinutes: integer("duration_min").default(60).notNull(),
+    travelBufferMinutes: integer("travel_buffer_min").default(30).notNull(),
+    status: text("status").default("active").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    startIdx: index("appointment_holds_start_idx").on(table.startAt),
+    statusIdx: index("appointment_holds_status_idx").on(table.status),
+    expiresIdx: index("appointment_holds_expires_idx").on(table.expiresAt),
+    quoteIdx: index("appointment_holds_quote_idx").on(table.instantQuoteId)
   })
 );
 

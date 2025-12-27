@@ -2,8 +2,8 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { DateTime } from "luxon";
-import { and, eq, gte, lte, ne } from "drizzle-orm";
-import { getDb, appointments, instantQuotes, properties } from "@/db";
+import { and, eq, gt, gte, lte, ne } from "drizzle-orm";
+import { appointmentHolds, getDb, appointments, instantQuotes, properties } from "@/db";
 import { forwardGeocode } from "@/lib/geocode";
 import {
   getBookingRulesPolicy,
@@ -280,6 +280,29 @@ export async function POST(request: NextRequest): Promise<Response> {
         )
       );
 
+    const holds = await db
+      .select({
+        id: appointmentHolds.id,
+        startAt: appointmentHolds.startAt,
+        durationMinutes: appointmentHolds.durationMinutes,
+        travelBufferMinutes: appointmentHolds.travelBufferMinutes,
+        status: appointmentHolds.status,
+        city: properties.city,
+        state: properties.state,
+        lat: properties.lat,
+        lng: properties.lng
+      })
+      .from(appointmentHolds)
+      .leftJoin(properties, eq(appointmentHolds.propertyId, properties.id))
+      .where(
+        and(
+          gte(appointmentHolds.startAt, lookbackStart),
+          lte(appointmentHolds.startAt, windowEnd),
+          eq(appointmentHolds.status, "active"),
+          gt(appointmentHolds.expiresAt, nowUtc)
+        )
+      );
+
     const blocks = existing
       .filter((row) => row.startAt)
       .map((row) => {
@@ -291,6 +314,20 @@ export async function POST(request: NextRequest): Promise<Response> {
         const lng = row.lng ? Number(row.lng) : null;
         return { start, end: new Date(start.getTime() + dur * 60_000), city, state, lat, lng };
       });
+
+    const holdBlocks = holds
+      .filter((row) => row.startAt)
+      .map((row) => {
+        const start = row.startAt as Date;
+        const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
+        const city = typeof row.city === "string" ? row.city.toLowerCase().trim() : null;
+        const state = typeof row.state === "string" ? row.state.toLowerCase().trim() : null;
+        const lat = row.lat ? Number(row.lat) : null;
+        const lng = row.lng ? Number(row.lng) : null;
+        return { start, end: new Date(start.getTime() + dur * 60_000), city, state, lat, lng };
+      });
+
+    blocks.push(...holdBlocks);
 
     const dayTotals = new Map<string, number>();
     for (const block of blocks) {
