@@ -90,6 +90,13 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [availabilitySelectedDay, setAvailabilitySelectedDay] = React.useState<string | null>(null);
   const [selectedSlotStartAt, setSelectedSlotStartAt] = React.useState<string | null>(null);
   const selectedSlotStartAtRef = React.useRef<string | null>(null);
+  const [holdId, setHoldId] = React.useState<string | null>(null);
+  const [holdExpiresAt, setHoldExpiresAt] = React.useState<string | null>(null);
+  const [holdStatus, setHoldStatus] = React.useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [holdMessage, setHoldMessage] = React.useState<string | null>(null);
+  const holdSlotRef = React.useRef<string | null>(null);
+  const holdRequestRef = React.useRef(0);
+  const holdInFlightRef = React.useRef<string | null>(null);
   const [bookingStatus, setBookingStatus] = React.useState<"idle" | "loading" | "success" | "error">("idle");
   const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
   const [photoSkipped, setPhotoSkipped] = React.useState(false);
@@ -123,6 +130,19 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   );
 
   const formatSlotTimeLabel = React.useCallback(
+    (iso: string) => {
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return iso;
+      return new Intl.DateTimeFormat("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: availabilityTimezone
+      }).format(date);
+    },
+    [availabilityTimezone]
+  );
+
+  const formatHoldExpiry = React.useCallback(
     (iso: string) => {
       const date = new Date(iso);
       if (Number.isNaN(date.getTime())) return iso;
@@ -335,6 +355,12 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       setAvailabilitySelectedDay(null);
       setSelectedSlotStartAt(null);
       setAvailabilityMessage(null);
+      setHoldId(null);
+      setHoldExpiresAt(null);
+      setHoldStatus("idle");
+      setHoldMessage(null);
+      holdSlotRef.current = null;
+      holdInFlightRef.current = null;
       return;
     }
 
@@ -347,6 +373,110 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       controller.abort();
     };
   }, [addressComplete, fetchAvailability, quoteId, step]);
+
+  React.useEffect(() => {
+    if (
+      step !== 2 ||
+      availabilityStatus !== "ready" ||
+      !quoteId ||
+      !addressComplete ||
+      !selectedSlotStartAt
+    ) {
+      return;
+    }
+
+    if (holdSlotRef.current === selectedSlotStartAt && holdId) return;
+    if (holdInFlightRef.current === selectedSlotStartAt) return;
+
+    const slotStartAt = selectedSlotStartAt;
+    const controller = new AbortController();
+    const requestId = ++holdRequestRef.current;
+    holdInFlightRef.current = slotStartAt;
+    setHoldStatus("loading");
+    setHoldMessage(null);
+
+    void (async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/junk-quote/hold`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            instantQuoteId: quoteId,
+            startAt: slotStartAt,
+            addressLine1: addressLine1.trim(),
+            city: city.trim(),
+            state: stateField.trim(),
+            postalCode: postalCode.trim()
+          }),
+          signal: controller.signal
+        });
+        const data = (await res.json().catch(() => null)) as
+          | { ok?: boolean; holdId?: string; expiresAt?: string; error?: string }
+          | null;
+
+        if (requestId !== holdRequestRef.current) return;
+
+        if (!res.ok || !data?.ok) {
+          const error =
+            typeof data?.error === "string" && data.error.length
+              ? data.error
+              : `Hold failed (HTTP ${res.status})`;
+          const message =
+            error === "slot_full"
+              ? "That time just filled up. Please pick another time."
+              : error === "day_full"
+                ? "We are fully booked that day. Please choose another time."
+                : error === "outside_booking_window"
+                  ? "That time is outside our booking window. Please pick another time."
+                  : error;
+          setHoldStatus("error");
+          setHoldMessage(message);
+          setHoldId(null);
+          setHoldExpiresAt(null);
+          holdSlotRef.current = null;
+          if (error === "slot_full" || error === "day_full") {
+            void fetchAvailability();
+          }
+          return;
+        }
+
+        setHoldId(data.holdId ?? null);
+        setHoldExpiresAt(data.expiresAt ?? null);
+        setHoldStatus("ready");
+        setHoldMessage(null);
+        holdSlotRef.current = slotStartAt;
+      } catch (err) {
+        if ((err as any)?.name === "AbortError") return;
+        if (requestId !== holdRequestRef.current) return;
+        setHoldStatus("error");
+        setHoldMessage("We couldn't hold that time. Please try again.");
+        setHoldId(null);
+        setHoldExpiresAt(null);
+        holdSlotRef.current = null;
+      } finally {
+        if (requestId === holdRequestRef.current) {
+          holdInFlightRef.current = null;
+        }
+      }
+    })();
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    addressComplete,
+    addressLine1,
+    apiBase,
+    availabilityStatus,
+    city,
+    fetchAvailability,
+    holdId,
+    postalCode,
+    quoteId,
+    selectedSlotStartAt,
+    stateField,
+    step
+  ]);
 
   const submitBooking = async () => {
     if (quoteState.status !== "ready") return;
@@ -368,27 +498,50 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     setBookingStatus("loading");
     setBookingMessage(null);
     try {
+      const payload: Record<string, unknown> = {
+        instantQuoteId: quoteId,
+        name: name.trim(),
+        phone: phone.trim(),
+        email: email.trim().length ? email.trim() : null,
+        addressLine1: addressLine1.trim(),
+        city: city.trim(),
+        state: stateField.trim(),
+        postalCode: postalCode.trim(),
+        startAt: selectedSlotStartAt,
+        notes: notes || null
+      };
+      if (holdId) payload["holdId"] = holdId;
+
       const res = await fetch(`${apiBase}/api/junk-quote/book`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({
-           instantQuoteId: quoteId,
-           name: name.trim(),
-           phone: phone.trim(),
-           email: email.trim().length ? email.trim() : null,
-           addressLine1: addressLine1.trim(),
-           city: city.trim(),
-           state: stateField.trim(),
-           postalCode: postalCode.trim(),
-           startAt: selectedSlotStartAt,
-           notes: notes || null
-         })
+        body: JSON.stringify(payload)
        });
       if (!res.ok) {
         const errorPayload = (await res.json().catch(() => null)) as { error?: string; errorId?: string } | null;
         if (errorPayload?.error === "slot_full") {
           setBookingStatus("error");
           setBookingMessage("That time just filled up. Please pick another time.");
+          void fetchAvailability();
+          return;
+        }
+        if (errorPayload?.error === "day_full") {
+          setBookingStatus("error");
+          setBookingMessage("We are fully booked that day. Please choose another time.");
+          void fetchAvailability();
+          return;
+        }
+        if (
+          errorPayload?.error === "hold_expired" ||
+          errorPayload?.error === "hold_not_found" ||
+          errorPayload?.error === "hold_mismatch"
+        ) {
+          setBookingStatus("error");
+          setBookingMessage("That hold expired. Please pick another time.");
+          setHoldId(null);
+          setHoldExpiresAt(null);
+          setHoldStatus("idle");
+          holdSlotRef.current = null;
           void fetchAvailability();
           return;
         }
@@ -411,6 +564,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       setBookingMessage(
         `You're booked for ${formatSlotLabel(bookedAt)}. We'll text${email.trim().length ? " (and email)" : ""} you a confirmation.`
       );
+      setHoldStatus("idle");
     } catch (err) {
       setBookingStatus("error");
       setBookingMessage((err as Error).message);
@@ -809,6 +963,15 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                             <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-900">
                               Selected time: <span className="font-semibold">{formatSlotLabel(selectedSlotStartAt)}</span>
                             </div>
+                          ) : null}
+                          {holdStatus === "loading" ? (
+                            <div className="text-[11px] text-neutral-500">Holding that time for you...</div>
+                          ) : holdStatus === "ready" && holdExpiresAt ? (
+                            <div className="text-[11px] text-neutral-500">
+                              Held until {formatHoldExpiry(holdExpiresAt)}.
+                            </div>
+                          ) : holdStatus === "error" && holdMessage ? (
+                            <div className="text-[11px] text-amber-700">{holdMessage}</div>
                           ) : null}
 
                           {(() => {
