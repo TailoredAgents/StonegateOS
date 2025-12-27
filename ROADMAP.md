@@ -19,7 +19,7 @@
 - Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited). Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events; inbound SMS/email ingestion + merge queue + state machine + delivery state enhancements done; DM/Nextdoor bridges pending).
 - Policy center storage: configurable business hours/quiet hours, booking windows/buffers, standard job definition, item policies, templates. Status: done (storage + admin UI); enforcement pending in Phase 1 tasks.
 - Automation modes/kill switches: per-channel autonomy levels, lead-level pause/DNC, human takeover, follow-up state machine. Status: partial (data model + admin API + UI for channel modes + lead kill switches; auto-reply enforcement wired; follow-up state machine pending).
-- Booking holds + confirmation loop: hold/reservation model, “standard job” enforcement, YES/NO confirmation cadence. Status: todo.
+- Booking holds + confirmation loop: hold/reservation model, “standard job” enforcement, YES/NO confirmation cadence. Status: in progress (holds + optional confirmation loop with reminders/YES-NO handling done; standard job enforcement pending).
 - Escalation routing/SLA: assignment, timers, hot-lead flags. Status: todo.
 - Owner brief + spend ingestion: daily digest and CPA inputs (manual spend entry v1). Status: todo.
 - Review/referral sequences: triggers and outbox schedules. Status: todo.
@@ -103,7 +103,7 @@ Dependencies/notes:
 
 ### C) Booking Flow: Two time options + appointment hold
 Goal: Convert chats into scheduled appointments without human involvement for standard jobs.
-Status: not started.
+Status: in progress (holds + confirmation loop reminders/YES-NO handling behind policy toggle done; standard job constraints pending).
 
 Task sequence:
 1) Availability model: generate two time windows based on capacity and geography.

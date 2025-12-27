@@ -1,17 +1,22 @@
-import { and, eq, sql } from "drizzle-orm";
+import { DateTime } from "luxon";
+import { and, asc, eq, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import {
+  appointments,
   automationSettings,
   contacts,
   conversationMessages,
   conversationParticipants,
   conversationThreads,
   getDb,
+  leads,
   leadAutomationStates,
   outboxEvents,
   properties
 } from "@/db";
+import { deleteCalendarEvent } from "@/lib/calendar";
 import { recordAuditEvent } from "@/lib/audit";
 import {
+  getConfirmationLoopPolicy,
   getServiceAreaPolicy,
   getTemplatesPolicy,
   isPostalCodeAllowed,
@@ -35,6 +40,11 @@ type AutoReplyOutcome = {
 
 const AUTO_REPLY_MIN_DELAY_MS = 10_000;
 const AUTO_REPLY_MAX_DELAY_MS = 30_000;
+const CONFIRMATION_REPLY_GRACE_MS = 12 * 60 * 60 * 1000;
+const APPOINTMENT_TIME_ZONE =
+  process.env["APPOINTMENT_TIMEZONE"] ??
+  process.env["GOOGLE_CALENDAR_TIMEZONE"] ??
+  "America/New_York";
 
 function resolveCandidateChannels(inboundChannel: string): AutoReplyChannel[] {
   switch (inboundChannel.toLowerCase()) {
@@ -55,6 +65,44 @@ function randomDelayMs(): number {
   const min = AUTO_REPLY_MIN_DELAY_MS;
   const max = AUTO_REPLY_MAX_DELAY_MS;
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+type ConfirmationIntent = "confirm" | "decline";
+
+function parseConfirmationIntent(body: string): ConfirmationIntent | null {
+  const normalized = body.trim().toLowerCase();
+  if (!normalized) return null;
+  if (/\b(stop|unsubscribe)\b/.test(normalized)) return null;
+
+  const cleaned = normalized.replace(/[^\w\s]/g, " ").trim();
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return null;
+
+  const declineTokens = new Set(["no", "nope", "nah", "cancel", "reschedule"]);
+  const confirmTokens = new Set(["yes", "yep", "yeah", "y", "ok", "okay", "sure", "confirm", "confirmed"]);
+
+  if (tokens.some((token) => declineTokens.has(token))) return "decline";
+  if (tokens.some((token) => confirmTokens.has(token))) return "confirm";
+  return null;
+}
+
+function buildRescheduleUrlForAppointment(appointmentId: string, token: string): string {
+  const base =
+    process.env["NEXT_PUBLIC_SITE_URL"] ??
+    process.env["SITE_URL"] ??
+    "http://localhost:3000";
+  const url = new URL("/schedule", base);
+  url.searchParams.set("appointmentId", appointmentId);
+  url.searchParams.set("token", token);
+  return url.toString();
+}
+
+function formatAppointmentTime(date: Date): string {
+  const dt = DateTime.fromJSDate(date, { zone: "utc" }).setZone(APPOINTMENT_TIME_ZONE);
+  if (!dt.isValid) {
+    return date.toISOString();
+  }
+  return dt.toLocaleString(DateTime.DATETIME_MED);
 }
 
 async function getAutomationMode(db: DbExecutor, channel: AutoReplyChannel): Promise<AutomationMode> {
@@ -114,6 +162,245 @@ async function ensureSystemParticipant(db: DbExecutor, threadId: string, created
   return created?.id ?? null;
 }
 
+async function queueThreadMessage(input: {
+  db: DbExecutor;
+  threadId: string;
+  channel: AutoReplyChannel;
+  toAddress: string;
+  body: string;
+  subject?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: Date;
+}): Promise<string | null> {
+  const participantId = await ensureSystemParticipant(input.db, input.threadId, input.createdAt);
+
+  const [message] = await input.db
+    .insert(conversationMessages)
+    .values({
+      threadId: input.threadId,
+      participantId,
+      direction: "outbound",
+      channel: input.channel,
+      subject: input.subject ?? null,
+      body: input.body,
+      toAddress: input.toAddress,
+      deliveryStatus: "queued",
+      metadata: input.metadata ?? null,
+      createdAt: input.createdAt
+    })
+    .returning({ id: conversationMessages.id });
+
+  if (!message?.id) {
+    return null;
+  }
+
+  await input.db
+    .update(conversationThreads)
+    .set({
+      lastMessagePreview: input.body.slice(0, 140),
+      lastMessageAt: input.createdAt,
+      updatedAt: input.createdAt
+    })
+    .where(eq(conversationThreads.id, input.threadId));
+
+  await input.db.insert(outboxEvents).values({
+    type: "message.send",
+    payload: { messageId: message.id },
+    createdAt: input.createdAt
+  });
+
+  return message.id;
+}
+
+async function handleConfirmationReply(input: {
+  db: DbExecutor;
+  messageId: string;
+  threadId: string;
+  leadId: string | null;
+  contactId: string | null;
+  channel: string;
+  body: string;
+  contactEmail: string | null;
+  contactPhone: string | null;
+  contactPhoneE164: string | null;
+}): Promise<boolean> {
+  const confirmationPolicy = await getConfirmationLoopPolicy(input.db);
+  if (!confirmationPolicy.enabled) {
+    return false;
+  }
+
+  const intent = parseConfirmationIntent(input.body);
+  if (!intent) {
+    return false;
+  }
+
+  const now = new Date();
+  const maxWindowMinutes =
+    confirmationPolicy.windowsMinutes.length > 0
+      ? Math.max(...confirmationPolicy.windowsMinutes)
+      : 24 * 60;
+  const windowStart = new Date(now.getTime() - CONFIRMATION_REPLY_GRACE_MS);
+  const windowEnd = new Date(now.getTime() + (maxWindowMinutes * 60_000 + CONFIRMATION_REPLY_GRACE_MS));
+
+  const filters = [
+    isNotNull(appointments.startAt),
+    gte(appointments.startAt, windowStart),
+    lte(appointments.startAt, windowEnd),
+    ne(appointments.status, "canceled"),
+    ne(appointments.status, "completed"),
+    ne(appointments.status, "no_show")
+  ];
+
+  if (input.leadId) {
+    filters.push(eq(appointments.leadId, input.leadId));
+  } else if (input.contactId) {
+    filters.push(eq(appointments.contactId, input.contactId));
+  } else {
+    return false;
+  }
+
+  const [appointment] = await input.db
+    .select({
+      id: appointments.id,
+      startAt: appointments.startAt,
+      status: appointments.status,
+      rescheduleToken: appointments.rescheduleToken,
+      calendarEventId: appointments.calendarEventId,
+      leadId: appointments.leadId
+    })
+    .from(appointments)
+    .where(and(...filters))
+    .orderBy(asc(appointments.startAt))
+    .limit(1);
+
+  if (!appointment?.id || !appointment.startAt || !appointment.rescheduleToken) {
+    return false;
+  }
+
+  const channel = input.channel.toLowerCase();
+  const replyChannel = channel === "email" ? "email" : "sms";
+  const toAddress =
+    replyChannel === "email"
+      ? input.contactEmail
+      : input.contactPhoneE164 ?? input.contactPhone ?? null;
+
+  if (intent === "confirm") {
+    await input.db
+      .update(appointments)
+      .set({ status: "confirmed", updatedAt: now })
+      .where(eq(appointments.id, appointment.id));
+
+    if (appointment.leadId) {
+      await input.db.update(leads).set({ status: "scheduled" }).where(eq(leads.id, appointment.leadId));
+    }
+
+    await input.db
+      .delete(outboxEvents)
+      .where(
+        and(
+          eq(outboxEvents.type, "estimate.reminder"),
+          sql`(payload->>'appointmentId') = ${appointment.id}`
+        )
+      );
+
+    if (toAddress) {
+      const when = appointment.startAt instanceof Date ? formatAppointmentTime(appointment.startAt) : "soon";
+      const body = `Thanks! You're confirmed for ${when}. Reply if you need any changes.`;
+
+      const state =
+        input.leadId && replyChannel
+          ? await getLeadAutomationState(input.db, input.leadId, replyChannel)
+          : null;
+      if (!state?.paused && !state?.dnc && !state?.humanTakeover) {
+        await queueThreadMessage({
+          db: input.db,
+          threadId: input.threadId,
+          channel: replyChannel,
+          toAddress,
+          body,
+          metadata: {
+            confirmationLoop: true,
+            confirmationIntent: "confirm",
+            appointmentId: appointment.id
+          },
+          createdAt: now
+        });
+      }
+    }
+
+    await recordAuditEvent({
+      actor: { type: "ai", label: "confirmation-loop" },
+      action: "appointment.confirmed",
+      entityType: "appointment",
+      entityId: appointment.id,
+      meta: { messageId: input.messageId, channel }
+    });
+
+    return true;
+  }
+
+  if (intent === "decline") {
+    await input.db
+      .update(appointments)
+      .set({ status: "requested", updatedAt: now, calendarEventId: null })
+      .where(eq(appointments.id, appointment.id));
+
+    if (appointment.leadId) {
+      await input.db.update(leads).set({ status: "contacted" }).where(eq(leads.id, appointment.leadId));
+    }
+
+    if (appointment.calendarEventId) {
+      await deleteCalendarEvent(appointment.calendarEventId);
+    }
+
+    await input.db
+      .delete(outboxEvents)
+      .where(
+        and(
+          eq(outboxEvents.type, "estimate.reminder"),
+          sql`(payload->>'appointmentId') = ${appointment.id}`
+        )
+      );
+
+    if (toAddress) {
+      const rescheduleUrl = buildRescheduleUrlForAppointment(appointment.id, appointment.rescheduleToken);
+      const body = `No problem. Use this link to reschedule: ${rescheduleUrl}`;
+
+      const state =
+        input.leadId && replyChannel
+          ? await getLeadAutomationState(input.db, input.leadId, replyChannel)
+          : null;
+      if (!state?.paused && !state?.dnc && !state?.humanTakeover) {
+        await queueThreadMessage({
+          db: input.db,
+          threadId: input.threadId,
+          channel: replyChannel,
+          toAddress,
+          body,
+          metadata: {
+            confirmationLoop: true,
+            confirmationIntent: "decline",
+            appointmentId: appointment.id
+          },
+          createdAt: now
+        });
+      }
+    }
+
+    await recordAuditEvent({
+      actor: { type: "ai", label: "confirmation-loop" },
+      action: "appointment.reschedule_requested",
+      entityType: "appointment",
+      entityId: appointment.id,
+      meta: { messageId: input.messageId, channel }
+    });
+
+    return true;
+  }
+
+  return false;
+}
+
 export async function handleInboundAutoReply(messageId: string): Promise<AutoReplyOutcome> {
   const db = getDb();
   const [row] = await db
@@ -150,6 +437,22 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
 
   if (row.direction !== "inbound") {
     return { status: "skipped" };
+  }
+
+  const confirmationHandled = await handleConfirmationReply({
+    db,
+    messageId: row.messageId,
+    threadId,
+    leadId: row.leadId ?? null,
+    contactId: row.contactId ?? null,
+    channel: row.channel ?? "sms",
+    body: row.body ?? "",
+    contactEmail: row.contactEmail ?? null,
+    contactPhone: row.contactPhone ?? null,
+    contactPhoneE164: row.contactPhoneE164 ?? null
+  });
+  if (confirmationHandled) {
+    return { status: "processed" };
   }
 
   const inboundChannel = row.channel ?? "sms";
