@@ -26,6 +26,10 @@ const POLICY_LABELS: Record<string, { title: string; description: string }> = {
     title: "Booking rules",
     description: "Default booking windows, buffers, and capacity caps."
   },
+  confirmation_loop: {
+    title: "Confirmation loop",
+    description: "Enable or disable appointment confirmation reminders."
+  },
   standard_job: {
     title: "Standard job definition",
     description: "Guardrails for what can be auto-booked."

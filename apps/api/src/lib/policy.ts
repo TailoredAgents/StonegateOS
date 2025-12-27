@@ -31,6 +31,11 @@ export type BookingRulesPolicy = {
   maxJobsPerCrew: number;
 };
 
+export type ConfirmationLoopPolicy = {
+  enabled: boolean;
+  windowsMinutes: number[];
+};
+
 export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
   mode: "zip_allowlist",
   homeBase: "Woodstock, GA",
@@ -362,6 +367,11 @@ export const DEFAULT_BOOKING_RULES_POLICY: BookingRulesPolicy = {
   maxJobsPerCrew: 3
 };
 
+export const DEFAULT_CONFIRMATION_LOOP_POLICY: ConfirmationLoopPolicy = {
+  enabled: false,
+  windowsMinutes: [24 * 60, 2 * 60]
+};
+
 export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
   first_touch: {
     sms: "Thanks for reaching out! We can help. What items and timeframe are you thinking?",
@@ -526,5 +536,23 @@ export async function getBookingRulesPolicy(db: DbExecutor = getDb()): Promise<B
     bufferMinutes,
     maxJobsPerDay,
     maxJobsPerCrew
+  };
+}
+
+export async function getConfirmationLoopPolicy(db: DbExecutor = getDb()): Promise<ConfirmationLoopPolicy> {
+  const stored = await getPolicySetting(db, "confirmation_loop");
+  if (!stored) {
+    return DEFAULT_CONFIRMATION_LOOP_POLICY;
+  }
+
+  const enabled = stored["enabled"] === true;
+  const windowsRaw = stored["windowsMinutes"];
+  const windowsMinutes = Array.isArray(windowsRaw)
+    ? windowsRaw.filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0)
+    : DEFAULT_CONFIRMATION_LOOP_POLICY.windowsMinutes;
+
+  return {
+    enabled,
+    windowsMinutes: windowsMinutes.length ? windowsMinutes : DEFAULT_CONFIRMATION_LOOP_POLICY.windowsMinutes
   };
 }

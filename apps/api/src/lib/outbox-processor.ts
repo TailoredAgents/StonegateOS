@@ -12,6 +12,7 @@ import {
   conversationThreads,
   messageDeliveryEvents
 } from "@/db";
+import { getConfirmationLoopPolicy } from "@/lib/policy";
 import type { EstimateNotificationPayload, QuoteNotificationPayload } from "@/lib/notifications";
 import {
   sendEstimateConfirmation,
@@ -46,7 +47,6 @@ type OutboxOutcome = {
 
 const MAX_MESSAGE_SEND_ATTEMPTS = 3;
 const MESSAGE_SEND_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
-const ESTIMATE_REMINDER_WINDOWS_MINUTES = [24 * 60, 2 * 60];
 
 const APPOINTMENT_STATUS_VALUES = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
 type AppointmentStatus = (typeof APPOINTMENT_STATUS_VALUES)[number];
@@ -553,13 +553,21 @@ async function scheduleAppointmentReminders(
   }
 
   const db = getDb();
+  const confirmationPolicy = await getConfirmationLoopPolicy(db);
+  if (!confirmationPolicy.enabled) {
+    return;
+  }
+
   if (options?.reset) {
     await clearPendingReminders(appointmentId);
   }
 
   const now = new Date();
+  const windows = confirmationPolicy.windowsMinutes.length
+    ? confirmationPolicy.windowsMinutes
+    : [24 * 60, 2 * 60];
 
-  for (const windowMinutes of ESTIMATE_REMINDER_WINDOWS_MINUTES) {
+  for (const windowMinutes of windows) {
     const reminderAt = new Date(startAt.getTime() - windowMinutes * 60_000);
     if (reminderAt <= now) continue;
 
@@ -820,6 +828,11 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       if (!appointmentId || !Number.isFinite(windowMinutes)) {
         console.warn("[outbox] estimate.reminder.missing_data", { id: event.id });
         return { status: "skipped" };
+      }
+
+      const confirmationPolicy = await getConfirmationLoopPolicy();
+      if (!confirmationPolicy.enabled || !confirmationPolicy.windowsMinutes.includes(windowMinutes)) {
+        return { status: "processed" };
       }
 
       const notification = await buildNotificationPayload(appointmentId);
