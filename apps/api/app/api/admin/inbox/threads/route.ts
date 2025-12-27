@@ -9,6 +9,7 @@ import {
   contacts,
   properties,
   teamMembers,
+  leadAutomationStates,
   leads,
   outboxEvents
 } from "@/db";
@@ -125,11 +126,21 @@ export async function GET(request: NextRequest): Promise<Response> {
           propertyCity: properties.city,
           propertyState: properties.state,
           propertyPostalCode: properties.postalCode,
-          assignedName: teamMembers.name
+          assignedName: teamMembers.name,
+          followupState: leadAutomationStates.followupState,
+          followupStep: leadAutomationStates.followupStep,
+          nextFollowupAt: leadAutomationStates.nextFollowupAt
         })
         .from(conversationThreads)
         .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
         .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
+        .leftJoin(
+          leadAutomationStates,
+          and(
+            eq(leadAutomationStates.leadId, conversationThreads.leadId),
+            eq(leadAutomationStates.channel, conversationThreads.channel)
+          )
+        )
         .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id))
         .where(whereClause)
     : db
@@ -156,11 +167,21 @@ export async function GET(request: NextRequest): Promise<Response> {
           propertyCity: properties.city,
           propertyState: properties.state,
           propertyPostalCode: properties.postalCode,
-          assignedName: teamMembers.name
+          assignedName: teamMembers.name,
+          followupState: leadAutomationStates.followupState,
+          followupStep: leadAutomationStates.followupStep,
+          nextFollowupAt: leadAutomationStates.nextFollowupAt
         })
         .from(conversationThreads)
         .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
         .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
+        .leftJoin(
+          leadAutomationStates,
+          and(
+            eq(leadAutomationStates.leadId, conversationThreads.leadId),
+            eq(leadAutomationStates.channel, conversationThreads.channel)
+          )
+        )
         .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id)))
     .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
     .limit(limit)
@@ -226,7 +247,14 @@ export async function GET(request: NextRequest): Promise<Response> {
             name: row.assignedName ?? "Assigned"
           }
         : null,
-      messageCount: messageCountMap.get(row.id) ?? 0
+      messageCount: messageCountMap.get(row.id) ?? 0,
+      followup: row.leadId
+        ? {
+            state: row.followupState ?? null,
+            step: typeof row.followupStep === "number" ? row.followupStep : null,
+            nextAt: row.nextFollowupAt ? row.nextFollowupAt.toISOString() : null
+          }
+        : null
     };
   });
 

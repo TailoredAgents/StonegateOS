@@ -30,6 +30,10 @@ const POLICY_LABELS: Record<string, { title: string; description: string }> = {
     title: "Confirmation loop",
     description: "Enable or disable appointment confirmation reminders."
   },
+  follow_up_sequence: {
+    title: "Follow-up sequence",
+    description: "Configure quoted-but-not-booked follow-up cadence."
+  },
   standard_job: {
     title: "Standard job definition",
     description: "Guardrails for what can be auto-booked."

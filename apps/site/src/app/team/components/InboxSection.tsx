@@ -32,6 +32,11 @@ type ThreadSummary = {
     outOfArea?: boolean | null;
   } | null;
   messageCount: number;
+  followup?: {
+    state: string | null;
+    step: number | null;
+    nextAt: string | null;
+  } | null;
 };
 
 type ThreadDetail = {
@@ -347,6 +352,11 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                           {thread.property?.outOfArea ? (
                             <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
                               Out of area
+                            </span>
+                          ) : null}
+                          {thread.followup?.nextAt && thread.followup.state === "running" ? (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                              Follow-up {formatTimestamp(thread.followup.nextAt)}
                             </span>
                           ) : null}
                           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">

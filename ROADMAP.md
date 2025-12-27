@@ -18,7 +18,7 @@
 - Access control & audit: roles/permissions and an audit log for sends/bookings/merges/policy changes. Status: partial (roles + audit log storage/API/UI in place; enforcement + broader audit coverage pending).
 - Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited). Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events; inbound SMS/email ingestion + merge queue + state machine + delivery state enhancements done; DM/Nextdoor bridges pending).
 - Policy center storage: configurable business hours/quiet hours, booking windows/buffers, standard job definition, item policies, templates. Status: done (storage + admin UI); enforcement pending in Phase 1 tasks.
-- Automation modes/kill switches: per-channel autonomy levels, lead-level pause/DNC, human takeover, follow-up state machine. Status: partial (data model + admin API + UI for channel modes + lead kill switches; auto-reply enforcement wired; follow-up state machine pending).
+- Automation modes/kill switches: per-channel autonomy levels, lead-level pause/DNC, human takeover, follow-up state machine. Status: partial (data model + admin API + UI for channel modes + lead kill switches; auto-reply enforcement wired; follow-up scheduler in progress).
 - Booking holds + confirmation loop: hold/reservation model, “standard job” enforcement, YES/NO confirmation cadence. Status: in progress (holds + optional confirmation loop with reminders/YES-NO handling done; standard job enforcement pending).
 - Escalation routing/SLA: assignment, timers, hot-lead flags. Status: todo.
 - Owner brief + spend ingestion: daily digest and CPA inputs (manual spend entry v1). Status: todo.
@@ -123,7 +123,7 @@ Dependencies/notes:
 
 ### D) Follow-up sequences (quoted-but-not-booked)
 Goal: Automated follow-up that stops when the lead replies or books.
-Status: not started.
+Status: in progress (follow-up scheduler + stop rules + inbox indicator wired; templates/cadence configurable).
 
 Task sequence:
 1) Define sequence templates and timing (new lead, quote sent, no response).

@@ -1,18 +1,26 @@
-import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte, ne, or, sql } from "drizzle-orm";
 import {
   getDb,
   outboxEvents,
   appointments,
+  automationSettings,
   leads,
   contacts,
   properties,
   quotes,
   crmPipeline,
+  conversationParticipants,
   conversationMessages,
   conversationThreads,
+  leadAutomationStates,
   messageDeliveryEvents
 } from "@/db";
-import { getConfirmationLoopPolicy } from "@/lib/policy";
+import {
+  getConfirmationLoopPolicy,
+  getFollowUpSequencePolicy,
+  getTemplatesPolicy,
+  resolveTemplateForChannel
+} from "@/lib/policy";
 import type { EstimateNotificationPayload, QuoteNotificationPayload } from "@/lib/notifications";
 import {
   sendEstimateConfirmation,
@@ -54,6 +62,8 @@ const VALID_APPOINTMENT_STATUSES = new Set<string>(APPOINTMENT_STATUS_VALUES);
 
 type PipelineStage = "new" | "contacted" | "qualified" | "quoted" | "won" | "lost";
 const PIPELINE_STAGE_SET = new Set<PipelineStage>(["new", "contacted", "qualified", "quoted", "won", "lost"]);
+
+type FollowUpChannel = "sms" | "email";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -530,6 +540,318 @@ function mapAppointmentStatusToStage(status: string): PipelineStage {
   }
 }
 
+async function clearLeadFollowups(leadId: string | null | undefined): Promise<void> {
+  if (!leadId) return;
+  const db = getDb();
+  const now = new Date();
+
+  await db
+    .update(leadAutomationStates)
+    .set({
+      followupState: "stopped",
+      followupStep: 0,
+      nextFollowupAt: null,
+      updatedAt: now
+    })
+    .where(eq(leadAutomationStates.leadId, leadId));
+
+  await db
+    .delete(outboxEvents)
+    .where(
+      and(
+        eq(outboxEvents.type, "followup.send"),
+        isNull(outboxEvents.processedAt),
+        sql`(payload->>'leadId') = ${leadId}`
+      )
+    );
+}
+
+async function getAutomationMode(
+  db: ReturnType<typeof getDb>,
+  channel: FollowUpChannel
+): Promise<"draft" | "assist" | "auto"> {
+  const [row] = await db
+    .select({ mode: automationSettings.mode })
+    .from(automationSettings)
+    .where(eq(automationSettings.channel, channel))
+    .limit(1);
+
+  return (row?.mode ?? "draft") as "draft" | "assist" | "auto";
+}
+
+async function getLeadAutomationState(
+  db: ReturnType<typeof getDb>,
+  leadId: string,
+  channel: FollowUpChannel
+): Promise<{
+  paused: boolean;
+  dnc: boolean;
+  humanTakeover: boolean;
+  followupState: string | null;
+}> {
+  const [row] = await db
+    .select({
+      paused: leadAutomationStates.paused,
+      dnc: leadAutomationStates.dnc,
+      humanTakeover: leadAutomationStates.humanTakeover,
+      followupState: leadAutomationStates.followupState
+    })
+    .from(leadAutomationStates)
+    .where(and(eq(leadAutomationStates.leadId, leadId), eq(leadAutomationStates.channel, channel)))
+    .limit(1);
+
+  return (
+    row ?? {
+      paused: false,
+      dnc: false,
+      humanTakeover: false,
+      followupState: null
+    }
+  );
+}
+
+function getContactChannelAddress(
+  contact: { email?: string | null; phone?: string | null; phoneE164?: string | null },
+  channel: FollowUpChannel
+): string | null {
+  return channel === "sms"
+    ? contact.phoneE164 ?? contact.phone ?? null
+    : contact.email ?? null;
+}
+
+async function resolveFollowUpChannel(
+  db: ReturnType<typeof getDb>,
+  leadId: string,
+  contact: { email?: string | null; phone?: string | null; phoneE164?: string | null },
+  preferred: FollowUpChannel[] = ["sms", "email"]
+): Promise<FollowUpChannel | null> {
+  for (const channel of preferred) {
+    const toAddress = getContactChannelAddress(contact, channel);
+    if (!toAddress) continue;
+
+    const mode = await getAutomationMode(db, channel);
+    if (mode === "draft") continue;
+
+    const state = await getLeadAutomationState(db, leadId, channel);
+    if (state.paused || state.dnc || state.humanTakeover) continue;
+
+    return channel;
+  }
+  return null;
+}
+
+async function ensureThreadForLead(
+  db: ReturnType<typeof getDb>,
+  input: { leadId: string; contactId: string; propertyId: string | null; channel: FollowUpChannel }
+): Promise<string | null> {
+  const [existing] = await db
+    .select({ id: conversationThreads.id })
+    .from(conversationThreads)
+    .where(and(eq(conversationThreads.leadId, input.leadId), eq(conversationThreads.channel, input.channel)))
+    .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
+    .limit(1);
+
+  if (existing?.id) {
+    return existing.id;
+  }
+
+  const now = new Date();
+  const [created] = await db
+    .insert(conversationThreads)
+    .values({
+      leadId: input.leadId,
+      contactId: input.contactId,
+      propertyId: input.propertyId,
+      status: "open",
+      channel: input.channel,
+      subject: input.channel === "email" ? "Stonegate follow-up" : null,
+      lastMessagePreview: "Follow-up scheduled",
+      lastMessageAt: now,
+      createdAt: now,
+      updatedAt: now
+    })
+    .returning({ id: conversationThreads.id });
+
+  return created?.id ?? null;
+}
+
+async function queueOutboundMessage(input: {
+  db: ReturnType<typeof getDb>;
+  threadId: string;
+  channel: FollowUpChannel;
+  body: string;
+  toAddress: string;
+  subject?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<string | null> {
+  const now = new Date();
+  const [existingParticipant] = await input.db
+    .select({ id: conversationParticipants.id })
+    .from(conversationParticipants)
+    .where(
+      and(
+        eq(conversationParticipants.threadId, input.threadId),
+        eq(conversationParticipants.participantType, "system")
+      )
+    )
+    .limit(1);
+
+  const participantId =
+    existingParticipant?.id ??
+    (
+      await input.db
+        .insert(conversationParticipants)
+        .values({
+          threadId: input.threadId,
+          participantType: "system",
+          displayName: "Stonegate Assistant",
+          createdAt: now
+        })
+        .returning({ id: conversationParticipants.id })
+    )[0]?.id ??
+    null;
+
+  const [message] = await input.db
+    .insert(conversationMessages)
+    .values({
+      threadId: input.threadId,
+      participantId,
+      direction: "outbound",
+      channel: input.channel,
+      subject: input.subject ?? null,
+      body: input.body,
+      toAddress: input.toAddress,
+      deliveryStatus: "queued",
+      metadata: input.metadata ?? null,
+      createdAt: now
+    })
+    .returning({ id: conversationMessages.id });
+
+  if (!message?.id) {
+    return null;
+  }
+
+  await input.db
+    .update(conversationThreads)
+    .set({
+      lastMessagePreview: input.body.slice(0, 140),
+      lastMessageAt: now,
+      updatedAt: now
+    })
+    .where(eq(conversationThreads.id, input.threadId));
+
+  await input.db.insert(outboxEvents).values({
+    type: "message.send",
+    payload: { messageId: message.id },
+    createdAt: now
+  });
+
+  return message.id;
+}
+
+async function scheduleLeadFollowups(leadId: string, contactId: string): Promise<void> {
+  const db = getDb();
+  const followupPolicy = await getFollowUpSequencePolicy(db);
+  if (!followupPolicy.enabled) {
+    return;
+  }
+
+  await clearLeadFollowups(leadId);
+
+  const [leadRow] = await db
+    .select({
+      id: leads.id,
+      status: leads.status,
+      contactId: leads.contactId,
+      propertyId: leads.propertyId
+    })
+    .from(leads)
+    .where(eq(leads.id, leadId))
+    .limit(1);
+
+  if (!leadRow || leadRow.status === "scheduled") {
+    return;
+  }
+
+  const [appointment] = await db
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(and(eq(appointments.leadId, leadId), ne(appointments.status, "canceled")))
+    .limit(1);
+  if (appointment?.id) {
+    return;
+  }
+
+  const [contact] = await db
+    .select({
+      email: contacts.email,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164
+    })
+    .from(contacts)
+    .where(eq(contacts.id, contactId))
+    .limit(1);
+
+  if (!contact) {
+    return;
+  }
+
+  const channel = await resolveFollowUpChannel(db, leadId, contact);
+  if (!channel) {
+    return;
+  }
+
+  const now = new Date();
+  const steps = followupPolicy.stepsMinutes
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  if (!steps.length) {
+    return;
+  }
+
+  const firstStep = steps[0] ?? 24 * 60;
+  const firstDue = new Date(now.getTime() + firstStep * 60_000);
+
+  await db
+    .insert(leadAutomationStates)
+    .values({
+      leadId,
+      channel,
+      paused: false,
+      dnc: false,
+      humanTakeover: false,
+      followupState: "running",
+      followupStep: 0,
+      nextFollowupAt: firstDue,
+      updatedAt: now
+    })
+    .onConflictDoUpdate({
+      target: [leadAutomationStates.leadId, leadAutomationStates.channel],
+      set: {
+        followupState: "running",
+        followupStep: 0,
+        nextFollowupAt: firstDue,
+        updatedAt: now
+      }
+    });
+
+  for (let step = 0; step < steps.length; step += 1) {
+    const stepMinutes = steps[step];
+    if (typeof stepMinutes !== "number") continue;
+    const dueAt = new Date(now.getTime() + stepMinutes * 60_000);
+    await db.insert(outboxEvents).values({
+      type: "followup.send",
+      payload: {
+        leadId,
+        channel,
+        step,
+        anchorAt: now.toISOString()
+      },
+      nextAttemptAt: dueAt
+    });
+  }
+}
+
 async function clearPendingReminders(appointmentId: string): Promise<void> {
   const db = getDb();
   await db
@@ -641,6 +963,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       await ensureCalendarEventCreated(notification);
       await sendEstimateConfirmation(notification, "requested");
       await scheduleAppointmentReminders(appointmentId, notification.appointment.startAt);
+      await clearLeadFollowups(notification.leadId ?? null);
       await updatePipelineStageForContact(
         notification.contactId ?? null,
         "qualified",
@@ -671,6 +994,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       await syncCalendarEventForReschedule(notification);
       await sendEstimateConfirmation(notification, "rescheduled");
       await scheduleAppointmentReminders(appointmentId, notification.appointment.startAt, { reset: true });
+      await clearLeadFollowups(notification.leadId ?? null);
       await updatePipelineStageForContact(
         notification.contactId ?? null,
         "qualified",
@@ -705,6 +1029,18 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         "quote.sent",
         { quoteId }
       );
+      if (notification.contactId) {
+        const db = getDb();
+        const [leadRow] = await db
+          .select({ id: leads.id })
+          .from(leads)
+          .where(eq(leads.contactId, notification.contactId))
+          .orderBy(desc(leads.updatedAt), desc(leads.createdAt))
+          .limit(1);
+        if (leadRow?.id) {
+          await scheduleLeadFollowups(leadRow.id, notification.contactId);
+        }
+      }
       return { status: "processed" };
     }
 
@@ -741,6 +1077,16 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         "quote.decision",
         { quoteId, decision, source }
       );
+      if (notification.contactId) {
+        const db = getDb();
+        const [leadRow] = await db
+          .select({ id: leads.id })
+          .from(leads)
+          .where(eq(leads.contactId, notification.contactId))
+          .orderBy(desc(leads.updatedAt), desc(leads.createdAt))
+          .limit(1);
+        await clearLeadFollowups(leadRow?.id ?? null);
+      }
       return { status: "processed" };
     }
 
@@ -801,6 +1147,9 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       if (status === "canceled" || status === "no_show" || status === "completed") {
         await clearPendingReminders(appointment.id);
       }
+      if (event.type === "estimate.status_changed") {
+        await clearLeadFollowups(leadId);
+      }
       if (notification.contactId) {
         const targetStage: PipelineStage =
           event.type === "estimate.status_changed" && status
@@ -848,6 +1197,158 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
 
       await sendEstimateReminder(notification, windowMinutes);
+      return { status: "processed" };
+    }
+
+    case "followup.schedule": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const leadId = typeof payload?.["leadId"] === "string" ? payload["leadId"] : null;
+      const contactId = typeof payload?.["contactId"] === "string" ? payload["contactId"] : null;
+
+      if (!leadId || !contactId) {
+        console.warn("[outbox] followup.schedule.missing_data", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      await scheduleLeadFollowups(leadId, contactId);
+      return { status: "processed" };
+    }
+
+    case "followup.send": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const leadId = typeof payload?.["leadId"] === "string" ? payload["leadId"] : null;
+      const channelRaw = typeof payload?.["channel"] === "string" ? payload["channel"] : null;
+      const step = typeof payload?.["step"] === "number" ? payload["step"] : Number(payload?.["step"]);
+      const anchorAtRaw = typeof payload?.["anchorAt"] === "string" ? payload["anchorAt"] : null;
+
+      if (!leadId || (channelRaw !== "sms" && channelRaw !== "email") || !Number.isFinite(step)) {
+        console.warn("[outbox] followup.send.missing_data", { id: event.id });
+        return { status: "skipped" };
+      }
+      const channel = channelRaw as FollowUpChannel;
+
+      const followupPolicy = await getFollowUpSequencePolicy();
+      if (!followupPolicy.enabled) {
+        return { status: "processed" };
+      }
+
+      const steps = followupPolicy.stepsMinutes
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .sort((a, b) => a - b);
+      if (!steps.length || step < 0 || step >= steps.length) {
+        return { status: "processed" };
+      }
+
+      const db = getDb();
+      const [leadRow] = await db
+        .select({
+          id: leads.id,
+          status: leads.status,
+          contactId: leads.contactId,
+          propertyId: leads.propertyId
+        })
+        .from(leads)
+        .where(eq(leads.id, leadId))
+        .limit(1);
+
+      if (!leadRow) {
+        return { status: "skipped" };
+      }
+
+      if (leadRow.status === "scheduled") {
+        await clearLeadFollowups(leadId);
+        return { status: "processed" };
+      }
+
+      const [appointment] = await db
+        .select({ id: appointments.id })
+        .from(appointments)
+        .where(and(eq(appointments.leadId, leadId), ne(appointments.status, "canceled")))
+        .limit(1);
+
+      if (appointment?.id) {
+        await clearLeadFollowups(leadId);
+        return { status: "processed" };
+      }
+
+      const state = await getLeadAutomationState(db, leadId, channel);
+      if (state.paused || state.dnc || state.humanTakeover || state.followupState === "stopped") {
+        await clearLeadFollowups(leadId);
+        return { status: "processed" };
+      }
+
+      const mode = await getAutomationMode(db, channel);
+      if (mode === "draft") {
+        await clearLeadFollowups(leadId);
+        return { status: "processed" };
+      }
+
+      const [contact] = await db
+        .select({ email: contacts.email, phone: contacts.phone, phoneE164: contacts.phoneE164 })
+        .from(contacts)
+        .where(eq(contacts.id, leadRow.contactId))
+        .limit(1);
+
+      const toAddress = contact ? getContactChannelAddress(contact, channel) : null;
+      if (!toAddress) {
+        await clearLeadFollowups(leadId);
+        return { status: "processed" };
+      }
+
+      const threadId = await ensureThreadForLead(db, {
+        leadId,
+        contactId: leadRow.contactId,
+        propertyId: leadRow.propertyId ?? null,
+        channel
+      });
+      if (!threadId) {
+        await clearLeadFollowups(leadId);
+        return { status: "processed" };
+      }
+
+      const templates = await getTemplatesPolicy(db);
+      const body =
+        resolveTemplateForChannel(templates.follow_up, { replyChannel: channel }) ??
+        "Just checking in - do you want to lock in a time for your junk removal?";
+      const subject = channel === "email" ? "Stonegate follow-up" : null;
+
+      const messageId = await queueOutboundMessage({
+        db,
+        threadId,
+        channel,
+        body,
+        toAddress,
+        subject,
+        metadata: {
+          followup: true,
+          followupStep: step,
+          leadId
+        }
+      });
+
+      if (!messageId) {
+        return { status: "retry", error: "followup_message_failed" };
+      }
+
+      const anchorAt = anchorAtRaw ? new Date(anchorAtRaw) : new Date();
+      const anchor = Number.isNaN(anchorAt.getTime()) ? new Date() : anchorAt;
+      const nextStep = step + 1;
+      const nextStepMinutes = nextStep < steps.length ? steps[nextStep] : undefined;
+      const nextDue =
+        typeof nextStepMinutes === "number"
+          ? new Date(anchor.getTime() + nextStepMinutes * 60_000)
+          : null;
+
+      await db
+        .update(leadAutomationStates)
+        .set({
+          followupState: nextDue ? "running" : "completed",
+          followupStep: nextStep,
+          nextFollowupAt: nextDue,
+          updatedAt: new Date()
+        })
+        .where(and(eq(leadAutomationStates.leadId, leadId), eq(leadAutomationStates.channel, channel)));
+
       return { status: "processed" };
     }
 

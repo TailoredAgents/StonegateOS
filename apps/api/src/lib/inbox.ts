@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import {
   contacts,
@@ -6,6 +6,7 @@ import {
   conversationParticipants,
   conversationThreads,
   getDb,
+  leadAutomationStates,
   leads,
   messageDeliveryEvents,
   outboxEvents
@@ -481,6 +482,27 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         updatedAt: now
       })
       .where(eq(conversationThreads.id, threadId));
+
+    if (leadId) {
+      await tx
+        .update(leadAutomationStates)
+        .set({
+          followupState: "stopped",
+          followupStep: 0,
+          nextFollowupAt: null,
+          updatedAt: now
+        })
+        .where(eq(leadAutomationStates.leadId, leadId));
+
+      await tx
+        .delete(outboxEvents)
+        .where(
+          and(
+            eq(outboxEvents.type, "followup.send"),
+            sql`(payload->>'leadId') = ${leadId}`
+          )
+        );
+    }
 
     await tx.insert(messageDeliveryEvents).values({
       messageId: message.id,

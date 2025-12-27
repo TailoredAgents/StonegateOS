@@ -36,6 +36,11 @@ export type ConfirmationLoopPolicy = {
   windowsMinutes: number[];
 };
 
+export type FollowUpSequencePolicy = {
+  enabled: boolean;
+  stepsMinutes: number[];
+};
+
 export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
   mode: "zip_allowlist",
   homeBase: "Woodstock, GA",
@@ -372,6 +377,11 @@ export const DEFAULT_CONFIRMATION_LOOP_POLICY: ConfirmationLoopPolicy = {
   windowsMinutes: [24 * 60, 2 * 60]
 };
 
+export const DEFAULT_FOLLOW_UP_SEQUENCE_POLICY: FollowUpSequencePolicy = {
+  enabled: true,
+  stepsMinutes: [24 * 60, 72 * 60, 7 * 24 * 60]
+};
+
 export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
   first_touch: {
     sms: "Thanks for reaching out! We can help. What items and timeframe are you thinking?",
@@ -554,5 +564,23 @@ export async function getConfirmationLoopPolicy(db: DbExecutor = getDb()): Promi
   return {
     enabled,
     windowsMinutes: windowsMinutes.length ? windowsMinutes : DEFAULT_CONFIRMATION_LOOP_POLICY.windowsMinutes
+  };
+}
+
+export async function getFollowUpSequencePolicy(db: DbExecutor = getDb()): Promise<FollowUpSequencePolicy> {
+  const stored = await getPolicySetting(db, "follow_up_sequence");
+  if (!stored) {
+    return DEFAULT_FOLLOW_UP_SEQUENCE_POLICY;
+  }
+
+  const enabled = stored["enabled"] !== false;
+  const stepsRaw = stored["stepsMinutes"];
+  const stepsMinutes = Array.isArray(stepsRaw)
+    ? stepsRaw.filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0)
+    : DEFAULT_FOLLOW_UP_SEQUENCE_POLICY.stepsMinutes;
+
+  return {
+    enabled,
+    stepsMinutes: stepsMinutes.length ? stepsMinutes : DEFAULT_FOLLOW_UP_SEQUENCE_POLICY.stepsMinutes
   };
 }

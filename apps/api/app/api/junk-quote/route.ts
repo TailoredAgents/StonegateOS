@@ -491,6 +491,17 @@ export async function POST(request: NextRequest) {
               }
             });
           }
+
+          if (leadRow?.id) {
+            await tx.insert(outboxEvents).values({
+              type: "followup.schedule",
+              payload: {
+                leadId: leadRow.id,
+                contactId: contact.id,
+                reason: "instant_quote.created"
+              }
+            });
+          }
         });
       } catch (error) {
         console.error("[junk-quote] lead_create_failed", { quoteId, error: String(error) });

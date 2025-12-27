@@ -5,6 +5,7 @@ import { getDb, policySettings } from "@/db";
 import {
   DEFAULT_BOOKING_RULES_POLICY,
   DEFAULT_CONFIRMATION_LOOP_POLICY,
+  DEFAULT_FOLLOW_UP_SEQUENCE_POLICY,
   DEFAULT_SERVICE_AREA_POLICY,
   DEFAULT_TEMPLATES_POLICY
 } from "@/lib/policy";
@@ -17,6 +18,7 @@ const POLICY_KEYS = [
   "service_area",
   "booking_rules",
   "confirmation_loop",
+  "follow_up_sequence",
   "standard_job",
   "item_policies",
   "templates"
@@ -47,6 +49,7 @@ const DEFAULT_POLICY_VALUES: Record<PolicyKey, Record<string, unknown>> = {
   service_area: DEFAULT_SERVICE_AREA_POLICY,
   booking_rules: DEFAULT_BOOKING_RULES_POLICY,
   confirmation_loop: DEFAULT_CONFIRMATION_LOOP_POLICY,
+  follow_up_sequence: DEFAULT_FOLLOW_UP_SEQUENCE_POLICY,
   standard_job: {
     allowedServices: ["junk_removal_primary"],
     maxVolumeCubicYards: 12,
