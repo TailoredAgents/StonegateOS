@@ -442,12 +442,19 @@ async function sendEstimateReminderInternal(
   }
 }
 
+export async function sendEstimateReminder(
+  payload: EstimateNotificationPayload,
+  windowMinutes: number
+): Promise<void> {
+  await sendEstimateReminderInternal(payload, { windowMinutes });
+}
+
 export async function sendEstimateReminder24h(payload: EstimateNotificationPayload): Promise<void> {
-  await sendEstimateReminderInternal(payload, { windowMinutes: 24 * 60 });
+  await sendEstimateReminder(payload, 24 * 60);
 }
 
 export async function sendEstimateReminder2h(payload: EstimateNotificationPayload): Promise<void> {
-  await sendEstimateReminderInternal(payload, { windowMinutes: 2 * 60 });
+  await sendEstimateReminder(payload, 2 * 60);
 }
 
 export async function sendQuoteSentNotification(payload: QuoteNotificationPayload): Promise<void> {

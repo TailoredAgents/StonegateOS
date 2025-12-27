@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, lte, or } from "drizzle-orm";
+import { and, asc, eq, isNull, lte, or, sql } from "drizzle-orm";
 import {
   getDb,
   outboxEvents,
@@ -15,6 +15,7 @@ import {
 import type { EstimateNotificationPayload, QuoteNotificationPayload } from "@/lib/notifications";
 import {
   sendEstimateConfirmation,
+  sendEstimateReminder,
   sendQuoteSentNotification,
   sendQuoteDecisionNotification
 } from "@/lib/notifications";
@@ -45,6 +46,7 @@ type OutboxOutcome = {
 
 const MAX_MESSAGE_SEND_ATTEMPTS = 3;
 const MESSAGE_SEND_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+const ESTIMATE_REMINDER_WINDOWS_MINUTES = [24 * 60, 2 * 60];
 
 const APPOINTMENT_STATUS_VALUES = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
 type AppointmentStatus = (typeof APPOINTMENT_STATUS_VALUES)[number];
@@ -528,6 +530,67 @@ function mapAppointmentStatusToStage(status: string): PipelineStage {
   }
 }
 
+async function clearPendingReminders(appointmentId: string): Promise<void> {
+  const db = getDb();
+  await db
+    .delete(outboxEvents)
+    .where(
+      and(
+        eq(outboxEvents.type, "estimate.reminder"),
+        isNull(outboxEvents.processedAt),
+        sql`(payload->>'appointmentId') = ${appointmentId}`
+      )
+    );
+}
+
+async function scheduleAppointmentReminders(
+  appointmentId: string,
+  startAt: Date | null | undefined,
+  options?: { reset?: boolean }
+): Promise<void> {
+  if (!startAt) {
+    return;
+  }
+
+  const db = getDb();
+  if (options?.reset) {
+    await clearPendingReminders(appointmentId);
+  }
+
+  const now = new Date();
+
+  for (const windowMinutes of ESTIMATE_REMINDER_WINDOWS_MINUTES) {
+    const reminderAt = new Date(startAt.getTime() - windowMinutes * 60_000);
+    if (reminderAt <= now) continue;
+
+    const [existing] = await db
+      .select({ id: outboxEvents.id })
+      .from(outboxEvents)
+      .where(
+        and(
+          eq(outboxEvents.type, "estimate.reminder"),
+          isNull(outboxEvents.processedAt),
+          sql`(payload->>'appointmentId') = ${appointmentId}`,
+          sql`(payload->>'windowMinutes') = ${String(windowMinutes)}`
+        )
+      )
+      .limit(1);
+
+    if (existing?.id) {
+      continue;
+    }
+
+    await db.insert(outboxEvents).values({
+      type: "estimate.reminder",
+      payload: {
+        appointmentId,
+        windowMinutes
+      },
+      nextAttemptAt: reminderAt
+    });
+  }
+}
+
 async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcome> {
   switch (event.type) {
     case "estimate.requested": {
@@ -569,6 +632,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
 
       await ensureCalendarEventCreated(notification);
       await sendEstimateConfirmation(notification, "requested");
+      await scheduleAppointmentReminders(appointmentId, notification.appointment.startAt);
       await updatePipelineStageForContact(
         notification.contactId ?? null,
         "qualified",
@@ -598,6 +662,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
 
       await syncCalendarEventForReschedule(notification);
       await sendEstimateConfirmation(notification, "rescheduled");
+      await scheduleAppointmentReminders(appointmentId, notification.appointment.startAt, { reset: true });
       await updatePipelineStageForContact(
         notification.contactId ?? null,
         "qualified",
@@ -675,6 +740,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
     case "lead.created": {
       const payload = isRecord(event.payload) ? event.payload : null;
       const leadId = typeof payload?.["leadId"] === "string" ? payload["leadId"] : null;
+      const status = typeof payload?.["status"] === "string" ? payload["status"] : null;
       const services = coerceServices(payload?.["services"]);
       const schedulingOverride = payload && isRecord(payload["scheduling"]) ? payload["scheduling"] : null;
 
@@ -724,16 +790,51 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
 
       await sendEstimateConfirmation(notification, "requested");
+      if (status === "canceled" || status === "no_show" || status === "completed") {
+        await clearPendingReminders(appointment.id);
+      }
       if (notification.contactId) {
         const targetStage: PipelineStage =
-          event.type === "estimate.status_changed" && typeof payload?.["status"] === "string"
-            ? mapAppointmentStatusToStage(payload["status"] as string)
+          event.type === "estimate.status_changed" && status
+            ? mapAppointmentStatusToStage(status)
             : "qualified";
         await updatePipelineStageForContact(notification.contactId, targetStage, event.type, {
           appointmentId: appointment.id,
-          status: payload?.["status"] ?? null
+          status: status ?? null
         });
       }
+      return { status: "processed" };
+    }
+
+    case "estimate.reminder": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const appointmentId = typeof payload?.["appointmentId"] === "string" ? payload["appointmentId"] : null;
+      const rawWindow = payload?.["windowMinutes"];
+      const windowMinutes =
+        typeof rawWindow === "number"
+          ? rawWindow
+          : typeof rawWindow === "string"
+            ? Number(rawWindow)
+            : NaN;
+
+      if (!appointmentId || !Number.isFinite(windowMinutes)) {
+        console.warn("[outbox] estimate.reminder.missing_data", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const notification = await buildNotificationPayload(appointmentId);
+      if (!notification) {
+        return { status: "skipped" };
+      }
+      if (
+        notification.appointment.status === "canceled" ||
+        notification.appointment.status === "no_show" ||
+        notification.appointment.status === "completed"
+      ) {
+        return { status: "skipped" };
+      }
+
+      await sendEstimateReminder(notification, windowMinutes);
       return { status: "processed" };
     }
 
