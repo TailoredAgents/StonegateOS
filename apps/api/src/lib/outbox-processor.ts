@@ -16,9 +16,12 @@ import {
   messageDeliveryEvents
 } from "@/db";
 import {
+  getBusinessHoursPolicy,
   getConfirmationLoopPolicy,
   getFollowUpSequencePolicy,
+  getQuietHoursPolicy,
   getTemplatesPolicy,
+  nextQuietHoursEnd,
   resolveTemplateForChannel
 } from "@/lib/policy";
 import type { EstimateNotificationPayload, QuoteNotificationPayload } from "@/lib/notifications";
@@ -51,6 +54,7 @@ export interface ProcessOutboxBatchOptions {
 type OutboxOutcome = {
   status: "processed" | "skipped" | "retry";
   error?: string | null;
+  nextAttemptAt?: Date | null;
 };
 
 const MAX_MESSAGE_SEND_ATTEMPTS = 3;
@@ -1380,6 +1384,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           body: conversationMessages.body,
           subject: conversationMessages.subject,
           toAddress: conversationMessages.toAddress,
+          metadata: conversationMessages.metadata,
           sentAt: conversationMessages.sentAt,
           contactId: conversationThreads.contactId,
           contactPhone: contacts.phone,
@@ -1402,6 +1407,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       const subject = message.subject ?? "Stonegate message";
       const body = message.body ?? "";
       let toAddress = message.toAddress ?? null;
+      const metadata = isRecord(message.metadata) ? message.metadata : null;
 
       if (!toAddress) {
         if (channel === "sms") {
@@ -1412,6 +1418,21 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
 
       const now = new Date();
+      const isAutomated =
+        metadata?.["autoReply"] === true ||
+        metadata?.["followup"] === true ||
+        metadata?.["confirmationLoop"] === true ||
+        metadata?.["automation"] === true;
+      const bypassQuietHours = metadata?.["autoReply"] === true || metadata?.["confirmationLoop"] === true;
+
+      if (isAutomated && !bypassQuietHours) {
+        const quietHours = await getQuietHoursPolicy(db);
+        const businessHours = await getBusinessHoursPolicy(db);
+        const quietUntil = nextQuietHoursEnd(now, channel, quietHours, businessHours.timezone);
+        if (quietUntil) {
+          return { status: "retry", error: "quiet_hours", nextAttemptAt: quietUntil };
+        }
+      }
       const attempt = (event.attempts ?? 0) + 1;
 
       if (!toAddress) {
@@ -1595,7 +1616,7 @@ export async function processOutboxBatch(
           .update(outboxEvents)
           .set({
             attempts: attempt,
-            nextAttemptAt: new Date(Date.now() + retryDelayMs),
+            nextAttemptAt: outcome.nextAttemptAt ?? new Date(Date.now() + retryDelayMs),
             lastError
           })
           .where(eq(outboxEvents.id, event.id));

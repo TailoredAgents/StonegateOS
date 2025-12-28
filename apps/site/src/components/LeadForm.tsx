@@ -286,14 +286,17 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               suggestions?: AvailabilitySlot[];
               days?: AvailabilityDay[];
               error?: string;
+              message?: string;
             }
           | null;
 
         if (!res.ok || !data?.ok) {
           const message =
-            typeof data?.error === "string"
-              ? data.error
-              : `Availability failed (HTTP ${res.status})`;
+            typeof data?.message === "string" && data.message.trim().length > 0
+              ? data.message
+              : typeof data?.error === "string"
+                ? data.error
+                : `Availability failed (HTTP ${res.status})`;
           setAvailabilityStatus("error");
           setAvailabilityMessage(message);
           setAvailabilitySlots([]);
@@ -411,7 +414,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
           signal: controller.signal
         });
         const data = (await res.json().catch(() => null)) as
-          | { ok?: boolean; holdId?: string; expiresAt?: string; error?: string }
+          | { ok?: boolean; holdId?: string; expiresAt?: string; error?: string; message?: string }
           | null;
 
         if (requestId !== holdRequestRef.current) return;
@@ -422,13 +425,16 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               ? data.error
               : `Hold failed (HTTP ${res.status})`;
           const message =
-            error === "slot_full"
-              ? "That time just filled up. Please pick another time."
-              : error === "day_full"
-                ? "We are fully booked that day. Please choose another time."
-                : error === "outside_booking_window"
-                  ? "That time is outside our booking window. Please pick another time."
-                  : error;
+            typeof (data as { message?: string } | null)?.message === "string" &&
+            (data as { message?: string }).message!.trim().length > 0
+              ? (data as { message?: string }).message!
+              : error === "slot_full"
+                ? "That time just filled up. Please pick another time."
+                : error === "day_full"
+                  ? "We are fully booked that day. Please choose another time."
+                  : error === "outside_booking_window"
+                    ? "That time is outside our booking window. Please pick another time."
+                    : error;
           setHoldStatus("error");
           setHoldMessage(message);
           setHoldId(null);
@@ -518,7 +524,9 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         body: JSON.stringify(payload)
        });
       if (!res.ok) {
-        const errorPayload = (await res.json().catch(() => null)) as { error?: string; errorId?: string } | null;
+        const errorPayload = (await res.json().catch(() => null)) as
+          | { error?: string; errorId?: string; message?: string }
+          | null;
         if (errorPayload?.error === "slot_full") {
           setBookingStatus("error");
           setBookingMessage("That time just filled up. Please pick another time.");
@@ -551,6 +559,9 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               ? ` (ref ${errorPayload.errorId})`
               : "";
           throw new Error(`Booking failed on our end. Please try again or call us.${suffix}`);
+        }
+        if (typeof errorPayload?.message === "string" && errorPayload.message.trim().length > 0) {
+          throw new Error(errorPayload.message);
         }
         const message =
           typeof errorPayload?.error === "string" && errorPayload.error.length

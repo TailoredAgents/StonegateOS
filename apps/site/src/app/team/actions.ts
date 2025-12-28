@@ -795,6 +795,377 @@ export async function updatePolicyAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+type Weekday = (typeof WEEKDAYS)[number];
+
+function parseTimeField(value: FormDataEntryValue | null): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(trimmed);
+  return match ? trimmed : null;
+}
+
+function timeToMinutes(value: string): number {
+  const [hours, minutes] = value.split(":").map((part) => Number(part));
+  return (Number(hours) || 0) * 60 + (Number(minutes) || 0);
+}
+
+function parseIntegerField(value: FormDataEntryValue | null, minValue = 0): number | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  const rounded = Math.round(parsed);
+  if (rounded < minValue) return null;
+  return rounded;
+}
+
+function parseNumberField(value: FormDataEntryValue | null, minValue = 0): number | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < minValue) return null;
+  return parsed;
+}
+
+function parseListField(value: FormDataEntryValue | null): string[] {
+  if (typeof value !== "string") return [];
+  return value
+    .split(/[\n,]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function parseZipListField(value: FormDataEntryValue | null): string[] {
+  if (typeof value !== "string") return [];
+  const parts = value.split(/[\s,]+/);
+  const cleaned = parts
+    .map((entry) => entry.replace(/\D/g, "").slice(0, 5))
+    .filter((entry) => entry.length === 5);
+  return Array.from(new Set(cleaned));
+}
+
+function parseTemplateField(value: FormDataEntryValue | null): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+async function submitPolicyUpdate(
+  jar: Awaited<ReturnType<typeof cookies>>,
+  key: string,
+  value: Record<string, unknown>,
+  successMessage: string
+): Promise<void> {
+  const response = await callAdminApi("/api/admin/policy", {
+    method: "POST",
+    body: JSON.stringify({ key, value })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update policy");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: successMessage, path: "/" });
+  revalidatePath("/team");
+}
+
+export async function updateBusinessHoursPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const timezoneRaw = formData.get("timezone");
+  const timezone = typeof timezoneRaw === "string" ? timezoneRaw.trim() : "";
+  const weekly: Record<Weekday, Array<{ start: string; end: string }>> = {
+    monday: [],
+    tuesday: [],
+    wednesday: [],
+    thursday: [],
+    friday: [],
+    saturday: [],
+    sunday: []
+  };
+
+  for (const day of WEEKDAYS) {
+    const closed = formData.get(`${day}_closed`) === "on";
+    if (closed) {
+      weekly[day] = [];
+      continue;
+    }
+    const start = parseTimeField(formData.get(`${day}_start`));
+    const end = parseTimeField(formData.get(`${day}_end`));
+    if (!start || !end) {
+      jar.set({ name: "myst-flash-error", value: `Missing hours for ${day}`, path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+    if (timeToMinutes(end) <= timeToMinutes(start)) {
+      jar.set({ name: "myst-flash-error", value: `End time must be after start on ${day}`, path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+    weekly[day] = [{ start, end }];
+  }
+
+  await submitPolicyUpdate(
+    jar,
+    "business_hours",
+    {
+      timezone: timezone.length > 0 ? timezone : "America/New_York",
+      weekly
+    },
+    "Business hours updated"
+  );
+}
+
+export async function updateQuietHoursPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const channels: Record<string, { start: string; end: string }> = {};
+  const channelKeys = ["sms", "email", "dm"];
+
+  for (const channel of channelKeys) {
+    const always = formData.get(`${channel}_always`) === "on";
+    if (always) {
+      channels[channel] = { start: "00:00", end: "00:00" };
+      continue;
+    }
+    const start = parseTimeField(formData.get(`${channel}_start`));
+    const end = parseTimeField(formData.get(`${channel}_end`));
+    if (!start || !end) {
+      jar.set({ name: "myst-flash-error", value: `Missing quiet hours for ${channel}`, path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+    channels[channel] = { start, end };
+  }
+
+  await submitPolicyUpdate(jar, "quiet_hours", { channels }, "Quiet hours updated");
+}
+
+export async function updateServiceAreaPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const homeBaseRaw = formData.get("homeBase");
+  const homeBase = typeof homeBaseRaw === "string" ? homeBaseRaw.trim() : "";
+  const radiusMiles = parseNumberField(formData.get("radiusMiles"), 0);
+  if (radiusMiles === null) {
+    jar.set({ name: "myst-flash-error", value: "Radius miles must be a number", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  const zipAllowlist = parseZipListField(formData.get("zipAllowlist"));
+  const notesRaw = formData.get("notes");
+  const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
+
+  await submitPolicyUpdate(
+    jar,
+    "service_area",
+    {
+      mode: "zip_allowlist",
+      homeBase: homeBase.length > 0 ? homeBase : undefined,
+      radiusMiles,
+      zipAllowlist,
+      notes: notes.length > 0 ? notes : undefined
+    },
+    "Service area updated"
+  );
+}
+
+export async function updateBookingRulesPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const bookingWindowDays = parseIntegerField(formData.get("bookingWindowDays"), 1);
+  const bufferMinutes = parseIntegerField(formData.get("bufferMinutes"), 0);
+  const maxJobsPerDay = parseIntegerField(formData.get("maxJobsPerDay"), 0);
+  const maxJobsPerCrew = parseIntegerField(formData.get("maxJobsPerCrew"), 0);
+
+  if (
+    bookingWindowDays === null ||
+    bufferMinutes === null ||
+    maxJobsPerDay === null ||
+    maxJobsPerCrew === null
+  ) {
+    jar.set({ name: "myst-flash-error", value: "Booking rule values must be numbers", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  await submitPolicyUpdate(
+    jar,
+    "booking_rules",
+    {
+      bookingWindowDays,
+      bufferMinutes,
+      maxJobsPerDay,
+      maxJobsPerCrew
+    },
+    "Booking rules updated"
+  );
+}
+
+export async function updateStandardJobPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const allowedServices = parseListField(formData.get("allowedServices"));
+  if (!allowedServices.length) {
+    jar.set({ name: "myst-flash-error", value: "Add at least one allowed service", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  const maxVolumeCubicYards = parseNumberField(formData.get("maxVolumeCubicYards"), 0);
+  const maxItemCount = parseIntegerField(formData.get("maxItemCount"), 0);
+  const notesRaw = formData.get("notes");
+  const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
+
+  if (maxVolumeCubicYards === null || maxItemCount === null) {
+    jar.set({ name: "myst-flash-error", value: "Standard job values must be numbers", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  await submitPolicyUpdate(
+    jar,
+    "standard_job",
+    {
+      allowedServices,
+      maxVolumeCubicYards,
+      maxItemCount,
+      notes: notes.length > 0 ? notes : undefined
+    },
+    "Standard job rules updated"
+  );
+}
+
+export async function updateItemPoliciesAction(formData: FormData) {
+  const jar = await cookies();
+  const declined = parseListField(formData.get("declined"));
+  const extraFees: Array<{ item: string; fee: number }> = [];
+
+  for (let index = 1; index <= 5; index += 1) {
+    const itemRaw = formData.get(`fee_item_${index}`);
+    const feeRaw = formData.get(`fee_amount_${index}`);
+    if (typeof itemRaw !== "string" || itemRaw.trim().length === 0) {
+      continue;
+    }
+    const fee = parseNumberField(feeRaw, 0);
+    if (fee === null) {
+      jar.set({ name: "myst-flash-error", value: "Extra fee amounts must be numbers", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+    extraFees.push({ item: itemRaw.trim(), fee });
+  }
+
+  await submitPolicyUpdate(
+    jar,
+    "item_policies",
+    {
+      declined,
+      extraFees
+    },
+    "Item policies updated"
+  );
+}
+
+export async function updateTemplatesPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const firstTouch: Record<string, string> = {};
+  const followUp: Record<string, string> = {};
+  const confirmations: Record<string, string> = {};
+  const reviews: Record<string, string> = {};
+  const outOfArea: Record<string, string> = {};
+
+  const firstTouchFields = ["sms", "email", "dm", "call", "web"];
+  const followUpFields = ["sms", "email"];
+  const confirmationsFields = ["sms", "email"];
+  const reviewsFields = ["sms", "email"];
+  const outOfAreaFields = ["sms", "email", "web"];
+
+  for (const field of firstTouchFields) {
+    const value = parseTemplateField(formData.get(`first_touch_${field}`));
+    if (value) firstTouch[field] = value;
+  }
+  for (const field of followUpFields) {
+    const value = parseTemplateField(formData.get(`follow_up_${field}`));
+    if (value) followUp[field] = value;
+  }
+  for (const field of confirmationsFields) {
+    const value = parseTemplateField(formData.get(`confirmations_${field}`));
+    if (value) confirmations[field] = value;
+  }
+  for (const field of reviewsFields) {
+    const value = parseTemplateField(formData.get(`reviews_${field}`));
+    if (value) reviews[field] = value;
+  }
+  for (const field of outOfAreaFields) {
+    const value = parseTemplateField(formData.get(`out_of_area_${field}`));
+    if (value) outOfArea[field] = value;
+  }
+
+  await submitPolicyUpdate(
+    jar,
+    "templates",
+    {
+      first_touch: firstTouch,
+      follow_up: followUp,
+      confirmations,
+      reviews,
+      out_of_area: outOfArea
+    },
+    "Templates updated"
+  );
+}
+
+export async function updateConfirmationLoopPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const enabled = formData.get("enabled") === "on";
+  const windows = [
+    parseNumberField(formData.get("window_hours_1"), 0),
+    parseNumberField(formData.get("window_hours_2"), 0),
+    parseNumberField(formData.get("window_hours_3"), 0)
+  ]
+    .filter((value): value is number => value !== null && value > 0)
+    .map((hours) => Math.round(hours * 60));
+
+  const windowsMinutes = windows.length ? windows : [24 * 60, 2 * 60];
+
+  await submitPolicyUpdate(
+    jar,
+    "confirmation_loop",
+    {
+      enabled,
+      windowsMinutes
+    },
+    "Confirmation loop updated"
+  );
+}
+
+export async function updateFollowUpSequencePolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const enabled = formData.get("enabled") === "on";
+  const steps = [
+    parseNumberField(formData.get("step_hours_1"), 0),
+    parseNumberField(formData.get("step_hours_2"), 0),
+    parseNumberField(formData.get("step_hours_3"), 0),
+    parseNumberField(formData.get("step_hours_4"), 0)
+  ]
+    .filter((value): value is number => value !== null && value > 0)
+    .map((hours) => Math.round(hours * 60));
+
+  const stepsMinutes = steps.length ? steps : [24 * 60, 72 * 60, 7 * 24 * 60];
+
+  await submitPolicyUpdate(
+    jar,
+    "follow_up_sequence",
+    {
+      enabled,
+      stepsMinutes
+    },
+    "Follow-up sequence updated"
+  );
+}
+
 export async function updateAutomationModeAction(formData: FormData) {
   const jar = await cookies();
   const channel = formData.get("channel");

@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { DateTime } from "luxon";
 import { getDb, policySettings } from "@/db";
 
 type DatabaseClient = ReturnType<typeof getDb>;
@@ -13,6 +14,29 @@ export type ServiceAreaPolicy = {
   radiusMiles?: number;
   zipAllowlist: string[];
   notes?: string;
+};
+
+export type TimeWindow = {
+  start: string;
+  end: string;
+};
+
+export type WeekdayKey =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
+export type BusinessHoursPolicy = {
+  timezone: string;
+  weekly: Record<WeekdayKey, TimeWindow[]>;
+};
+
+export type QuietHoursPolicy = {
+  channels: Record<string, TimeWindow>;
 };
 
 export type TemplateGroup = Record<string, string>;
@@ -31,6 +55,18 @@ export type BookingRulesPolicy = {
   maxJobsPerCrew: number;
 };
 
+export type StandardJobPolicy = {
+  allowedServices: string[];
+  maxVolumeCubicYards: number;
+  maxItemCount: number;
+  notes?: string;
+};
+
+export type ItemPoliciesPolicy = {
+  declined: string[];
+  extraFees: Array<{ item: string; fee: number }>;
+};
+
 export type ConfirmationLoopPolicy = {
   enabled: boolean;
   windowsMinutes: number[];
@@ -39,6 +75,39 @@ export type ConfirmationLoopPolicy = {
 export type FollowUpSequencePolicy = {
   enabled: boolean;
   stepsMinutes: number[];
+};
+
+const DEFAULT_POLICY_TIMEZONE = process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
+
+const WEEKDAY_KEYS: WeekdayKey[] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday"
+];
+
+export const DEFAULT_BUSINESS_HOURS_POLICY: BusinessHoursPolicy = {
+  timezone: DEFAULT_POLICY_TIMEZONE,
+  weekly: {
+    monday: [{ start: "08:00", end: "18:00" }],
+    tuesday: [{ start: "08:00", end: "18:00" }],
+    wednesday: [{ start: "08:00", end: "18:00" }],
+    thursday: [{ start: "08:00", end: "18:00" }],
+    friday: [{ start: "08:00", end: "18:00" }],
+    saturday: [{ start: "09:00", end: "14:00" }],
+    sunday: []
+  }
+};
+
+export const DEFAULT_QUIET_HOURS_POLICY: QuietHoursPolicy = {
+  channels: {
+    sms: { start: "20:00", end: "08:00" },
+    email: { start: "19:00", end: "07:00" },
+    dm: { start: "20:00", end: "08:00" }
+  }
 };
 
 export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
@@ -382,6 +451,18 @@ export const DEFAULT_FOLLOW_UP_SEQUENCE_POLICY: FollowUpSequencePolicy = {
   stepsMinutes: [24 * 60, 72 * 60, 7 * 24 * 60]
 };
 
+export const DEFAULT_STANDARD_JOB_POLICY: StandardJobPolicy = {
+  allowedServices: ["junk_removal_primary"],
+  maxVolumeCubicYards: 12,
+  maxItemCount: 20,
+  notes: "Standard jobs only. Oversize/hazard items require approval."
+};
+
+export const DEFAULT_ITEM_POLICIES: ItemPoliciesPolicy = {
+  declined: ["hazmat", "paint", "oil"],
+  extraFees: [{ item: "mattress", fee: 25 }]
+};
+
 export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
   first_touch: {
     sms: "Thanks for reaching out! We can help. What items and timeframe are you thinking?",
@@ -411,6 +492,42 @@ export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function parseTimeString(value: unknown): { hour: number; minute: number } | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return { hour, minute };
+}
+
+function coerceTimeWindow(value: unknown): TimeWindow | null {
+  if (!isRecord(value)) return null;
+  const start = parseTimeString(value["start"]);
+  const end = parseTimeString(value["end"]);
+  if (!start || !end) return null;
+  const startText = `${String(start.hour).padStart(2, "0")}:${String(start.minute).padStart(2, "0")}`;
+  const endText = `${String(end.hour).padStart(2, "0")}:${String(end.minute).padStart(2, "0")}`;
+  return { start: startText, end: endText };
+}
+
+function coerceTimeWindowList(value: unknown, fallback: TimeWindow[]): TimeWindow[] {
+  if (!Array.isArray(value)) return fallback;
+  return value.map(coerceTimeWindow).filter((entry): entry is TimeWindow => Boolean(entry));
+}
+
+function resolveTimezone(value: unknown): string {
+  const candidate = typeof value === "string" && value.trim().length > 0 ? value.trim() : DEFAULT_POLICY_TIMEZONE;
+  return DateTime.local().setZone(candidate).isValid ? candidate : DEFAULT_POLICY_TIMEZONE;
+}
+
+function resolveWeekdayKey(date: DateTime): WeekdayKey {
+  const index = date.weekday - 1;
+  return WEEKDAY_KEYS[index] ?? "monday";
 }
 
 function coerceTemplateGroup(value: unknown, fallback: TemplateGroup): TemplateGroup {
@@ -490,6 +607,42 @@ export async function getServiceAreaPolicy(db: DbExecutor = getDb()): Promise<Se
   };
 }
 
+export async function getBusinessHoursPolicy(db: DbExecutor = getDb()): Promise<BusinessHoursPolicy> {
+  const stored = await getPolicySetting(db, "business_hours");
+  if (!stored) {
+    return DEFAULT_BUSINESS_HOURS_POLICY;
+  }
+
+  const timezone = resolveTimezone(stored["timezone"]);
+  const weeklyRaw = isRecord(stored["weekly"]) ? (stored["weekly"] as Record<string, unknown>) : {};
+
+  const weekly = WEEKDAY_KEYS.reduce<Record<WeekdayKey, TimeWindow[]>>((acc, key) => {
+    acc[key] = coerceTimeWindowList(weeklyRaw[key], DEFAULT_BUSINESS_HOURS_POLICY.weekly[key]);
+    return acc;
+  }, {} as Record<WeekdayKey, TimeWindow[]>);
+
+  return { timezone, weekly };
+}
+
+export async function getQuietHoursPolicy(db: DbExecutor = getDb()): Promise<QuietHoursPolicy> {
+  const stored = await getPolicySetting(db, "quiet_hours");
+  if (!stored) {
+    return DEFAULT_QUIET_HOURS_POLICY;
+  }
+
+  const channelsRaw = isRecord(stored["channels"]) ? (stored["channels"] as Record<string, unknown>) : {};
+  const channels: Record<string, TimeWindow> = { ...DEFAULT_QUIET_HOURS_POLICY.channels };
+
+  for (const [channel, value] of Object.entries(channelsRaw)) {
+    const window = coerceTimeWindow(value);
+    if (window) {
+      channels[channel] = window;
+    }
+  }
+
+  return { channels };
+}
+
 export async function getTemplatesPolicy(db: DbExecutor = getDb()): Promise<TemplatesPolicy> {
   const stored = await getPolicySetting(db, "templates");
   if (!stored) {
@@ -516,6 +669,171 @@ export async function getOutOfAreaMessage(
     DEFAULT_TEMPLATES_POLICY.out_of_area["sms"] ??
     "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock."
   );
+}
+
+export async function getStandardJobPolicy(db: DbExecutor = getDb()): Promise<StandardJobPolicy> {
+  const stored = await getPolicySetting(db, "standard_job");
+  if (!stored) {
+    return DEFAULT_STANDARD_JOB_POLICY;
+  }
+
+  const allowedServicesRaw = stored["allowedServices"];
+  const allowedServices = Array.isArray(allowedServicesRaw)
+    ? allowedServicesRaw.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : DEFAULT_STANDARD_JOB_POLICY.allowedServices;
+
+  const maxVolumeCubicYards =
+    typeof stored["maxVolumeCubicYards"] === "number" && Number.isFinite(stored["maxVolumeCubicYards"])
+      ? stored["maxVolumeCubicYards"]
+      : DEFAULT_STANDARD_JOB_POLICY.maxVolumeCubicYards;
+
+  const maxItemCount =
+    typeof stored["maxItemCount"] === "number" && Number.isFinite(stored["maxItemCount"])
+      ? stored["maxItemCount"]
+      : DEFAULT_STANDARD_JOB_POLICY.maxItemCount;
+
+  return {
+    allowedServices,
+    maxVolumeCubicYards,
+    maxItemCount,
+    notes: typeof stored["notes"] === "string" ? stored["notes"] : DEFAULT_STANDARD_JOB_POLICY.notes
+  };
+}
+
+export async function getItemPoliciesPolicy(db: DbExecutor = getDb()): Promise<ItemPoliciesPolicy> {
+  const stored = await getPolicySetting(db, "item_policies");
+  if (!stored) {
+    return DEFAULT_ITEM_POLICIES;
+  }
+
+  const declinedRaw = stored["declined"];
+  const declined = Array.isArray(declinedRaw)
+    ? declinedRaw.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : DEFAULT_ITEM_POLICIES.declined;
+
+  const extraFeesRaw = stored["extraFees"];
+  const extraFees = Array.isArray(extraFeesRaw)
+    ? extraFeesRaw
+        .map((entry) => (isRecord(entry) ? entry : null))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+        .map((entry) => ({
+          item: typeof entry["item"] === "string" ? entry["item"].trim() : "",
+          fee: typeof entry["fee"] === "number" && Number.isFinite(entry["fee"]) ? entry["fee"] : NaN
+        }))
+        .filter((entry) => entry.item.length > 0 && Number.isFinite(entry.fee) && entry.fee >= 0)
+    : DEFAULT_ITEM_POLICIES.extraFees;
+
+  return { declined, extraFees };
+}
+
+export function getBusinessHourWindowsForDate(
+  date: Date | DateTime,
+  policy: BusinessHoursPolicy
+): Array<{ start: DateTime; end: DateTime }> {
+  const zone = resolveTimezone(policy.timezone);
+  const local =
+    date instanceof DateTime ? date.setZone(zone) : DateTime.fromJSDate(date, { zone: "utc" }).setZone(zone);
+  const dayKey = resolveWeekdayKey(local);
+  const windows = policy.weekly[dayKey] ?? [];
+  const baseDay = local.startOf("day");
+
+  return windows
+    .map((window) => {
+      const startTime = parseTimeString(window.start);
+      const endTime = parseTimeString(window.end);
+      if (!startTime || !endTime) return null;
+      const start = baseDay.set({ hour: startTime.hour, minute: startTime.minute, second: 0, millisecond: 0 });
+      const end = baseDay.set({ hour: endTime.hour, minute: endTime.minute, second: 0, millisecond: 0 });
+      if (!start.isValid || !end.isValid || end <= start) return null;
+      return { start, end };
+    })
+    .filter((entry): entry is { start: DateTime; end: DateTime } => Boolean(entry));
+}
+
+export function isWithinBusinessHours(
+  startAt: Date,
+  durationMinutes: number,
+  policy: BusinessHoursPolicy
+): boolean {
+  const zone = resolveTimezone(policy.timezone);
+  const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(zone);
+  if (!startLocal.isValid) return false;
+  const endLocal = startLocal.plus({ minutes: durationMinutes });
+  const windows = getBusinessHourWindowsForDate(startLocal, policy);
+  return windows.some((window) => startLocal >= window.start && endLocal <= window.end);
+}
+
+export function isQuietHoursActive(
+  date: Date,
+  channel: string,
+  policy: QuietHoursPolicy,
+  timezone: string
+): boolean {
+  const zone = resolveTimezone(timezone);
+  const window = policy.channels[channel];
+  if (!window) return false;
+  const startTime = parseTimeString(window.start);
+  const endTime = parseTimeString(window.end);
+  if (!startTime || !endTime) return false;
+
+  const local = DateTime.fromJSDate(date, { zone: "utc" }).setZone(zone);
+  if (!local.isValid) return false;
+  const minutes = local.hour * 60 + local.minute;
+  const startMinutes = startTime.hour * 60 + startTime.minute;
+  const endMinutes = endTime.hour * 60 + endTime.minute;
+
+  if (startMinutes === endMinutes) return false;
+  if (startMinutes < endMinutes) {
+    return minutes >= startMinutes && minutes < endMinutes;
+  }
+  return minutes >= startMinutes || minutes < endMinutes;
+}
+
+export function nextQuietHoursEnd(
+  date: Date,
+  channel: string,
+  policy: QuietHoursPolicy,
+  timezone: string
+): Date | null {
+  const zone = resolveTimezone(timezone);
+  const window = policy.channels[channel];
+  if (!window) return null;
+  const startTime = parseTimeString(window.start);
+  const endTime = parseTimeString(window.end);
+  if (!startTime || !endTime) return null;
+
+  const local = DateTime.fromJSDate(date, { zone: "utc" }).setZone(zone);
+  if (!local.isValid) return null;
+  const minutes = local.hour * 60 + local.minute;
+  const startMinutes = startTime.hour * 60 + startTime.minute;
+  const endMinutes = endTime.hour * 60 + endTime.minute;
+
+  if (startMinutes === endMinutes) return null;
+
+  if (startMinutes < endMinutes) {
+    if (minutes < startMinutes || minutes >= endMinutes) return null;
+    return local
+      .set({ hour: endTime.hour, minute: endTime.minute, second: 0, millisecond: 0 })
+      .toUTC()
+      .toJSDate();
+  }
+
+  if (minutes >= startMinutes) {
+    return local
+      .plus({ days: 1 })
+      .set({ hour: endTime.hour, minute: endTime.minute, second: 0, millisecond: 0 })
+      .toUTC()
+      .toJSDate();
+  }
+
+  if (minutes < endMinutes) {
+    return local
+      .set({ hour: endTime.hour, minute: endTime.minute, second: 0, millisecond: 0 })
+      .toUTC()
+      .toJSDate();
+  }
+
+  return null;
 }
 
 export async function getBookingRulesPolicy(db: DbExecutor = getDb()): Promise<BookingRulesPolicy> {

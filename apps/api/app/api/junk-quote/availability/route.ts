@@ -6,12 +6,17 @@ import { and, eq, gt, gte, lte, ne } from "drizzle-orm";
 import { appointmentHolds, getDb, appointments, instantQuotes, properties } from "@/db";
 import { forwardGeocode } from "@/lib/geocode";
 import {
+  getBusinessHourWindowsForDate,
+  getBusinessHoursPolicy,
   getBookingRulesPolicy,
+  getItemPoliciesPolicy,
   getOutOfAreaMessage,
   getServiceAreaPolicy,
+  getStandardJobPolicy,
   isPostalCodeAllowed,
   normalizePostalCode
 } from "@/lib/policy";
+import { buildStandardJobMessage, evaluateStandardJob } from "@/lib/standard-job";
 import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
 
 const RAW_ALLOWED_ORIGINS =
@@ -61,8 +66,6 @@ type Suggestion = {
 };
 
 const WINDOW_DAYS = 14;
-const START_HOUR = 8;
-const END_HOUR = 18;
 const SLOT_INTERVAL_MIN = 60;
 const DEFAULT_CAPACITY = 2;
 const DEFAULT_RADIUS_KM = 30;
@@ -71,9 +74,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function formatDayLocal(date: Date): string {
+function formatDayLocal(date: Date, timezone: string): string {
   return (
-    DateTime.fromJSDate(date, { zone: "utc" }).setZone(APPOINTMENT_TIME_ZONE).toISODate() ??
+    DateTime.fromJSDate(date, { zone: "utc" }).setZone(timezone).toISODate() ??
     date.toISOString().slice(0, 10)
   );
 }
@@ -215,19 +218,51 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     const db = getDb();
+    const businessHours = await getBusinessHoursPolicy(db);
+    const schedulingZone = businessHours.timezone || APPOINTMENT_TIME_ZONE;
     const bookingRules = await getBookingRulesPolicy(db);
     const windowDays =
       typeof bookingRules.bookingWindowDays === "number" && bookingRules.bookingWindowDays > 0
         ? Math.min(Math.floor(bookingRules.bookingWindowDays), 90)
         : WINDOW_DAYS;
     const [quote] = await db
-      .select({ id: instantQuotes.id, aiResult: instantQuotes.aiResult, perceivedSize: instantQuotes.perceivedSize })
+      .select({
+        id: instantQuotes.id,
+        aiResult: instantQuotes.aiResult,
+        perceivedSize: instantQuotes.perceivedSize,
+        jobTypes: instantQuotes.jobTypes,
+        notes: instantQuotes.notes
+      })
       .from(instantQuotes)
       .where(eq(instantQuotes.id, body.instantQuoteId))
       .limit(1);
 
     if (!quote) {
       return corsJson({ ok: false, error: "quote_not_found" }, requestOrigin, { status: 404 });
+    }
+
+    const standardPolicy = await getStandardJobPolicy(db);
+    const itemPolicy = await getItemPoliciesPolicy(db);
+    const evaluation = evaluateStandardJob(
+      {
+        jobTypes: quote.jobTypes ?? [],
+        perceivedSize: quote.perceivedSize,
+        notes: quote.notes ?? null,
+        aiResult: quote.aiResult
+      },
+      standardPolicy,
+      itemPolicy
+    );
+    if (!evaluation.isStandard) {
+      return corsJson(
+        {
+          ok: false,
+          error: "non_standard_job",
+          message: buildStandardJobMessage(evaluation)
+        },
+        requestOrigin,
+        { status: 400 }
+      );
     }
 
     const durationInfo = deriveDurationMinutes(quote);
@@ -331,14 +366,14 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     const dayTotals = new Map<string, number>();
     for (const block of blocks) {
-      const dayKey = formatDayLocal(block.start);
+      const dayKey = formatDayLocal(block.start, schedulingZone);
       dayTotals.set(dayKey, (dayTotals.get(dayKey) ?? 0) + 1);
     }
 
     const dayCityCounts = new Map<string, Map<string, number>>();
     for (const b of blocks) {
       if (!b.city || !b.state) continue;
-      const dayKey = formatDayLocal(b.start);
+      const dayKey = formatDayLocal(b.start, schedulingZone);
       const locKey = `${b.city}:${b.state}`;
       const dayCounts = dayCityCounts.get(dayKey) ?? new Map<string, number>();
       dayCounts.set(locKey, (dayCounts.get(locKey) ?? 0) + 1);
@@ -347,20 +382,24 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     const suggestions: Suggestion[] = [];
     const days: Array<{ date: string; slots: Suggestion[] }> = [];
-    const nowLocal = DateTime.now().setZone(APPOINTMENT_TIME_ZONE);
+    const nowLocal = DateTime.now().setZone(schedulingZone);
 
     for (let day = 0; day < windowDays; day++) {
       const baseDay = nowLocal.plus({ days: day }).startOf("day");
-      if (baseDay.weekday === 7) continue;
+      const windows = getBusinessHourWindowsForDate(baseDay, businessHours);
 
       const dayKey = baseDay.toISODate();
       if (!dayKey) continue;
       const daySlots: Suggestion[] = [];
+      if (!windows.length) {
+        days.push({ date: dayKey, slots: daySlots });
+        continue;
+      }
       if (bookingRules.maxJobsPerDay > 0 && (dayTotals.get(dayKey) ?? 0) >= bookingRules.maxJobsPerDay) {
         days.push({ date: dayKey, slots: daySlots });
         continue;
       }
-      const dayBlocks = blocks.filter((b) => formatDayLocal(b.start) === dayKey);
+      const dayBlocks = blocks.filter((b) => formatDayLocal(b.start, schedulingZone) === dayKey);
       const dayCounts = dayCityCounts.get(dayKey);
       const topCount =
         dayCounts && dayCounts.size > 0
@@ -375,32 +414,33 @@ export async function POST(request: NextRequest): Promise<Response> {
           ? dayBlocks.filter((b) => distanceKm(b, resolvedLat!, resolvedLng!) <= DEFAULT_RADIUS_KM).length
           : null;
 
-      for (
-        let minutes = START_HOUR * 60;
-        minutes + durationMinutes <= END_HOUR * 60;
-        minutes += SLOT_INTERVAL_MIN
-      ) {
-        const slotStartLocal = baseDay.plus({ minutes });
-        if (slotStartLocal < nowLocal) continue;
+      for (const window of windows) {
+        for (
+          let slotStartLocal = window.start;
+          slotStartLocal.plus({ minutes: durationMinutes }) <= window.end;
+          slotStartLocal = slotStartLocal.plus({ minutes: SLOT_INTERVAL_MIN })
+        ) {
+          if (slotStartLocal < nowLocal) continue;
 
-        const slotEndLocal = slotStartLocal.plus({ minutes: durationMinutes });
-        const slotStart = slotStartLocal.toUTC().toJSDate();
-        const slotEnd = slotEndLocal.toUTC().toJSDate();
+          const slotEndLocal = slotStartLocal.plus({ minutes: durationMinutes });
+          const slotStart = slotStartLocal.toUTC().toJSDate();
+          const slotEnd = slotEndLocal.toUTC().toJSDate();
 
-        if (overlapsCount(blocks, slotStart, slotEnd) >= capacity) continue;
+          if (overlapsCount(blocks, slotStart, slotEnd) >= capacity) continue;
 
-        const slot: Suggestion = {
-          startAt: slotStart.toISOString(),
-          endAt: slotEnd.toISOString(),
-          reason:
-            resolvedLat !== null && resolvedLng !== null && nearest !== null
-              ? `Nearest scheduled job ~${nearest.toFixed(1)} km; ${withinRadius ?? 0} within ${DEFAULT_RADIUS_KM} km`
-              : topCount && topCount > 0
-                ? `Aligned with ${topCount} nearby job(s) on this day`
-                : `No conflicts; ${durationMinutes} min slot`
-        };
-        suggestions.push(slot);
-        daySlots.push(slot);
+          const slot: Suggestion = {
+            startAt: slotStart.toISOString(),
+            endAt: slotEnd.toISOString(),
+            reason:
+              resolvedLat !== null && resolvedLng !== null && nearest !== null
+                ? `Nearest scheduled job ~${nearest.toFixed(1)} km; ${withinRadius ?? 0} within ${DEFAULT_RADIUS_KM} km`
+                : topCount && topCount > 0
+                  ? `Aligned with ${topCount} nearby job(s) on this day`
+                  : `No conflicts; ${durationMinutes} min slot`
+          };
+          suggestions.push(slot);
+          daySlots.push(slot);
+        }
       }
 
       daySlots.sort((a, b) => Date.parse(a.startAt) - Date.parse(b.startAt));
@@ -416,7 +456,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return corsJson(
       {
         ok: true,
-        timezone: APPOINTMENT_TIME_ZONE,
+        timezone: schedulingZone,
         durationMinutes,
         travelBufferMinutes,
         capacity,

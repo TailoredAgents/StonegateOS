@@ -5,20 +5,23 @@ import { z } from "zod";
 import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { appointmentHolds, appointments, getDb, instantQuotes, leads } from "@/db";
 import {
+  getBusinessHourWindowsForDate,
+  getBusinessHoursPolicy,
   getBookingRulesPolicy,
+  getItemPoliciesPolicy,
   getOutOfAreaMessage,
   getServiceAreaPolicy,
+  getStandardJobPolicy,
   isPostalCodeAllowed,
   normalizePostalCode
 } from "@/lib/policy";
+import { buildStandardJobMessage, evaluateStandardJob } from "@/lib/standard-job";
 import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
 
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
 
 const WINDOW_DAYS = 14;
-const START_HOUR = 8;
-const END_HOUR = 18;
 const SLOT_INTERVAL_MIN = 60;
 const DEFAULT_CAPACITY = 2;
 const HOLD_WINDOW_MINUTES = 15;
@@ -139,15 +142,47 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     const db = getDb();
     const bookingRules = await getBookingRulesPolicy(db);
+    const businessHours = await getBusinessHoursPolicy(db);
+    const schedulingZone = businessHours.timezone || APPOINTMENT_TIME_ZONE;
 
     const [quote] = await db
-      .select({ id: instantQuotes.id, aiResult: instantQuotes.aiResult, perceivedSize: instantQuotes.perceivedSize })
+      .select({
+        id: instantQuotes.id,
+        aiResult: instantQuotes.aiResult,
+        perceivedSize: instantQuotes.perceivedSize,
+        jobTypes: instantQuotes.jobTypes,
+        notes: instantQuotes.notes
+      })
       .from(instantQuotes)
       .where(eq(instantQuotes.id, body.instantQuoteId))
       .limit(1);
 
     if (!quote) {
       return corsJson({ ok: false, error: "quote_not_found" }, requestOrigin, { status: 404 });
+    }
+
+    const standardPolicy = await getStandardJobPolicy(db);
+    const itemPolicy = await getItemPoliciesPolicy(db);
+    const evaluation = evaluateStandardJob(
+      {
+        jobTypes: quote.jobTypes ?? [],
+        perceivedSize: quote.perceivedSize,
+        notes: quote.notes ?? null,
+        aiResult: quote.aiResult
+      },
+      standardPolicy,
+      itemPolicy
+    );
+    if (!evaluation.isStandard) {
+      return corsJson(
+        {
+          ok: false,
+          error: "non_standard_job",
+          message: buildStandardJobMessage(evaluation)
+        },
+        requestOrigin,
+        { status: 400 }
+      );
     }
 
     const durationMinutes = deriveDurationMinutes(quote);
@@ -161,8 +196,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       return corsJson({ ok: false, error: "invalid_startAt" }, requestOrigin, { status: 400 });
     }
 
-    const nowLocal = DateTime.now().setZone(APPOINTMENT_TIME_ZONE);
-    const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(APPOINTMENT_TIME_ZONE);
+    const nowLocal = DateTime.now().setZone(schedulingZone);
+    const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(schedulingZone);
     if (!startLocal.isValid) {
       return corsJson({ ok: false, error: "invalid_startAt" }, requestOrigin, { status: 400 });
     }
@@ -176,15 +211,18 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (startLocal > nowLocal.plus({ days: bookingWindowDays }).endOf("day")) {
       return corsJson({ ok: false, error: "outside_booking_window" }, requestOrigin, { status: 400 });
     }
-    if (startLocal.weekday === 7) {
+    const windows = getBusinessHourWindowsForDate(startLocal, businessHours);
+    if (!windows.length) {
       return corsJson({ ok: false, error: "unavailable_day" }, requestOrigin, { status: 400 });
     }
-    if (startLocal.minute % SLOT_INTERVAL_MIN !== 0) {
-      return corsJson({ ok: false, error: "invalid_start_time" }, requestOrigin, { status: 400 });
-    }
-    const minutesOfDay = startLocal.hour * 60 + startLocal.minute;
-    if (minutesOfDay < START_HOUR * 60 || minutesOfDay + durationMinutes > END_HOUR * 60) {
+    const endLocal = startLocal.plus({ minutes: durationMinutes });
+    const window = windows.find((entry) => startLocal >= entry.start && endLocal <= entry.end);
+    if (!window) {
       return corsJson({ ok: false, error: "outside_business_hours" }, requestOrigin, { status: 400 });
+    }
+    const slotOffset = Math.round(startLocal.diff(window.start, "minutes").minutes);
+    if (!Number.isFinite(slotOffset) || slotOffset % SLOT_INTERVAL_MIN !== 0) {
+      return corsJson({ ok: false, error: "invalid_start_time" }, requestOrigin, { status: 400 });
     }
 
     const [leadRow] = await db

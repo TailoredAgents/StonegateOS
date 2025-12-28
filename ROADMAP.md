@@ -31,7 +31,7 @@
 
 ### Business Settings / Policy Center (cross-cutting)
 Goal: Central place to configure business rules instead of hardcoding.
-Status: partial (policy storage + admin UI done; service area + booking window/buffer/day-cap enforced in web/instant quote flows; other enforcement pending).
+Status: partial (policy storage + admin UI done; business/quiet hours enforcement added for scheduling + automated outbound messaging; service area + booking window/buffer/day-cap enforced in web/instant quote flows; standard-job + item policy enforcement added for instant-quote holds/booking; other enforcement pending).
 
 Task sequence:
 1) Business hours + quiet hours per channel.

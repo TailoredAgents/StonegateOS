@@ -3,10 +3,14 @@ import { NextResponse } from "next/server";
 import { inArray } from "drizzle-orm";
 import { getDb, policySettings } from "@/db";
 import {
+  DEFAULT_BUSINESS_HOURS_POLICY,
   DEFAULT_BOOKING_RULES_POLICY,
   DEFAULT_CONFIRMATION_LOOP_POLICY,
   DEFAULT_FOLLOW_UP_SEQUENCE_POLICY,
+  DEFAULT_QUIET_HOURS_POLICY,
   DEFAULT_SERVICE_AREA_POLICY,
+  DEFAULT_ITEM_POLICIES,
+  DEFAULT_STANDARD_JOB_POLICY,
   DEFAULT_TEMPLATES_POLICY
 } from "@/lib/policy";
 import { isAdminRequest } from "../../web/admin";
@@ -27,39 +31,14 @@ const POLICY_KEYS = [
 type PolicyKey = (typeof POLICY_KEYS)[number];
 
 const DEFAULT_POLICY_VALUES: Record<PolicyKey, Record<string, unknown>> = {
-  business_hours: {
-    timezone: process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York",
-    weekly: {
-      monday: [{ start: "08:00", end: "18:00" }],
-      tuesday: [{ start: "08:00", end: "18:00" }],
-      wednesday: [{ start: "08:00", end: "18:00" }],
-      thursday: [{ start: "08:00", end: "18:00" }],
-      friday: [{ start: "08:00", end: "18:00" }],
-      saturday: [{ start: "09:00", end: "14:00" }],
-      sunday: []
-    }
-  },
-  quiet_hours: {
-    channels: {
-      sms: { start: "20:00", end: "08:00" },
-      email: { start: "19:00", end: "07:00" },
-      dm: { start: "20:00", end: "08:00" }
-    }
-  },
+  business_hours: DEFAULT_BUSINESS_HOURS_POLICY,
+  quiet_hours: DEFAULT_QUIET_HOURS_POLICY,
   service_area: DEFAULT_SERVICE_AREA_POLICY,
   booking_rules: DEFAULT_BOOKING_RULES_POLICY,
   confirmation_loop: DEFAULT_CONFIRMATION_LOOP_POLICY,
   follow_up_sequence: DEFAULT_FOLLOW_UP_SEQUENCE_POLICY,
-  standard_job: {
-    allowedServices: ["junk_removal_primary"],
-    maxVolumeCubicYards: 12,
-    maxItemCount: 20,
-    notes: "Standard jobs only. Oversize/hazard items require approval."
-  },
-  item_policies: {
-    declined: ["hazmat", "paint", "oil"],
-    extraFees: [{ item: "mattress", fee: 25 }]
-  },
+  standard_job: DEFAULT_STANDARD_JOB_POLICY,
+  item_policies: DEFAULT_ITEM_POLICIES,
   templates: DEFAULT_TEMPLATES_POLICY
 };
 
