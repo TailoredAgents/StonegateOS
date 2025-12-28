@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb, appointments, leads, outboxEvents } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
 
@@ -19,6 +20,8 @@ export async function POST(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "appointments.update");
+  if (permissionError) return permissionError;
 
   const { id: appointmentId } = await context.params;
   if (!appointmentId) {

@@ -15,6 +15,7 @@ import {
 } from "@/db";
 import { isConversationState, type ConversationState } from "@/lib/conversation-state";
 import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -58,6 +59,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "messages.read");
+  if (permissionError) return permissionError;
 
   const { searchParams } = request.nextUrl;
   const rawSearch = searchParams.get("q");
@@ -275,6 +278,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "messages.send");
+  if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as {
     contactId?: string;

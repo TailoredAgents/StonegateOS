@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { getDb, mergeSuggestions } from "@/db";
 import { mergeContacts } from "@/lib/merge-queue";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
 const ACTIONS = ["approve", "decline"] as const;
@@ -20,6 +21,8 @@ export async function PATCH(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.merge");
+  if (permissionError) return permissionError;
 
   const { suggestionId } = await context.params;
   if (!suggestionId) {

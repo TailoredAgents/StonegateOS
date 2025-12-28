@@ -13,6 +13,7 @@ import {
   DEFAULT_STANDARD_JOB_POLICY,
   DEFAULT_TEMPLATES_POLICY
 } from "@/lib/policy";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -50,6 +51,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "policy.read");
+  if (permissionError) return permissionError;
 
   const db = getDb();
   const keys = POLICY_KEYS;
@@ -86,6 +89,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "policy.write");
+  if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as {
     key?: string;

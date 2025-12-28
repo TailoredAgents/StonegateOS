@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { getDb, teamMembers } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -12,6 +13,8 @@ export async function PATCH(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "access.manage");
+  if (permissionError) return permissionError;
 
   const { memberId } = await context.params;
   if (!memberId) {
@@ -89,6 +92,8 @@ export async function DELETE(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "access.manage");
+  if (permissionError) return permissionError;
 
   const { memberId } = await context.params;
   if (!memberId) {

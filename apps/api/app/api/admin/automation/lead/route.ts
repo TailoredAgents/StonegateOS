@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getDb, leadAutomationStates } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -23,6 +24,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "automation.read");
+  if (permissionError) return permissionError;
 
   const leadId = request.nextUrl.searchParams.get("leadId");
   const channel = request.nextUrl.searchParams.get("channel");
@@ -84,6 +87,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "automation.write");
+  if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as {
     leadId?: string;

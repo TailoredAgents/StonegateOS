@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { contacts, getDb, mergeSuggestions, teamMembers } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
 
 const STATUSES = ["pending", "approved", "declined"] as const;
@@ -32,6 +33,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.merge");
+  if (permissionError) return permissionError;
 
   const { searchParams } = request.nextUrl;
   const statusParam = searchParams.get("status");

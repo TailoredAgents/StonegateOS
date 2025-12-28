@@ -13,6 +13,7 @@ import {
   crmPipeline,
   quotes
 } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../web/admin";
 
 const STATUS_OPTIONS = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
@@ -42,6 +43,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "appointments.read");
+  if (permissionError) return permissionError;
 
   const db = getDb();
   const statusFilter = parseStatusParam(request.nextUrl.searchParams.get("status"));

@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, gte, lte, eq, ne } from "drizzle-orm";
 import { getDb, appointments, properties } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { forwardGeocode } from "@/lib/geocode";
 
@@ -40,6 +41,10 @@ const DEFAULT_CAPACITY = 2;
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ ok: false, suggestions: [], error: "unauthorized" }, { status: 401 });
+  }
+  const permissionError = await requirePermission(request, "bookings.manage");
+  if (permissionError) {
+    return NextResponse.json({ ok: false, suggestions: [], error: "forbidden" }, { status: 403 });
   }
 
   const payload = (await request.json().catch(() => ({}))) as SuggestRequest;

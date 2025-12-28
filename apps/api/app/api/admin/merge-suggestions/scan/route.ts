@@ -2,12 +2,15 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { scanMergeSuggestions } from "@/lib/merge-queue";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "contacts.merge");
+  if (permissionError) return permissionError;
 
   const payload = (await request.json().catch(() => null)) as {
     sinceDays?: number;

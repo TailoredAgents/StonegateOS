@@ -17,6 +17,7 @@ import {
   type ConversationState
 } from "@/lib/conversation-state";
 import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -36,6 +37,8 @@ export async function GET(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "messages.read");
+  if (permissionError) return permissionError;
 
   const { threadId } = await context.params;
   if (!threadId) {
@@ -271,6 +274,8 @@ export async function PATCH(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "messages.send");
+  if (permissionError) return permissionError;
 
   const { threadId } = await context.params;
   if (!threadId) {

@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb, auditLogs, teamMembers } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
 
 const DEFAULT_LIMIT = 50;
@@ -25,6 +26,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "audit.read");
+  if (permissionError) return permissionError;
 
   const { searchParams } = request.nextUrl;
   const entityType = searchParams.get("entityType");

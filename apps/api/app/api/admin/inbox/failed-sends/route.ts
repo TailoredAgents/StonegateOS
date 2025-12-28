@@ -8,6 +8,7 @@ import {
   getDb,
   messageDeliveryEvents
 } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
 const DEFAULT_LIMIT = 25;
@@ -31,6 +32,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "messages.read");
+  if (permissionError) return permissionError;
 
   const { searchParams } = request.nextUrl;
   const limit = parseLimit(searchParams.get("limit"));

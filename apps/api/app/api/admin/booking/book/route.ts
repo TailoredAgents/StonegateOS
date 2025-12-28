@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
 import { getDb, appointments, outboxEvents } from "@/db";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 function parseDate(value: string): Date | null {
   const d = new Date(value);
@@ -21,6 +22,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "bookings.manage");
+  if (permissionError) return permissionError;
 
   let payload: BookRequest = {};
   const contentType = request.headers.get("content-type") ?? "";
