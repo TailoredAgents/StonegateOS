@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, crmPipeline, contacts } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../../web/admin";
 import { PIPELINE_STAGE_SET, type PipelineStage } from "../stages";
 import { eq } from "drizzle-orm";
@@ -46,6 +47,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
       : undefined;
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
 
   const [contact] = await db
     .select({ id: contacts.id })
@@ -86,6 +88,18 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   if (!pipeline) {
     return NextResponse.json({ error: "pipeline_update_failed" }, { status: 500 });
   }
+
+  await recordAuditEvent({
+    actor,
+    action: "pipeline.updated",
+    entityType: "crm_pipeline",
+    entityId: pipeline.contactId,
+    meta: {
+      contactId,
+      stage: pipeline.stage,
+      notes: pipeline.notes ?? null
+    }
+  });
 
   return NextResponse.json({
     pipeline: {

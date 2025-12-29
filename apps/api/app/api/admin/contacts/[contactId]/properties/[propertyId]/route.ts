@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, properties } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../../../web/admin";
 import { and, eq } from "drizzle-orm";
 import { forwardGeocode } from "@/lib/geocode";
@@ -80,6 +81,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   }
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
 
   // Attempt geocode if address fields changed
   if (updates["addressLine1"] || updates["city"] || updates["state"] || updates["postalCode"]) {
@@ -119,6 +121,16 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     return NextResponse.json({ error: "property_not_found" }, { status: 404 });
   }
 
+  const changedFields = Object.keys(updates).filter((key) => key !== "updatedAt");
+
+  await recordAuditEvent({
+    actor,
+    action: "property.updated",
+    entityType: "property",
+    entityId: updated.id,
+    meta: { contactId, fields: changedFields }
+  });
+
   return NextResponse.json({
     property: {
       id: updated.id,
@@ -145,6 +157,7 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   }
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
   const [deleted] = await db
     .delete(properties)
     .where(and(eq(properties.id, propertyId), eq(properties.contactId, contactId)))
@@ -153,6 +166,14 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   if (!deleted) {
     return NextResponse.json({ error: "property_not_found" }, { status: 404 });
   }
+
+  await recordAuditEvent({
+    actor,
+    action: "property.deleted",
+    entityType: "property",
+    entityId: deleted.id,
+    meta: { contactId }
+  });
 
   return NextResponse.json({ deleted: true });
 }

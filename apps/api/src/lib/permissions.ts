@@ -14,7 +14,18 @@ type PermissionContext = {
 
 const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   owner: ["*"],
-  office: ["messages.send", "messages.read", "policy.read", "policy.write", "bookings.manage"],
+  office: [
+    "messages.send",
+    "messages.read",
+    "policy.read",
+    "policy.write",
+    "bookings.manage",
+    "automation.read",
+    "automation.write",
+    "audit.read",
+    "appointments.read",
+    "appointments.update"
+  ],
   crew: ["messages.read", "appointments.read", "appointments.update"],
   read_only: ["read"]
 };

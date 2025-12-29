@@ -15,7 +15,18 @@ const DEFAULT_ROLES = [
   {
     name: "Office",
     slug: "office",
-    permissions: ["messages.send", "messages.read", "policy.read", "policy.write", "bookings.manage"]
+    permissions: [
+      "messages.send",
+      "messages.read",
+      "policy.read",
+      "policy.write",
+      "bookings.manage",
+      "automation.read",
+      "automation.write",
+      "audit.read",
+      "appointments.read",
+      "appointments.update"
+    ]
   },
   {
     name: "Crew",

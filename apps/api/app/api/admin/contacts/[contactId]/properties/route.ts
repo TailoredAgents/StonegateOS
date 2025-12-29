@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, contacts, properties } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../../web/admin";
 import { eq } from "drizzle-orm";
 import { forwardGeocode } from "@/lib/geocode";
@@ -47,6 +48,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   }
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
 
   const [contact] = await db
     .select({ id: contacts.id })
@@ -93,6 +95,14 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   if (!property) {
     return NextResponse.json({ error: "property_insert_failed" }, { status: 500 });
   }
+
+  await recordAuditEvent({
+    actor,
+    action: "property.created",
+    entityType: "property",
+    entityId: property.id,
+    meta: { contactId }
+  });
 
   return NextResponse.json({
     property: {

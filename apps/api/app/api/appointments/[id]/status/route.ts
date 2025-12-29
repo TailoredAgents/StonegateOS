@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb, appointments, leads, outboxEvents } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
@@ -79,6 +80,17 @@ export async function POST(
       appointmentId: updated.id,
       leadId: updated.leadId,
       status
+    }
+  });
+
+  await recordAuditEvent({
+    actor: getAuditActorFromRequest(request),
+    action: "appointment.status.updated",
+    entityType: "appointment",
+    entityId: updated.id,
+    meta: {
+      status,
+      leadId: updated.leadId ?? null
     }
   });
 

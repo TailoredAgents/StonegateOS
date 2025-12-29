@@ -15,7 +15,7 @@
 - Public/team/owner chat endpoints.
 
 ## Foundations to add (prereqs for the roadmap)
-- Access control & audit: roles/permissions and an audit log for sends/bookings/merges/policy changes. Status: partial (roles + audit log storage/API/UI in place; permission enforcement added for policy/automation/inbox/merges/access/audit/payments/appointments; broader audit coverage pending).
+- Access control & audit: roles/permissions and an audit log for sends/bookings/merges/policy changes. Status: partial (roles + audit log storage/API/UI in place; permission enforcement added for policy/automation/inbox/merges/access/audit/payments/appointments; audit coverage added for quotes/contacts/pipeline/appointments; remaining audit coverage pending).
 - Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited). Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events; inbound SMS/email ingestion + merge queue + state machine + delivery state enhancements done; DM/Nextdoor bridges pending).
 - Policy center storage: configurable business hours/quiet hours, booking windows/buffers, standard job definition, item policies, templates. Status: done (storage + admin UI); enforcement pending in Phase 1 tasks.
 - Automation modes/kill switches: per-channel autonomy levels, lead-level pause/DNC, human takeover, follow-up state machine. Status: partial (data model + admin API + UI for channel modes + lead kill switches; auto-reply enforcement wired; follow-up scheduler in progress).

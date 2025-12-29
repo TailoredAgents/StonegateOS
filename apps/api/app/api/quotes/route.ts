@@ -5,6 +5,7 @@ import { calculateQuoteBreakdown } from "@myst-os/pricing/src/engine/calculate";
 import { serviceRates } from "@myst-os/pricing/src/config/defaults";
 import type { ConcreteSurfaceInput, ServiceCategory } from "@myst-os/pricing/src/types";
 import { getDb, quotes, contacts, properties } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../web/admin";
 import { eq, desc } from "drizzle-orm";
 
@@ -157,6 +158,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const body = parsedBody.data;
+  const actor = getAuditActorFromRequest(request);
   const db = getDb();
 
   const [contact] = await db
@@ -248,6 +250,19 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!inserted) {
     return NextResponse.json({ error: "insert_failed" }, { status: 500 });
   }
+
+  await recordAuditEvent({
+    actor,
+    action: "quote.created",
+    entityType: "quote",
+    entityId: inserted.id,
+    meta: {
+      contactId: body.contactId,
+      propertyId: body.propertyId,
+      services: selectedServices,
+      total: breakdown.total
+    }
+  });
 
   return NextResponse.json({
     ok: true,

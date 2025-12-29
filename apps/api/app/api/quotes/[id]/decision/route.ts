@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb, quotes, outboxEvents } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { eq } from "drizzle-orm";
 
@@ -31,6 +32,7 @@ export async function POST(
     );
   }
 
+  const actor = getAuditActorFromRequest(request);
   const db = getDb();
   const rows = await db
     .select({
@@ -81,6 +83,17 @@ export async function POST(
       quoteId: updated.id,
       decision: parsedBody.data.decision,
       source: "admin",
+      notes: parsedBody.data.notes ?? null
+    }
+  });
+
+  await recordAuditEvent({
+    actor,
+    action: "quote.decision",
+    entityType: "quote",
+    entityId: updated.id,
+    meta: {
+      decision: parsedBody.data.decision,
       notes: parsedBody.data.notes ?? null
     }
   });

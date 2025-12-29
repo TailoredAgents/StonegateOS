@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb, quotes, outboxEvents } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -42,6 +43,7 @@ export async function POST(
     );
   }
 
+  const actor = getAuditActorFromRequest(request);
   const db = getDb();
   const rows = await db
     .select({
@@ -97,6 +99,18 @@ export async function POST(
       quoteId: updated.id,
       contactId: existing.contactId,
       shareToken
+    }
+  });
+
+  await recordAuditEvent({
+    actor,
+    action: "quote.sent",
+    entityType: "quote",
+    entityId: updated.id,
+    meta: {
+      contactId: existing.contactId,
+      shareToken,
+      expiresAt: expiresAt ? expiresAt.toISOString() : null
     }
   });
 

@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, quotes, contacts, properties } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../web/admin";
 import { eq } from "drizzle-orm";
 
@@ -118,6 +119,13 @@ export async function DELETE(
   if (!deleted?.id) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
+
+  await recordAuditEvent({
+    actor: getAuditActorFromRequest(request),
+    action: "quote.deleted",
+    entityType: "quote",
+    entityId: deleted.id
+  });
 
   return NextResponse.json({ ok: true, quoteId: deleted.id });
 }

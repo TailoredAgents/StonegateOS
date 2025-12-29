@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, contacts, instantQuotes } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { normalizePhone } from "../../../web/utils";
 import { eq, inArray, sql } from "drizzle-orm";
@@ -87,6 +88,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   }
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
 
   const [updated] = await db
     .update(contacts)
@@ -107,6 +109,16 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   if (!updated) {
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
   }
+
+  const changedFields = Object.keys(updates).filter((key) => key !== "updatedAt");
+
+  await recordAuditEvent({
+    actor,
+    action: "contact.updated",
+    entityType: "contact",
+    entityId: updated.id,
+    meta: { fields: changedFields }
+  });
 
   return NextResponse.json({
     contact: {
@@ -134,6 +146,7 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   }
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
   const [existing] = await db
     .select({ id: contacts.id, phone: contacts.phone, phoneE164: contacts.phoneE164 })
     .from(contacts)
@@ -184,6 +197,14 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
     }
 
     return { deletedInstantQuotes };
+  });
+
+  await recordAuditEvent({
+    actor,
+    action: "contact.deleted",
+    entityType: "contact",
+    entityId: contactId,
+    meta: { deletedInstantQuotes: result.deletedInstantQuotes }
   });
 
   return NextResponse.json({ deleted: true, deletedInstantQuotes: result.deletedInstantQuotes });

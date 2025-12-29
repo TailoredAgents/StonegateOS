@@ -9,6 +9,7 @@ import {
   crmPipeline,
   crmTasks
 } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../web/admin";
 import { normalizePhone } from "../../web/utils";
 import { forwardGeocode } from "@/lib/geocode";
@@ -370,6 +371,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
   }
 
+  const actor = getAuditActorFromRequest(request);
   const db = getDb();
 
   try {
@@ -431,6 +433,27 @@ export async function POST(request: NextRequest): Promise<Response> {
     });
 
     const { contact, property } = result;
+
+    await recordAuditEvent({
+      actor,
+      action: "contact.created",
+      entityType: "contact",
+      entityId: contact.id,
+      meta: {
+        propertyId: property?.id ?? null,
+        source: "manual"
+      }
+    });
+
+    if (property?.id) {
+      await recordAuditEvent({
+        actor,
+        action: "property.created",
+        entityType: "property",
+        entityId: property.id,
+        meta: { contactId: contact.id }
+      });
+    }
 
     return NextResponse.json({
       contact: {
