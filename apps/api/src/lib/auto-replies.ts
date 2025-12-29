@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { and, asc, eq, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNotNull, lte, ne, or, sql } from "drizzle-orm";
 import {
   appointments,
   automationSettings,
@@ -45,6 +45,7 @@ const APPOINTMENT_TIME_ZONE =
   process.env["APPOINTMENT_TIMEZONE"] ??
   process.env["GOOGLE_CALENDAR_TIMEZONE"] ??
   "America/New_York";
+const STOP_TOKENS = new Set(["stop", "stopall", "unsubscribe", "cancel", "end", "quit"]);
 
 function resolveCandidateChannels(inboundChannel: string): AutoReplyChannel[] {
   switch (inboundChannel.toLowerCase()) {
@@ -65,6 +66,14 @@ function randomDelayMs(): number {
   const min = AUTO_REPLY_MIN_DELAY_MS;
   const max = AUTO_REPLY_MAX_DELAY_MS;
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function isStopMessage(body: string): boolean {
+  const normalized = body.trim().toLowerCase();
+  if (!normalized) return false;
+  const tokens = normalized.replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
+  if (!tokens.length) return false;
+  return tokens.some((token) => STOP_TOKENS.has(token));
 }
 
 type ConfirmationIntent = "confirm" | "decline";
@@ -131,6 +140,88 @@ async function getLeadAutomationState(
     .limit(1);
 
   return row ?? null;
+}
+
+async function applyLeadDnc(input: {
+  db: DbExecutor;
+  leadId: string | null;
+  contactId: string | null;
+  channel: AutoReplyChannel;
+  messageId: string;
+}): Promise<string[]> {
+  const leadIds = new Set<string>();
+  if (input.leadId) {
+    leadIds.add(input.leadId);
+  }
+  if (input.contactId) {
+    const rows = await input.db
+      .select({ id: leads.id })
+      .from(leads)
+      .where(eq(leads.contactId, input.contactId));
+    for (const row of rows) {
+      leadIds.add(row.id);
+    }
+  }
+
+  const ids = [...leadIds];
+  if (!ids.length) {
+    return [];
+  }
+
+  const now = new Date();
+  const values = ids.map((leadId) => ({
+    leadId,
+    channel: input.channel,
+    paused: true,
+    dnc: true,
+    humanTakeover: false,
+    followupState: "stopped",
+    followupStep: 0,
+    nextFollowupAt: null,
+    pausedAt: now,
+    pausedBy: null,
+    createdAt: now,
+    updatedAt: now
+  }));
+
+  await input.db
+    .insert(leadAutomationStates)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [leadAutomationStates.leadId, leadAutomationStates.channel],
+      set: {
+        paused: true,
+        dnc: true,
+        humanTakeover: false,
+        followupState: "stopped",
+        followupStep: 0,
+        nextFollowupAt: null,
+        pausedAt: now,
+        pausedBy: null,
+        updatedAt: now
+      }
+    });
+
+  const leadFilters = ids.map((id) => sql`(payload->>'leadId') = ${id}`);
+  if (leadFilters.length > 0) {
+    await input.db
+      .delete(outboxEvents)
+      .where(and(eq(outboxEvents.type, "followup.send"), or(...leadFilters)));
+  }
+
+  await recordAuditEvent({
+    actor: { type: "system", label: "stop-handler" },
+    action: "automation.dnc.enabled",
+    entityType: "contact",
+    entityId: input.contactId ?? null,
+    meta: {
+      leadIds: ids,
+      channel: input.channel,
+      messageId: input.messageId
+    }
+  });
+
+  return ids;
 }
 
 async function ensureSystemParticipant(db: DbExecutor, threadId: string, createdAt: Date): Promise<string | null> {
@@ -439,6 +530,32 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
     return { status: "skipped" };
   }
 
+  const inboundChannel = row.channel ?? "sms";
+  if (isStopMessage(row.body ?? "")) {
+    if (inboundChannel === "sms" || inboundChannel === "email") {
+      await applyLeadDnc({
+        db,
+        leadId: row.leadId ?? null,
+        contactId: row.contactId ?? null,
+        channel: inboundChannel,
+        messageId: row.messageId
+      });
+    }
+
+    await recordAuditEvent({
+      actor: { type: "system", label: "stop-handler" },
+      action: "auto_reply.skipped",
+      entityType: "conversation_message",
+      entityId: row.messageId,
+      meta: {
+        reason: "stop_request",
+        inboundChannel
+      }
+    });
+
+    return { status: "processed" };
+  }
+
   const confirmationHandled = await handleConfirmationReply({
     db,
     messageId: row.messageId,
@@ -455,7 +572,6 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
     return { status: "processed" };
   }
 
-  const inboundChannel = row.channel ?? "sms";
   const candidates = resolveCandidateChannels(inboundChannel);
   if (candidates.length === 0) {
     await recordAuditEvent({

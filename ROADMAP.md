@@ -123,7 +123,7 @@ Dependencies/notes:
 
 ### D) Follow-up sequences (quoted-but-not-booked)
 Goal: Automated follow-up that stops when the lead replies or books.
-Status: in progress (follow-up scheduler + stop rules + inbox indicator wired; templates/cadence configurable).
+Status: in progress (follow-up scheduler + stop rules + inbox indicator wired; SMS STOP handling added; templates/cadence configurable).
 
 Task sequence:
 1) Define sequence templates and timing (new lead, quote sent, no response).
