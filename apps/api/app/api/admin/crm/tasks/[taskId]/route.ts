@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, crmTasks } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../../web/admin";
 import { eq } from "drizzle-orm";
 
@@ -84,6 +85,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   }
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
 
   const [updated] = await db
     .update(crmTasks)
@@ -104,6 +106,19 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   if (!updated) {
     return NextResponse.json({ error: "task_not_found" }, { status: 404 });
   }
+
+  const changedFields = Object.keys(updates).filter((key) => key !== "updatedAt");
+
+  await recordAuditEvent({
+    actor,
+    action: "crm.task.updated",
+    entityType: "crm_task",
+    entityId: updated.id,
+    meta: {
+      contactId: updated.contactId,
+      fields: changedFields
+    }
+  });
 
   return NextResponse.json({
     task: {
@@ -131,6 +146,7 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   }
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
   const [deleted] = await db
     .delete(crmTasks)
     .where(eq(crmTasks.id, taskId))
@@ -139,6 +155,13 @@ export async function DELETE(request: NextRequest, context: RouteContext): Promi
   if (!deleted) {
     return NextResponse.json({ error: "task_not_found" }, { status: 404 });
   }
+
+  await recordAuditEvent({
+    actor,
+    action: "crm.task.deleted",
+    entityType: "crm_task",
+    entityId: deleted.id
+  });
 
   return NextResponse.json({ deleted: true });
 }

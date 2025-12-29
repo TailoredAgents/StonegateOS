@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, crmTasks, contacts } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { and, eq, sql, asc, desc } from "drizzle-orm";
 
@@ -112,6 +113,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
 
   const [contact] = await db
     .select({ id: contacts.id })
@@ -149,6 +151,18 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!task) {
     return NextResponse.json({ error: "task_insert_failed" }, { status: 500 });
   }
+
+  await recordAuditEvent({
+    actor,
+    action: "crm.task.created",
+    entityType: "crm_task",
+    entityId: task.id,
+    meta: {
+      contactId: task.contactId,
+      status: task.status,
+      assignedTo: task.assignedTo ?? null
+    }
+  });
 
   return NextResponse.json({
     task: {

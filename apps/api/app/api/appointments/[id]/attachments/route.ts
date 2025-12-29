@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb, appointments, appointmentAttachments } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -90,6 +91,14 @@ export async function POST(
   if (!inserted) {
     return NextResponse.json({ error: "insert_failed" }, { status: 500 });
   }
+
+  await recordAuditEvent({
+    actor: getAuditActorFromRequest(request),
+    action: "appointment.attachment.added",
+    entityType: "appointment_attachment",
+    entityId: inserted.id,
+    meta: { appointmentId }
+  });
 
   return NextResponse.json({
     ok: true,

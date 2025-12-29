@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { getDb, appointments, appointmentTasks } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -54,6 +55,14 @@ export async function POST(
     return NextResponse.json({ error: "task_insert_failed" }, { status: 500 });
   }
 
+  await recordAuditEvent({
+    actor: getAuditActorFromRequest(request),
+    action: "appointment.task.created",
+    entityType: "appointment_task",
+    entityId: inserted.id,
+    meta: { appointmentId, status: inserted.status }
+  });
+
   return NextResponse.json({
     ok: true,
     task: {
@@ -96,6 +105,14 @@ export async function PATCH(
   if (!updated) {
     return NextResponse.json({ error: "task_not_found" }, { status: 404 });
   }
+
+  await recordAuditEvent({
+    actor: getAuditActorFromRequest(request),
+    action: "appointment.task.updated",
+    entityType: "appointment_task",
+    entityId: updated.id,
+    meta: { appointmentId, status: updated.status }
+  });
 
   return NextResponse.json({ ok: true, taskId: updated.id, status: updated.status });
 }

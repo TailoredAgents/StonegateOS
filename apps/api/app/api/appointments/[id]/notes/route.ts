@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb, appointmentNotes } from "@/db";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -53,6 +54,14 @@ export async function POST(
   if (!note) {
     return NextResponse.json({ error: "note_failed" }, { status: 500 });
   }
+
+  await recordAuditEvent({
+    actor: getAuditActorFromRequest(request),
+    action: "appointment.note.created",
+    entityType: "appointment_note",
+    entityId: note.id,
+    meta: { appointmentId }
+  });
 
   return NextResponse.json({ ok: true, note });
 }
