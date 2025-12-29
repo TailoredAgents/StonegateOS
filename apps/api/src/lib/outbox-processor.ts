@@ -33,7 +33,7 @@ import {
 } from "@/lib/notifications";
 import type { AppointmentCalendarPayload } from "@/lib/calendar";
 import { createCalendarEventWithRetry, updateCalendarEventWithRetry } from "@/lib/calendar-events";
-import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
+import { sendDmMessage, sendDmTyping, sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
 import { handleInboundAutoReply } from "@/lib/auto-replies";
 import { recordAuditEvent } from "@/lib/audit";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
@@ -59,6 +59,8 @@ type OutboxOutcome = {
 
 const MAX_MESSAGE_SEND_ATTEMPTS = 3;
 const MESSAGE_SEND_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+const HUMANISTIC_DELAY_MIN_MS = 10_000;
+const HUMANISTIC_DELAY_MAX_MS = 30_000;
 
 const APPOINTMENT_STATUS_VALUES = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
 type AppointmentStatus = (typeof APPOINTMENT_STATUS_VALUES)[number];
@@ -142,6 +144,39 @@ function coerceServices(input: unknown): string[] {
     return [];
   }
   return input.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function randomHumanisticDelayMs(): number {
+  return Math.floor(Math.random() * (HUMANISTIC_DELAY_MAX_MS - HUMANISTIC_DELAY_MIN_MS + 1)) + HUMANISTIC_DELAY_MIN_MS;
+}
+
+function readMetaNumber(metadata: Record<string, unknown> | null, key: string): number | null {
+  if (!metadata) return null;
+  const value = metadata[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function mergeMetadata(
+  existing: Record<string, unknown> | null,
+  updates: Record<string, unknown>
+): Record<string, unknown> {
+  return { ...(existing ?? {}), ...updates };
+}
+
+async function resolveDmRecipient(db: ReturnType<typeof getDb>, threadId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ externalAddress: conversationParticipants.externalAddress })
+    .from(conversationParticipants)
+    .where(
+      and(
+        eq(conversationParticipants.threadId, threadId),
+        eq(conversationParticipants.participantType, "contact")
+      )
+    )
+    .limit(1);
+  return typeof row?.externalAddress === "string" && row.externalAddress.trim().length > 0
+    ? row.externalAddress.trim()
+    : null;
 }
 
 function buildQuoteShareUrl(token: string): string {
@@ -1414,6 +1449,8 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           toAddress = message.contactPhoneE164 ?? message.contactPhone ?? null;
         } else if (channel === "email") {
           toAddress = message.contactEmail ?? null;
+        } else if (channel === "dm") {
+          toAddress = await resolveDmRecipient(db, message.threadId);
         }
       }
 
@@ -1434,6 +1471,34 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         }
       }
       const attempt = (event.attempts ?? 0) + 1;
+
+      const delayFromMeta =
+        readMetaNumber(metadata, "humanisticDelayMs") ?? readMetaNumber(metadata, "autoReplyDelayMs");
+      const delayMs =
+        channel === "dm" ? delayFromMeta ?? (isAutomated ? randomHumanisticDelayMs() : null) : null;
+      const typingSentAt = typeof metadata?.["dmTypingSentAt"] === "string" ? metadata?.["dmTypingSentAt"] : null;
+
+      if (channel === "dm" && delayMs && !typingSentAt && toAddress) {
+        const typingResult = await sendDmTyping(toAddress, "typing_on", metadata);
+        if (!typingResult.ok) {
+          console.warn("[outbox] dm.typing_failed", { messageId, detail: typingResult.detail });
+        }
+
+        const updatedMetadata = mergeMetadata(metadata, {
+          dmTypingSentAt: now.toISOString(),
+          humanisticDelayMs: delayMs
+        });
+        await db
+          .update(conversationMessages)
+          .set({ metadata: updatedMetadata })
+          .where(eq(conversationMessages.id, message.id));
+
+        return {
+          status: "retry",
+          error: "dm_typing_delay",
+          nextAttemptAt: new Date(now.getTime() + delayMs)
+        };
+      }
 
       if (!toAddress) {
         await db
@@ -1462,6 +1527,8 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         result = await sendSmsMessage(toAddress, body);
       } else if (channel === "email") {
         result = await sendEmailMessage(toAddress, subject, body);
+      } else if (channel === "dm") {
+        result = await sendDmMessage(toAddress, body, metadata);
       } else {
         result = { ok: false, provider: "unknown", detail: "unsupported_channel" };
       }
@@ -1548,6 +1615,13 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           detail
         }
       });
+
+      if (channel === "dm" && typingSentAt && toAddress) {
+        const typingOff = await sendDmTyping(toAddress, "typing_off", metadata);
+        if (!typingOff.ok) {
+          console.warn("[outbox] dm.typing_off_failed", { messageId, detail: typingOff.detail });
+        }
+      }
 
       if (channel === "sms" || channel === "email") {
         await recordProviderSuccessSafe(channel);

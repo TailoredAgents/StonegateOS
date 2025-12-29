@@ -111,3 +111,104 @@ export async function sendEmailMessage(
     return { ok: false, provider: "smtp", detail: `email_error:${String(error)}` };
   }
 }
+
+type DmWebhookResponse = {
+  id?: string;
+  messageId?: string;
+  providerMessageId?: string;
+  ok?: boolean;
+  error?: string;
+};
+
+function readDmWebhookConfig(): { url: string; token: string | null; from: string | null } | null {
+  const url = process.env["DM_WEBHOOK_URL"];
+  if (!url) return null;
+  return {
+    url,
+    token: process.env["DM_WEBHOOK_TOKEN"] ?? null,
+    from: process.env["DM_WEBHOOK_FROM"] ?? null
+  };
+}
+
+async function postDmWebhook(
+  payload: Record<string, unknown>
+): Promise<SendResult> {
+  const config = readDmWebhookConfig();
+  if (!config) {
+    return { ok: false, provider: "dm_webhook", detail: "dm_not_configured" };
+  }
+
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+    if (config.token) {
+      headers["Authorization"] = `Bearer ${config.token}`;
+    }
+
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      return { ok: false, provider: "dm_webhook", detail: `dm_failed:${response.status}:${text}` };
+    }
+
+    const data = (await response.json().catch(() => null)) as DmWebhookResponse | null;
+    if (data?.ok === false) {
+      return { ok: false, provider: "dm_webhook", detail: data.error ?? "dm_failed" };
+    }
+
+    const providerMessageId =
+      (typeof data?.providerMessageId === "string" && data.providerMessageId) ||
+      (typeof data?.messageId === "string" && data.messageId) ||
+      (typeof data?.id === "string" && data.id) ||
+      null;
+
+    return {
+      ok: true,
+      provider: "dm_webhook",
+      providerMessageId
+    };
+  } catch (error) {
+    return { ok: false, provider: "dm_webhook", detail: `dm_error:${String(error)}` };
+  }
+}
+
+export async function sendDmMessage(
+  to: string,
+  body: string,
+  metadata?: Record<string, unknown> | null
+): Promise<SendResult> {
+  const config = readDmWebhookConfig();
+  const payload: Record<string, unknown> = {
+    action: "message",
+    to,
+    body,
+    metadata: metadata ?? null
+  };
+  if (config?.from) {
+    payload["from"] = config.from;
+  }
+  return postDmWebhook(payload);
+}
+
+export async function sendDmTyping(
+  to: string,
+  state: "typing_on" | "typing_off",
+  metadata?: Record<string, unknown> | null
+): Promise<SendResult> {
+  const config = readDmWebhookConfig();
+  const payload: Record<string, unknown> = {
+    action: state,
+    to,
+    metadata: metadata ?? null
+  };
+  if (config?.from) {
+    payload["from"] = config.from;
+  }
+  return postDmWebhook(payload);
+}
