@@ -261,6 +261,7 @@ async function queueThreadMessage(input: {
   body: string;
   subject?: string | null;
   metadata?: Record<string, unknown> | null;
+  delayMs?: number;
   createdAt: Date;
 }): Promise<string | null> {
   const participantId = await ensureSystemParticipant(input.db, input.threadId, input.createdAt);
@@ -297,7 +298,11 @@ async function queueThreadMessage(input: {
   await input.db.insert(outboxEvents).values({
     type: "message.send",
     payload: { messageId: message.id },
-    createdAt: input.createdAt
+    createdAt: input.createdAt,
+    nextAttemptAt:
+      typeof input.delayMs === "number" && Number.isFinite(input.delayMs) && input.delayMs > 0
+        ? new Date(input.createdAt.getTime() + input.delayMs)
+        : null
   });
 
   return message.id;
@@ -397,6 +402,7 @@ async function handleConfirmationReply(input: {
     if (toAddress) {
       const when = appointment.startAt instanceof Date ? formatAppointmentTime(appointment.startAt) : "soon";
       const body = `Thanks! You're confirmed for ${when}. Reply if you need any changes.`;
+      const delayMs = randomDelayMs();
 
       const state =
         input.leadId && replyChannel
@@ -412,8 +418,10 @@ async function handleConfirmationReply(input: {
           metadata: {
             confirmationLoop: true,
             confirmationIntent: "confirm",
-            appointmentId: appointment.id
+            appointmentId: appointment.id,
+            humanisticDelayMs: delayMs
           },
+          delayMs,
           createdAt: now
         });
       }
@@ -456,6 +464,7 @@ async function handleConfirmationReply(input: {
     if (toAddress) {
       const rescheduleUrl = buildRescheduleUrlForAppointment(appointment.id, appointment.rescheduleToken);
       const body = `No problem. Use this link to reschedule: ${rescheduleUrl}`;
+      const delayMs = randomDelayMs();
 
       const state =
         input.leadId && replyChannel
@@ -471,8 +480,10 @@ async function handleConfirmationReply(input: {
           metadata: {
             confirmationLoop: true,
             confirmationIntent: "decline",
-            appointmentId: appointment.id
+            appointmentId: appointment.id,
+            humanisticDelayMs: delayMs
           },
+          delayMs,
           createdAt: now
         });
       }

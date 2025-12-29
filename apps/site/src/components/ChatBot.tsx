@@ -27,6 +27,8 @@ const SUGGESTIONS = [
   "What does a half-trailer usually cost?",
   "Can you book me for an estimate?"
 ];
+const RESPONSE_DELAY_MIN_MS = 10_000;
+const RESPONSE_DELAY_MAX_MS = 30_000;
 
 function fallbackResponse(message: string): string {
   const m = message.toLowerCase();
@@ -42,16 +44,54 @@ export function ChatBot() {
   const [isOpen, setIsOpen] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [bookingInFlight, setBookingInFlight] = React.useState(false);
+  const [isTyping, setIsTyping] = React.useState(false);
   const [messages, setMessages] = React.useState<Message[]>([
     { id: "initial", sender: "bot", text: "Hi! I'm Stonegate Assist. Ask about services, pricing ranges, or how we work." }
   ]);
   const endRef = React.useRef<HTMLDivElement>(null);
+  const pendingRepliesRef = React.useRef(0);
+  const timersRef = React.useRef<number[]>([]);
 
   React.useEffect(() => {
     if (!isOpen) return;
     const t = setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
     return () => clearTimeout(t);
   }, [messages, isOpen]);
+
+  React.useEffect(() => {
+    return () => {
+      timersRef.current.forEach((timerId) => window.clearTimeout(timerId));
+      timersRef.current = [];
+    };
+  }, []);
+
+  function pickResponseDelayMs(): number {
+    const range = RESPONSE_DELAY_MAX_MS - RESPONSE_DELAY_MIN_MS;
+    return RESPONSE_DELAY_MIN_MS + Math.floor(Math.random() * (range + 1));
+  }
+
+  function beginBotReplyDelay() {
+    pendingRepliesRef.current += 1;
+    setIsTyping(true);
+    return { startedAt: Date.now(), delayMs: pickResponseDelayMs() };
+  }
+
+  function scheduleBotReply(
+    message: Message,
+    options: { startedAt: number; delayMs: number; clearBooking?: boolean }
+  ) {
+    const elapsed = Date.now() - options.startedAt;
+    const remaining = Math.max(0, options.delayMs - elapsed);
+    const timerId = window.setTimeout(() => {
+      setMessages((prev) => {
+        const next = options.clearBooking ? prev.map((m) => (m.booking ? { ...m, booking: undefined } : m)) : prev;
+        return [...next, message];
+      });
+      pendingRepliesRef.current = Math.max(0, pendingRepliesRef.current - 1);
+      if (pendingRepliesRef.current === 0) setIsTyping(false);
+    }, remaining);
+    timersRef.current.push(timerId);
+  }
 
   function formatSlot(s: BookingSuggestion): string {
     const start = new Date(s.startAt);
@@ -81,12 +121,13 @@ export function ChatBot() {
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "user", text }]);
     setInput("");
 
+    const pacing = beginBotReplyDelay();
     const ai = await callAssistant({ message: text });
     const reply = typeof ai?.reply === "string" ? ai.reply : fallbackResponse(text);
-    setMessages((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), sender: "bot", text: reply, ...(ai?.booking ? { booking: ai.booking } : {}) }
-    ]);
+    scheduleBotReply(
+      { id: crypto.randomUUID(), sender: "bot", text: reply, ...(ai?.booking ? { booking: ai.booking } : {}) },
+      pacing
+    );
   };
 
   const handleSelectSlot = async (slot: BookingSuggestion) => {
@@ -94,12 +135,10 @@ export function ChatBot() {
     setBookingInFlight(true);
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "user", text: `Book ${formatSlot(slot)}` }]);
     try {
+      const pacing = beginBotReplyDelay();
       const ai = await callAssistant({ action: { type: "select_booking_slot", startAt: slot.startAt } });
       const reply = typeof ai?.reply === "string" ? ai.reply : "Sorry - I couldn't book that slot. Try again?";
-      setMessages((prev) => [
-        ...prev.map((m) => (m.booking ? { ...m, booking: undefined } : m)),
-        { id: crypto.randomUUID(), sender: "bot", text: reply }
-      ]);
+      scheduleBotReply({ id: crypto.randomUUID(), sender: "bot", text: reply }, { ...pacing, clearBooking: true });
     } finally {
       setBookingInFlight(false);
     }
@@ -161,6 +200,18 @@ export function ChatBot() {
                 ) : null}
               </div>
              ))}
+             {isTyping ? (
+               <div className="flex justify-start">
+                 <div className="max-w-[75%] rounded-xl bg-neutral-100 px-3 py-2 text-neutral-500">
+                   <span className="sr-only">Stonegate Assist is typing</span>
+                   <span className="flex items-center gap-1" aria-hidden="true">
+                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400" style={{ animationDelay: "0ms" }} />
+                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400" style={{ animationDelay: "150ms" }} />
+                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400" style={{ animationDelay: "300ms" }} />
+                   </span>
+                 </div>
+               </div>
+             ) : null}
              <div ref={endRef} />
            </div>
           <div className="border-t border-neutral-200 px-4 py-3">

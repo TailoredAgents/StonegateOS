@@ -223,6 +223,10 @@ type PublicBookingState = {
   contactId?: string;
   propertyId?: string;
   suggestions?: Array<{ startAt: string; endAt: string }>;
+  preferredDay?: string;
+  preferredStartHour?: number;
+  preferredEndHour?: number;
+  preferenceLabel?: string;
   updatedAt?: number;
 };
 
@@ -270,6 +274,10 @@ function readPublicBookingState(request: NextRequest): PublicBookingState | null
     contactId: typeof parsed["contactId"] === "string" ? parsed["contactId"] : undefined,
     propertyId: typeof parsed["propertyId"] === "string" ? parsed["propertyId"] : undefined,
     suggestions,
+    preferredDay: typeof parsed["preferredDay"] === "string" ? parsed["preferredDay"] : undefined,
+    preferredStartHour: typeof parsed["preferredStartHour"] === "number" ? parsed["preferredStartHour"] : undefined,
+    preferredEndHour: typeof parsed["preferredEndHour"] === "number" ? parsed["preferredEndHour"] : undefined,
+    preferenceLabel: typeof parsed["preferenceLabel"] === "string" ? parsed["preferenceLabel"] : undefined,
     updatedAt: typeof parsed["updatedAt"] === "number" ? parsed["updatedAt"] : undefined
   };
 }
@@ -280,6 +288,136 @@ function writePublicBookingState(response: NextResponse, state: PublicBookingSta
     return;
   }
   response.cookies.set(PUBLIC_BOOKING_COOKIE, JSON.stringify({ ...state, updatedAt: Date.now() }), bookingCookieOptions());
+}
+
+const BOOKING_TIME_ZONE = "America/New_York";
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+type BookingPreference = {
+  preferredDay?: string;
+  preferredStartHour?: number;
+  preferredEndHour?: number;
+  preferenceLabel?: string;
+};
+
+type BookingPreferenceUpdate = BookingPreference & {
+  clear?: boolean;
+};
+
+function formatDayInZone(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
+    date
+  );
+}
+
+function dayIndexInZone(date: Date, timeZone: string): number {
+  const label = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long" }).format(date).toLowerCase();
+  const idx = WEEKDAYS.indexOf(label);
+  return idx >= 0 ? idx : date.getDay();
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function hourInZone(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", hour12: false }).formatToParts(date);
+  const hourPart = parts.find((part) => part.type === "hour")?.value;
+  const parsed = hourPart ? Number(hourPart) : NaN;
+  return Number.isFinite(parsed) ? parsed : date.getHours();
+}
+
+function extractPreferredDay(message: string, timeZone: string): { day: string; label: string } | null {
+  const lower = message.toLowerCase();
+  const now = new Date();
+  if (lower.includes("today")) {
+    return { day: formatDayInZone(now, timeZone), label: "today" };
+  }
+  if (lower.includes("tomorrow")) {
+    return { day: formatDayInZone(addDays(now, 1), timeZone), label: "tomorrow" };
+  }
+
+  for (const [index, name] of WEEKDAYS.entries()) {
+    if (!lower.includes(name)) continue;
+    const currentIndex = dayIndexInZone(now, timeZone);
+    const diff = (index - currentIndex + 7) % 7;
+    return { day: formatDayInZone(addDays(now, diff), timeZone), label: name };
+  }
+
+  return null;
+}
+
+function extractPreferredTimeWindow(message: string): { startHour: number; endHour: number; label: string } | null {
+  const lower = message.toLowerCase();
+  if (lower.includes("morning") || lower.includes("early")) {
+    return { startHour: 8, endHour: 12, label: "morning" };
+  }
+  if (lower.includes("afternoon")) {
+    return { startHour: 12, endHour: 17, label: "afternoon" };
+  }
+  if (lower.includes("evening") || lower.includes("tonight") || lower.includes("after work")) {
+    return { startHour: 17, endHour: 20, label: "evening" };
+  }
+  return null;
+}
+
+function looksLikeFlexibleTime(message: string): boolean {
+  const lower = message.toLowerCase();
+  return ["any time", "anytime", "whenever", "no preference", "no pref", "whatever works"].some((kw) =>
+    lower.includes(kw)
+  );
+}
+
+function extractBookingPreferenceUpdate(message: string, timeZone: string): BookingPreferenceUpdate | null {
+  if (looksLikeFlexibleTime(message)) return { clear: true };
+
+  const day = extractPreferredDay(message, timeZone);
+  const window = extractPreferredTimeWindow(message);
+  if (!day && !window) return null;
+
+  const labelParts = [];
+  if (day?.label) labelParts.push(day.label);
+  if (window?.label) labelParts.push(window.label);
+
+  return {
+    preferredDay: day?.day,
+    preferredStartHour: window?.startHour,
+    preferredEndHour: window?.endHour,
+    preferenceLabel: labelParts.length ? labelParts.join(" ") : undefined
+  };
+}
+
+function applyBookingPreference(
+  suggestions: BookingSuggestion[],
+  preference: BookingPreference,
+  timeZone: string
+): { suggestions: BookingSuggestion[]; used: boolean } {
+  const hasDay = typeof preference.preferredDay === "string" && preference.preferredDay.length > 0;
+  const hasWindow =
+    typeof preference.preferredStartHour === "number" &&
+    Number.isFinite(preference.preferredStartHour) &&
+    typeof preference.preferredEndHour === "number" &&
+    Number.isFinite(preference.preferredEndHour);
+
+  if (!hasDay && !hasWindow) return { suggestions, used: false };
+
+  const filtered = suggestions.filter((slot) => {
+    const start = new Date(slot.startAt);
+    if (Number.isNaN(start.getTime())) return false;
+    if (hasDay) {
+      const day = formatDayInZone(start, timeZone);
+      if (day !== preference.preferredDay) return false;
+    }
+    if (hasWindow) {
+      const hour = hourInZone(start, timeZone);
+      if (hour < (preference.preferredStartHour ?? 0) || hour >= (preference.preferredEndHour ?? 24)) return false;
+    }
+    return true;
+  });
+
+  return { suggestions: filtered, used: true };
 }
 
 function looksLikeBookingIntent(message: string): boolean {
@@ -579,8 +717,23 @@ async function handlePublicBookingMessage(
   }
 
   const state: PublicBookingState = existingState ?? { phase: "idle" };
+  const preferenceUpdate = extractBookingPreferenceUpdate(message, BOOKING_TIME_ZONE);
+  if (preferenceUpdate?.clear) {
+    state.preferredDay = undefined;
+    state.preferredStartHour = undefined;
+    state.preferredEndHour = undefined;
+    state.preferenceLabel = undefined;
+  } else if (preferenceUpdate) {
+    if (preferenceUpdate.preferredDay) state.preferredDay = preferenceUpdate.preferredDay;
+    if (typeof preferenceUpdate.preferredStartHour === "number")
+      state.preferredStartHour = preferenceUpdate.preferredStartHour;
+    if (typeof preferenceUpdate.preferredEndHour === "number") state.preferredEndHour = preferenceUpdate.preferredEndHour;
+    if (preferenceUpdate.preferenceLabel) state.preferenceLabel = preferenceUpdate.preferenceLabel;
+  }
 
-  if (state.phase === "suggesting" && state.suggestions?.length) {
+  const wantsNewSuggestions = Boolean(preferenceUpdate);
+
+  if (state.phase === "suggesting" && state.suggestions?.length && !wantsNewSuggestions) {
     return {
       reply: "Tap one of the time buttons above and I'll lock it in.",
       state
@@ -659,7 +812,9 @@ async function handlePublicBookingMessage(
       city: state.city,
       state: state.state,
       postalCode: state.postalCode
-    }
+    },
+    preferredStartHour: state.preferredStartHour,
+    preferredEndHour: state.preferredEndHour
   });
 
   if (!suggestions || !suggestions.length) {
@@ -671,15 +826,35 @@ async function handlePublicBookingMessage(
   }
 
   state.phase = "suggesting";
-  state.suggestions = suggestions.map((s) => ({ startAt: s.startAt, endAt: s.endAt }));
+  const preference: BookingPreference = {
+    preferredDay: state.preferredDay,
+    preferredStartHour: state.preferredStartHour,
+    preferredEndHour: state.preferredEndHour,
+    preferenceLabel: state.preferenceLabel
+  };
+  const filtered = applyBookingPreference(suggestions, preference, BOOKING_TIME_ZONE);
+  const finalSuggestions = filtered.suggestions.length ? filtered.suggestions : suggestions;
+  state.suggestions = finalSuggestions.map((s) => ({ startAt: s.startAt, endAt: s.endAt }));
+
+  const label = state.preferenceLabel;
+  const prefers = filtered.used;
+  const reply = prefers
+    ? filtered.suggestions.length
+      ? label
+        ? `Great - here are a few ${label} openings. Tap one to lock it in:`
+        : "Great - here are a few openings that match that time. Tap one to lock it in:"
+      : label
+        ? `I couldn't find openings for ${label}, but here are the next available times:`
+        : "I couldn't find openings for that time, but here are the next available times:"
+    : "Awesome - here are a few openings. Tap one to lock it in:";
 
   return {
-    reply: "Awesome - here are a few openings. Tap one to lock it in:",
+    reply,
     state,
     booking: {
       contactId: state.contactId,
       propertyId: state.propertyId,
-      suggestions,
+      suggestions: finalSuggestions,
       propertyLabel: `${state.addressLine1}, ${state.city}`
     }
   };
@@ -900,12 +1075,31 @@ async function maybeGetSuggestions(
   if (!keywords.some((kw) => lower.includes(kw))) return null;
   if (!ctx.contactId || !ctx.propertyId) return null;
 
-  const suggestions = await fetchBookingSuggestions(ctx);
+  const preferenceUpdate = extractBookingPreferenceUpdate(message, BOOKING_TIME_ZONE);
+  const preference = preferenceUpdate?.clear ? null : preferenceUpdate;
+  const suggestions = await fetchBookingSuggestions({
+    ...ctx,
+    preferredStartHour: preference?.preferredStartHour,
+    preferredEndHour: preference?.preferredEndHour
+  });
   if (!suggestions || !suggestions.length) return null;
+  const filtered = preference
+    ? applyBookingPreference(
+        suggestions,
+        {
+          preferredDay: preference.preferredDay,
+          preferredStartHour: preference.preferredStartHour,
+          preferredEndHour: preference.preferredEndHour,
+          preferenceLabel: preference.preferenceLabel
+        },
+        BOOKING_TIME_ZONE
+      )
+    : { suggestions, used: false };
+  const finalSuggestions = filtered.suggestions.length ? filtered.suggestions : suggestions;
   return {
     contactId: ctx.contactId,
     propertyId: ctx.propertyId,
-    suggestions,
+    suggestions: finalSuggestions,
     propertyLabel: ctx.propertyLabel
   };
 }
@@ -915,6 +1109,8 @@ async function fetchBookingSuggestions(
     contactId?: string;
     propertyId?: string;
     property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+    preferredStartHour?: number;
+    preferredEndHour?: number;
   }
 ): Promise<BookingSuggestion[] | null> {
   const { apiBase, adminKey } = getAdminContext();
@@ -925,6 +1121,8 @@ async function fetchBookingSuggestions(
   try {
     const body: {
       durationMinutes: number;
+      startHour?: number;
+      endHour?: number;
       addressLine1?: string;
       city?: string;
       state?: string;
@@ -936,6 +1134,12 @@ async function fetchBookingSuggestions(
       if (ctx.property.city) body.city = ctx.property.city;
       if (ctx.property.state) body.state = ctx.property.state;
       if (ctx.property.postalCode) body.postalCode = ctx.property.postalCode;
+    }
+    if (typeof ctx.preferredStartHour === "number" && Number.isFinite(ctx.preferredStartHour)) {
+      body.startHour = ctx.preferredStartHour;
+    }
+    if (typeof ctx.preferredEndHour === "number" && Number.isFinite(ctx.preferredEndHour)) {
+      body.endHour = ctx.preferredEndHour;
     }
 
     const res = await fetch(`${apiBase}/api/admin/booking/assist`, {
