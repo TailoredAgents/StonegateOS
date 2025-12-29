@@ -16,7 +16,7 @@
 
 ## Foundations to add (prereqs for the roadmap)
 - Access control & audit: roles/permissions and an audit log for sends/bookings/merges/policy changes. Status: partial (roles + audit log storage/API/UI in place; permission enforcement added for policy/automation/inbox/merges/access/audit/payments/appointments; audit coverage added for quotes/contacts/properties/pipeline/appointments + CRM/appointment tasks; remaining audit coverage pending).
-- Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited). Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events; inbound SMS/email ingestion + merge queue + state machine + delivery state enhancements done; DM/Nextdoor bridges pending).
+- Inbox primitives: conversation threads/messages tables, delivery state tracking, merge review queue, inbound ingestion pipeline (start with SMS/email; FB/Nextdoor routed into SMS if limited). Status: partial (data model + admin API + Team Console inbox + outbox send/delivery events; inbound SMS/email ingestion + merge queue + state machine + delivery state enhancements done; DM outbound webhook + typing indicators wired; provider-specific DM bridge + Nextdoor pending).
 - Policy center storage: configurable business hours/quiet hours, booking windows/buffers, standard job definition, item policies, templates. Status: done (storage + admin UI); enforcement pending in Phase 1 tasks.
 - Automation modes/kill switches: per-channel autonomy levels, lead-level pause/DNC, human takeover, follow-up state machine. Status: partial (data model + admin API + UI for channel modes + lead kill switches; auto-reply enforcement wired; follow-up scheduler in progress).
 - Booking holds + confirmation loop: hold/reservation model, “standard job” enforcement, YES/NO confirmation cadence. Status: in progress (holds + optional confirmation loop with reminders/YES-NO handling done; standard job enforcement pending).
@@ -81,7 +81,7 @@ Dependencies/notes:
 
 ### B) Speed-to-Lead Automations (missed call + instant reply)
 Goal: First response within 2 minutes across all channels.
-Status: in progress (missed-call webhook + SMS/email auto-reply with 10-30s delay wired; channel sequencing SMS->email; auto-reply markers + out-of-area badges in inbox/pipeline; DM webhook stub added; Nextdoor bridge pending).
+Status: in progress (missed-call webhook + SMS/email auto-reply with 10-30s delay wired; channel sequencing SMS->email; auto-reply markers + out-of-area badges in inbox/pipeline; DM outbound webhook + typing indicators wired; provider-specific DM bridge + Nextdoor pending).
 
 Task sequence:
 1) Define "first touch" templates by channel (SMS/FB/Nextdoor/email).
