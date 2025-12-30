@@ -222,30 +222,39 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
   }
 
   const threadDetailPromise = threadId
-    ? callAdminApi(`/api/admin/inbox/threads/${threadId}`)
+    ? callAdminApi(`/api/admin/inbox/threads/${threadId}`).catch(() => null)
     : Promise.resolve(null);
   const [threadsRes, providerRes, failedRes, threadDetailRes] = await Promise.all([
-    callAdminApi(`/api/admin/inbox/threads?${params.toString()}`),
-    callAdminApi("/api/admin/providers/health"),
-    callAdminApi("/api/admin/inbox/failed-sends?limit=10"),
+    callAdminApi(`/api/admin/inbox/threads?${params.toString()}`).catch(() => null),
+    callAdminApi("/api/admin/providers/health").catch(() => null),
+    callAdminApi("/api/admin/inbox/failed-sends?limit=10").catch(() => null),
     threadDetailPromise
   ]);
 
-  if (!threadsRes.ok) {
-    throw new Error("Failed to load inbox threads");
+  let threadsError: { message: string; status?: number } | null = null;
+
+  let threads: ThreadSummary[] = [];
+  if (!threadsRes) {
+    threadsError = { message: "Unable to reach the API service for inbox threads." };
+  } else if (!threadsRes.ok) {
+    const detail = await threadsRes.text().catch(() => "");
+    threadsError = {
+      message: detail.trim().length ? detail.trim() : "Failed to load inbox threads.",
+      status: threadsRes.status
+    };
+  } else {
+    const threadsPayload = (await threadsRes.json()) as { threads?: ThreadSummary[] };
+    threads = threadsPayload.threads ?? [];
   }
 
-  const threadsPayload = (await threadsRes.json()) as { threads?: ThreadSummary[] };
-  const threads = threadsPayload.threads ?? [];
-
   let providers: ProviderHealth[] = [];
-  if (providerRes.ok) {
+  if (providerRes?.ok) {
     const providerPayload = (await providerRes.json()) as { providers?: ProviderHealth[] };
     providers = providerPayload.providers ?? [];
   }
 
   let failedMessages: FailedMessage[] = [];
-  if (failedRes.ok) {
+  if (failedRes?.ok) {
     const failedPayload = (await failedRes.json()) as { messages?: FailedMessage[] };
     failedMessages = failedPayload.messages ?? [];
   }
@@ -270,6 +279,17 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
         <p className="mt-1 text-sm text-slate-600">
           Track every lead conversation in one place. Threads show delivery state and keep your team in sync.
         </p>
+        {threadsError ? (
+          <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p className="font-semibold">Inbox unavailable</p>
+            <p className="mt-1">{threadsError.message}</p>
+            {threadsError.status === 401 || threadsError.status === 403 ? (
+              <p className="mt-2 text-xs text-amber-800">
+                Check that the Site and API services share the same `ADMIN_API_KEY` and that the account role has `messages.read`.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         {providers.length > 0 ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
             {providers.map((provider) => {
