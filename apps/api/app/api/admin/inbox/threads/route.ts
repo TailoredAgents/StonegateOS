@@ -141,7 +141,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           leadAutomationStates,
           and(
             eq(leadAutomationStates.leadId, conversationThreads.leadId),
-            eq(leadAutomationStates.channel, conversationThreads.channel)
+            sql`${leadAutomationStates.channel}::text = ${conversationThreads.channel}::text`
           )
         )
         .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id))
@@ -182,7 +182,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           leadAutomationStates,
           and(
             eq(leadAutomationStates.leadId, conversationThreads.leadId),
-            eq(leadAutomationStates.channel, conversationThreads.channel)
+            sql`${leadAutomationStates.channel}::text = ${conversationThreads.channel}::text`
           )
         )
         .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id)))
