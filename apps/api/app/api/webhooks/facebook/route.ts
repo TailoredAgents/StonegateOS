@@ -26,11 +26,18 @@ type FacebookMessage = {
   attachments?: FacebookMessageAttachment[];
 };
 
+type FacebookPostback = {
+  payload?: string;
+  title?: string;
+  referral?: Record<string, unknown>;
+};
+
 type FacebookMessagingEvent = {
   sender?: { id?: string };
   recipient?: { id?: string };
   timestamp?: number;
   message?: FacebookMessage;
+  postback?: FacebookPostback;
 };
 
 type FacebookLeadgenField = {
@@ -497,12 +504,6 @@ export async function POST(request: NextRequest): Promise<Response> {
   for (const entry of payload.entry) {
     const events = Array.isArray(entry.messaging) ? entry.messaging : [];
     for (const event of events) {
-      const message = event.message;
-      if (!message || message.is_echo) {
-        skipped += 1;
-        continue;
-      }
-
       const senderId = event.sender?.id ?? null;
       const recipientId = event.recipient?.id ?? null;
       if (!senderId) {
@@ -510,34 +511,82 @@ export async function POST(request: NextRequest): Promise<Response> {
         continue;
       }
 
-      const text = typeof message.text === "string" ? message.text : "";
-      const mediaUrls = getMediaUrls(message);
+      const message = event.message;
+      const postback = event.postback;
       const receivedAt =
         typeof event.timestamp === "number" ? new Date(event.timestamp) : undefined;
 
-      try {
-        await recordInboundMessage({
-          channel: "dm",
-          body: text,
-          subject: null,
-          fromAddress: senderId,
-          toAddress: recipientId,
-          provider: "facebook",
-          providerMessageId: typeof message.mid === "string" ? message.mid : null,
-          mediaUrls,
-          receivedAt,
-          metadata: {
-            source: "facebook",
-            pageId: entry.id ?? null,
-            senderId,
-            recipientId
-          }
-        });
-        processed += 1;
-      } catch (error) {
-        errors += 1;
-        console.warn("[webhooks][facebook] inbound_failed", { error: String(error) });
+      if (message && !message.is_echo) {
+        const text = typeof message.text === "string" ? message.text : "";
+        const mediaUrls = getMediaUrls(message);
+
+        try {
+          await recordInboundMessage({
+            channel: "dm",
+            body: text,
+            subject: null,
+            fromAddress: senderId,
+            toAddress: recipientId,
+            provider: "facebook",
+            providerMessageId: typeof message.mid === "string" ? message.mid : null,
+            mediaUrls,
+            receivedAt,
+            metadata: {
+              source: "facebook",
+              pageId: entry.id ?? null,
+              senderId,
+              recipientId
+            }
+          });
+          processed += 1;
+        } catch (error) {
+          errors += 1;
+          console.warn("[webhooks][facebook] inbound_failed", { error: String(error) });
+        }
+        continue;
       }
+
+      if (postback) {
+        const payload = typeof postback.payload === "string" ? postback.payload : null;
+        const title = typeof postback.title === "string" ? postback.title : null;
+        const referral =
+          postback.referral && typeof postback.referral === "object" ? postback.referral : null;
+        const body = payload
+          ? `Postback: ${payload}`
+          : title
+            ? `Postback: ${title}`
+            : "Postback received";
+
+        try {
+          await recordInboundMessage({
+            channel: "dm",
+            body,
+            subject: null,
+            fromAddress: senderId,
+            toAddress: recipientId,
+            provider: "facebook",
+            providerMessageId: null,
+            receivedAt,
+            metadata: {
+              source: "facebook",
+              type: "postback",
+              pageId: entry.id ?? null,
+              senderId,
+              recipientId,
+              payload,
+              title,
+              referral
+            }
+          });
+          processed += 1;
+        } catch (error) {
+          errors += 1;
+          console.warn("[webhooks][facebook] postback_failed", { error: String(error) });
+        }
+        continue;
+      }
+
+      skipped += 1;
     }
 
     const changes = Array.isArray(entry.changes) ? entry.changes : [];
