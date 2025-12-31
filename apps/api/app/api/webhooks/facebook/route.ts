@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { eq, or, sql } from "drizzle-orm";
 import { recordInboundMessage } from "@/lib/inbox";
-import { getDb, contacts, leads, outboxEvents, properties } from "@/db";
+import { getDb, contacts, leads, outboxEvents } from "@/db";
 import { normalizeName, normalizePhone } from "../../web/utils";
 import { upsertContact, upsertProperty } from "../../web/persistence";
 
@@ -463,7 +463,7 @@ async function recordLeadFromFacebook(input: {
   });
 }
 
-export async function GET(request: NextRequest): Promise<Response> {
+export function GET(request: NextRequest): Response {
   const url = new URL(request.url);
   const mode = url.searchParams.get("hub.mode");
   const token = url.searchParams.get("hub.verify_token");
