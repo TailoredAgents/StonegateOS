@@ -60,7 +60,17 @@ export function Footer() {
           </div>
         </div>
         <p className="mt-12 text-xs text-neutral-400">
-          Copyright {new Date().getFullYear()} Stonegate Junk Removal. Licensed & insured. All rights reserved.
+          <span>
+            Copyright {new Date().getFullYear()} Stonegate Junk Removal. Licensed & insured. All rights reserved.
+          </span>
+          <span className="mx-2">•</span>
+          <Link href="/privacy" className="text-neutral-500 hover:text-primary-700">
+            Privacy Policy
+          </Link>
+          <span className="mx-2">•</span>
+          <Link href="/terms" className="text-neutral-500 hover:text-primary-700">
+            Terms
+          </Link>
         </p>
       </div>
     </footer>
