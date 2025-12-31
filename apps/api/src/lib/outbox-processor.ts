@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, isNull, lte, ne, or, sql } from "drizzle-orm";
+import crypto from "node:crypto";
 import {
   getDb,
   outboxEvents,
@@ -204,6 +205,18 @@ function parseLeadAlertRecipients(raw: string | undefined): string[] {
     .split(/[,\s]+/)
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
+}
+
+function normalizeEmailForHash(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizePhoneForHash(value: string): string {
+  return value.replace(/[^\d]/g, "");
+}
+
+function hashSha256(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
 }
 
 async function buildLeadAlertMessage(leadId: string): Promise<{ text: string; phone: string | null } | null> {
@@ -1331,6 +1344,120 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
 
       return { status: "processed", error: lastFailure };
+    }
+
+    case "meta.lead_event": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const leadId = typeof payload?.["leadId"] === "string" ? payload["leadId"] : null;
+      if (!leadId) {
+        console.warn("[outbox] meta.lead_event.missing_lead", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const datasetId = process.env["META_DATASET_ID"];
+      const accessToken = process.env["META_CONVERSIONS_TOKEN"];
+      if (!datasetId || !accessToken) {
+        console.warn("[outbox] meta.lead_event.missing_config", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const leadEventSource =
+        typeof process.env["META_LEAD_EVENT_SOURCE"] === "string" && process.env["META_LEAD_EVENT_SOURCE"].trim().length > 0
+          ? process.env["META_LEAD_EVENT_SOURCE"].trim()
+          : "StonegateOS";
+      const eventName = typeof payload?.["eventName"] === "string" ? payload["eventName"] : "Lead";
+
+      const db = getDb();
+      const [row] = await db
+        .select({
+          leadId: leads.id,
+          createdAt: leads.createdAt,
+          formPayload: leads.formPayload,
+          contactEmail: contacts.email,
+          contactPhone: contacts.phone,
+          contactPhoneE164: contacts.phoneE164
+        })
+        .from(leads)
+        .leftJoin(contacts, eq(leads.contactId, contacts.id))
+        .where(eq(leads.id, leadId))
+        .limit(1);
+
+      if (!row) {
+        console.warn("[outbox] meta.lead_event.not_found", { id: event.id, leadId });
+        return { status: "skipped" };
+      }
+
+      const formPayload = isRecord(row.formPayload) ? row.formPayload : null;
+      const leadgenId = typeof formPayload?.["leadgenId"] === "string" ? formPayload["leadgenId"] : null;
+      if (!leadgenId) {
+        console.warn("[outbox] meta.lead_event.missing_leadgen", { id: event.id, leadId });
+        return { status: "skipped" };
+      }
+
+      let eventTime = Math.floor((row.createdAt ?? new Date()).getTime() / 1000);
+      const createdTimeRaw = typeof formPayload?.["createdTime"] === "string" ? formPayload["createdTime"] : null;
+      if (createdTimeRaw) {
+        const parsed = new Date(createdTimeRaw);
+        if (!Number.isNaN(parsed.getTime())) {
+          eventTime = Math.floor(parsed.getTime() / 1000);
+        }
+      }
+
+      const userData: Record<string, unknown> = {
+        lead_id: leadgenId
+      };
+
+      if (row.contactEmail) {
+        const normalizedEmail = normalizeEmailForHash(row.contactEmail);
+        if (normalizedEmail.length > 0) {
+          userData["em"] = [hashSha256(normalizedEmail)];
+        }
+      }
+
+      const phoneRaw = row.contactPhoneE164 ?? row.contactPhone;
+      if (phoneRaw) {
+        const normalizedPhone = normalizePhoneForHash(phoneRaw);
+        if (normalizedPhone.length > 0) {
+          userData["ph"] = [hashSha256(normalizedPhone)];
+        }
+      }
+
+      const payloadBody = {
+        data: [
+          {
+            action_source: "system_generated",
+            custom_data: {
+              event_source: "crm",
+              lead_event_source: leadEventSource
+            },
+            event_name: eventName,
+            event_time: eventTime,
+            user_data: userData
+          }
+        ]
+      };
+
+      const response = await fetch(
+        `https://graph.facebook.com/v24.0/${datasetId}/events?access_token=${accessToken}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payloadBody)
+        }
+      );
+
+      if (!response.ok) {
+        const text = await response.text();
+        const retryable = response.status >= 500 || response.status === 429;
+        console.warn("[outbox] meta.lead_event.failed", {
+          id: event.id,
+          status: response.status,
+          error: text
+        });
+        return retryable ? { status: "retry", error: text } : { status: "processed", error: text };
+      }
+
+      return { status: "processed" };
     }
 
     case "estimate.reminder": {
