@@ -121,6 +121,12 @@ function formatStatusLabel(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function normalizePhoneLink(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const cleaned = phone.replace(/[^\d+]/g, "");
+  return cleaned.length ? cleaned : null;
+}
+
 function formatStateLabel(value: string): string {
   if (!value) return "";
   return value
@@ -271,6 +277,9 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
   const activeThread = threadDetail?.thread ?? null;
   const activeMessages = threadDetail?.messages ?? [];
   const allowedStates = activeThread ? getAllowedStates(activeThread.state ?? "new") : [...THREAD_STATES];
+  const activePhone = normalizePhoneLink(activeThread?.contact?.phone);
+  const callLink = activePhone ? `tel:${activePhone}` : null;
+  const textLink = activePhone ? `sms:${activePhone}` : null;
 
   return (
     <section className="space-y-6">
@@ -515,37 +524,61 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                     </p>
                   ) : null}
                 </div>
-                <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
-                  <input type="hidden" name="threadId" value={activeThread.id} />
-                  <select
-                    name="state"
-                    defaultValue={activeThread.state ?? "new"}
-                    className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
-                  >
-                    {allowedStates.map((value) => (
-                      <option key={value} value={value}>
-                        {formatStateLabel(value)}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    name="status"
-                    defaultValue={activeThread.status}
-                    className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
-                  >
-                    {THREAD_STATUSES.map((value) => (
-                      <option key={value} value={value}>
-                        {formatStatusLabel(value)}
-                      </option>
-                    ))}
-                  </select>
-                  <SubmitButton
-                    className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                    pendingLabel="Saving..."
-                  >
-                    Update thread
-                  </SubmitButton>
-                </form>
+                <div className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <a
+                      className={`rounded-full border px-3 py-2 text-xs font-semibold ${
+                        callLink
+                          ? "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                          : "pointer-events-none border-slate-100 text-slate-300"
+                      }`}
+                      href={callLink ?? "#"}
+                    >
+                      Call
+                    </a>
+                    <a
+                      className={`rounded-full border px-3 py-2 text-xs font-semibold ${
+                        textLink
+                          ? "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                          : "pointer-events-none border-slate-100 text-slate-300"
+                      }`}
+                      href={textLink ?? "#"}
+                    >
+                      Text
+                    </a>
+                  </div>
+                  <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
+                    <input type="hidden" name="threadId" value={activeThread.id} />
+                    <select
+                      name="state"
+                      defaultValue={activeThread.state ?? "new"}
+                      className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
+                    >
+                      {allowedStates.map((value) => (
+                        <option key={value} value={value}>
+                          {formatStateLabel(value)}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      name="status"
+                      defaultValue={activeThread.status}
+                      className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
+                    >
+                      {THREAD_STATUSES.map((value) => (
+                        <option key={value} value={value}>
+                          {formatStatusLabel(value)}
+                        </option>
+                      ))}
+                    </select>
+                    <SubmitButton
+                      className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                      pendingLabel="Saving..."
+                    >
+                      Update thread
+                    </SubmitButton>
+                  </form>
+                </div>
               </div>
 
               <div className="space-y-3">

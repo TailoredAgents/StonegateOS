@@ -567,6 +567,14 @@ export async function POST(request: NextRequest) {
           throw new Error("lead_insert_failed");
         }
 
+        await tx.insert(outboxEvents).values({
+          type: "lead.alert",
+          payload: {
+            leadId: lead.id,
+            source: "instant_quote"
+          }
+        });
+
         leadId = lead.id;
         propertyId = property.id;
       }

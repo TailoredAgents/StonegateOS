@@ -227,6 +227,14 @@ export async function POST(request: NextRequest) {
       throw new Error("Failed to record lead");
     }
 
+    await tx.insert(outboxEvents).values({
+      type: "lead.alert",
+      payload: {
+        leadId: lead.id,
+        source: "web"
+      }
+    });
+
     let appointmentRecord:
       | {
           id: string;

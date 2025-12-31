@@ -60,6 +60,12 @@ function mapsUrl(property: PropertySummary | undefined): string | null {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts.join(", "))}`;
 }
 
+function normalizePhoneLink(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const cleaned = phone.replace(/[^\d+]/g, "");
+  return cleaned.length ? cleaned : null;
+}
+
 function teamLink(tab: string, params?: Record<string, string | null | undefined>): string {
   const query = new URLSearchParams();
   query.set("tab", tab);
@@ -95,6 +101,9 @@ function ContactCard({ contact }: ContactCardProps) {
 
   const primaryProperty = contactState.properties[0];
   const mapsLink = mapsUrl(primaryProperty);
+  const phoneLink = normalizePhoneLink(contactState.phone);
+  const callLink = phoneLink ? `tel:${phoneLink}` : null;
+  const textLink = phoneLink ? `sms:${phoneLink}` : null;
 
   const openTasks = useMemo(
     () => contactState.tasks.filter((task) => task.status !== "completed"),
@@ -150,6 +159,26 @@ function ContactCard({ contact }: ContactCardProps) {
                 Delete
               </SubmitButton>
             </form>
+            <a
+              className={`rounded-full border px-4 py-2 font-medium ${
+                callLink
+                  ? "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                  : "pointer-events-none border-slate-100 text-slate-300"
+              }`}
+              href={callLink ?? "#"}
+            >
+              Call
+            </a>
+            <a
+              className={`rounded-full border px-4 py-2 font-medium ${
+                textLink
+                  ? "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                  : "pointer-events-none border-slate-100 text-slate-300"
+              }`}
+              href={textLink ?? "#"}
+            >
+              Text
+            </a>
             <a
               className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
               href={teamLink("quote-builder", { contactId: contactState.id })}

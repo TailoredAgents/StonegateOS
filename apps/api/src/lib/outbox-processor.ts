@@ -198,6 +198,58 @@ function buildRescheduleUrlForAppointment(appointmentId: string, token: string):
   return url.toString();
 }
 
+function parseLeadAlertRecipients(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[,\s]+/)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+async function buildLeadAlertMessage(leadId: string): Promise<{ text: string; phone: string | null } | null> {
+  const db = getDb();
+  const [row] = await db
+    .select({
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164,
+      email: contacts.email,
+      source: leads.source,
+      addressLine1: properties.addressLine1,
+      city: properties.city,
+      state: properties.state,
+      postalCode: properties.postalCode
+    })
+    .from(leads)
+    .leftJoin(contacts, eq(leads.contactId, contacts.id))
+    .leftJoin(properties, eq(leads.propertyId, properties.id))
+    .where(eq(leads.id, leadId))
+    .limit(1);
+
+  if (!row) return null;
+
+  const name = [row.firstName, row.lastName].filter(Boolean).join(" ").trim();
+  const phone = row.phoneE164 ?? row.phone ?? null;
+  const addressParts = [row.addressLine1, row.city, row.state, row.postalCode]
+    .map((part) => (typeof part === "string" ? part.trim() : ""))
+    .filter((part) => part.length > 0);
+  const address = addressParts.length ? addressParts.join(", ") : null;
+  const source = typeof row.source === "string" && row.source.length ? row.source : null;
+
+  const pieces = [
+    name ? `New lead: ${name}` : "New lead received",
+    phone ? `Phone: ${phone}` : null,
+    address ? `Address: ${address}` : null,
+    source ? `Source: ${source}` : null
+  ].filter(Boolean);
+
+  return {
+    text: pieces.join(" | "),
+    phone
+  };
+}
+
 function buildCalendarPayloadFromNotification(
   notification: EstimateNotificationPayload
 ): AppointmentCalendarPayload | null {
@@ -1200,6 +1252,85 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         });
       }
       return { status: "processed" };
+    }
+
+    case "lead.alert": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const leadId = typeof payload?.["leadId"] === "string" ? payload["leadId"] : null;
+      if (!leadId) {
+        console.warn("[outbox] lead.alert.missing_lead", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const recipients = parseLeadAlertRecipients(process.env["LEAD_ALERT_SMS"]);
+      if (!recipients.length) {
+        return { status: "processed" };
+      }
+
+      const message = await buildLeadAlertMessage(leadId);
+      if (!message) {
+        return { status: "skipped" };
+      }
+
+      const sentTo = Array.isArray(payload?.["sentTo"])
+        ? payload?.["sentTo"].filter((value): value is string => typeof value === "string")
+        : [];
+      const sentSet = new Set(sentTo);
+      const pending = recipients.filter((recipient) => !sentSet.has(recipient));
+      if (!pending.length) {
+        return { status: "processed" };
+      }
+
+      let retryableFailure: string | null = null;
+      let lastFailure: string | null = null;
+
+      for (const recipient of pending) {
+        const result = await sendSmsMessage(recipient, message.text);
+        if (result.ok) {
+          sentSet.add(recipient);
+          await recordProviderSuccessSafe("sms");
+          await recordAuditEvent({
+            actor: { type: "worker", label: "outbox" },
+            action: "lead.alert.sent",
+            entityType: "lead",
+            entityId: leadId,
+            meta: { recipient, provider: result.provider ?? null }
+          });
+          continue;
+        }
+
+        const detail = result.detail ?? null;
+        lastFailure = detail ?? "lead_alert_failed";
+        const retryable = isRetryableSendFailure(detail);
+        if (retryable) {
+          retryableFailure = lastFailure;
+        } else {
+          await recordProviderFailureSafe("sms", detail);
+        }
+
+        await recordAuditEvent({
+          actor: { type: "worker", label: "outbox" },
+          action: "lead.alert.failed",
+          entityType: "lead",
+          entityId: leadId,
+          meta: { recipient, provider: result.provider ?? null, detail }
+        });
+      }
+
+      const updatedPayload = {
+        ...(payload ?? {}),
+        sentTo: Array.from(sentSet)
+      };
+      await getDb()
+        .update(outboxEvents)
+        .set({ payload: updatedPayload })
+        .where(eq(outboxEvents.id, event.id));
+
+      if (retryableFailure) {
+        return { status: "retry", error: retryableFailure };
+      }
+
+      return { status: "processed", error: lastFailure };
     }
 
     case "estimate.reminder": {

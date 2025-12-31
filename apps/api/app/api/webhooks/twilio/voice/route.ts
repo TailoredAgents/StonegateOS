@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { getDb, conversationThreads, leads, properties } from "@/db";
+import { getDb, conversationThreads, leads, outboxEvents, properties } from "@/db";
 import { recordInboundMessage } from "@/lib/inbox";
 
 export const dynamic = "force-dynamic";
@@ -95,6 +95,14 @@ async function ensureLeadForThread(input: {
     if (!lead?.id) {
       throw new Error("missed_call_lead_failed");
     }
+
+    await tx.insert(outboxEvents).values({
+      type: "lead.alert",
+      payload: {
+        leadId: lead.id,
+        source: "missed_call"
+      }
+    });
 
     await tx
       .update(conversationThreads)

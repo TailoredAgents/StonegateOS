@@ -461,6 +461,16 @@ export async function POST(request: NextRequest) {
             })
             .returning({ id: leads.id });
 
+          if (leadRow?.id) {
+            await tx.insert(outboxEvents).values({
+              type: "lead.alert",
+              payload: {
+                leadId: leadRow.id,
+                source: "instant_quote"
+              }
+            });
+          }
+
           const [pipelineRow] = await tx
             .select({ stage: crmPipeline.stage })
             .from(crmPipeline)
