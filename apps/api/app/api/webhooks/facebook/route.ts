@@ -263,13 +263,13 @@ async function upsertFacebookContact(db: DbExecutor, input: {
     };
 
     if (email && !contact.email) {
-      updatePayload.email = email;
+      updatePayload["email"] = email;
     }
     if (phoneRaw && !contact.phone) {
-      updatePayload.phone = phoneRaw;
+      updatePayload["phone"] = phoneRaw;
     }
     if (phoneE164 && !contact.phoneE164) {
-      updatePayload.phoneE164 = phoneE164;
+      updatePayload["phoneE164"] = phoneE164;
     }
 
     await db.update(contacts).set(updatePayload).where(eq(contacts.id, contact.id));
