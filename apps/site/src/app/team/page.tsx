@@ -30,6 +30,20 @@ const CREW_COOKIE = "myst-crew-session";
 
 export const metadata = { title: "Stonegate Team Console" };
 
+type LeadContactSummary = {
+  id: string;
+  name: string;
+  phone: string | null;
+  phoneE164: string | null;
+  pipeline?: { stage?: string | null };
+};
+
+function normalizePhoneLink(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const cleaned = phone.replace(/[^\d+]/g, "");
+  return cleaned.length ? cleaned : null;
+}
+
 export default async function TeamPage({
   searchParams
 }: {
@@ -108,6 +122,20 @@ export default async function TeamPage({
     }
   }
 
+  let newLead: LeadContactSummary | null = null;
+  if (hasOwner || hasCrew) {
+    try {
+      const response = await callAdminApi("/api/admin/contacts?limit=12");
+      if (response.ok) {
+        const payload = (await response.json()) as { contacts?: LeadContactSummary[] };
+        const contacts = payload.contacts ?? [];
+        newLead = contacts.find((contact) => contact.pipeline?.stage === "new") ?? null;
+      }
+    } catch {
+      newLead = null;
+    }
+  }
+
   return (
     <div className="relative min-h-screen overflow-visible bg-gradient-to-br from-slate-100 via-white to-slate-50">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.12),_transparent_50%)]" />
@@ -154,6 +182,56 @@ export default async function TeamPage({
           <div className="rounded-2xl border border-rose-200/70 bg-rose-50/80 p-4 text-sm text-rose-700 shadow-sm shadow-rose-100">
             {flashError}
           </div>
+        ) : null}
+        {newLead ? (
+          <section className="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4 shadow-sm shadow-emerald-100">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">New lead ready</p>
+                <p className="mt-1 text-sm font-semibold text-emerald-900">{newLead.name || "New lead"}</p>
+                <p className="mt-1 text-xs text-emerald-700">
+                  {newLead.phoneE164 ?? newLead.phone ?? "Phone not on file yet"}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2 text-xs">
+                {(() => {
+                  const callNumber = normalizePhoneLink(newLead.phoneE164 ?? newLead.phone);
+                  const callLink = callNumber ? `tel:${callNumber}` : null;
+                  const textLink = callNumber ? `sms:${callNumber}` : null;
+                  return (
+                    <>
+                      <a
+                        className={`rounded-full border px-3 py-2 font-semibold ${
+                          callLink
+                            ? "border-emerald-200 text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
+                            : "pointer-events-none border-emerald-100 text-emerald-300"
+                        }`}
+                        href={callLink ?? "#"}
+                      >
+                        Call now
+                      </a>
+                      <a
+                        className={`rounded-full border px-3 py-2 font-semibold ${
+                          textLink
+                            ? "border-emerald-200 text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
+                            : "pointer-events-none border-emerald-100 text-emerald-300"
+                        }`}
+                        href={textLink ?? "#"}
+                      >
+                        Text
+                      </a>
+                      <a
+                        className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
+                        href={`/team?tab=contacts&q=${encodeURIComponent(newLead.name)}`}
+                      >
+                        Open contact
+                      </a>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </section>
         ) : null}
 
         {needsCrewLogin ? (

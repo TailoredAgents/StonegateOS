@@ -33,6 +33,12 @@ type ContactsSectionProps = {
   offset?: number;
 };
 
+function normalizePhoneLink(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const cleaned = phone.replace(/[^\d+]/g, "");
+  return cleaned.length ? cleaned : null;
+}
+
 export async function ContactsSection({ search, offset }: ContactsSectionProps): Promise<ReactElement> {
   const safeOffset = typeof offset === "number" && offset > 0 ? offset : 0;
 
@@ -66,9 +72,57 @@ export async function ContactsSection({ search, offset }: ContactsSectionProps):
   const nextOffset = hasNext
     ? pagination.nextOffset ?? pagination.offset + contacts.length
     : pagination.offset;
+  const shouldHighlight = !search && safeOffset === 0;
+  const newLead = shouldHighlight
+    ? contacts.find((contact) => contact.pipeline?.stage === "new") ?? null
+    : null;
+  const callNumber = normalizePhoneLink(newLead?.phoneE164 ?? newLead?.phone ?? null);
+  const callLink = callNumber ? `tel:${callNumber}` : null;
+  const textLink = callNumber ? `sms:${callNumber}` : null;
 
   return (
     <section className="space-y-6">
+      {newLead ? (
+        <div className="rounded-3xl border border-emerald-200/70 bg-emerald-50/80 p-5 shadow-sm shadow-emerald-100">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">New lead ready</p>
+              <p className="mt-1 text-sm font-semibold text-emerald-900">{newLead.name || "New lead"}</p>
+              <p className="mt-1 text-xs text-emerald-700">
+                {newLead.phoneE164 ?? newLead.phone ?? "Phone not on file yet"}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <a
+                className={`rounded-full border px-3 py-2 font-semibold ${
+                  callLink
+                    ? "border-emerald-200 text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
+                    : "pointer-events-none border-emerald-100 text-emerald-300"
+                }`}
+                href={callLink ?? "#"}
+              >
+                Call now
+              </a>
+              <a
+                className={`rounded-full border px-3 py-2 font-semibold ${
+                  textLink
+                    ? "border-emerald-200 text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
+                    : "pointer-events-none border-emerald-100 text-emerald-300"
+                }`}
+                href={textLink ?? "#"}
+              >
+                Text
+              </a>
+              <a
+                className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
+                href={`/team?tab=contacts&q=${encodeURIComponent(newLead.name)}`}
+              >
+                Open contact
+              </a>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
