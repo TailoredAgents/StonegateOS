@@ -112,6 +112,30 @@ services:
         sync: false
       - key: SMTP_FROM
         sync: false
+      - key: DM_WEBHOOK_URL
+        sync: false
+      - key: DM_WEBHOOK_TOKEN
+        sync: false
+      - key: DM_WEBHOOK_FROM
+        sync: false
+      - key: FB_VERIFY_TOKEN
+        sync: false
+      - key: FB_APP_SECRET
+        sync: false
+      - key: FB_LEADGEN_ACCESS_TOKEN
+        sync: false
+      - key: FB_MARKETING_ACCESS_TOKEN
+        sync: false
+      - key: FB_AD_ACCOUNT_ID
+        sync: false
+      - key: FB_LEAD_FORM_IDS
+        sync: false
+      - key: META_DATASET_ID
+        sync: false
+      - key: META_CONVERSIONS_TOKEN
+        sync: false
+      - key: META_LEAD_EVENT_SOURCE
+        sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -127,6 +151,8 @@ services:
       - key: GA4_API_SECRET
         sync: false
       - key: QUOTE_ALERT_EMAIL
+        sync: false
+      - key: LEAD_ALERT_SMS
         sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
@@ -194,6 +220,26 @@ services:
       - key: SMTP_PASS
         sync: false
       - key: SMTP_FROM
+        sync: false
+      - key: DM_WEBHOOK_URL
+        sync: false
+      - key: DM_WEBHOOK_TOKEN
+        sync: false
+      - key: DM_WEBHOOK_FROM
+        sync: false
+      - key: LEAD_ALERT_SMS
+        sync: false
+      - key: FB_LEADGEN_ACCESS_TOKEN
+        sync: false
+      - key: FB_MARKETING_ACCESS_TOKEN
+        sync: false
+      - key: FB_AD_ACCOUNT_ID
+        sync: false
+      - key: META_DATASET_ID
+        sync: false
+      - key: META_CONVERSIONS_TOKEN
+        sync: false
+      - key: META_LEAD_EVENT_SOURCE
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false

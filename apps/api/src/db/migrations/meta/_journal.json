@@ -92,6 +92,13 @@
       "when": 1766902000000,
       "tag": "0012_appointment_holds",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1767476061860,
+      "tag": "0013_meta_ads_insights_daily",
+      "breakpoints": true
     }
   ]
 }

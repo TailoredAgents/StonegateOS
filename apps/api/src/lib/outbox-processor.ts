@@ -38,6 +38,7 @@ import { sendDmMessage, sendDmTyping, sendEmailMessage, sendSmsMessage } from "@
 import { handleInboundAutoReply } from "@/lib/auto-replies";
 import { recordAuditEvent } from "@/lib/audit";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
+import { MetaGraphApiError, syncMetaAdsInsightsDaily } from "@/lib/meta-ads-insights";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -121,7 +122,7 @@ function isRetryableSendFailure(detail: string | null): boolean {
   return true;
 }
 
-async function recordProviderSuccessSafe(provider: "sms" | "email" | "calendar"): Promise<void> {
+async function recordProviderSuccessSafe(provider: "sms" | "email" | "calendar" | "meta_ads"): Promise<void> {
   try {
     await recordProviderSuccess(provider);
   } catch (error) {
@@ -130,7 +131,7 @@ async function recordProviderSuccessSafe(provider: "sms" | "email" | "calendar")
 }
 
 async function recordProviderFailureSafe(
-  provider: "sms" | "email" | "calendar",
+  provider: "sms" | "email" | "calendar" | "meta_ads",
   detail: string | null
 ): Promise<void> {
   try {
@@ -1458,6 +1459,57 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
 
       return { status: "processed" };
+    }
+
+    case "meta.ads_insights.sync": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const daysRaw = payload?.["days"];
+      const days =
+        typeof daysRaw === "number"
+          ? daysRaw
+          : typeof daysRaw === "string"
+            ? Number(daysRaw)
+            : NaN;
+      const sinceRaw = typeof payload?.["since"] === "string" ? payload["since"] : null;
+      const untilRaw = typeof payload?.["until"] === "string" ? payload["until"] : null;
+
+      const isoDate = (date: Date): string => date.toISOString().slice(0, 10);
+      const isIsoDateString = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+      let since = sinceRaw && isIsoDateString(sinceRaw) ? sinceRaw : null;
+      let until = untilRaw && isIsoDateString(untilRaw) ? untilRaw : null;
+
+      if (!since || !until || since > until) {
+        const windowDays = Number.isFinite(days) && days > 0 ? Math.min(Math.floor(days), 90) : 14;
+        const now = new Date();
+        const end = isoDate(now);
+        const startDate = new Date(now);
+        startDate.setDate(startDate.getDate() - (windowDays - 1));
+        const start = isoDate(startDate);
+        since = start;
+        until = end;
+      }
+
+      try {
+        const result = await syncMetaAdsInsightsDaily({ since, until });
+        await recordProviderSuccessSafe("meta_ads");
+        console.info("[outbox] meta.ads_insights.sync.ok", { id: event.id, since, until, ...result });
+        return {
+          status: "processed"
+        };
+      } catch (error) {
+        const detail =
+          error instanceof MetaGraphApiError
+            ? `meta_ads_insights_failed:${error.status}:${error.body}`
+            : `meta_ads_insights_error:${String(error)}`;
+
+        await recordProviderFailureSafe("meta_ads", detail);
+
+        const retryable =
+          error instanceof MetaGraphApiError ? error.status === 429 || error.status >= 500 : true;
+
+        return retryable ? { status: "retry", error: detail } : { status: "processed", error: detail };
+      }
     }
 
     case "estimate.reminder": {

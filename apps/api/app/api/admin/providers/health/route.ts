@@ -4,7 +4,7 @@ import { inArray } from "drizzle-orm";
 import { getDb, providerHealth } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 
-const PROVIDERS = ["sms", "email", "calendar"] as const;
+const PROVIDERS = ["sms", "email", "calendar", "meta_ads"] as const;
 
 type ProviderStatus = "healthy" | "degraded" | "unknown";
 

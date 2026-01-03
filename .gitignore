@@ -30,5 +30,7 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+# Local MCP config (may contain tokens)
+.mcp.json
 # Explicit local environment overrides
 .env.local

@@ -491,6 +491,43 @@ export const providerHealth = pgTable("provider_health", {
     .$onUpdate(() => new Date())
 });
 
+export const metaAdsInsightsDaily = pgTable(
+  "meta_ads_insights_daily",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    accountId: text("account_id").notNull(),
+    level: text("level").notNull(),
+    entityId: text("entity_id").notNull(),
+    dateStart: text("date_start").notNull(),
+    dateStop: text("date_stop"),
+    currency: varchar("currency", { length: 10 }),
+    campaignId: text("campaign_id"),
+    campaignName: text("campaign_name"),
+    adsetId: text("adset_id"),
+    adsetName: text("adset_name"),
+    adId: text("ad_id"),
+    adName: text("ad_name"),
+    impressions: integer("impressions").notNull(),
+    clicks: integer("clicks").notNull(),
+    reach: integer("reach").notNull(),
+    spend: numeric("spend", { precision: 12, scale: 2 }).notNull(),
+    raw: jsonb("raw").$type<Record<string, unknown>>().notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    uniqueIdx: uniqueIndex("meta_ads_insights_unique_idx").on(
+      table.accountId,
+      table.level,
+      table.entityId,
+      table.dateStart
+    ),
+    dateIdx: index("meta_ads_insights_date_idx").on(table.dateStart),
+    campaignIdx: index("meta_ads_insights_campaign_idx").on(table.campaignId),
+    adsetIdx: index("meta_ads_insights_adset_idx").on(table.adsetId),
+    adIdx: index("meta_ads_insights_ad_idx").on(table.adId)
+  })
+);
+
 export const calendarSyncState = pgTable("calendar_sync_state", {
   calendarId: text("calendar_id").primaryKey(),
   syncToken: text("sync_token"),
