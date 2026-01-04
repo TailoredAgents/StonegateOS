@@ -165,6 +165,30 @@ export async function ContactsSection({ search, offset }: ContactsSectionProps):
               className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
             />
           </label>
+          <label className="flex flex-col gap-1 text-sm text-slate-600">
+            <span>Pipeline stage</span>
+            <select
+              name="pipelineStage"
+              defaultValue="new"
+              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+            >
+              <option value="new">New</option>
+              <option value="contacted">Contacted</option>
+              <option value="quoted">Quoted</option>
+              <option value="qualified">Booked (estimate scheduled)</option>
+              <option value="won">Won (job booked)</option>
+              <option value="lost">Lost</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm text-slate-600 sm:col-span-2">
+            <span>Pipeline notes</span>
+            <textarea
+              name="pipelineNotes"
+              rows={2}
+              placeholder="Optional"
+              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+            />
+          </label>
           <label className="flex flex-col gap-1 text-sm text-slate-600 sm:col-span-2">
             <span>Street address</span>
             <input

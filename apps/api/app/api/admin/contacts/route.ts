@@ -18,6 +18,9 @@ import { asc, desc, inArray, ilike, or, sql } from "drizzle-orm";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 200;
+const PIPELINE_STAGES = ["new", "contacted", "qualified", "quoted", "won", "lost"] as const;
+type PipelineStage = (typeof PIPELINE_STAGES)[number];
+const PIPELINE_STAGE_SET = new Set<string>(PIPELINE_STAGES);
 
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
@@ -328,6 +331,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     lastName,
     email,
     phone,
+    pipelineStage,
+    pipelineNotes,
     property: propertyInput
   } = payload as Record<string, unknown>;
 
@@ -337,6 +342,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (typeof lastName !== "string" || lastName.trim().length === 0) {
     return NextResponse.json({ error: "last_name_required" }, { status: 400 });
   }
+
+  const stageValue = typeof pipelineStage === "string" ? pipelineStage.trim() : "";
+  const resolvedStage: PipelineStage = PIPELINE_STAGE_SET.has(stageValue) ? (stageValue as PipelineStage) : "new";
+  const resolvedNotes = typeof pipelineNotes === "string" && pipelineNotes.trim().length > 0 ? pipelineNotes.trim() : null;
 
   const hasProperty = Boolean(propertyInput && typeof propertyInput === "object");
   const propertyValues = hasProperty ? (propertyInput as Record<string, unknown>) : null;
@@ -425,8 +434,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         .insert(crmPipeline)
         .values({
           contactId: contact.id,
-          stage: "new",
-          notes: null
+          stage: resolvedStage,
+          notes: resolvedNotes
         })
         .onConflictDoNothing({
           target: crmPipeline.contactId
@@ -469,8 +478,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         createdAt: contact.createdAt.toISOString(),
         updatedAt: contact.updatedAt.toISOString(),
         pipeline: {
-          stage: "new",
-          notes: null,
+          stage: resolvedStage,
+          notes: resolvedNotes,
           updatedAt: contact.updatedAt.toISOString()
         },
         property: property

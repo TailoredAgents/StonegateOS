@@ -18,7 +18,7 @@ import type { ContactSummary, PropertySummary, TaskSummary } from "./contacts.ty
 const PIPELINE_STAGE_LABELS: Record<string, string> = {
   new: "New",
   contacted: "Contacted",
-  qualified: "Scheduled Quote",
+  qualified: "Booked",
   quoted: "Quoted",
   won: "Won",
   lost: "Lost"

@@ -325,6 +325,8 @@ export async function createContactAction(formData: FormData) {
   const lastName = formData.get("lastName");
   const email = formData.get("email");
   const phone = formData.get("phone");
+  const pipelineStage = formData.get("pipelineStage");
+  const pipelineNotes = formData.get("pipelineNotes");
   const addressLine1 = formData.get("addressLine1");
   const city = formData.get("city");
   const state = formData.get("state");
@@ -345,7 +347,9 @@ export async function createContactAction(formData: FormData) {
     firstName: firstName.trim(),
     lastName: lastName.trim(),
     email: typeof email === "string" && email.trim().length ? email.trim() : undefined,
-    phone: typeof phone === "string" && phone.trim().length ? phone.trim() : undefined
+    phone: typeof phone === "string" && phone.trim().length ? phone.trim() : undefined,
+    pipelineStage: typeof pipelineStage === "string" && pipelineStage.trim().length ? pipelineStage.trim() : undefined,
+    pipelineNotes: typeof pipelineNotes === "string" && pipelineNotes.trim().length ? pipelineNotes.trim() : undefined
   };
 
   const hasAddress =
