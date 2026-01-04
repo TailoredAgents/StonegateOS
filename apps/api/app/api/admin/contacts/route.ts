@@ -337,29 +337,28 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (typeof lastName !== "string" || lastName.trim().length === 0) {
     return NextResponse.json({ error: "last_name_required" }, { status: 400 });
   }
-  if (!propertyInput || typeof propertyInput !== "object") {
-    return NextResponse.json({ error: "property_required" }, { status: 400 });
-  }
 
-  const {
-    addressLine1,
-    addressLine2,
-    city,
-    state,
-    postalCode
-  } = propertyInput as Record<string, unknown>;
+  const hasProperty = Boolean(propertyInput && typeof propertyInput === "object");
+  const propertyValues = hasProperty ? (propertyInput as Record<string, unknown>) : null;
+  const addressLine1 = hasProperty ? propertyValues?.["addressLine1"] : null;
+  const addressLine2 = hasProperty ? propertyValues?.["addressLine2"] : null;
+  const city = hasProperty ? propertyValues?.["city"] : null;
+  const state = hasProperty ? propertyValues?.["state"] : null;
+  const postalCode = hasProperty ? propertyValues?.["postalCode"] : null;
 
-  if (typeof addressLine1 !== "string" || addressLine1.trim().length === 0) {
-    return NextResponse.json({ error: "address_required" }, { status: 400 });
-  }
-  if (typeof city !== "string" || city.trim().length === 0) {
-    return NextResponse.json({ error: "city_required" }, { status: 400 });
-  }
-  if (typeof state !== "string" || state.trim().length === 0) {
-    return NextResponse.json({ error: "state_required" }, { status: 400 });
-  }
-  if (typeof postalCode !== "string" || postalCode.trim().length === 0) {
-    return NextResponse.json({ error: "postal_code_required" }, { status: 400 });
+  if (hasProperty) {
+    if (typeof addressLine1 !== "string" || addressLine1.trim().length === 0) {
+      return NextResponse.json({ error: "address_required" }, { status: 400 });
+    }
+    if (typeof city !== "string" || city.trim().length === 0) {
+      return NextResponse.json({ error: "city_required" }, { status: 400 });
+    }
+    if (typeof state !== "string" || state.trim().length === 0) {
+      return NextResponse.json({ error: "state_required" }, { status: 400 });
+    }
+    if (typeof postalCode !== "string" || postalCode.trim().length === 0) {
+      return NextResponse.json({ error: "postal_code_required" }, { status: 400 });
+    }
   }
 
   let normalizedPhone: { raw: string; e164: string } | null = null;
@@ -376,13 +375,6 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   try {
     const result = await db.transaction(async (tx) => {
-      const geo = await forwardGeocode({
-        addressLine1: addressLine1.trim(),
-        city: city.trim(),
-        state: state.trim().slice(0, 2).toUpperCase(),
-        postalCode: postalCode.trim()
-      });
-
       const [contact] = await tx
         .insert(contacts)
         .values({
@@ -401,22 +393,33 @@ export async function POST(request: NextRequest): Promise<Response> {
         throw new Error("contact_insert_failed");
       }
 
-      const [property] = await tx
-        .insert(properties)
-        .values({
-          contactId: contact.id,
-          addressLine1: addressLine1.trim(),
-          addressLine2:
-            typeof addressLine2 === "string" && addressLine2.trim().length
-              ? addressLine2.trim()
-              : null,
-          city: city.trim(),
-          state: state.trim().slice(0, 2).toUpperCase(),
-          postalCode: postalCode.trim(),
-          lat: geo?.lat !== undefined && geo?.lat !== null ? geo.lat.toString() : null,
-          lng: geo?.lng !== undefined && geo?.lng !== null ? geo.lng.toString() : null
-        })
-        .returning();
+      let property: typeof properties.$inferSelect | null = null;
+      if (hasProperty) {
+        const geo = await forwardGeocode({
+          addressLine1: (addressLine1 as string).trim(),
+          city: (city as string).trim(),
+          state: (state as string).trim().slice(0, 2).toUpperCase(),
+          postalCode: (postalCode as string).trim()
+        });
+
+        const [createdProperty] = await tx
+          .insert(properties)
+          .values({
+            contactId: contact.id,
+            addressLine1: (addressLine1 as string).trim(),
+            addressLine2:
+              typeof addressLine2 === "string" && addressLine2.trim().length
+                ? addressLine2.trim()
+                : null,
+            city: (city as string).trim(),
+            state: (state as string).trim().slice(0, 2).toUpperCase(),
+            postalCode: (postalCode as string).trim(),
+            lat: geo?.lat !== undefined && geo?.lat !== null ? geo.lat.toString() : null,
+            lng: geo?.lng !== undefined && geo?.lng !== null ? geo.lng.toString() : null
+          })
+          .returning();
+        property = createdProperty ?? null;
+      }
 
       await tx
         .insert(crmPipeline)

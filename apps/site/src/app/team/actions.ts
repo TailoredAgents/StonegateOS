@@ -333,18 +333,10 @@ export async function createContactAction(formData: FormData) {
   if (
     typeof firstName !== "string" ||
     typeof lastName !== "string" ||
-    typeof addressLine1 !== "string" ||
-    typeof city !== "string" ||
-    typeof state !== "string" ||
-    typeof postalCode !== "string" ||
     firstName.trim().length === 0 ||
-    lastName.trim().length === 0 ||
-    addressLine1.trim().length === 0 ||
-    city.trim().length === 0 ||
-    state.trim().length === 0 ||
-    postalCode.trim().length === 0
+    lastName.trim().length === 0
   ) {
-    jar.set({ name: "myst-flash-error", value: "Contact details are required", path: "/" });
+    jar.set({ name: "myst-flash-error", value: "First and last name are required", path: "/" });
     revalidatePath("/team");
     return;
   }
@@ -353,14 +345,43 @@ export async function createContactAction(formData: FormData) {
     firstName: firstName.trim(),
     lastName: lastName.trim(),
     email: typeof email === "string" && email.trim().length ? email.trim() : undefined,
-    phone: typeof phone === "string" && phone.trim().length ? phone.trim() : undefined,
-    property: {
+    phone: typeof phone === "string" && phone.trim().length ? phone.trim() : undefined
+  };
+
+  const hasAddress =
+    typeof addressLine1 === "string" &&
+    typeof city === "string" &&
+    typeof state === "string" &&
+    typeof postalCode === "string" &&
+    addressLine1.trim().length > 0 &&
+    city.trim().length > 0 &&
+    state.trim().length > 0 &&
+    postalCode.trim().length > 0;
+
+  const anyAddressField =
+    (typeof addressLine1 === "string" && addressLine1.trim().length > 0) ||
+    (typeof city === "string" && city.trim().length > 0) ||
+    (typeof state === "string" && state.trim().length > 0) ||
+    (typeof postalCode === "string" && postalCode.trim().length > 0);
+
+  if (anyAddressField && !hasAddress) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "If you add an address, include street, city, state, and postal code",
+      path: "/"
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (hasAddress) {
+    payload["property"] = {
       addressLine1: addressLine1.trim(),
       city: city.trim(),
       state: state.trim(),
       postalCode: postalCode.trim()
-    }
-  };
+    };
+  }
 
   const response = await callAdminApi("/api/admin/contacts", {
     method: "POST",
@@ -383,6 +404,67 @@ export async function createContactAction(formData: FormData) {
   }
 
   jar.set({ name: "myst-flash", value: "Contact created", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function bookAppointmentAction(formData: FormData) {
+  const jar = await cookies();
+
+  const contactId = formData.get("contactId");
+  const propertyId = formData.get("propertyId");
+  const startAt = formData.get("startAt");
+  const durationMinutes = formData.get("durationMinutes");
+  const travelBufferMinutes = formData.get("travelBufferMinutes");
+  const servicesRaw = formData.get("services");
+
+  if (typeof contactId !== "string" || contactId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (typeof startAt !== "string" || startAt.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Start time is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const parsedDuration = typeof durationMinutes === "string" ? Number(durationMinutes) : NaN;
+  const parsedTravel = typeof travelBufferMinutes === "string" ? Number(travelBufferMinutes) : NaN;
+
+  const services =
+    typeof servicesRaw === "string" && servicesRaw.trim().length > 0
+      ? servicesRaw
+          .split(",")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0)
+      : [];
+
+  const payload: Record<string, unknown> = {
+    contactId: contactId.trim(),
+    startAt: startAt.trim(),
+    durationMinutes: Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : 60,
+    travelBufferMinutes: Number.isFinite(parsedTravel) && parsedTravel >= 0 ? parsedTravel : 30,
+    services
+  };
+
+  if (typeof propertyId === "string" && propertyId.trim().length > 0) {
+    payload["propertyId"] = propertyId.trim();
+  }
+
+  const response = await callAdminApi("/api/admin/booking/book", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to book appointment");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Appointment booked", path: "/" });
   revalidatePath("/team");
 }
 

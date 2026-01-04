@@ -127,7 +127,7 @@ export async function ContactsSection({ search, offset }: ContactsSectionProps):
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Add a contact</h2>
-            <p className="mt-1 text-sm text-slate-600">Capture new homeowners or door-knock leads with full address details for instant follow-up.</p>
+            <p className="mt-1 text-sm text-slate-600">Capture new homeowners or manual leads. Address is optional and can be added later.</p>
           </div>
         </div>
         <form action={createContactAction} className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -169,7 +169,7 @@ export async function ContactsSection({ search, offset }: ContactsSectionProps):
             <span>Street address</span>
             <input
               name="addressLine1"
-              required
+              placeholder="Optional (can add later)"
               className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
             />
           </label>
@@ -177,7 +177,7 @@ export async function ContactsSection({ search, offset }: ContactsSectionProps):
             <span>City</span>
             <input
               name="city"
-              required
+              placeholder="Optional"
               className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
             />
           </label>
@@ -186,8 +186,8 @@ export async function ContactsSection({ search, offset }: ContactsSectionProps):
               <span>State</span>
               <input
                 name="state"
-                required
                 maxLength={2}
+                placeholder="Optional"
                 className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm uppercase text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
             </label>
@@ -195,7 +195,7 @@ export async function ContactsSection({ search, offset }: ContactsSectionProps):
               <span>Postal code</span>
               <input
                 name="postalCode"
-                required
+                placeholder="Optional"
                 className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
             </label>

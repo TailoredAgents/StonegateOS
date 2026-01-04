@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import {
   addPropertyAction,
+  bookAppointmentAction,
   createTaskAction,
   deleteContactAction,
   deletePropertyAction,
@@ -91,6 +92,8 @@ const taskStatusLabel: Record<string, string> = {
 function ContactCard({ contact }: ContactCardProps) {
   const [contactState, setContactState] = useState<ContactSummary>(contact);
   const [editingContact, setEditingContact] = useState(false);
+  const [showBookingForm, setShowBookingForm] = useState(false);
+  const [bookingStartAtIso, setBookingStartAtIso] = useState<string>("");
   const [addingProperty, setAddingProperty] = useState(false);
   const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
   const [showTaskForm, setShowTaskForm] = useState(false);
@@ -152,6 +155,13 @@ function ContactCard({ contact }: ContactCardProps) {
               onClick={() => setEditingContact((prev) => !prev)}
             >
               {editingContact ? "Close edit" : "Edit contact"}
+            </button>
+            <button
+              type="button"
+              className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+              onClick={() => setShowBookingForm((prev) => !prev)}
+            >
+              {showBookingForm ? "Close booking" : "Book appointment"}
             </button>
             <form action={deleteContactAction} className="inline">
               <input type="hidden" name="contactId" value={contactState.id} />
@@ -250,6 +260,105 @@ function ContactCard({ contact }: ContactCardProps) {
               >
                 Cancel
               </button>
+            </div>
+          </form>
+        ) : null}
+
+        {showBookingForm ? (
+          <form
+            action={bookAppointmentAction}
+            className="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-xs text-slate-600 shadow-inner"
+            onSubmit={() => {
+              setShowBookingForm(false);
+              setBookingStartAtIso("");
+            }}
+          >
+            <input type="hidden" name="contactId" value={contactState.id} />
+            <input type="hidden" name="startAt" value={bookingStartAtIso} />
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <label className="flex flex-col gap-1">
+                <span>Property</span>
+                <select
+                  name="propertyId"
+                  defaultValue={primaryProperty?.id ?? ""}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                >
+                  <option value="">
+                    No address yet (create placeholder)
+                  </option>
+                  {contactState.properties.map((property) => (
+                    <option key={property.id} value={property.id}>
+                      {property.addressLine1}, {property.city}, {property.state} {property.postalCode}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>Start time</span>
+                <input
+                  type="datetime-local"
+                  required
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (!value) {
+                      setBookingStartAtIso("");
+                      return;
+                    }
+                    const parsed = new Date(value);
+                    setBookingStartAtIso(Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString());
+                  }}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>Duration (minutes)</span>
+                <input
+                  name="durationMinutes"
+                  type="number"
+                  min={15}
+                  step={5}
+                  defaultValue={60}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>Travel buffer (minutes)</span>
+                <input
+                  name="travelBufferMinutes"
+                  type="number"
+                  min={0}
+                  step={5}
+                  defaultValue={30}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                />
+              </label>
+              <label className="flex flex-col gap-1 sm:col-span-2">
+                <span>Services (optional)</span>
+                <input
+                  name="services"
+                  placeholder="e.g. junk_removal_primary"
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <SubmitButton className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700" pendingLabel="Booking...">
+                Confirm booking (adds to calendar)
+              </SubmitButton>
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800"
+                onClick={() => {
+                  setShowBookingForm(false);
+                  setBookingStartAtIso("");
+                }}
+              >
+                Cancel
+              </button>
+              <span className="text-[11px] text-slate-500">
+                Calendar sync runs via the outbox worker.
+              </span>
             </div>
           </form>
         ) : null}
