@@ -94,9 +94,15 @@ type DbExecutor = DatabaseClient | TransactionExecutor;
 
 function verifySignature(rawBody: string, signature: string | null, secret: string): boolean {
   if (!signature) return false;
-  const [algo, hash] = signature.split("=");
-  if (algo !== "sha256" || !hash) return false;
-  const expected = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+  const trimmed = signature.split(",")[0]?.trim() ?? "";
+  const [algoRaw, hash] = trimmed.split("=");
+  const algo = algoRaw?.trim().toLowerCase();
+
+  if (!hash || (algo !== "sha256" && algo !== "sha1")) {
+    return false;
+  }
+
+  const expected = crypto.createHmac(algo, secret).update(rawBody, "utf8").digest("hex");
   try {
     return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(expected, "hex"));
   } catch {
@@ -488,6 +494,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     request.headers.get("x-hub-signature-256") ?? request.headers.get("x-hub-signature");
 
   if (secret && !verifySignature(rawBody, signature, secret)) {
+    console.warn("[webhooks][facebook] invalid_signature", {
+      signatureHeader: signature?.split("=")[0] ?? null,
+      traceId: request.headers.get("x-fb-trace-id") ?? null
+    });
     return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
   }
 
