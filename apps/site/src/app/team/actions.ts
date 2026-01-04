@@ -5,6 +5,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { callAdminApi } from "./lib/api";
 
+const CALL_AGENT_PHONE_COOKIE = "myst-call-agent-phone";
+
 export async function updateApptStatus(formData: FormData) {
   const id = formData.get("appointmentId");
   const status = formData.get("status");
@@ -483,6 +485,69 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
     // ignore
   }
   return fallback;
+}
+
+export async function saveCallAgentPhoneAction(formData: FormData) {
+  const jar = await cookies();
+  const raw = formData.get("agentPhone");
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Enter a phone number", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({
+    name: CALL_AGENT_PHONE_COOKIE,
+    value: raw.trim(),
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365
+  });
+
+  jar.set({ name: "myst-flash", value: "Call phone saved", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function clearCallAgentPhoneAction() {
+  const jar = await cookies();
+  jar.set({ name: CALL_AGENT_PHONE_COOKIE, value: "", path: "/", maxAge: 0 });
+  jar.set({ name: "myst-flash", value: "Call phone cleared", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function startContactCallAction(formData: FormData) {
+  const jar = await cookies();
+  const contactId = formData.get("contactId");
+  if (typeof contactId !== "string" || contactId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const agentPhone = jar.get(CALL_AGENT_PHONE_COOKIE)?.value ?? null;
+  if (!agentPhone || agentPhone.trim().length === 0) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Set your call phone in Settings before using Call",
+      path: "/"
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/calls/start", {
+    method: "POST",
+    body: JSON.stringify({ contactId: contactId.trim(), agentPhone })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to start call");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Ringing your phone now… answer to connect", path: "/" });
+  revalidatePath("/team");
 }
 
 export async function updateContactAction(formData: FormData) {

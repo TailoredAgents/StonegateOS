@@ -9,6 +9,7 @@ import {
   deleteContactAction,
   deletePropertyAction,
   deleteTaskAction,
+  startContactCallAction,
   updateContactAction,
   updatePropertyAction,
   updateTaskAction
@@ -169,6 +170,33 @@ function ContactCard({ contact }: ContactCardProps) {
                 Delete
               </SubmitButton>
             </form>
+            <form
+              action={startContactCallAction}
+              className="inline"
+              onSubmit={(event) => {
+                if (!callLink) {
+                  event.preventDefault();
+                  return;
+                }
+                const label = contactState.phone ?? "this contact";
+                if (!window.confirm(`Call ${contactState.name} (${label}) from the Stonegate number?`)) {
+                  event.preventDefault();
+                }
+              }}
+            >
+              <input type="hidden" name="contactId" value={contactState.id} />
+              <SubmitButton
+                className={`rounded-full border px-4 py-2 font-medium ${
+                  callLink
+                    ? "border-primary-200 bg-primary-50 text-primary-800 hover:border-primary-300 hover:bg-primary-100"
+                    : "border-slate-100 text-slate-300"
+                }`}
+                pendingLabel="Calling..."
+                disabled={!callLink}
+              >
+                Call (Stonegate #)
+              </SubmitButton>
+            </form>
             <a
               className={`rounded-full border px-4 py-2 font-medium ${
                 callLink
@@ -177,7 +205,7 @@ function ContactCard({ contact }: ContactCardProps) {
               }`}
               href={callLink ?? "#"}
             >
-              Call
+              Call direct
             </a>
             <a
               className={`rounded-full border px-4 py-2 font-medium ${
