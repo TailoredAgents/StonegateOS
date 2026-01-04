@@ -9,6 +9,23 @@ export type SendResult = {
 
 let cachedTransporter: nodemailer.Transporter | null = null;
 
+type FacebookPageTokenResponse = {
+  access_token?: string;
+  id?: string;
+};
+
+type FacebookSendResponse = {
+  recipient_id?: string;
+  message_id?: string;
+  error?: {
+    message?: string;
+    type?: string;
+    code?: number;
+    error_subcode?: number;
+    fbtrace_id?: string;
+  };
+};
+
 function getTransport(): nodemailer.Transporter | null {
   if (cachedTransporter) {
     return cachedTransporter;
@@ -130,6 +147,126 @@ function readDmWebhookConfig(): { url: string; token: string | null; from: strin
   };
 }
 
+const FB_GRAPH_VERSION = "v24.0";
+const PAGE_TOKEN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const pageAccessTokenCache = new Map<string, { token: string; fetchedAt: number }>();
+
+function getFacebookSystemUserToken(): string | null {
+  const token =
+    process.env["FB_MESSENGER_ACCESS_TOKEN"] ??
+    process.env["FB_LEADGEN_ACCESS_TOKEN"] ??
+    null;
+  return token && token.trim().length > 0 ? token.trim() : null;
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function getDmProvider(metadata?: Record<string, unknown> | null): string | null {
+  return (
+    readString(metadata?.["dmProvider"]) ??
+    readString(metadata?.["source"]) ??
+    readString(metadata?.["provider"]) ??
+    null
+  );
+}
+
+function getFacebookPageId(metadata?: Record<string, unknown> | null): string | null {
+  return (
+    readString(metadata?.["dmPageId"]) ??
+    readString(metadata?.["pageId"]) ??
+    readString(metadata?.["recipientId"]) ??
+    readString(metadata?.["page_id"]) ??
+    readString(process.env["FB_PAGE_ID"]) ??
+    null
+  );
+}
+
+async function fetchFacebookPageAccessToken(pageId: string, systemUserToken: string): Promise<string> {
+  const cached = pageAccessTokenCache.get(pageId);
+  if (cached && Date.now() - cached.fetchedAt < PAGE_TOKEN_CACHE_TTL_MS) {
+    return cached.token;
+  }
+
+  const url = new URL(`https://graph.facebook.com/${FB_GRAPH_VERSION}/${pageId}`);
+  url.searchParams.set("fields", "access_token");
+  url.searchParams.set("access_token", systemUserToken);
+
+  const response = await fetch(url.toString(), { method: "GET" });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`fb_page_token_failed:${response.status}:${text}`);
+  }
+
+  const json = (() => {
+    try {
+      return JSON.parse(text) as FacebookPageTokenResponse;
+    } catch {
+      return null;
+    }
+  })();
+  const pageToken = json && typeof json.access_token === "string" ? json.access_token.trim() : "";
+  if (!pageToken) {
+    throw new Error("fb_page_token_missing");
+  }
+
+  pageAccessTokenCache.set(pageId, { token: pageToken, fetchedAt: Date.now() });
+  return pageToken;
+}
+
+async function sendFacebookDm(
+  action: "message" | "typing_on" | "typing_off",
+  input: { pageId: string; recipientId: string; body?: string }
+): Promise<SendResult> {
+  const systemUserToken = getFacebookSystemUserToken();
+  if (!systemUserToken) {
+    return { ok: false, provider: "facebook", detail: "facebook_dm_not_configured" };
+  }
+
+  const pageAccessToken = await fetchFacebookPageAccessToken(input.pageId, systemUserToken);
+  const url = new URL(`https://graph.facebook.com/${FB_GRAPH_VERSION}/me/messages`);
+  url.searchParams.set("access_token", pageAccessToken);
+
+  const payload: Record<string, unknown> = {
+    recipient: { id: input.recipientId }
+  };
+
+  if (action === "message") {
+    payload["messaging_type"] = "RESPONSE";
+    payload["message"] = { text: input.body ?? "" };
+  } else {
+    payload["sender_action"] = action;
+  }
+
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    return { ok: false, provider: "facebook", detail: `facebook_dm_failed:${response.status}:${text}` };
+  }
+
+  const json = (() => {
+    try {
+      return JSON.parse(text) as FacebookSendResponse;
+    } catch {
+      return null;
+    }
+  })();
+
+  return {
+    ok: true,
+    provider: "facebook",
+    providerMessageId: json?.message_id ?? null
+  };
+}
+
 async function postDmWebhook(
   payload: Record<string, unknown>
 ): Promise<SendResult> {
@@ -184,16 +321,34 @@ export async function sendDmMessage(
   metadata?: Record<string, unknown> | null
 ): Promise<SendResult> {
   const config = readDmWebhookConfig();
-  const payload: Record<string, unknown> = {
-    action: "message",
-    to,
-    body,
-    metadata: metadata ?? null
-  };
-  if (config?.from) {
-    payload["from"] = config.from;
+  if (config) {
+    const payload: Record<string, unknown> = {
+      action: "message",
+      to,
+      body,
+      metadata: metadata ?? null
+    };
+    if (config.from) {
+      payload["from"] = config.from;
+    }
+    return postDmWebhook(payload);
   }
-  return postDmWebhook(payload);
+
+  const provider = getDmProvider(metadata);
+  if (provider !== "facebook") {
+    return { ok: false, provider: "dm", detail: "dm_not_configured" };
+  }
+
+  const pageId = getFacebookPageId(metadata);
+  if (!pageId) {
+    return { ok: false, provider: "facebook", detail: "facebook_dm_missing_page" };
+  }
+
+  try {
+    return await sendFacebookDm("message", { pageId, recipientId: to, body });
+  } catch (error) {
+    return { ok: false, provider: "facebook", detail: `facebook_dm_error:${String(error)}` };
+  }
 }
 
 export async function sendDmTyping(
@@ -202,13 +357,31 @@ export async function sendDmTyping(
   metadata?: Record<string, unknown> | null
 ): Promise<SendResult> {
   const config = readDmWebhookConfig();
-  const payload: Record<string, unknown> = {
-    action: state,
-    to,
-    metadata: metadata ?? null
-  };
-  if (config?.from) {
-    payload["from"] = config.from;
+  if (config) {
+    const payload: Record<string, unknown> = {
+      action: state,
+      to,
+      metadata: metadata ?? null
+    };
+    if (config.from) {
+      payload["from"] = config.from;
+    }
+    return postDmWebhook(payload);
   }
-  return postDmWebhook(payload);
+
+  const provider = getDmProvider(metadata);
+  if (provider !== "facebook") {
+    return { ok: false, provider: "dm", detail: "dm_not_configured" };
+  }
+
+  const pageId = getFacebookPageId(metadata);
+  if (!pageId) {
+    return { ok: false, provider: "facebook", detail: "facebook_dm_missing_page" };
+  }
+
+  try {
+    return await sendFacebookDm(state, { pageId, recipientId: to });
+  } catch (error) {
+    return { ok: false, provider: "facebook", detail: `facebook_dm_error:${String(error)}` };
+  }
 }

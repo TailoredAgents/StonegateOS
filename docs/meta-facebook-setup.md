@@ -3,6 +3,7 @@
 This repo already supports:
 - Facebook Lead Ads (Instant Forms) ingestion into CRM leads
 - Facebook Messenger inbound messages into the inbox
+- Facebook Messenger outbound replies from the CRM (Send API)
 - Meta Ads Insights sync into `meta_ads_insights_daily` (for spend/clicks/impressions dashboards, plus cost-per-lead/appointment)
 
 ## Endpoints
@@ -19,7 +20,14 @@ API service (`stonegate-api`):
 - `FB_VERIFY_TOKEN` (your verify token string)
 - `FB_APP_SECRET` (Meta App secret)
 - `FB_LEADGEN_ACCESS_TOKEN` (System User token with Lead Ads + Pages permissions)
+- `FB_MESSENGER_ACCESS_TOKEN` (optional; if unset we reuse `FB_LEADGEN_ACCESS_TOKEN`)
 - `FB_LEAD_FORM_IDS` (optional comma-separated allowlist of form IDs)
+- `FB_PAGE_ID` (optional fallback for outbound Messenger send)
+
+Optional legacy DM webhook transport (if you already have a DM proxy service):
+- `DM_WEBHOOK_URL`
+- `DM_WEBHOOK_TOKEN` (optional)
+- `DM_WEBHOOK_FROM` (optional)
 
 Worker service (`stonegate-outbox-worker`) for Ads Insights sync:
 - `FB_AD_ACCOUNT_ID` (ad account id, with or without `act_` prefix)
@@ -45,8 +53,10 @@ Admin auth (needed for the `/api/admin/...` endpoints):
    - Grant Leads Access for the Page’s forms
    - Generate an access token with required permissions (at minimum):
      - `leads_retrieval`
+     - `pages_show_list`
      - `pages_manage_metadata`
      - `pages_messaging`
+     - `pages_read_engagement`
      - `ads_management` (or `ads_read` if read-only)
 4. Verify end-to-end
    - Use Meta “Test” tools to send a webhook event and confirm the API logs show `ok: true`

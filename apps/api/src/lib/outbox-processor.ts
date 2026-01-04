@@ -158,11 +158,109 @@ function readMetaNumber(metadata: Record<string, unknown> | null, key: string): 
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function readStringValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function readMetadataString(metadata: Record<string, unknown> | null, key: string): string | null {
+  if (!metadata) return null;
+  return readStringValue(metadata[key]);
+}
+
+function resolveDmProvider(metadata: Record<string, unknown> | null): string | null {
+  return (
+    readMetadataString(metadata, "dmProvider") ??
+    readMetadataString(metadata, "source") ??
+    readMetadataString(metadata, "provider") ??
+    null
+  );
+}
+
+function resolveDmPageId(metadata: Record<string, unknown> | null): string | null {
+  return (
+    readMetadataString(metadata, "dmPageId") ??
+    readMetadataString(metadata, "pageId") ??
+    readMetadataString(metadata, "recipientId") ??
+    readMetadataString(metadata, "page_id") ??
+    null
+  );
+}
+
 function mergeMetadata(
   existing: Record<string, unknown> | null,
   updates: Record<string, unknown>
 ): Record<string, unknown> {
   return { ...(existing ?? {}), ...updates };
+}
+
+function isDmWebhookConfigured(): boolean {
+  return Boolean(readStringValue(process.env["DM_WEBHOOK_URL"]));
+}
+
+function hasFacebookDmEnv(): boolean {
+  return Boolean(
+    readStringValue(process.env["FB_MESSENGER_ACCESS_TOKEN"]) ?? readStringValue(process.env["FB_LEADGEN_ACCESS_TOKEN"])
+  );
+}
+
+async function resolveDmSendMetadata(
+  db: ReturnType<typeof getDb>,
+  threadId: string,
+  metadata: Record<string, unknown> | null
+): Promise<Record<string, unknown> | null> {
+  const provider = resolveDmProvider(metadata);
+  const pageId = resolveDmPageId(metadata) ?? readStringValue(process.env["FB_PAGE_ID"]);
+
+  if (provider && pageId) {
+    return metadata;
+  }
+
+  const [latestInbound] = await db
+    .select({
+      provider: conversationMessages.provider,
+      toAddress: conversationMessages.toAddress,
+      metadata: conversationMessages.metadata,
+      receivedAt: conversationMessages.receivedAt,
+      createdAt: conversationMessages.createdAt
+    })
+    .from(conversationMessages)
+    .where(
+      and(
+        eq(conversationMessages.threadId, threadId),
+        eq(conversationMessages.channel, "dm"),
+        eq(conversationMessages.direction, "inbound")
+      )
+    )
+    .orderBy(desc(conversationMessages.receivedAt), desc(conversationMessages.createdAt))
+    .limit(1);
+
+  const inboundMetadata = isRecord(latestInbound?.metadata) ? latestInbound.metadata : null;
+  const inferredProvider =
+    provider ??
+    readStringValue(latestInbound?.provider) ??
+    resolveDmProvider(inboundMetadata) ??
+    (!isDmWebhookConfigured() && hasFacebookDmEnv() ? "facebook" : null);
+  const inferredPageId =
+    pageId ??
+    readStringValue(latestInbound?.toAddress) ??
+    resolveDmPageId(inboundMetadata) ??
+    null;
+
+  if (!inferredProvider && !inferredPageId) {
+    return metadata;
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (!readMetadataString(metadata, "dmProvider") && inferredProvider) {
+    updates["dmProvider"] = inferredProvider;
+  }
+  if (!resolveDmPageId(metadata) && inferredPageId) {
+    updates["dmPageId"] = inferredPageId;
+  }
+
+  return Object.keys(updates).length === 0 ? metadata : mergeMetadata(metadata, updates);
 }
 
 async function resolveDmRecipient(db: ReturnType<typeof getDb>, threadId: string): Promise<string | null> {
@@ -1752,7 +1850,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       const subject = message.subject ?? "Stonegate message";
       const body = message.body ?? "";
       let toAddress = message.toAddress ?? null;
-      const metadata = isRecord(message.metadata) ? message.metadata : null;
+      let metadata = isRecord(message.metadata) ? message.metadata : null;
 
       if (!toAddress) {
         if (channel === "sms") {
@@ -1761,6 +1859,17 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           toAddress = message.contactEmail ?? null;
         } else if (channel === "dm") {
           toAddress = await resolveDmRecipient(db, message.threadId);
+        }
+      }
+
+      if (channel === "dm") {
+        const resolvedMetadata = await resolveDmSendMetadata(db, message.threadId, metadata);
+        if (resolvedMetadata !== metadata) {
+          metadata = resolvedMetadata;
+          await db
+            .update(conversationMessages)
+            .set({ metadata })
+            .where(eq(conversationMessages.id, message.id));
         }
       }
 
