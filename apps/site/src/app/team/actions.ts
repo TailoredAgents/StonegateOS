@@ -6,6 +6,10 @@ import { revalidatePath } from "next/cache";
 import { callAdminApi } from "./lib/api";
 
 const CALL_AGENT_PHONE_COOKIE = "myst-call-agent-phone";
+const CALL_AGENT_DEVON_PHONE_COOKIE = "myst-call-agent-devon-phone";
+const CALL_AGENT_OWNER_PHONE_COOKIE = "myst-call-agent-owner-phone";
+const CALL_AGENT_CHOICE_COOKIE = "myst-call-agent-choice";
+type CallAgentChoice = "devon" | "owner";
 
 export async function updateApptStatus(formData: FormData) {
   const id = formData.get("appointmentId");
@@ -490,27 +494,76 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
 export async function saveCallAgentPhoneAction(formData: FormData) {
   const jar = await cookies();
   const raw = formData.get("agentPhone");
+  const who = formData.get("who");
   if (typeof raw !== "string" || raw.trim().length === 0) {
     jar.set({ name: "myst-flash-error", value: "Enter a phone number", path: "/" });
     revalidatePath("/team");
     return;
   }
 
+  const trimmed = raw.trim();
+  const choice: CallAgentChoice = who === "owner" ? "owner" : "devon";
+  const targetCookie = choice === "owner" ? CALL_AGENT_OWNER_PHONE_COOKIE : CALL_AGENT_DEVON_PHONE_COOKIE;
+
   jar.set({
-    name: CALL_AGENT_PHONE_COOKIE,
-    value: raw.trim(),
+    name: targetCookie,
+    value: trimmed,
     path: "/",
     maxAge: 60 * 60 * 24 * 365
   });
 
-  jar.set({ name: "myst-flash", value: "Call phone saved", path: "/" });
+  jar.set({
+    name: CALL_AGENT_CHOICE_COOKIE,
+    value: choice,
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365
+  });
+
+  // Backwards compatible cookie (single phone)
+  jar.set({
+    name: CALL_AGENT_PHONE_COOKIE,
+    value: trimmed,
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365
+  });
+
+  jar.set({
+    name: "myst-flash",
+    value: choice === "owner" ? "Austin call phone saved" : "Devon call phone saved",
+    path: "/"
+  });
   revalidatePath("/team");
 }
 
-export async function clearCallAgentPhoneAction() {
+export async function clearCallAgentPhoneAction(formData: FormData) {
   const jar = await cookies();
-  jar.set({ name: CALL_AGENT_PHONE_COOKIE, value: "", path: "/", maxAge: 0 });
-  jar.set({ name: "myst-flash", value: "Call phone cleared", path: "/" });
+  const who = formData.get("who");
+  const choice: CallAgentChoice = who === "owner" ? "owner" : "devon";
+  const targetCookie = choice === "owner" ? CALL_AGENT_OWNER_PHONE_COOKIE : CALL_AGENT_DEVON_PHONE_COOKIE;
+  jar.set({ name: targetCookie, value: "", path: "/", maxAge: 0 });
+  jar.set({
+    name: "myst-flash",
+    value: choice === "owner" ? "Austin call phone cleared" : "Devon call phone cleared",
+    path: "/"
+  });
+  revalidatePath("/team");
+}
+
+export async function setCallAgentChoiceAction(formData: FormData) {
+  const jar = await cookies();
+  const choice = formData.get("choice");
+  const normalized: CallAgentChoice = choice === "owner" ? "owner" : "devon";
+  jar.set({
+    name: CALL_AGENT_CHOICE_COOKIE,
+    value: normalized,
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365
+  });
+  jar.set({
+    name: "myst-flash",
+    value: normalized === "owner" ? "Call will ring Austin" : "Call will ring Devon",
+    path: "/"
+  });
   revalidatePath("/team");
 }
 
@@ -523,11 +576,21 @@ export async function startContactCallAction(formData: FormData) {
     return;
   }
 
-  const agentPhone = jar.get(CALL_AGENT_PHONE_COOKIE)?.value ?? null;
-  if (!agentPhone || agentPhone.trim().length === 0) {
+  const choiceRaw = jar.get(CALL_AGENT_CHOICE_COOKIE)?.value ?? null;
+  const choice: CallAgentChoice = choiceRaw === "owner" ? "owner" : "devon";
+  const devonPhone = jar.get(CALL_AGENT_DEVON_PHONE_COOKIE)?.value ?? "";
+  const ownerPhone = jar.get(CALL_AGENT_OWNER_PHONE_COOKIE)?.value ?? "";
+  const legacyPhone = jar.get(CALL_AGENT_PHONE_COOKIE)?.value ?? "";
+
+  const agentPhone =
+    (choice === "devon" ? devonPhone : ownerPhone).trim() ||
+    legacyPhone.trim() ||
+    "";
+
+  if (!agentPhone) {
     jar.set({
       name: "myst-flash-error",
-      value: "Set your call phone in Settings before using Call",
+      value: "Set Devon/Your call phone in Settings before using Call",
       path: "/"
     });
     revalidatePath("/team");
@@ -546,7 +609,11 @@ export async function startContactCallAction(formData: FormData) {
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "Ringing your phone now… answer to connect", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: choice === "owner" ? "Ringing Austin now… answer to connect" : "Ringing Devon now… answer to connect",
+    path: "/"
+  });
   revalidatePath("/team");
 }
 
