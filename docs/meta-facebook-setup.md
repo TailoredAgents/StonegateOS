@@ -24,6 +24,8 @@ API service (`stonegate-api`):
 - `FB_LEAD_FORM_IDS` (optional comma-separated allowlist of form IDs)
 - `FB_PAGE_ID` (optional fallback for outbound Messenger send)
 
+Note: outbound sends (`message.send`) are processed by the outbox worker in production; ensure the worker has the same `FB_*` env vars.
+
 Optional legacy DM webhook transport (if you already have a DM proxy service):
 - `DM_WEBHOOK_URL`
 - `DM_WEBHOOK_TOKEN` (optional)
