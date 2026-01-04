@@ -3,13 +3,15 @@
 This repo already supports:
 - Facebook Lead Ads (Instant Forms) ingestion into CRM leads
 - Facebook Messenger inbound messages into the inbox
-- Meta Ads Insights sync into `meta_ads_insights_daily` (for spend/clicks/impressions dashboards)
+- Meta Ads Insights sync into `meta_ads_insights_daily` (for spend/clicks/impressions dashboards, plus cost-per-lead/appointment)
 
 ## Endpoints
 
 - Webhook callback URL (Meta App → Webhooks): `https://<API_BASE_URL>/api/webhooks/facebook`
 - Admin enqueue Ads Insights sync: `POST https://<API_BASE_URL>/api/admin/meta/ads/sync`
-- Admin Ads summary (campaign-level): `GET https://<API_BASE_URL>/api/admin/meta/ads/summary?since=YYYY-MM-DD&until=YYYY-MM-DD`
+- Admin Ads summary (campaign-level by default): `GET https://<API_BASE_URL>/api/admin/meta/ads/summary?since=YYYY-MM-DD&until=YYYY-MM-DD[&level=ad]`
+  - `level=campaign` (default) → aggregates by campaign
+  - `level=ad` → aggregates by ad (includes `costPerLead` and `costPerConversion` where conversions = scheduled appointments)
 
 ## Required env vars (Render)
 

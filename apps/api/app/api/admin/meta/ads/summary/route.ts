@@ -27,6 +27,12 @@ function parseRange(request: NextRequest): { since: string; until: string } {
   return { since, until };
 }
 
+function parseLevel(request: NextRequest): "campaign" | "ad" {
+  const level = request.nextUrl.searchParams.get("level");
+  if (level === "ad") return "ad";
+  return "campaign";
+}
+
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string") {
@@ -42,16 +48,24 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const { since, until } = parseRange(request);
+  const level = parseLevel(request);
   const startAt = new Date(`${since}T00:00:00.000Z`);
   const endAt = new Date(`${until}T00:00:00.000Z`);
   endAt.setUTCDate(endAt.getUTCDate() + 1);
 
   const db = getDb();
 
-  const insightsByCampaign = await db
+  const idColumn = level === "ad" ? metaAdsInsightsDaily.adId : metaAdsInsightsDaily.campaignId;
+  const nameColumn = level === "ad" ? metaAdsInsightsDaily.adName : metaAdsInsightsDaily.campaignName;
+
+  const insights = await db
     .select({
-      campaignId: metaAdsInsightsDaily.campaignId,
+      id: idColumn,
+      name: sql<string | null>`max(${nameColumn})`,
+      campaignId: sql<string | null>`max(${metaAdsInsightsDaily.campaignId})`,
       campaignName: sql<string | null>`max(${metaAdsInsightsDaily.campaignName})`,
+      adsetId: sql<string | null>`max(${metaAdsInsightsDaily.adsetId})`,
+      adsetName: sql<string | null>`max(${metaAdsInsightsDaily.adsetName})`,
       spend: sql<string>`coalesce(sum(${metaAdsInsightsDaily.spend}), 0)`,
       impressions: sql<number>`coalesce(sum(${metaAdsInsightsDaily.impressions}), 0)`,
       clicks: sql<number>`coalesce(sum(${metaAdsInsightsDaily.clicks}), 0)`,
@@ -65,60 +79,81 @@ export async function GET(request: NextRequest): Promise<Response> {
         lte(metaAdsInsightsDaily.dateStart, until)
       )
     )
-    .groupBy(metaAdsInsightsDaily.campaignId);
+    .groupBy(idColumn);
 
-  const leadsByCampaign = await db
+  const leadKeyExpr =
+    level === "ad"
+      ? sql<string | null>`(${leads.formPayload} ->> 'adId')`
+      : sql<string | null>`(${leads.formPayload} ->> 'campaignId')`;
+
+  const leadsByKey = await db
     .select({
-      campaignId: sql<string | null>`(${leads.formPayload} ->> 'campaignId')`,
-      count: sql<number>`count(*)`
+      key: leadKeyExpr,
+      leads: sql<number>`count(*)`,
+      conversions: sql<number>`sum(case when ${leads.status} = 'scheduled' then 1 else 0 end)`
     })
     .from(leads)
     .where(and(eq(leads.source, "facebook_lead"), gte(leads.createdAt, startAt), lt(leads.createdAt, endAt)))
-    .groupBy(sql`(${leads.formPayload} ->> 'campaignId')`);
+    .groupBy(leadKeyExpr);
 
-  const leadsMap = new Map<string | null, number>();
-  for (const row of leadsByCampaign) {
-    leadsMap.set(row.campaignId ?? null, Number(row.count ?? 0));
+  const leadsMap = new Map<string | null, { leads: number; conversions: number }>();
+  for (const row of leadsByKey) {
+    leadsMap.set(row.key ?? null, {
+      leads: Number(row.leads ?? 0),
+      conversions: Number(row.conversions ?? 0)
+    });
   }
 
-  const campaigns = insightsByCampaign
+  const items = insights
     .map((row) => {
+      const stats = leadsMap.get(row.id ?? null) ?? { leads: 0, conversions: 0 };
       const spend = toNumber(row.spend);
-      const leadsCount = leadsMap.get(row.campaignId ?? null) ?? 0;
+      const leadsCount = stats.leads;
+      const convCount = stats.conversions;
       return {
+        id: row.id ?? null,
+        name: row.name ?? null,
         campaignId: row.campaignId ?? null,
         campaignName: row.campaignName ?? null,
+        adsetId: row.adsetId ?? null,
+        adsetName: row.adsetName ?? null,
         spend,
         impressions: Number(row.impressions ?? 0),
         clicks: Number(row.clicks ?? 0),
         reach: Number(row.reach ?? 0),
         leads: leadsCount,
-        costPerLead: leadsCount > 0 ? spend / leadsCount : null
+        conversions: convCount,
+        costPerLead: leadsCount > 0 ? spend / leadsCount : null,
+        costPerConversion: convCount > 0 ? spend / convCount : null
       };
     })
     .sort((a, b) => b.spend - a.spend);
 
-  const totals = campaigns.reduce(
+  const totals = items.reduce(
     (acc, row) => {
       acc.spend += row.spend;
       acc.impressions += row.impressions;
       acc.clicks += row.clicks;
       acc.reach += row.reach;
       acc.leads += row.leads;
+      acc.conversions += row.conversions ?? 0;
       return acc;
     },
-    { spend: 0, impressions: 0, clicks: 0, reach: 0, leads: 0 }
+    { spend: 0, impressions: 0, clicks: 0, reach: 0, leads: 0, conversions: 0 }
   );
 
   return NextResponse.json({
     ok: true,
+    level,
     since,
     until,
     totals: {
       ...totals,
-      costPerLead: totals.leads > 0 ? totals.spend / totals.leads : null
+      costPerLead: totals.leads > 0 ? totals.spend / totals.leads : null,
+      costPerConversion: totals.conversions > 0 ? totals.spend / totals.conversions : null
     },
-    campaigns
+    items,
+    ...(level === "campaign" ? { campaigns: items } : {}),
+    ...(level === "ad" ? { ads: items } : {})
   });
 }
-
