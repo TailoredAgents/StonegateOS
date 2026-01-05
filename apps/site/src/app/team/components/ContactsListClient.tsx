@@ -12,6 +12,7 @@ import {
   deletePropertyAction,
   startContactCallAction,
   updateContactAction,
+  updatePipelineStageAction,
   updatePropertyAction
 } from "../actions";
 import type { ContactNoteSummary, ContactSummary, PropertySummary } from "./contacts.types";
@@ -25,8 +26,29 @@ const PIPELINE_STAGE_LABELS: Record<string, string> = {
   lost: "Lost"
 };
 
+const PIPELINE_STAGES = ["new", "contacted", "qualified", "quoted", "won", "lost"] as const;
+
 function stageLabel(stage: string): string {
   return PIPELINE_STAGE_LABELS[stage] ?? stage;
+}
+
+function stageBadgeClass(stage: string): string {
+  switch (stage) {
+    case "new":
+      return "bg-primary-100 text-primary-700";
+    case "contacted":
+      return "bg-amber-100 text-amber-800";
+    case "qualified":
+      return "bg-sky-100 text-sky-800";
+    case "quoted":
+      return "bg-indigo-100 text-indigo-800";
+    case "won":
+      return "bg-emerald-100 text-emerald-800";
+    case "lost":
+      return "bg-rose-100 text-rose-800";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
 }
 
 function formatDateTime(iso: string | null): string {
@@ -107,10 +129,37 @@ function ContactCard({ contact }: ContactCardProps) {
           <div className="space-y-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
               <h3 className="text-lg font-semibold text-slate-900">{contactState.name}</h3>
-              <span className="inline-flex items-center rounded-full bg-primary-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
+              <span
+                className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${stageBadgeClass(
+                  contactState.pipeline.stage
+                )}`}
+              >
                 {stageLabel(contactState.pipeline.stage)}
               </span>
             </div>
+            <form action={updatePipelineStageAction} className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <input type="hidden" name="contactId" value={contactState.id} />
+              <label className="flex items-center gap-2">
+                <span className="text-[11px] font-medium text-slate-500">Stage</span>
+                <select
+                  name="stage"
+                  defaultValue={contactState.pipeline.stage}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
+                >
+                  {PIPELINE_STAGES.map((value) => (
+                    <option key={value} value={value}>
+                      {stageLabel(value)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <SubmitButton
+                className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                pendingLabel="Saving..."
+              >
+                Update
+              </SubmitButton>
+            </form>
             <div className="flex flex-wrap gap-3 text-xs text-slate-500">
               {contactState.email ? (
                 <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">{contactState.email}</span>
