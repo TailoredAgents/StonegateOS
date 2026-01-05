@@ -38,7 +38,7 @@ export interface TabNavGroup {
 
 export const teamTabTokens = {
   container:
-    "hidden gap-2 overflow-visible rounded-2xl border border-slate-200/80 bg-white/80 p-2 shadow-sm shadow-slate-200/50 backdrop-blur supports-[backdrop-filter]:bg-white/60 sm:flex sm:flex-wrap sm:items-center sm:justify-start sm:sticky sm:top-4 sm:z-40",
+    "flex flex-nowrap gap-2 overflow-x-auto overflow-y-visible rounded-2xl border border-slate-200/80 bg-white/80 p-2 shadow-sm shadow-slate-200/50 backdrop-blur supports-[backdrop-filter]:bg-white/60 sm:flex-wrap sm:items-center sm:justify-start sm:sticky sm:top-4 sm:overflow-visible sm:z-40",
   item: {
     base:
       "relative flex min-h-[44px] items-center justify-center rounded-xl border border-transparent px-4 py-2 text-sm font-medium leading-tight transition duration-150 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white",
@@ -63,9 +63,7 @@ interface TabNavProps {
 export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label": ariaLabel }: TabNavProps) {
   const router = useRouter();
   const [isPending, startTransition] = React.useTransition();
-  const [isOpen, setIsOpen] = React.useState(false);
   const [openGroupId, setOpenGroupId] = React.useState<string | null>(null);
-  const containerRef = React.useRef<HTMLDivElement>(null);
   const navRef = React.useRef<HTMLElement>(null);
 
   const resolveAllowed = (requires?: AccessRequirement): boolean => {
@@ -78,7 +76,6 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
     return true;
   };
 
-  const activeItem = items.find((item) => item.id === activeId) ?? null;
   const resolvedGroups = React.useMemo(() => {
     if (!groups || groups.length === 0) return null;
     const itemMap = new Map(items.map((item) => [item.id, item]));
@@ -118,24 +115,8 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
   );
 
   React.useEffect(() => {
-    setIsOpen(false);
     setOpenGroupId(null);
   }, [activeId]);
-
-  React.useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    function handleClickOutside(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    }
-
-    document.addEventListener("click", handleClickOutside);
-    return () => document.removeEventListener("click", handleClickOutside);
-  }, [isOpen]);
 
   React.useEffect(() => {
     if (!openGroupId) {
@@ -154,55 +135,6 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="sm:hidden" ref={containerRef}>
-        <button
-          type="button"
-          className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-medium text-slate-700 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary-200"
-          onClick={() => setIsOpen((value) => !value)}
-          aria-expanded={isOpen}
-          aria-label={ariaLabel ?? "Team console sections"}
-        >
-          <span>{activeItem?.label ?? "Select section"}</span>
-          <ChevronDown
-            className={cn("h-4 w-4 text-slate-500 transition-transform", isOpen ? "rotate-180" : "rotate-0")}
-          />
-        </button>
-        <div
-          className={cn(
-            "mt-2 space-y-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-lg shadow-slate-200/70",
-            isOpen ? "block" : "hidden"
-          )}
-        >
-          {items.map((item) => {
-            const allowed = resolveAllowed(item.requires);
-            const isActive = item.id === activeId;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                disabled={!allowed}
-                onClick={() => {
-                  if (!allowed) {
-                    return;
-                  }
-                  setIsOpen(false);
-                  handleNavigate(item.href);
-                }}
-                className={cn(
-                  "flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-medium transition",
-                  isActive ? "bg-primary-50 text-primary-700" : "text-slate-600 hover:bg-slate-100",
-                  !allowed && "cursor-not-allowed opacity-45"
-                )}
-              >
-                <span>{item.label}</span>
-                {isActive ? <span className="text-[10px] font-semibold uppercase text-primary-600">Active</span> : null}
-              </button>
-            );
-          })}
-        </div>
-        {isPending ? <p className="mt-1 text-xs text-slate-500">Loading section...</p> : null}
-      </div>
-
       <nav
         className={teamTabTokens.container}
         aria-label={ariaLabel ?? "Team console sections"}
@@ -386,6 +318,7 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
               );
             })}
       </nav>
+      {isPending ? <p className="px-1 text-xs text-slate-500">Loading section...</p> : null}
     </div>
   );
 }
