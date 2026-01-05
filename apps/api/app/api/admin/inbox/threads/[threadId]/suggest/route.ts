@@ -64,7 +64,10 @@ async function callOpenAIReply(input: {
   model: string;
   systemPrompt: string;
   userPrompt: string;
-}): Promise<{ body: string; subject: string | null } | null> {
+}): Promise<
+  | { ok: true; body: string; subject: string | null }
+  | { ok: false; error: string; detail?: string | null }
+> {
   async function request(targetModel: string) {
     return fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -110,34 +113,38 @@ async function callOpenAIReply(input: {
     if (isDev && (status === 400 || status === 404) && input.model !== "gpt-5") {
       response = await request("gpt-5");
       if (!response.ok) {
-        console.warn("[inbox.suggest] openai.fallback_failed", { status, bodyText });
-        return null;
+        const fallbackText = await response.text().catch(() => "");
+        console.warn("[inbox.suggest] openai.fallback_failed", { status: response.status, bodyText: fallbackText });
+        return { ok: false, error: "openai_request_failed", detail: fallbackText.slice(0, 300) };
       }
     } else {
       console.warn("[inbox.suggest] openai.request_failed", { status, bodyText });
-      return null;
+      return { ok: false, error: "openai_request_failed", detail: bodyText.slice(0, 300) };
     }
   }
 
   try {
     const data = (await response.json()) as {
       output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      output_text?: string;
     };
     const raw =
+      (typeof data.output_text === "string" ? data.output_text : null) ??
       data.output
         ?.flatMap((item) => item.content ?? [])
         .find((chunk) => typeof chunk.text === "string")
-        ?.text ?? null;
-    if (!raw) return null;
+        ?.text ??
+      null;
+    if (!raw) return { ok: false, error: "openai_empty_response" };
 
     const parsed = JSON.parse(raw) as { body?: unknown; subject?: unknown };
     const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
-    if (!body) return null;
+    if (!body) return { ok: false, error: "openai_empty_body" };
     const subject = typeof parsed.subject === "string" && parsed.subject.trim().length > 0 ? parsed.subject.trim() : null;
-    return { body, subject };
+    return { ok: true, body, subject };
   } catch (error) {
     console.warn("[inbox.suggest] openai.response_error", { error: String(error) });
-    return null;
+    return { ok: false, error: "openai_parse_failed" };
   }
 }
 
@@ -341,8 +348,14 @@ Company notes: We can message any time, and we typically schedule jobs during bu
     userPrompt
   });
 
-  if (!suggestion) {
-    return NextResponse.json({ error: "suggest_failed" }, { status: 500 });
+  if (!suggestion.ok) {
+    return NextResponse.json(
+      {
+        error: suggestion.error,
+        detail: suggestion.detail ?? null
+      },
+      { status: 502 }
+    );
   }
 
   const now = new Date();
