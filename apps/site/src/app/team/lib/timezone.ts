@@ -1,5 +1,5 @@
-export const TEAM_TIME_ZONE =
-  process.env["NEXT_PUBLIC_APPOINTMENT_TIMEZONE"] ?? "America/New_York";
+// Eastern time with automatic DST handling (IANA zone). Hard-coded so no env is required.
+export const TEAM_TIME_ZONE = "America/New_York";
 
 export function formatDayKey(date: Date): string {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
@@ -23,4 +23,3 @@ export function formatDayKey(date: Date): string {
 
   return `${year}-${month}-${day}`;
 }
-

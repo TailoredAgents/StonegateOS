@@ -17,7 +17,7 @@ StonegateOS is a monorepo for the Stonegate Junk Removal business:
 2. Set `DATABASE_URL` to your local connection string, for example `postgres://stonegate:stonegate@localhost:5432/stonegate`.
 3. Set `NEXT_PUBLIC_SITE_URL` (site) and `NEXT_PUBLIC_API_BASE_URL` (site) plus `API_BASE_URL` (server actions and API calls) to match your local ports (`http://localhost:3000` and `http://localhost:3001`).
 4. Provide `ADMIN_API_KEY`; this gates admin routes and the team console server actions.
-5. Adjust `APPOINTMENT_TIMEZONE` (defaults to `America/New_York`) if the crew operates in a different locale.
+5. Timezone defaults to Eastern (`America/New_York`) with automatic DST; no env is needed unless you intentionally override `APPOINTMENT_TIMEZONE`.
 6. Crew login uses a hardcoded key in `apps/site/src/lib/crew-session.ts`.
 
 ## Database

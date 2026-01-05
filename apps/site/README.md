@@ -26,7 +26,8 @@ Required for full functionality:
 Optional:
 - `OPENAI_API_KEY`, `OPENAI_MODEL` (public chat)
 - `NEXT_PUBLIC_GA4_ID`, `NEXT_PUBLIC_META_PIXEL_ID`
-- `NEXT_PUBLIC_APPOINTMENT_TIMEZONE`
+
+Team Console timestamps are fixed to Eastern (`America/New_York`) with automatic daylight savings; no timezone env is required.
 
 ## Content
 Markdown/MDX content lives under `apps/site/content`. The site uses Contentlayer during build; see root README for build steps.
