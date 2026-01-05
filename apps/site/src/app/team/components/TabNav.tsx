@@ -38,7 +38,7 @@ export interface TabNavGroup {
 
 export const teamTabTokens = {
   container:
-    "flex flex-nowrap gap-2 overflow-x-auto overflow-y-visible rounded-2xl border border-slate-200/80 bg-white/80 p-2 shadow-sm shadow-slate-200/50 backdrop-blur supports-[backdrop-filter]:bg-white/60 sm:flex-wrap sm:items-center sm:justify-start sm:sticky sm:top-4 sm:overflow-visible sm:z-40",
+    "flex flex-nowrap gap-2 overflow-x-auto overflow-y-visible rounded-2xl border border-slate-200/80 bg-white/80 p-2 shadow-sm shadow-slate-200/50 backdrop-blur supports-[backdrop-filter]:bg-white/60 sm:flex-wrap sm:items-center sm:justify-start sm:sticky sm:top-4 sm:overflow-visible z-50",
   item: {
     base:
       "relative flex min-h-[44px] items-center justify-center rounded-xl border border-transparent px-4 py-2 text-sm font-medium leading-tight transition duration-150 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white",
@@ -236,7 +236,7 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
                   <div
                     id={`tab-group-${group.id}`}
                     className={cn(
-                      "absolute left-0 top-full z-50 mt-2 min-w-[12rem] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl shadow-slate-200/60",
+                      "absolute left-0 top-full z-[70] mt-2 min-w-[12rem] rounded-2xl border border-slate-200 bg-white p-2 shadow-xl shadow-slate-200/60",
                       isOpenGroup ? "block" : "hidden"
                     )}
                     role="menu"
