@@ -72,6 +72,7 @@ type MessageDetail = {
   channel: string;
   subject: string | null;
   body: string;
+  mediaUrls?: string[];
   deliveryStatus: string;
   participantName: string | null;
   createdAt: string;
@@ -602,6 +603,8 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                     const autoReplyDelayMs = readMetaNumber(message.metadata ?? null, "autoReplyDelayMs");
                     const isDraft = isDraftMessage(message.metadata ?? null);
                     const statusLabel = isDraft ? "draft" : message.deliveryStatus;
+                    const hasMedia = Array.isArray(message.mediaUrls) && message.mediaUrls.length > 0;
+                    const showBody = !(hasMedia && message.body === "Media message");
                     return (
                       <div key={message.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                         <div
@@ -629,7 +632,49 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                               {message.subject}
                             </div>
                           ) : null}
-                          <p className="whitespace-pre-wrap">{message.body}</p>
+                          {showBody ? <p className="whitespace-pre-wrap">{message.body}</p> : null}
+                          {hasMedia ? (
+                            <div className="mt-3 space-y-2">
+                              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                {message.mediaUrls!.map((_url, index) => {
+                                  const href = `/api/team/inbox/media/${encodeURIComponent(message.id)}/${index}`;
+                                  return (
+                                    <a
+                                      key={`${message.id}-${index}`}
+                                      href={href}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="group block overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                                      title="Open attachment"
+                                    >
+                                      <img
+                                        src={href}
+                                        alt={`Attachment ${index + 1}`}
+                                        loading="lazy"
+                                        className="h-28 w-full object-cover transition group-hover:opacity-90"
+                                      />
+                                    </a>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex flex-wrap gap-2 text-[11px] text-slate-500">
+                                {message.mediaUrls!.map((_url, index) => {
+                                  const href = `/api/team/inbox/media/${encodeURIComponent(message.id)}/${index}`;
+                                  return (
+                                    <a
+                                      key={`${message.id}-link-${index}`}
+                                      href={href}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="rounded-full border border-slate-200 px-3 py-1 font-medium text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                                    >
+                                      View attachment {index + 1}
+                                    </a>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
                           <div className="mt-2 flex items-center justify-between text-[10px] text-slate-500">
                             <span>{message.participantName ?? message.direction}</span>
                             <span>
