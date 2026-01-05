@@ -25,7 +25,10 @@ function isAllowedTwilioMediaUrl(value: string): boolean {
   }
 }
 
-export async function GET(request: NextRequest, context: RouteContext): Promise<Response> {
+async function resolveMedia(request: NextRequest, context: RouteContext): Promise<{
+  mediaUrl: string;
+  provider: string | null;
+} | Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -62,17 +65,88 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     return NextResponse.json({ error: "media_not_found" }, { status: 404 });
   }
 
-  if (row.provider !== "twilio" || !isAllowedTwilioMediaUrl(mediaUrl)) {
+  return { mediaUrl, provider: row.provider ?? null };
+}
+
+function readTwilioAuth(): string | null {
+  const sid = process.env["TWILIO_ACCOUNT_SID"];
+  const token = process.env["TWILIO_AUTH_TOKEN"];
+  if (!sid || !token) return null;
+  return Buffer.from(`${sid}:${token}`).toString("base64");
+}
+
+async function fetchTwilioHead(mediaUrl: string, auth: string): Promise<Response> {
+  const headResponse = await fetch(mediaUrl, {
+    method: "HEAD",
+    headers: { Authorization: `Basic ${auth}` }
+  }).catch(() => null);
+
+  const response = headResponse?.ok
+    ? headResponse
+    : await fetch(mediaUrl, {
+        method: "GET",
+        headers: { Authorization: `Basic ${auth}`, Range: "bytes=0-0" }
+      }).catch(() => null);
+
+  if (!response?.ok) {
+    const status = response?.status ?? 502;
+    const text = response ? await response.text().catch(() => "") : "";
+    return NextResponse.json(
+      { error: "media_fetch_failed", detail: `twilio:${status}:${text}` },
+      { status: 502 }
+    );
+  }
+
+  const contentType = response.headers.get("content-type") ?? "application/octet-stream";
+  const contentLength = response.headers.get("content-length");
+
+  try {
+    await response.arrayBuffer();
+  } catch {
+    // ignore
+  }
+
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      ...(contentLength ? { "Content-Length": contentLength } : {}),
+      "Cache-Control": "private, max-age=60"
+    }
+  });
+}
+
+export async function HEAD(request: NextRequest, context: RouteContext): Promise<Response> {
+  const resolved = await resolveMedia(request, context);
+  if (resolved instanceof Response) return resolved;
+
+  const { mediaUrl, provider } = resolved;
+  if (provider !== "twilio" || !isAllowedTwilioMediaUrl(mediaUrl)) {
     return NextResponse.json({ error: "media_provider_unsupported" }, { status: 400 });
   }
 
-  const sid = process.env["TWILIO_ACCOUNT_SID"];
-  const token = process.env["TWILIO_AUTH_TOKEN"];
-  if (!sid || !token) {
+  const auth = readTwilioAuth();
+  if (!auth) {
     return NextResponse.json({ error: "twilio_not_configured" }, { status: 500 });
   }
 
-  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  return fetchTwilioHead(mediaUrl, auth);
+}
+
+export async function GET(request: NextRequest, context: RouteContext): Promise<Response> {
+  const resolved = await resolveMedia(request, context);
+  if (resolved instanceof Response) return resolved;
+
+  const { mediaUrl, provider } = resolved;
+  if (provider !== "twilio" || !isAllowedTwilioMediaUrl(mediaUrl)) {
+    return NextResponse.json({ error: "media_provider_unsupported" }, { status: 400 });
+  }
+
+  const auth = readTwilioAuth();
+  if (!auth) {
+    return NextResponse.json({ error: "twilio_not_configured" }, { status: 500 });
+  }
+
   const upstream = await fetch(mediaUrl, {
     method: "GET",
     headers: { Authorization: `Basic ${auth}` }
@@ -97,4 +171,3 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     }
   });
 }
-

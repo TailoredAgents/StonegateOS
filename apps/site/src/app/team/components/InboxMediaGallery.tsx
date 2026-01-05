@@ -7,6 +7,11 @@ function clampIndex(value: number, count: number): number {
   return ((value % count) + count) % count;
 }
 
+function isVideoContentType(contentType: string | null | undefined): boolean {
+  if (!contentType) return false;
+  return contentType.toLowerCase().startsWith("video/");
+}
+
 export function InboxMediaGallery({ messageId, count }: { messageId: string; count: number }) {
   const safeCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
   const mediaUrls = useMemo(() => {
@@ -17,6 +22,41 @@ export function InboxMediaGallery({ messageId, count }: { messageId: string; cou
 
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const activeIndex = openIndex === null ? null : clampIndex(openIndex, safeCount);
+  const [contentTypes, setContentTypes] = useState<Record<number, string>>({});
+  const activeContentType = activeIndex !== null ? contentTypes[activeIndex] ?? null : null;
+  const activeIsVideo = isVideoContentType(activeContentType);
+
+  useEffect(() => {
+    if (safeCount <= 0) return;
+    let cancelled = false;
+
+    async function loadTypes() {
+      const entries = await Promise.all(
+        mediaUrls.map(async (href, index) => {
+          try {
+            const response = await fetch(href, { method: "HEAD" });
+            if (!response.ok) return [index, "" as const] as const;
+            return [index, response.headers.get("content-type") ?? ""] as const;
+          } catch {
+            return [index, "" as const] as const;
+          }
+        })
+      );
+
+      if (cancelled) return;
+
+      const next: Record<number, string> = {};
+      for (const [index, contentType] of entries) {
+        if (contentType) next[index] = contentType;
+      }
+      setContentTypes(next);
+    }
+
+    loadTypes();
+    return () => {
+      cancelled = true;
+    };
+  }, [mediaUrls, safeCount]);
 
   useEffect(() => {
     if (activeIndex === null) return;
@@ -44,22 +84,34 @@ export function InboxMediaGallery({ messageId, count }: { messageId: string; cou
   return (
     <div className="mt-3 space-y-2">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {mediaUrls.map((href, index) => (
-          <button
-            key={`${messageId}-${index}`}
-            type="button"
-            onClick={() => setOpenIndex(index)}
-            className="group block overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
-            title="View photo"
-          >
-            <img
-              src={href}
-              alt={`Attachment ${index + 1}`}
-              loading="lazy"
-              className="h-28 w-full object-cover transition group-hover:opacity-90"
-            />
-          </button>
-        ))}
+        {mediaUrls.map((href, index) => {
+          const type = contentTypes[index] ?? null;
+          const isVideo = isVideoContentType(type);
+          return (
+            <button
+              key={`${messageId}-${index}`}
+              type="button"
+              onClick={() => setOpenIndex(index)}
+              className="group relative block overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+              title={isVideo ? "View video" : "View photo"}
+            >
+              {isVideo ? (
+                <div className="flex h-28 w-full items-center justify-center bg-slate-900 text-white">
+                  <div className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold">
+                    <span className="text-sm">▶</span> Video
+                  </div>
+                </div>
+              ) : (
+                <img
+                  src={href}
+                  alt={`Attachment ${index + 1}`}
+                  loading="lazy"
+                  className="h-28 w-full object-cover transition group-hover:opacity-90"
+                />
+              )}
+            </button>
+          );
+        })}
       </div>
 
       <div className="flex flex-wrap gap-2 text-[11px] text-slate-500">
@@ -102,11 +154,20 @@ export function InboxMediaGallery({ messageId, count }: { messageId: string; cou
             </div>
 
             <div className="relative overflow-hidden rounded-xl bg-slate-50">
-              <img
-                src={mediaUrls[activeIndex]}
-                alt={`Attachment ${activeIndex + 1}`}
-                className="mx-auto max-h-[75vh] w-auto max-w-full object-contain"
-              />
+              {activeIsVideo ? (
+                <video
+                  controls
+                  playsInline
+                  className="mx-auto max-h-[75vh] w-auto max-w-full"
+                  src={mediaUrls[activeIndex]}
+                />
+              ) : (
+                <img
+                  src={mediaUrls[activeIndex]}
+                  alt={`Attachment ${activeIndex + 1}`}
+                  className="mx-auto max-h-[75vh] w-auto max-w-full object-contain"
+                />
+              )}
             </div>
 
             {safeCount > 1 ? (
@@ -152,4 +213,3 @@ export function InboxMediaGallery({ messageId, count }: { messageId: string; cou
     </div>
   );
 }
-
