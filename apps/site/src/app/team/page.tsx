@@ -69,7 +69,7 @@ export default async function TeamPage({
       contactsOffset = parsed;
     }
   }
-  const quoteContactId = typeof params?.contactId === "string" ? params.contactId : undefined;
+  const contactIdParam = typeof params?.contactId === "string" ? params.contactId : undefined;
   const inboxThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
   const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
 
@@ -228,7 +228,7 @@ export default async function TeamPage({
                       </a>
                       <a
                         className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
-                        href={`/team?tab=contacts&q=${encodeURIComponent(newLead.name)}`}
+                        href={`/team?tab=contacts&contactId=${encodeURIComponent(newLead.id)}&q=${encodeURIComponent(newLead.name)}`}
                       >
                         Open contact
                       </a>
@@ -270,7 +270,7 @@ export default async function TeamPage({
               </div>
             }
           >
-            <QuoteBuilderSection initialContactId={quoteContactId} />
+            <QuoteBuilderSection initialContactId={contactIdParam} />
           </React.Suspense>
         ) : null}
 
@@ -357,7 +357,7 @@ export default async function TeamPage({
               </div>
             }
           >
-            <ContactsSection search={contactsQuery} offset={contactsOffset} />
+            <ContactsSection search={contactsQuery} offset={contactsOffset} contactId={contactIdParam} />
           </React.Suspense>
         ) : null}
 
@@ -705,4 +705,3 @@ function formatFuture(value: Date | null): string {
   const days = Math.floor(hours / 24);
   return `in ${days}d`;
 }
-

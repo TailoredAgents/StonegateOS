@@ -14,7 +14,7 @@ import { isAdminRequest } from "../../web/admin";
 import { normalizePhone } from "../../web/utils";
 import { forwardGeocode } from "@/lib/geocode";
 import type { SQL } from "drizzle-orm";
-import { asc, desc, inArray, ilike, or, sql } from "drizzle-orm";
+import { asc, desc, eq, inArray, ilike, or, sql } from "drizzle-orm";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 200;
@@ -48,9 +48,11 @@ export async function GET(request: NextRequest): Promise<Response> {
   const db = getDb();
   const { searchParams } = request.nextUrl;
   const rawSearch = searchParams.get("q");
+  const contactIdRaw = searchParams.get("contactId");
+  const contactIdFilter = contactIdRaw && contactIdRaw.trim().length > 0 ? contactIdRaw.trim() : null;
   const searchTerm = rawSearch ? sanitizeSearchTerm(rawSearch) : null;
-  const limit = parseLimit(searchParams.get("limit"));
-  const offset = parseOffset(searchParams.get("offset"));
+  const limit = contactIdFilter ? 1 : parseLimit(searchParams.get("limit"));
+  const offset = contactIdFilter ? 0 : parseOffset(searchParams.get("offset"));
 
   const likePattern =
     searchTerm && searchTerm.length > 0 ? `%${searchTerm.replace(/\s+/g, "%")}%` : null;
@@ -77,7 +79,9 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const filters: SQL<unknown>[] = [];
 
-  if (likePattern) {
+  if (contactIdFilter) {
+    filters.push(eq(contacts.id, contactIdFilter));
+  } else if (likePattern) {
     filters.push(
       ilike(contacts.firstName, likePattern),
       ilike(contacts.lastName, likePattern),

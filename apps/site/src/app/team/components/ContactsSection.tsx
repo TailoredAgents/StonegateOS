@@ -31,6 +31,7 @@ function formatRange(pagination: PaginationInfo, count: number): string {
 type ContactsSectionProps = {
   search?: string;
   offset?: number;
+  contactId?: string;
 };
 
 function normalizePhoneLink(phone: string | null | undefined): string | null {
@@ -39,13 +40,14 @@ function normalizePhoneLink(phone: string | null | undefined): string | null {
   return cleaned.length ? cleaned : null;
 }
 
-export async function ContactsSection({ search, offset }: ContactsSectionProps): Promise<ReactElement> {
+export async function ContactsSection({ search, offset, contactId }: ContactsSectionProps): Promise<ReactElement> {
   const safeOffset = typeof offset === "number" && offset > 0 ? offset : 0;
 
   const params = new URLSearchParams();
   params.set("limit", String(PAGE_SIZE));
   if (safeOffset > 0) params.set("offset", String(safeOffset));
   if (search && search.trim().length > 0) params.set("q", search.trim());
+  if (contactId) params.set("contactId", contactId);
 
   const response = await callAdminApi(`/api/admin/contacts?${params.toString()}`);
   if (!response.ok) {
@@ -115,7 +117,7 @@ export async function ContactsSection({ search, offset }: ContactsSectionProps):
               </a>
               <a
                 className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
-                href={`/team?tab=contacts&q=${encodeURIComponent(newLead.name)}`}
+                href={`/team?tab=contacts&contactId=${encodeURIComponent(newLead.id)}&q=${encodeURIComponent(newLead.name)}`}
               >
                 Open contact
               </a>
