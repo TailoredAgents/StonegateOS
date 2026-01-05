@@ -9,6 +9,7 @@ import {
 } from "../actions";
 import { addApptAttachmentAction } from "../actions/attachments";
 import { callAdminApi, fmtTime } from "../lib/api";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type AppointmentStatus = "requested" | "confirmed" | "completed" | "no_show" | "canceled";
 
@@ -182,7 +183,9 @@ export async function EstimatesSection(): Promise<ReactElement> {
                     {a.notes.map((note) => (
                       <div key={note.id} className="rounded-md bg-white px-2 py-1">
                         <div>{note.body}</div>
-                        <div className="text-[10px] text-neutral-400">{new Date(note.createdAt).toLocaleString()}</div>
+                        <div className="text-[10px] text-neutral-400">
+                          {new Date(note.createdAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -201,7 +204,9 @@ export async function EstimatesSection(): Promise<ReactElement> {
                         >
                           {att.filename}
                         </a>
-                        <div className="text-[10px] text-neutral-400">{new Date(att.createdAt).toLocaleString()}</div>
+                        <div className="text-[10px] text-neutral-400">
+                          {new Date(att.createdAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
+                        </div>
                       </div>
                     ))}
                   </div>

@@ -4,6 +4,7 @@ import React from "react";
 import { CalendarGrid, type CalendarEvent } from "./CalendarGrid";
 import { CalendarMonthGrid } from "./CalendarMonthGrid";
 import { CalendarEventDetail } from "./CalendarEventDetail";
+import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
 
 type Props = {
   initialView: "week" | "month";
@@ -14,7 +15,7 @@ type Props = {
 export function CalendarViewer({ initialView, events, conflicts }: Props) {
   const [view, setView] = React.useState<"week" | "month">(initialView);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
-  const [selectedDay, setSelectedDay] = React.useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [selectedDay, setSelectedDay] = React.useState<string>(() => formatDayKey(new Date()));
   const selectedEvent = selectedId ? events.find((evt) => evt.id === selectedId) ?? null : null;
 
   const dayEvents = React.useMemo(() => {
@@ -119,19 +120,32 @@ export function CalendarViewer({ initialView, events, conflicts }: Props) {
 function dayKeyFromIso(iso: string): string | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString().slice(0, 10);
+  const key = formatDayKey(d);
+  return key.length > 0 ? key : null;
 }
 
 function formatDayKeyLabel(dayKey: string): string {
-  const date = new Date(`${dayKey}T00:00:00.000Z`);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
+  if (!match) return dayKey;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return dayKey;
+  const date = new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
   if (Number.isNaN(date.getTime())) return dayKey;
-  return date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  return date.toLocaleDateString(undefined, {
+    timeZone: TEAM_TIME_ZONE,
+    weekday: "long",
+    month: "long",
+    day: "numeric"
+  });
 }
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     hour: "numeric",
     minute: "2-digit",
     hour12: true

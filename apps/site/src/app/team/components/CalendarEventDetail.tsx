@@ -1,5 +1,6 @@
 import React from "react";
 import type { CalendarEvent } from "./CalendarGrid";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type Props = {
   event: CalendarEvent;
@@ -57,6 +58,7 @@ export function CalendarEventDetail({ event }: Props): React.ReactElement {
 function formatTime(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString(undefined, {
+    timeZone: TEAM_TIME_ZONE,
     weekday: "short",
     month: "short",
     day: "numeric",

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { SubmitButton } from "@/components/SubmitButton";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   addPropertyAction,
   bookAppointmentAction,
@@ -34,6 +35,7 @@ function formatDateTime(iso: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "N/A";
   return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     dateStyle: "medium",
     timeStyle: "short"
   }).format(date);
@@ -44,6 +46,7 @@ function formatDate(iso: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "No due date";
   return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     dateStyle: "medium"
   }).format(date);
 }

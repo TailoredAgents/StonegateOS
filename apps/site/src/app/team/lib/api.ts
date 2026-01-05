@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE } from "@/lib/admin-session";
 import { CREW_SESSION_COOKIE } from "@/lib/crew-session";
+import { TEAM_TIME_ZONE } from "./timezone";
 
 const API_BASE_URL =
   process.env["API_BASE_URL"] ??
@@ -44,6 +45,7 @@ export function fmtTime(iso: string | null): string {
   if (!iso) return "TBD";
   const d = new Date(iso);
   return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     weekday: "short",
     hour: "numeric",
     minute: "2-digit"
@@ -57,4 +59,3 @@ export function fmtMoney(cents: number, currency: string): string {
     return `$${(cents / 100).toFixed(2)}`;
   }
 }
-

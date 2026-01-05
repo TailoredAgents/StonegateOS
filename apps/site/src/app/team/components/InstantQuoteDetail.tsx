@@ -2,6 +2,7 @@ import React from "react";
 import { callAdminApi } from "../lib/api";
 import { deleteInstantQuoteAction } from "../actions";
 import { DeleteInstantQuoteForm } from "./DeleteInstantQuoteForm";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type InstantQuoteDto = {
   id: string;
@@ -52,7 +53,9 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
     <div className="space-y-3 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
       <div className="flex items-center justify-between text-sm">
         <div className="font-semibold text-slate-900">{quote.contactName}</div>
-        <div className="text-[11px] text-slate-500">{new Date(quote.createdAt).toLocaleString()}</div>
+        <div className="text-[11px] text-slate-500">
+          {new Date(quote.createdAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
+        </div>
       </div>
       <div className="text-xs text-slate-600">
         {quote.contactPhone} • {quote.zip} • timeframe: {quote.timeframe}

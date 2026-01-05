@@ -1,4 +1,5 @@
 import React from "react";
+import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
 
 type CalendarEvent = {
   id: string;
@@ -42,10 +43,11 @@ export function CalendarMonthGrid({
 
   const buckets = new Map<string, CalendarEvent[]>();
   for (const cell of cells) {
-    buckets.set(cell.toISOString().slice(0, 10), []);
+    buckets.set(formatDayKey(cell), []);
   }
   for (const evt of events) {
-    const key = new Date(evt.start).toISOString().slice(0, 10);
+    const parsed = new Date(evt.start);
+    const key = Number.isNaN(parsed.getTime()) ? "" : formatDayKey(parsed);
     if (buckets.has(key)) {
       buckets.get(key)!.push(evt);
     }
@@ -56,7 +58,7 @@ export function CalendarMonthGrid({
   return (
     <div className="grid grid-cols-7 gap-2 text-sm">
       {cells.map((day, idx) => {
-        const key = day.toISOString().slice(0, 10);
+        const key = formatDayKey(day);
         const inMonth = day.getMonth() === month;
         const bucket = buckets.get(key) ?? [];
         const isSelected = typeof selectedDay === "string" && selectedDay.length > 0 ? selectedDay === key : false;
@@ -74,7 +76,11 @@ export function CalendarMonthGrid({
                 isSelected ? "text-primary-700" : "text-slate-500"
               }`}
             >
-              {day.toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}
+              {day.toLocaleDateString(undefined, {
+                timeZone: TEAM_TIME_ZONE,
+                weekday: "short",
+                day: "numeric"
+              })}
             </button>
 
             {bucket.length ? (
@@ -137,6 +143,7 @@ function formatTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     hour: "numeric",
     minute: "2-digit",
     hour12: true

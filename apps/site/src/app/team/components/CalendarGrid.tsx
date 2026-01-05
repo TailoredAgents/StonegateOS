@@ -1,4 +1,5 @@
 import React from "react";
+import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
 
 export type CalendarEvent = {
   id: string;
@@ -31,11 +32,15 @@ export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React
 
   const dayBuckets: Record<string, CalendarEvent[]> = {};
   for (const day of days) {
-    dayBuckets[day.toISOString().slice(0, 10)] = [];
+    const key = formatDayKey(day);
+    if (key) {
+      dayBuckets[key] = [];
+    }
   }
 
   for (const evt of events) {
-    const dayKey = new Date(evt.start).toISOString().slice(0, 10);
+    const parsed = new Date(evt.start);
+    const dayKey = Number.isNaN(parsed.getTime()) ? "" : formatDayKey(parsed);
     if (dayBuckets[dayKey]) {
       dayBuckets[dayKey].push(evt);
     }
@@ -46,7 +51,7 @@ export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React
   return (
     <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-7">
       {days.map((day) => {
-        const key = day.toISOString().slice(0, 10);
+        const key = formatDayKey(day);
         const bucket = dayBuckets[key] ?? [];
         return (
           <div
@@ -54,7 +59,12 @@ export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React
             className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm"
           >
             <div className="mb-2 text-xs font-semibold uppercase text-slate-500">
-              {day.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+              {day.toLocaleDateString(undefined, {
+                timeZone: TEAM_TIME_ZONE,
+                weekday: "short",
+                month: "short",
+                day: "numeric"
+              })}
             </div>
             <div className="space-y-2">
               {bucket.length === 0 ? (
@@ -110,6 +120,7 @@ function formatTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     hour: "numeric",
     minute: "2-digit",
     hour12: true

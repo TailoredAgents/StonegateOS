@@ -1,6 +1,7 @@
 import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { updateAutomationModeAction, updateLeadAutomationAction } from "../actions";
 
 type AutomationChannel = {
@@ -56,7 +57,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                   Update
                 </SubmitButton>
                 <span className="text-[10px] text-slate-500">
-                  {channel.updatedAt ? new Date(channel.updatedAt).toLocaleString() : "Just now"}
+                  {channel.updatedAt
+                    ? new Date(channel.updatedAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })
+                    : "Just now"}
                 </span>
               </form>
             ))}

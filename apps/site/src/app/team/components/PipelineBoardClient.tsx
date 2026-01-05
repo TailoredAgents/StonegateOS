@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { updatePipelineStageAction } from "../actions";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 import type { PipelineContact, PipelineLane } from "./pipeline.types";
 
 const STAGE_LABELS: Record<string, string> = {
@@ -105,6 +106,7 @@ function formatShortDate(iso: string | null): string {
   const time = Date.parse(iso);
   if (Number.isNaN(time)) return "No recent activity";
   return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     month: "short",
     day: "numeric"
   }).format(new Date(time));
@@ -351,4 +353,3 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
     </div>
   );
 }
-

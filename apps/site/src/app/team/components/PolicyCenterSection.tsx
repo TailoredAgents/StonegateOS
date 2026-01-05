@@ -1,6 +1,7 @@
 import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   updateBookingRulesPolicyAction,
   updateBusinessHoursPolicyAction,
@@ -127,7 +128,9 @@ function readGroup(value: Record<string, unknown>, key: string): Record<string, 
 }
 
 function formatUpdatedAt(updatedAt: string | null): string {
-  return updatedAt ? new Date(updatedAt).toLocaleString() : "just now";
+  return updatedAt
+    ? new Date(updatedAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })
+    : "just now";
 }
 
 function AdvancedJsonEditor(props: { setting: PolicySetting | undefined }) {

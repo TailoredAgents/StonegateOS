@@ -1,6 +1,7 @@
 import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   createThreadAction,
   retryFailedMessageAction,
@@ -176,6 +177,7 @@ function formatTimestamp(value: string | null): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "No activity yet";
   return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     month: "short",
     day: "numeric",
     hour: "numeric",
