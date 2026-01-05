@@ -7,6 +7,15 @@ import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-hea
 
 export const dynamic = "force-dynamic";
 
+const EMPTY_TWIML_RESPONSE = `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;
+
+function twimlOk(): NextResponse {
+  return new NextResponse(EMPTY_TWIML_RESPONSE, {
+    status: 200,
+    headers: { "Content-Type": "text/xml" }
+  });
+}
+
 function readString(value: FormDataEntryValue | null): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
@@ -120,7 +129,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
     }
 
-    return new NextResponse("ok", { status: 200 });
+    return twimlOk();
   }
 
   const mediaUrls: string[] = [];
@@ -153,5 +162,5 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: message }, { status });
   }
 
-  return new NextResponse("ok", { status: 200 });
+  return twimlOk();
 }
