@@ -194,19 +194,9 @@ function ContactCard({ contact }: ContactCardProps) {
                 pendingLabel="Calling..."
                 disabled={!callLink}
               >
-                Call (Stonegate #)
+                Call
               </SubmitButton>
             </form>
-            <a
-              className={`rounded-full border px-4 py-2 font-medium ${
-                callLink
-                  ? "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
-                  : "pointer-events-none border-slate-100 text-slate-300"
-              }`}
-              href={callLink ?? "#"}
-            >
-              Call direct
-            </a>
             <a
               className={`rounded-full border px-4 py-2 font-medium ${
                 textLink
