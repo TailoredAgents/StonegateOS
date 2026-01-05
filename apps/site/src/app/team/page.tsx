@@ -5,9 +5,11 @@ import { CrewLoginForm } from "../crew/login/LoginForm";
 import {
   logoutCrew,
   logoutOwner,
+  dismissNewLeadAction,
   saveCallAgentPhoneAction,
   clearCallAgentPhoneAction,
-  setCallAgentChoiceAction
+  setCallAgentChoiceAction,
+  updatePipelineStageAction
 } from "./actions";
 import { MyDaySection } from "./components/MyDaySection";
 import { EstimatesSection } from "./components/EstimatesSection";
@@ -27,6 +29,7 @@ import { AuditLogSection } from "./components/AuditLogSection";
 import { MergeQueueSection } from "./components/MergeQueueSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
+import { FlashClearer } from "./components/FlashClearer";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
@@ -40,12 +43,6 @@ type LeadContactSummary = {
   phoneE164: string | null;
   pipeline?: { stage?: string | null };
 };
-
-function normalizePhoneLink(phone: string | null | undefined): string | null {
-  if (!phone) return null;
-  const cleaned = phone.replace(/[^\d+]/g, "");
-  return cleaned.length ? cleaned : null;
-}
 
 export default async function TeamPage({
   searchParams
@@ -75,6 +72,7 @@ export default async function TeamPage({
 
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
+  const dismissedNewLeadId = cookieStore.get("myst-new-lead-dismissed")?.value ?? null;
   const tabs: TabNavItem[] = [
     { id: "myday", label: "My Day", href: "/team?tab=myday", requires: "crew" },
     { id: "estimates", label: "Estimates", href: "/team?tab=estimates", requires: "owner" },
@@ -135,7 +133,12 @@ export default async function TeamPage({
       if (response.ok) {
         const payload = (await response.json()) as { contacts?: LeadContactSummary[] };
         const contacts = payload.contacts ?? [];
-        newLead = contacts.find((contact) => contact.pipeline?.stage === "new") ?? null;
+        newLead =
+          contacts.find(
+            (contact) =>
+              contact.pipeline?.stage === "new" &&
+              (!dismissedNewLeadId || contact.id !== dismissedNewLeadId)
+          ) ?? null;
       }
     } catch {
       newLead = null;
@@ -189,6 +192,7 @@ export default async function TeamPage({
             {flashError}
           </div>
         ) : null}
+        {flash || flashError ? <FlashClearer /> : null}
         {newLead ? (
           <section className="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4 shadow-sm shadow-emerald-100">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -200,41 +204,31 @@ export default async function TeamPage({
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 text-xs">
-                {(() => {
-                  const callNumber = normalizePhoneLink(newLead.phoneE164 ?? newLead.phone);
-                  const callLink = callNumber ? `tel:${callNumber}` : null;
-                  const textLink = callNumber ? `sms:${callNumber}` : null;
-                  return (
-                    <>
-                      <a
-                        className={`rounded-full border px-3 py-2 font-semibold ${
-                          callLink
-                            ? "border-emerald-200 text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
-                            : "pointer-events-none border-emerald-100 text-emerald-300"
-                        }`}
-                        href={callLink ?? "#"}
-                      >
-                        Call now
-                      </a>
-                      <a
-                        className={`rounded-full border px-3 py-2 font-semibold ${
-                          textLink
-                            ? "border-emerald-200 text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
-                            : "pointer-events-none border-emerald-100 text-emerald-300"
-                        }`}
-                        href={textLink ?? "#"}
-                      >
-                        Text
-                      </a>
-                      <a
-                        className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
-                        href={`/team?tab=contacts&contactId=${encodeURIComponent(newLead.id)}&q=${encodeURIComponent(newLead.name)}`}
-                      >
-                        Open contact
-                      </a>
-                    </>
-                  );
-                })()}
+                <a
+                  className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
+                  href={`/team?tab=contacts&contactId=${encodeURIComponent(newLead.id)}`}
+                >
+                  Open contact
+                </a>
+                <form action={updatePipelineStageAction}>
+                  <input type="hidden" name="contactId" value={newLead.id} />
+                  <input type="hidden" name="stage" value="contacted" />
+                  <button
+                    type="submit"
+                    className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
+                  >
+                    Mark contacted
+                  </button>
+                </form>
+                <form action={dismissNewLeadAction}>
+                  <input type="hidden" name="contactId" value={newLead.id} />
+                  <button
+                    type="submit"
+                    className="rounded-full border border-emerald-200 px-3 py-2 font-semibold text-emerald-800 hover:border-emerald-300 hover:text-emerald-900"
+                  >
+                    Dismiss 24h
+                  </button>
+                </form>
               </div>
             </div>
           </section>

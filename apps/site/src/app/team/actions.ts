@@ -1912,3 +1912,22 @@ export async function logoutOwner() {
   jar.set({ name: "myst-admin-session", value: "", path: "/", maxAge: 0 });
   redirect("/team");
 }
+
+export async function dismissNewLeadAction(formData: FormData) {
+  const jar = await cookies();
+  const contactId = formData.get("contactId");
+
+  if (typeof contactId !== "string" || contactId.trim().length === 0) {
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({
+    name: "myst-new-lead-dismissed",
+    value: contactId.trim(),
+    path: "/",
+    maxAge: 60 * 60 * 24
+  });
+
+  revalidatePath("/team");
+}
