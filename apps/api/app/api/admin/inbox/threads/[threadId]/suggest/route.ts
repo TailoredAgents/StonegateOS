@@ -54,7 +54,10 @@ function isReplyChannel(value: string): value is ReplyChannel {
 function getOpenAIConfig(): { apiKey: string; model: string } | null {
   const apiKey = process.env["OPENAI_API_KEY"];
   if (!apiKey) return null;
-  const configured = process.env["OPENAI_MODEL"];
+  const configured =
+    process.env["OPENAI_INBOX_SUGGEST_MODEL"] ??
+    process.env["OPENAI_MODEL"] ??
+    null;
   const model = configured && configured.trim().length > 0 ? configured.trim() : "gpt-5-mini";
   return { apiKey, model };
 }
