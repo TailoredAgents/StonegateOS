@@ -97,7 +97,7 @@ async function callOpenAIReply(input: {
                 body: { type: "string" },
                 subject: { type: "string" }
               },
-              required: ["body"]
+              required: ["body", "subject"]
             }
           }
         }
@@ -140,7 +140,10 @@ async function callOpenAIReply(input: {
     const parsed = JSON.parse(raw) as { body?: unknown; subject?: unknown };
     const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
     if (!body) return { ok: false, error: "openai_empty_body" };
-    const subject = typeof parsed.subject === "string" && parsed.subject.trim().length > 0 ? parsed.subject.trim() : null;
+    const subject =
+      typeof parsed.subject === "string" && parsed.subject.trim().length > 0
+        ? parsed.subject.trim()
+        : null;
     return { ok: true, body, subject };
   } catch (error) {
     console.warn("[inbox.suggest] openai.response_error", { error: String(error) });
