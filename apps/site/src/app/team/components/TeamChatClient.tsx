@@ -2,6 +2,7 @@
 
 import React from "react";
 import { Button, cn } from "@myst-os/ui";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type BookingSuggestion = { startAt: string; endAt: string; reason: string; services?: string[] };
 type BookingOption = BookingSuggestion & { services?: string[]; selectedService?: string };
@@ -267,7 +268,12 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
             if (action.type === "book_appointment" && !next[action.id]) {
               const start = action.payload?.["startAt"] ? new Date(action.payload["startAt"]) : null;
               next[action.id] = start
-                ? start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+                ? start.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                    timeZone: TEAM_TIME_ZONE
+                  })
                 : "";
             }
           }
@@ -381,7 +387,16 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const formatSlot = React.useCallback((suggestion: BookingSuggestion): string => {
     const start = new Date(suggestion.startAt);
     const end = new Date(suggestion.endAt);
-    return `${start.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })} - ${end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+    return `${start.toLocaleString(undefined, {
+      weekday: "short",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: TEAM_TIME_ZONE
+    })} - ${end.toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: TEAM_TIME_ZONE
+    })}`;
   }, []);
 
   const handleBook = React.useCallback(
@@ -418,7 +433,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           });
         } else {
           const data = (await res.json()) as { appointmentId?: string; startAt?: string };
-          const when = data.startAt ? new Date(data.startAt).toLocaleString() : formatSlot(suggestion);
+          const when = data.startAt
+            ? new Date(data.startAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })
+            : formatSlot(suggestion);
           setBookingStatus({
             state: "success",
             message: `Booked ${when}${contact ? ` for ${contact.name}` : ""}${property ? ` at ${property.label}` : ""}.`
@@ -861,7 +878,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                             <div className="text-[11px] text-slate-500">
                               Appointment:{" "}
                               {action.context.appointmentStartAt
-                                ? new Date(action.context.appointmentStartAt).toLocaleString()
+                                ? new Date(action.context.appointmentStartAt).toLocaleString(undefined, {
+                                    timeZone: TEAM_TIME_ZONE
+                                  })
                                 : "Timing TBD"}
                             </div>
                           ) : null}

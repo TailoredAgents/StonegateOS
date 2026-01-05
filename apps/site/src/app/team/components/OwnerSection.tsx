@@ -1,6 +1,7 @@
 import React from "react";
 import { OwnerAssistClient } from "./OwnerAssistClient";
 import { callAdminApi } from "../lib/api";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type PaymentDto = {
   id: string;
@@ -65,7 +66,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
                   </div>
                   <div className="text-right text-xs text-slate-600">
                     <div>{p.cardBrand ?? p.method ?? "payment"}</div>
-                    <div>{new Date(p.createdAt).toLocaleDateString()}</div>
+                    <div>{new Date(p.createdAt).toLocaleDateString(undefined, { timeZone: TEAM_TIME_ZONE })}</div>
                   </div>
                 </li>
               ))}
