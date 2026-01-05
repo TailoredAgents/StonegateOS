@@ -8,13 +8,9 @@ export type PropertySummary = {
   createdAt: string;
 };
 
-export type TaskSummary = {
+export type ContactNoteSummary = {
   id: string;
-  title: string;
-  dueAt: string | null;
-  assignedTo: string | null;
-  status: string;
-  notes: string | null;
+  body: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -38,7 +34,8 @@ export type ContactSummary = {
   lastActivityAt: string | null;
   pipeline: PipelineSummary;
   properties: PropertySummary[];
-  tasks: TaskSummary[];
+  notes: ContactNoteSummary[];
+  notesCount: number;
   stats: {
     appointments: number;
     quotes: number;

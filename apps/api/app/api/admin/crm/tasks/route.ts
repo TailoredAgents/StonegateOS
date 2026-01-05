@@ -6,6 +6,7 @@ import { isAdminRequest } from "../../../web/admin";
 import { and, eq, sql, asc, desc } from "drizzle-orm";
 
 type TaskStatus = "open" | "completed";
+const TASK_STATUS_SET = new Set<TaskStatus>(["open", "completed"]);
 
 function parseStatusParam(value: string | null): TaskStatus | "all" {
   if (!value) return "open";
@@ -92,7 +93,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     title,
     dueAt,
     assignedTo,
-    notes
+    notes,
+    status
   } = payload as Record<string, unknown>;
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
@@ -115,6 +117,18 @@ export async function POST(request: NextRequest): Promise<Response> {
   const db = getDb();
   const actor = getAuditActorFromRequest(request);
 
+  let taskStatus: TaskStatus = "open";
+  if (status !== undefined) {
+    if (typeof status !== "string") {
+      return NextResponse.json({ error: "invalid_status" }, { status: 400 });
+    }
+    const normalized = status.trim().toLowerCase() as TaskStatus;
+    if (!TASK_STATUS_SET.has(normalized)) {
+      return NextResponse.json({ error: "invalid_status" }, { status: 400 });
+    }
+    taskStatus = normalized;
+  }
+
   const [contact] = await db
     .select({ id: contacts.id })
     .from(contacts)
@@ -134,7 +148,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       assignedTo:
         typeof assignedTo === "string" && assignedTo.trim().length > 0 ? assignedTo.trim() : null,
       notes: typeof notes === "string" && notes.trim().length > 0 ? notes.trim() : null,
-      status: "open"
+      status: taskStatus
     })
     .returning({
       id: crmTasks.id,

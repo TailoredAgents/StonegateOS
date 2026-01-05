@@ -884,6 +884,76 @@ export async function updatePipelineStageAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+function makeNoteTitle(body: string): string {
+  const normalized = body.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) return "Note";
+  const maxLen = 60;
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, maxLen - 1)}…`;
+}
+
+export async function createContactNoteAction(formData: FormData) {
+  const jar = await cookies();
+  const contactId = formData.get("contactId");
+  const body = formData.get("body");
+
+  if (typeof contactId !== "string" || contactId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (typeof body !== "string" || body.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Note body required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    contactId: contactId.trim(),
+    title: makeNoteTitle(body),
+    notes: body.trim(),
+    status: "completed"
+  };
+
+  const response = await callAdminApi(`/api/admin/crm/tasks`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to add note");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Note added", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function deleteContactNoteAction(formData: FormData) {
+  const jar = await cookies();
+  const noteId = formData.get("noteId");
+
+  if (typeof noteId !== "string" || noteId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Note ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/admin/crm/tasks/${noteId.trim()}`, { method: "DELETE" });
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to delete note");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Note deleted", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function createTaskAction(formData: FormData) {
   const jar = await cookies();
   const contactId = formData.get("contactId");

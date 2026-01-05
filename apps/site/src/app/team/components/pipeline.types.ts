@@ -21,7 +21,7 @@ export type PipelineContact = {
     appointments: number;
     quotes: number;
   };
-  openTasks: number;
+  notesCount: number;
   lastActivityAt: string | null;
   updatedAt: string;
   createdAt: string;

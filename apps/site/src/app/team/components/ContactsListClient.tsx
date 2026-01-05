@@ -6,16 +6,15 @@ import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   addPropertyAction,
   bookAppointmentAction,
-  createTaskAction,
+  createContactNoteAction,
   deleteContactAction,
+  deleteContactNoteAction,
   deletePropertyAction,
-  deleteTaskAction,
   startContactCallAction,
   updateContactAction,
-  updatePropertyAction,
-  updateTaskAction
+  updatePropertyAction
 } from "../actions";
-import type { ContactSummary, PropertySummary, TaskSummary } from "./contacts.types";
+import type { ContactNoteSummary, ContactSummary, PropertySummary } from "./contacts.types";
 
 const PIPELINE_STAGE_LABELS: Record<string, string> = {
   new: "New",
@@ -38,16 +37,6 @@ function formatDateTime(iso: string | null): string {
     timeZone: TEAM_TIME_ZONE,
     dateStyle: "medium",
     timeStyle: "short"
-  }).format(date);
-}
-
-function formatDate(iso: string | null): string {
-  if (!iso) return "No due date";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "No due date";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: TEAM_TIME_ZONE,
-    dateStyle: "medium"
   }).format(date);
 }
 
@@ -88,11 +77,6 @@ type ContactCardProps = {
   contact: ContactSummary;
 };
 
-const taskStatusLabel: Record<string, string> = {
-  open: "Open",
-  completed: "Completed"
-};
-
 function ContactCard({ contact }: ContactCardProps) {
   const [contactState, setContactState] = useState<ContactSummary>(contact);
   const [editingContact, setEditingContact] = useState(false);
@@ -100,7 +84,7 @@ function ContactCard({ contact }: ContactCardProps) {
   const [bookingStartAtIso, setBookingStartAtIso] = useState<string>("");
   const [addingProperty, setAddingProperty] = useState(false);
   const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
-  const [showTaskForm, setShowTaskForm] = useState(false);
+  const [showNoteForm, setShowNoteForm] = useState(false);
 
   useEffect(() => {
     setContactState(contact);
@@ -112,15 +96,9 @@ function ContactCard({ contact }: ContactCardProps) {
   const callLink = phoneLink ? `tel:${phoneLink}` : null;
   const textLink = phoneLink ? `sms:${phoneLink}` : null;
 
-  const openTasks = useMemo(
-    () => contactState.tasks.filter((task) => task.status !== "completed"),
-    [contactState.tasks]
-  );
-
-  const completedTasks = useMemo(
-    () => contactState.tasks.filter((task) => task.status === "completed"),
-    [contactState.tasks]
-  );
+  const sortedNotes = useMemo(() => {
+    return [...(contactState.notes ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  }, [contactState.notes]);
 
   return (
     <li className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60">
@@ -148,7 +126,9 @@ function ContactCard({ contact }: ContactCardProps) {
               <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">
                 Quotes: {contactState.stats.quotes}
               </span>
-              <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">Open tasks: {openTasks.length}</span>
+              <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">
+                Notes: {contactState.notesCount ?? contactState.notes.length}
+              </span>
             </div>
             <p className="text-xs text-slate-400">Last activity: {formatDateTime(contactState.lastActivityAt)}</p>
           </div>
@@ -532,67 +512,49 @@ function ContactCard({ contact }: ContactCardProps) {
           <div className="space-y-4 lg:col-span-2">
             <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 shadow-inner">
               <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold text-slate-800">Tasks</h4>
+                <h4 className="text-sm font-semibold text-slate-800">Notes</h4>
                 <button
                   type="button"
                   className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-primary-300 hover:text-primary-700"
-                  onClick={() => setShowTaskForm((prev) => !prev)}
+                  onClick={() => setShowNoteForm((prev) => !prev)}
                 >
-                  {showTaskForm ? "Close" : "Add task"}
+                  {showNoteForm ? "Close" : "Add note"}
                 </button>
               </div>
               <div className="mt-3 space-y-3">
-                {contactState.tasks.length === 0 ? (
+                {sortedNotes.length === 0 ? (
                   <p className="rounded-xl border border-dashed border-slate-200 bg-white/60 px-3 py-2 text-xs text-slate-500">
-                    No tasks yet. Capture follow-ups to keep the pipeline moving.
+                    No notes yet. Capture details from calls and follow-ups so everyone stays aligned.
                   </p>
                 ) : (
-                  <>
-                    {openTasks.map((task) => (
-                      <TaskRow key={task.id} task={task} />
-                    ))}
-                    {completedTasks.length > 0 ? (
-                      <details className="rounded-xl border border-slate-200 bg-white/70 p-3 text-slate-500">
-                        <summary className="cursor-pointer text-xs font-medium text-slate-600">
-                          Completed ({completedTasks.length})
-                        </summary>
-                        <div className="mt-2 space-y-2">
-                          {completedTasks.map((task) => (
-                            <TaskRow key={task.id} task={task} />
-                          ))}
-                        </div>
-                      </details>
-                    ) : null}
-                  </>
+                  sortedNotes.map((note) => <NoteRow key={note.id} note={note} />)
                 )}
               </div>
-              {showTaskForm ? (
+              {showNoteForm ? (
                 <form
-                  action={createTaskAction}
-                  className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600 sm:grid-cols-2"
-                  onSubmit={() => setShowTaskForm(false)}
+                  action={createContactNoteAction}
+                  className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600"
+                  onSubmit={() => setShowNoteForm(false)}
                 >
                   <input type="hidden" name="contactId" value={contactState.id} />
-                  <label className="flex flex-col gap-1 sm:col-span-2">
-                    <span>Title</span>
-                    <input name="title" required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
-                  </label>
                   <label className="flex flex-col gap-1">
-                    <span>Due date</span>
-                    <input name="dueAt" type="date" className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                    <span>Note</span>
+                    <textarea
+                      name="body"
+                      required
+                      rows={3}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                      placeholder="What happened? Next steps?"
+                    />
                   </label>
-                  <label className="flex flex-col gap-1">
-                    <span>Assignee</span>
-                    <input name="assignedTo" placeholder="Optional" className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
-                  </label>
-                  <div className="flex gap-2 sm:col-span-2">
+                  <div className="flex gap-2">
                     <SubmitButton className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700" pendingLabel="Saving...">
-                      Add task
+                      Add note
                     </SubmitButton>
                     <button
                       type="button"
                       className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800"
-                      onClick={() => setShowTaskForm(false)}
+                      onClick={() => setShowNoteForm(false)}
                     >
                       Cancel
                     </button>
@@ -607,43 +569,27 @@ function ContactCard({ contact }: ContactCardProps) {
   );
 }
 
-function TaskRow({ task }: { task: TaskSummary }) {
-  const isCompleted = task.status === "completed";
+function NoteRow({ note }: { note: ContactNoteSummary }) {
   return (
-    <div
-      className={`rounded-2xl border px-4 py-3 text-xs shadow-sm ${
-        isCompleted ? "border-slate-200 bg-white/70 text-slate-500" : "border-emerald-200/70 bg-emerald-50/70 text-emerald-900"
-      }`}
-    >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-xs text-slate-700 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
-          <p className={`text-sm font-semibold ${isCompleted ? "text-slate-600" : "text-emerald-900"}`}>{task.title}</p>
-          <p className="text-[11px]">
-            {taskStatusLabel[task.status] ?? task.status} · {formatDate(task.dueAt)}
-            {task.assignedTo ? ` · ${task.assignedTo}` : ""}
-          </p>
-          {task.notes ? <p className="text-[11px] opacity-80">{task.notes}</p> : null}
+          <p className="text-[11px] text-slate-500">Added {formatDateTime(note.createdAt)}</p>
+          <p className="whitespace-pre-wrap text-sm font-semibold text-slate-800">{note.body}</p>
         </div>
-        <div className="flex gap-2">
-          <form action={updateTaskAction}>
-            <input type="hidden" name="taskId" value={task.id} />
-            <input type="hidden" name="status" value={isCompleted ? "open" : "completed"} />
-            <SubmitButton
-              className={`rounded-full px-3 py-1.5 font-medium ${
-                isCompleted ? "border border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700" : "border border-emerald-300 text-emerald-700 hover:bg-emerald-100"
-              }`}
-              pendingLabel="Updating..."
-            >
-              {isCompleted ? "Reopen" : "Complete"}
-            </SubmitButton>
-          </form>
-          <form action={deleteTaskAction}>
-            <input type="hidden" name="taskId" value={task.id} />
-            <SubmitButton className="rounded-full border border-rose-200 px-3 py-1.5 font-medium text-rose-600 hover:bg-rose-50" pendingLabel="Removing...">
-              Delete
-            </SubmitButton>
-          </form>
-        </div>
+        <form
+          action={deleteContactNoteAction}
+          onSubmit={(event) => {
+            if (!window.confirm("Delete this note?")) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <input type="hidden" name="noteId" value={note.id} />
+          <SubmitButton className="rounded-full border border-rose-200 px-3 py-1.5 font-medium text-rose-600 hover:bg-rose-50" pendingLabel="Removing...">
+            Delete
+          </SubmitButton>
+        </form>
       </div>
     </div>
   );

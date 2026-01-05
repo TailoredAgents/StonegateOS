@@ -279,7 +279,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                               {contact.firstName} {contact.lastName}
                             </p>
                             <p className="text-[11px] text-slate-500">
-                              Updated {formatShortDate(contact.lastActivityAt)} - {contact.openTasks} open tasks
+                              Updated {formatShortDate(contact.lastActivityAt)} - {contact.notesCount} notes
                             </p>
                           </div>
                           <span

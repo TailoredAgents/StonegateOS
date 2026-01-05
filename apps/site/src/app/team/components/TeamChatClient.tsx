@@ -54,7 +54,7 @@ type ContactOption = {
 const TEAM_SUGGESTIONS: string[] = [
   "Summarize today's schedule for the crew.",
   "Draft a follow-up text after a quote visit.",
-  "List action items for open tasks.",
+  "Summarize recent notes for a lead.",
   "Share tips for handling a tough stain."
 ];
 
@@ -64,8 +64,8 @@ function fallbackResponse(message: string): string {
     return "Today's run: morning appliance pickup, mid-day garage cleanout, late afternoon curbside furniture haul. Keep tie-downs and dollies ready.";
   if (m.includes("follow-up") || m.includes("text"))
     return "Example follow-up: Thanks for having us out today! Let me know if you have questions about the quote.";
-  if (m.includes("task") || m.includes("pipeline"))
-    return "Review pipeline cards for New and Scheduled Estimate, add reminders when activity is 7+ days old, and attach notes for context.";
+  if (m.includes("note") || m.includes("pipeline"))
+    return "Review pipeline cards for New and Booked, add a quick note after each call, and mark leads contacted so the team stays in sync.";
   if (m.includes("stain") || m.includes("rust"))
     return "For heavy items: team lift with straps/dollies, protect floors, and clear pathways. Separate recyclables when possible.";
   return "Got it! Emphasize safety, document before/after photos, and keep the customer looped in.";

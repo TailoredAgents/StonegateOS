@@ -90,15 +90,16 @@ export async function GET(request: NextRequest): Promise<Response> {
           .groupBy(quotes.contactId)
       : [];
 
-  const openTaskCounts =
+  const noteStats =
     contactIds.length > 0
       ? await db
           .select({
             contactId: crmTasks.contactId,
-            count: sql<number>`count(*)`
+            count: sql<number>`count(*)`,
+            latest: sql<Date | null>`max(${crmTasks.updatedAt})`
           })
           .from(crmTasks)
-          .where(and(inArray(crmTasks.contactId, contactIds), eq(crmTasks.status, "open")))
+          .where(inArray(crmTasks.contactId, contactIds))
           .groupBy(crmTasks.contactId)
       : [];
 
@@ -127,10 +128,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     quoteMap.set(stat.contactId, { count: Number(stat.count), latest: stat.latest });
   }
 
-  const openTaskMap = new Map<string, number>();
-  for (const stat of openTaskCounts) {
+  const noteMap = new Map<string, { count: number; latest: Date | null }>();
+  for (const stat of noteStats) {
     if (!stat.contactId) continue;
-    openTaskMap.set(stat.contactId, Number(stat.count));
+    noteMap.set(stat.contactId, { count: Number(stat.count), latest: stat.latest });
   }
 
   const lanes = PIPELINE_STAGES.map((stage) => ({ stage, contacts: [] as Array<Record<string, unknown>> }));
@@ -152,13 +153,14 @@ export async function GET(request: NextRequest): Promise<Response> {
       normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
     const appointmentStat = appointmentMap.get(contactId);
     const quoteStat = quoteMap.get(contactId);
-    const openTasks = openTaskMap.get(contactId) ?? 0;
+    const notes = noteMap.get(contactId) ?? { count: 0, latest: null };
 
     const dates = [
       toDate(row.updatedAt),
       toDate(row.pipelineUpdatedAt ?? null),
       toDate(appointmentStat?.latest ?? null),
-      toDate(quoteStat?.latest ?? null)
+      toDate(quoteStat?.latest ?? null),
+      toDate(notes.latest ?? null)
     ];
 
     const lastActivity =
@@ -191,7 +193,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         appointments: appointmentStat?.count ?? 0,
         quotes: quoteStat?.count ?? 0
       },
-      openTasks,
+      notesCount: notes.count,
       lastActivityAt: lastActivity ? lastActivity.toISOString() : null,
       updatedAt: row.updatedAt.toISOString(),
       createdAt: row.createdAt.toISOString()

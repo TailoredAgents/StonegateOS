@@ -253,10 +253,26 @@ export async function GET(request: NextRequest): Promise<Response> {
     const pipeline = pipelineMap.get(contact.id);
     const tasksForContact = tasksMap.get(contact.id) ?? [];
 
+    const notes = tasksForContact
+      .slice()
+      .sort((a, b) => (b.updatedAt?.getTime?.() ?? 0) - (a.updatedAt?.getTime?.() ?? 0))
+      .map((task) => ({
+        id: task.id,
+        body: (task.notes ?? task.title).trim(),
+        createdAt: task.createdAt.toISOString(),
+        updatedAt: task.updatedAt.toISOString()
+      }));
+
+    const latestNoteUpdatedAt = tasksForContact
+      .map((task) => task.updatedAt)
+      .filter((value): value is Date => value instanceof Date)
+      .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+
     const dates = [
       toDate(contact.updatedAt),
       toDate(appointmentStat?.latest ?? null),
-      toDate(quoteStat?.latest ?? null)
+      toDate(quoteStat?.latest ?? null),
+      toDate(latestNoteUpdatedAt)
     ];
     const lastActivity =
       dates
@@ -290,16 +306,8 @@ export async function GET(request: NextRequest): Promise<Response> {
         postalCode: property.postalCode,
         createdAt: property.createdAt.toISOString()
       })),
-      tasks: tasksForContact.map((task) => ({
-        id: task.id,
-        title: task.title,
-        dueAt: task.dueAt ? task.dueAt.toISOString() : null,
-        assignedTo: task.assignedTo,
-        status: task.status,
-        notes: task.notes,
-        createdAt: task.createdAt.toISOString(),
-        updatedAt: task.updatedAt.toISOString()
-      })),
+      notes,
+      notesCount: notes.length,
       stats: {
         appointments: appointmentStat?.count ?? 0,
         quotes: quoteStat?.count ?? 0
