@@ -5,6 +5,7 @@ import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   createThreadAction,
   retryFailedMessageAction,
+  sendDraftMessageAction,
   sendThreadMessageAction,
   updateThreadAction
 } from "../actions";
@@ -199,6 +200,11 @@ function readMetaNumber(meta: Record<string, unknown> | null | undefined, key: s
 function isAutoReply(meta: Record<string, unknown> | null | undefined): boolean {
   if (!meta) return false;
   return meta["autoReply"] === true;
+}
+
+function isDraftMessage(meta: Record<string, unknown> | null | undefined): boolean {
+  if (!meta) return false;
+  return meta["draft"] === true;
 }
 
 function getAllowedStates(currentState: string | null | undefined): string[] {
@@ -593,6 +599,8 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                     const isOutbound = message.direction !== "inbound";
                     const autoReply = isAutoReply(message.metadata ?? null);
                     const autoReplyDelayMs = readMetaNumber(message.metadata ?? null, "autoReplyDelayMs");
+                    const isDraft = isDraftMessage(message.metadata ?? null);
+                    const statusLabel = isDraft ? "draft" : message.deliveryStatus;
                     return (
                       <div key={message.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                         <div
@@ -600,14 +608,21 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                             isOutbound ? "bg-primary-100 text-slate-900" : "bg-slate-100 text-slate-700"
                           }`}
                         >
-                          {autoReply ? (
-                            <div className="mb-1 inline-flex items-center gap-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                              Auto reply
-                              {typeof autoReplyDelayMs === "number"
-                                ? `(${Math.round(autoReplyDelayMs / 1000)}s delay)`
-                                : null}
-                            </div>
-                          ) : null}
+                          <div className="mb-1 flex flex-wrap items-center gap-2">
+                            {autoReply ? (
+                              <div className="inline-flex items-center gap-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                Auto reply
+                                {typeof autoReplyDelayMs === "number"
+                                  ? `(${Math.round(autoReplyDelayMs / 1000)}s delay)`
+                                  : null}
+                              </div>
+                            ) : null}
+                            {isDraft ? (
+                              <div className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                                Draft
+                              </div>
+                            ) : null}
+                          </div>
                           {message.subject ? (
                             <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
                               {message.subject}
@@ -617,9 +632,22 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                           <div className="mt-2 flex items-center justify-between text-[10px] text-slate-500">
                             <span>{message.participantName ?? message.direction}</span>
                             <span>
-                              {formatTimestamp(message.createdAt)} - {message.deliveryStatus}
+                              {formatTimestamp(message.createdAt)} - {statusLabel}
                             </span>
                           </div>
+                          {isOutbound && isDraft ? (
+                            <div className="mt-3 flex justify-end">
+                              <form action={sendDraftMessageAction}>
+                                <input type="hidden" name="messageId" value={message.id} />
+                                <SubmitButton
+                                  className="rounded-full bg-primary-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow transition hover:bg-primary-700"
+                                  pendingLabel="Sending..."
+                                >
+                                  Send
+                                </SubmitButton>
+                              </form>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     );

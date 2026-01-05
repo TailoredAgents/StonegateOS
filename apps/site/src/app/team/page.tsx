@@ -94,8 +94,8 @@ export default async function TeamPage({
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
   ];
   const tabGroups: TabNavGroup[] = [
-    { id: "ops", label: "Ops", itemIds: ["myday", "calendar", "inbox", "chat"] },
-    { id: "sales", label: "Sales", itemIds: ["estimates", "quotes", "quote-builder", "pipeline", "contacts"] },
+    { id: "ops", label: "Ops", itemIds: ["myday", "calendar", "chat"] },
+    { id: "sales", label: "Sales", itemIds: ["estimates", "quotes", "quote-builder", "pipeline", "contacts", "inbox"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
     { id: "control", label: "Control", itemIds: ["policy", "automation", "access", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }

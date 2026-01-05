@@ -617,6 +617,31 @@ export async function startContactCallAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function sendDraftMessageAction(formData: FormData) {
+  const jar = await cookies();
+  const messageId = formData.get("messageId");
+  if (typeof messageId !== "string" || messageId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Message ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/admin/inbox/messages/${messageId.trim()}/retry`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to send draft");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Message sending…", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function updateContactAction(formData: FormData) {
   const jar = await cookies();
   const contactId = formData.get("contactId");

@@ -600,10 +600,6 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
 
   for (const channel of candidates) {
     const mode = await getAutomationMode(db, channel);
-    if (mode === "draft") {
-      attempted.push({ channel, reason: "mode_draft" });
-      continue;
-    }
 
     if (row.leadId) {
       const state = await getLeadAutomationState(db, row.leadId, channel);
@@ -714,6 +710,7 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
         ? `Re: ${row.threadSubject}`
         : "Stonegate Junk Removal"
       : null;
+  const isDraft = selectedMode === "draft";
 
   const created = await db.transaction(async (tx) => {
     const participantId = await ensureSystemParticipant(tx, threadId, now);
@@ -733,6 +730,8 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
           autoReply: true,
           autoReplyToMessageId: row.messageId,
           autoReplyDelayMs: delayMs,
+          autoReplyMode: selectedMode ?? null,
+          draft: isDraft || undefined,
           inboundChannel,
           replyChannel,
           outOfArea: isOutOfArea || undefined
@@ -745,28 +744,30 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
       throw new Error("auto_reply_message_failed");
     }
 
-    await tx
-      .update(conversationThreads)
-      .set({
-        lastMessagePreview: template.slice(0, 140),
-        lastMessageAt: now,
-        updatedAt: now
-      })
-      .where(eq(conversationThreads.id, threadId));
+    if (!isDraft) {
+      await tx
+        .update(conversationThreads)
+        .set({
+          lastMessagePreview: template.slice(0, 140),
+          lastMessageAt: now,
+          updatedAt: now
+        })
+        .where(eq(conversationThreads.id, threadId));
 
-    await tx.insert(outboxEvents).values({
-      type: "message.send",
-      payload: { messageId: message.id },
-      nextAttemptAt: new Date(now.getTime() + delayMs),
-      createdAt: now
-    });
+      await tx.insert(outboxEvents).values({
+        type: "message.send",
+        payload: { messageId: message.id },
+        nextAttemptAt: new Date(now.getTime() + delayMs),
+        createdAt: now
+      });
+    }
 
     return message;
   });
 
   await recordAuditEvent({
     actor: { type: "ai", label: "auto-reply" },
-    action: "auto_reply.queued",
+    action: isDraft ? "auto_reply.draft_created" : "auto_reply.queued",
     entityType: "conversation_message",
     entityId: created.id,
     meta: {
