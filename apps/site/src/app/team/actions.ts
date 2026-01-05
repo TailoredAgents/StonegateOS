@@ -1876,6 +1876,31 @@ export async function retryFailedMessageAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function suggestThreadReplyAction(formData: FormData) {
+  const jar = await cookies();
+  const threadId = formData.get("threadId");
+  if (typeof threadId !== "string" || threadId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/admin/inbox/threads/${threadId.trim()}/suggest`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to generate suggestion");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "AI draft created. Review and click Send when ready.", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function logoutCrew() {
   const jar = await cookies();
   jar.set({ name: "myst-crew-session", value: "", path: "/", maxAge: 0 });

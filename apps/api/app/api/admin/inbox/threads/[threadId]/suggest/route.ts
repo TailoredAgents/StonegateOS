@@ -1,0 +1,394 @@
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
+import {
+  contacts,
+  conversationMessages,
+  conversationParticipants,
+  conversationThreads,
+  getDb,
+  properties
+} from "@/db";
+import { requirePermission } from "@/lib/permissions";
+import { getBusinessHoursPolicy, getServiceAreaPolicy, getTemplatesPolicy, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
+import { isAdminRequest } from "../../../../../web/admin";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+
+type ReplyChannel = "sms" | "email" | "dm";
+
+type DatabaseClient = ReturnType<typeof getDb>;
+type Tx = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer T) => Promise<unknown>
+  ? T
+  : never;
+
+type ThreadContext = {
+  id: string;
+  channel: string;
+  subject: string | null;
+  state: string;
+  contactId: string | null;
+  contactName: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+  contactPhoneE164: string | null;
+  propertyId: string | null;
+  propertyPostalCode: string | null;
+  propertyAddressLine1: string | null;
+  propertyCity: string | null;
+  propertyState: string | null;
+};
+
+type MessageContext = {
+  direction: string;
+  channel: string;
+  subject: string | null;
+  body: string;
+  createdAt: Date;
+  participantName: string | null;
+};
+
+function isReplyChannel(value: string): value is ReplyChannel {
+  return value === "sms" || value === "email" || value === "dm";
+}
+
+function getOpenAIConfig(): { apiKey: string; model: string } | null {
+  const apiKey = process.env["OPENAI_API_KEY"];
+  if (!apiKey) return null;
+  const configured = process.env["OPENAI_MODEL"];
+  const model = configured && configured.trim().length > 0 ? configured.trim() : "gpt-5-mini";
+  return { apiKey, model };
+}
+
+async function callOpenAIReply(input: {
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  userPrompt: string;
+}): Promise<{ body: string; subject: string | null } | null> {
+  async function request(targetModel: string) {
+    return fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${input.apiKey}`
+      },
+      body: JSON.stringify({
+        model: targetModel,
+        input: [
+          { role: "system", content: input.systemPrompt },
+          { role: "user", content: input.userPrompt }
+        ],
+        temperature: 0.4,
+        max_output_tokens: 500,
+        reasoning: { effort: "low" },
+        text: {
+          verbosity: "medium",
+          format: {
+            type: "json_schema",
+            name: "reply_suggestion",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                body: { type: "string" },
+                subject: { type: "string" }
+              },
+              required: ["body"]
+            }
+          }
+        }
+      })
+    });
+  }
+
+  let response = await request(input.model);
+  if (!response.ok) {
+    const status = response.status;
+    const bodyText = await response.text().catch(() => "");
+    const isDev = process.env["NODE_ENV"] !== "production";
+    if (isDev && (status === 400 || status === 404) && input.model !== "gpt-5") {
+      response = await request("gpt-5");
+      if (!response.ok) {
+        console.warn("[inbox.suggest] openai.fallback_failed", { status, bodyText });
+        return null;
+      }
+    } else {
+      console.warn("[inbox.suggest] openai.request_failed", { status, bodyText });
+      return null;
+    }
+  }
+
+  try {
+    const data = (await response.json()) as {
+      output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+    };
+    const raw =
+      data.output
+        ?.flatMap((item) => item.content ?? [])
+        .find((chunk) => typeof chunk.text === "string")
+        ?.text ?? null;
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as { body?: unknown; subject?: unknown };
+    const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
+    if (!body) return null;
+    const subject = typeof parsed.subject === "string" && parsed.subject.trim().length > 0 ? parsed.subject.trim() : null;
+    return { body, subject };
+  } catch (error) {
+    console.warn("[inbox.suggest] openai.response_error", { error: String(error) });
+    return null;
+  }
+}
+
+async function ensureAiParticipant(tx: Tx, threadId: string, now: Date) {
+  const [existing] = await tx
+    .select({ id: conversationParticipants.id })
+    .from(conversationParticipants)
+    .where(
+      and(
+        eq(conversationParticipants.threadId, threadId),
+        eq(conversationParticipants.participantType, "team"),
+        eq(conversationParticipants.displayName, "Stonegate Assist"),
+        sql`${conversationParticipants.teamMemberId} is null`
+      )
+    )
+    .limit(1);
+
+  if (existing?.id) return existing.id;
+
+  const [created] = await tx
+    .insert(conversationParticipants)
+    .values({
+      threadId,
+      participantType: "team",
+      teamMemberId: null,
+      displayName: "Stonegate Assist",
+      createdAt: now
+    })
+    .returning({ id: conversationParticipants.id });
+
+  return created?.id ?? null;
+}
+
+function buildTranscript(messages: MessageContext[]): string {
+  const lines = messages.map((message) => {
+    const who = message.participantName ?? (message.direction === "inbound" ? "Customer" : "Team");
+    const subject = message.subject ? ` (subject: ${message.subject})` : "";
+    return `[${message.createdAt.toISOString()}] ${who}${subject}: ${message.body}`;
+  });
+  return lines.join("\n");
+}
+
+export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ threadId: string }> }
+): Promise<Response> {
+  if (!isAdminRequest(request)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const permissionError = await requirePermission(request, "messages.send");
+  if (permissionError) return permissionError;
+
+  const { threadId } = await context.params;
+  if (!threadId) {
+    return NextResponse.json({ error: "thread_id_required" }, { status: 400 });
+  }
+
+  const config = getOpenAIConfig();
+  if (!config) {
+    return NextResponse.json({ error: "openai_not_configured" }, { status: 400 });
+  }
+
+  const db = getDb();
+  const [thread] = await db
+    .select({
+      id: conversationThreads.id,
+      channel: conversationThreads.channel,
+      subject: conversationThreads.subject,
+      state: conversationThreads.state,
+      contactId: conversationThreads.contactId,
+      contactFirstName: contacts.firstName,
+      contactLastName: contacts.lastName,
+      contactEmail: contacts.email,
+      contactPhone: contacts.phone,
+      contactPhoneE164: contacts.phoneE164,
+      propertyId: conversationThreads.propertyId,
+      propertyPostalCode: properties.postalCode,
+      propertyAddressLine1: properties.addressLine1,
+      propertyCity: properties.city,
+      propertyState: properties.state
+    })
+    .from(conversationThreads)
+    .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
+    .where(eq(conversationThreads.id, threadId))
+    .limit(1);
+
+  if (!thread) {
+    return NextResponse.json({ error: "thread_not_found" }, { status: 404 });
+  }
+
+  const replyChannel = thread.channel;
+  if (!isReplyChannel(replyChannel)) {
+    return NextResponse.json({ error: "unsupported_channel" }, { status: 400 });
+  }
+
+  const messageRows = await db
+    .select({
+      direction: conversationMessages.direction,
+      channel: conversationMessages.channel,
+      subject: conversationMessages.subject,
+      body: conversationMessages.body,
+      createdAt: conversationMessages.createdAt,
+      participantName: conversationParticipants.displayName
+    })
+    .from(conversationMessages)
+    .leftJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
+    .where(eq(conversationMessages.threadId, threadId))
+    .orderBy(desc(conversationMessages.createdAt))
+    .limit(12);
+
+  const messages: MessageContext[] = messageRows
+    .map((row) => ({
+      direction: row.direction,
+      channel: row.channel,
+      subject: row.subject ?? null,
+      body: row.body,
+      createdAt: row.createdAt,
+      participantName: row.participantName ?? null
+    }))
+    .reverse();
+
+  const contactName = [thread.contactFirstName, thread.contactLastName].filter(Boolean).join(" ").trim();
+  const threadContext: ThreadContext = {
+    id: thread.id,
+    channel: thread.channel,
+    subject: thread.subject ?? null,
+    state: thread.state,
+    contactId: thread.contactId ?? null,
+    contactName: contactName.length > 0 ? contactName : null,
+    contactEmail: thread.contactEmail ?? null,
+    contactPhone: thread.contactPhone ?? null,
+    contactPhoneE164: thread.contactPhoneE164 ?? null,
+    propertyId: thread.propertyId ?? null,
+    propertyPostalCode: thread.propertyPostalCode ?? null,
+    propertyAddressLine1: thread.propertyAddressLine1 ?? null,
+    propertyCity: thread.propertyCity ?? null,
+    propertyState: thread.propertyState ?? null
+  };
+
+  const [templates, serviceArea, businessHours] = await Promise.all([
+    getTemplatesPolicy(db),
+    getServiceAreaPolicy(db),
+    getBusinessHoursPolicy(db)
+  ]);
+
+  const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
+  const outOfArea =
+    normalizedPostal !== null ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
+
+  const firstTouchExample = resolveTemplateForChannel(templates.first_touch, {
+    inboundChannel: replyChannel,
+    replyChannel
+  });
+  const followUpExample = resolveTemplateForChannel(templates.follow_up, {
+    inboundChannel: replyChannel,
+    replyChannel
+  });
+  const outOfAreaExample =
+    replyChannel === "email" || replyChannel === "sms"
+      ? resolveTemplateForChannel(templates.out_of_area, { inboundChannel: replyChannel, replyChannel })
+      : null;
+
+  const systemPrompt = `
+You are Stonegate Assist, the warm, human, front-office voice for Stonegate Junk Removal in North Metro Atlanta.
+Write a reply the customer will receive.
+
+Rules:
+- Sound like a helpful local office rep. No emojis.
+- Be concise and specific; avoid filler.
+- Ask for only the missing info needed to book: address (or ZIP), item details, and preferred timing.
+- If the customer is out of the service area, politely explain service area limits and offer a phone call.
+- Do NOT mention internal systems, databases, webhooks, or that you're an AI.
+- Output ONLY JSON with keys: body (string), subject (string optional).
+
+Business hours policy timezone: ${businessHours.timezone}
+Company notes: We can message any time, and we typically schedule jobs during business hours.
+`.trim();
+
+  const contextLines = [
+    `Channel: ${replyChannel}`,
+    `Thread state: ${threadContext.state}`,
+    `Customer name: ${threadContext.contactName ?? "Unknown"}`,
+    threadContext.contactPhoneE164 || threadContext.contactPhone ? `Customer phone: ${threadContext.contactPhoneE164 ?? threadContext.contactPhone}` : null,
+    threadContext.contactEmail ? `Customer email: ${threadContext.contactEmail}` : null,
+    threadContext.propertyAddressLine1 ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}` : null,
+    normalizedPostal ? `ZIP: ${normalizedPostal}` : null,
+    outOfArea === true ? `Service area: OUT OF AREA` : outOfArea === false ? `Service area: OK` : `Service area: unknown (ask for ZIP)`,
+    firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
+    followUpExample ? `Example (follow up): ${followUpExample}` : null,
+    outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,
+    `Transcript:\n${buildTranscript(messages)}`
+  ].filter((line): line is string => Boolean(line));
+
+  const userPrompt = `Write the best next reply for this conversation.\n${contextLines.join("\n")}`;
+
+  const suggestion = await callOpenAIReply({
+    apiKey: config.apiKey,
+    model: config.model,
+    systemPrompt,
+    userPrompt
+  });
+
+  if (!suggestion) {
+    return NextResponse.json({ error: "suggest_failed" }, { status: 500 });
+  }
+
+  const now = new Date();
+  const created = await db.transaction(async (tx) => {
+    const participantId = await ensureAiParticipant(tx, threadId, now);
+    const [message] = await tx
+      .insert(conversationMessages)
+      .values({
+        threadId,
+        participantId,
+        direction: "outbound",
+        channel: replyChannel,
+        subject: replyChannel === "email" ? suggestion.subject ?? thread.subject ?? "Stonegate message" : null,
+        body: suggestion.body,
+        deliveryStatus: "queued",
+        metadata: {
+          draft: true,
+          aiSuggested: true,
+          aiModel: config.model,
+          outOfArea: outOfArea === true ? true : undefined
+        },
+        createdAt: now
+      })
+      .returning({ id: conversationMessages.id });
+
+    if (!message?.id) {
+      throw new Error("draft_create_failed");
+    }
+    return message;
+  });
+
+  await recordAuditEvent({
+    actor: getAuditActorFromRequest(request),
+    action: "inbox.suggest.draft_created",
+    entityType: "conversation_thread",
+    entityId: threadId,
+    meta: { channel: replyChannel, messageId: created.id }
+  });
+
+  return NextResponse.json({
+    ok: true,
+    messageId: created.id,
+    channel: replyChannel,
+    draft: {
+      subject: replyChannel === "email" ? suggestion.subject ?? null : null,
+      body: suggestion.body
+    }
+  });
+}

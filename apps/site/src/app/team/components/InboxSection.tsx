@@ -7,6 +7,7 @@ import {
   retryFailedMessageAction,
   sendDraftMessageAction,
   sendThreadMessageAction,
+  suggestThreadReplyAction,
   updateThreadAction
 } from "../actions";
 
@@ -654,6 +655,18 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                   })
                 )}
               </div>
+
+              {["sms", "email", "dm"].includes(activeThread.channel) ? (
+                <form action={suggestThreadReplyAction} className="flex justify-end">
+                  <input type="hidden" name="threadId" value={activeThread.id} />
+                  <SubmitButton
+                    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-primary-300 hover:text-primary-700"
+                    pendingLabel="Thinking..."
+                  >
+                    AI Suggest
+                  </SubmitButton>
+                </form>
+              ) : null}
 
               <form action={sendThreadMessageAction} className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
                 <input type="hidden" name="threadId" value={activeThread.id} />
