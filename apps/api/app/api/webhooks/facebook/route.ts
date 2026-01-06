@@ -92,6 +92,9 @@ type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends 
   : never;
 type DbExecutor = DatabaseClient | TransactionExecutor;
 
+const PAGE_TOKEN_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const pageTokenCache = new Map<string, { token: string; fetchedAt: number }>();
+
 function verifySignature(rawBody: string, signature: string | null, secret: string): boolean {
   if (!signature) return false;
   const trimmed = signature.split(",")[0]?.trim() ?? "";
@@ -190,6 +193,84 @@ function parseLeadFormFilter(): Set<string> | null {
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
   return ids.length ? new Set(ids) : null;
+}
+
+function resolveFacebookToken(): { systemUserToken: string | null; pageTokenOverride: string | null } {
+  const pageToken = process.env["FB_PAGE_ACCESS_TOKEN"];
+  const systemUserToken =
+    process.env["FB_MESSENGER_ACCESS_TOKEN"] ??
+    process.env["FB_LEADGEN_ACCESS_TOKEN"] ??
+    process.env["FB_MARKETING_ACCESS_TOKEN"] ??
+    null;
+  return {
+    systemUserToken: systemUserToken && systemUserToken.trim().length > 0 ? systemUserToken.trim() : null,
+    pageTokenOverride: pageToken && pageToken.trim().length > 0 ? pageToken.trim() : null
+  };
+}
+
+async function fetchPageAccessToken(pageId: string, systemUserToken: string): Promise<string | null> {
+  const cached = pageTokenCache.get(pageId);
+  if (cached && Date.now() - cached.fetchedAt < PAGE_TOKEN_CACHE_TTL_MS) {
+    return cached.token;
+  }
+
+  const url = new URL(`https://graph.facebook.com/v24.0/${pageId}`);
+  url.searchParams.set("fields", "access_token");
+  url.searchParams.set("access_token", systemUserToken);
+
+  try {
+    const response = await fetch(url.toString(), { method: "GET" });
+    const text = await response.text();
+    if (!response.ok) {
+      console.warn("[webhooks][facebook] page_token_failed", { status: response.status, body: text });
+      return null;
+    }
+    const data = JSON.parse(text) as { access_token?: string | null };
+    const token = data.access_token?.trim() ?? null;
+    if (token) {
+      pageTokenCache.set(pageId, { token, fetchedAt: Date.now() });
+    }
+    return token;
+  } catch (error) {
+    console.warn("[webhooks][facebook] page_token_error", { error: String(error) });
+    return null;
+  }
+}
+
+async function fetchSenderName(pageId: string | null, senderId: string | null): Promise<string | null> {
+  if (!senderId) return null;
+
+  const { systemUserToken, pageTokenOverride } = resolveFacebookToken();
+  let accessToken: string | null = pageTokenOverride ?? null;
+
+  if (!accessToken && pageId && systemUserToken) {
+    accessToken = await fetchPageAccessToken(pageId, systemUserToken);
+  }
+
+  if (!accessToken) return null;
+
+  const url = new URL(`https://graph.facebook.com/v24.0/${senderId}`);
+  url.searchParams.set("fields", "first_name,last_name,name");
+  url.searchParams.set("access_token", accessToken);
+
+  try {
+    const response = await fetch(url.toString(), { method: "GET" });
+    const text = await response.text();
+    if (!response.ok) {
+      console.warn("[webhooks][facebook] sender_lookup_failed", { status: response.status, body: text });
+      return null;
+    }
+    const data = JSON.parse(text) as { name?: string; first_name?: string; last_name?: string };
+    const full = typeof data.name === "string" && data.name.trim().length ? data.name.trim() : null;
+    if (full) return full;
+    const first = typeof data.first_name === "string" ? data.first_name.trim() : "";
+    const last = typeof data.last_name === "string" ? data.last_name.trim() : "";
+    const combined = `${first} ${last}`.trim();
+    return combined.length ? combined : null;
+  } catch (error) {
+    console.warn("[webhooks][facebook] sender_lookup_error", { error: String(error) });
+    return null;
+  }
 }
 
 async function fetchLeadgenDetails(
@@ -529,6 +610,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       if (message && !message.is_echo) {
         const text = typeof message.text === "string" ? message.text : "";
         const mediaUrls = getMediaUrls(message);
+        const senderName = await fetchSenderName(entry.id ?? null, senderId);
 
         try {
           await recordInboundMessage({
@@ -541,6 +623,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             providerMessageId: typeof message.mid === "string" ? message.mid : null,
             mediaUrls,
             receivedAt,
+            senderName: senderName ?? null,
             metadata: {
               source: "facebook",
               pageId: entry.id ?? null,
@@ -561,6 +644,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         const title = typeof postback.title === "string" ? postback.title : null;
         const referral =
           postback.referral && typeof postback.referral === "object" ? postback.referral : null;
+        const senderName = await fetchSenderName(entry.id ?? null, senderId);
         const body = payload
           ? `Postback: ${payload}`
           : title
@@ -577,6 +661,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             provider: "facebook",
             providerMessageId: null,
             receivedAt,
+            senderName: senderName ?? null,
             metadata: {
               source: "facebook",
               type: "postback",
