@@ -98,7 +98,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const inboundLatest = db
     .select({
       threadId: conversationMessages.threadId,
-      lastInboundAt: sql<Date | null>`max(coalesce(${conversationMessages.receivedAt}, ${conversationMessages.createdAt}))`
+      lastInboundAt: sql<Date | null>`max(coalesce(${conversationMessages.receivedAt}, ${conversationMessages.createdAt}))`.as(
+        "lastInboundAt"
+      )
     })
     .from(conversationMessages)
     .where(eq(conversationMessages.direction, "inbound"))
