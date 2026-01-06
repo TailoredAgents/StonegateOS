@@ -8,6 +8,7 @@ import {
   retryFailedMessageAction,
   sendDraftMessageAction,
   sendThreadMessageAction,
+  deleteMessageAction,
   suggestThreadReplyAction,
   updateThreadAction
 } from "../actions";
@@ -633,20 +634,33 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                             isOutbound ? "bg-primary-100 text-slate-900" : "bg-slate-100 text-slate-700"
                           }`}
                         >
-                          <div className="mb-1 flex flex-wrap items-center gap-2">
-                            {autoReply ? (
-                              <div className="inline-flex items-center gap-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                                Auto reply
-                                {typeof autoReplyDelayMs === "number"
-                                  ? `(${Math.round(autoReplyDelayMs / 1000)}s delay)`
-                                  : null}
-                              </div>
-                            ) : null}
-                            {isDraft ? (
-                              <div className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-                                Draft
-                              </div>
-                            ) : null}
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {autoReply ? (
+                                <div className="inline-flex items-center gap-2 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                  Auto reply
+                                  {typeof autoReplyDelayMs === "number"
+                                    ? `(${Math.round(autoReplyDelayMs / 1000)}s delay)`
+                                    : null}
+                                </div>
+                              ) : null}
+                              {isDraft ? (
+                                <div className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                                  Draft
+                                </div>
+                              ) : null}
+                            </div>
+                            <form action={deleteMessageAction}>
+                              <input type="hidden" name="messageId" value={message.id} />
+                              <button
+                                type="submit"
+                                className="text-[12px] text-slate-500 transition hover:text-rose-600"
+                                title="Delete message"
+                                aria-label="Delete message"
+                              >
+                                🗑
+                              </button>
+                            </form>
                           </div>
                           {message.subject ? (
                             <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">

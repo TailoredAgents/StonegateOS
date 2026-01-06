@@ -1946,6 +1946,30 @@ export async function retryFailedMessageAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function deleteMessageAction(formData: FormData) {
+  const jar = await cookies();
+  const messageId = formData.get("messageId");
+  if (typeof messageId !== "string" || messageId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Message ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/admin/inbox/messages/${messageId}`, {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to delete message");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Message deleted", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function suggestThreadReplyAction(formData: FormData) {
   const jar = await cookies();
   const threadId = formData.get("threadId");
