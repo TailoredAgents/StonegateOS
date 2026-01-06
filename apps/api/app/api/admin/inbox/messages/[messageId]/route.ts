@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { desc, eq, sql } from "drizzle-orm";
 import { getDb, conversationMessages, conversationThreads } from "@/db";
-import { requirePermission } from "../../../../web/admin";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 
 export async function DELETE(
