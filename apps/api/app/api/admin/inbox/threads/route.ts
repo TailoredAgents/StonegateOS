@@ -239,7 +239,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       lastMessageAt: row.lastMessageAt ? row.lastMessageAt.toISOString() : null,
       updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
       stateUpdatedAt: row.stateUpdatedAt ? row.stateUpdatedAt.toISOString() : null,
-      lastInboundAt: row.lastInboundAt ? row.lastInboundAt.toISOString() : null,
+      lastInboundAt: row.lastInboundAt instanceof Date ? row.lastInboundAt.toISOString() : null,
       contact: row.contactId
         ? {
             id: row.contactId,
