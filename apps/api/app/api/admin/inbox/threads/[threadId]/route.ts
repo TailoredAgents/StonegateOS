@@ -231,6 +231,13 @@ export async function GET(
   });
 
   const contactName = [threadRow.contactFirstName, threadRow.contactLastName].filter(Boolean).join(" ").trim();
+  const rawLastInbound = threadRow.lastInboundAt as unknown;
+  const lastInboundIso =
+    rawLastInbound instanceof Date
+      ? rawLastInbound.toISOString()
+      : typeof rawLastInbound === "string"
+        ? rawLastInbound
+        : null;
 
   return NextResponse.json({
     thread: {
@@ -243,7 +250,7 @@ export async function GET(
       lastMessageAt: threadRow.lastMessageAt ? threadRow.lastMessageAt.toISOString() : null,
       updatedAt: threadRow.updatedAt ? threadRow.updatedAt.toISOString() : null,
       createdAt: threadRow.createdAt.toISOString(),
-      lastInboundAt: threadRow.lastInboundAt ? threadRow.lastInboundAt.toISOString() : null,
+      lastInboundAt: lastInboundIso,
       stateUpdatedAt: threadRow.stateUpdatedAt ? threadRow.stateUpdatedAt.toISOString() : null,
       contact: threadRow.contactId
         ? {
