@@ -371,16 +371,13 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
       throw new Error("contact_missing");
     }
 
-    const threadFilters = [
-      eq(conversationThreads.contactId, contact.id),
-      eq(conversationThreads.channel, channel),
-      inArray(conversationThreads.status, [...OPEN_THREAD_STATUSES])
-    ];
+    const threadFilters = [eq(conversationThreads.contactId, contact.id), eq(conversationThreads.channel, channel)];
 
     const [existingThread] = await tx
       .select({
         id: conversationThreads.id,
-        leadId: conversationThreads.leadId
+        leadId: conversationThreads.leadId,
+        status: conversationThreads.status
       })
       .from(conversationThreads)
       .where(and(...threadFilters))
@@ -409,6 +406,14 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         })
         .returning({ id: conversationThreads.id });
       threadId = thread?.id ?? null;
+    } else if (existingThread.status !== "open") {
+      await tx
+        .update(conversationThreads)
+        .set({
+          status: "open",
+          updatedAt: now
+        })
+        .where(eq(conversationThreads.id, threadId));
     }
 
     if (!threadId) {
