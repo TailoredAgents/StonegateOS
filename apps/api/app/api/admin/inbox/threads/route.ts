@@ -231,16 +231,13 @@ export async function GET(request: NextRequest): Promise<Response> {
     const normalizedPostalCode = normalizePostalCode(row.propertyPostalCode ?? null);
     const outOfArea =
       normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
-    let lastInboundIso: string | null = null;
     const rawLastInbound = row.lastInboundAt as unknown;
-    if (rawLastInbound instanceof Date) {
-      lastInboundIso = rawLastInbound.toISOString();
-    } else if (typeof rawLastInbound === "string" && rawLastInbound.trim().length) {
-      const parsed = new Date(rawLastInbound);
-      if (!Number.isNaN(parsed.getTime())) {
-        lastInboundIso = parsed.toISOString();
-      }
-    }
+    const lastInboundIso =
+      rawLastInbound instanceof Date
+        ? rawLastInbound.toISOString()
+        : typeof rawLastInbound === "string"
+          ? rawLastInbound
+          : null;
     return {
       id: row.id,
       status: row.status,
