@@ -59,6 +59,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       createdAt: appointments.createdAt,
       updatedAt: appointments.updatedAt,
       leadId: appointments.leadId,
+      quotedTotalCents: appointments.quotedTotalCents,
+      finalTotalCents: appointments.finalTotalCents,
       contactId: contacts.id,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
@@ -246,6 +248,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       leadId: row.leadId,
+      quotedTotalCents: row.quotedTotalCents ?? null,
+      finalTotalCents: row.finalTotalCents ?? null,
       services: row.servicesRequested ?? [],
       contact: {
         id: row.contactId ?? "unknown",
@@ -274,6 +278,6 @@ export async function GET(request: NextRequest): Promise<Response> {
     };
   });
 
-  return NextResponse.json({ ok: true, data: appointmentsDto });
+  return NextResponse.json({ ok: true, data: appointmentsDto, appointments: appointmentsDto });
 }
 

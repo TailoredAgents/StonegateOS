@@ -99,6 +99,13 @@
       "when": 1767476061860,
       "tag": "0013_meta_ads_insights_daily",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1767666717166,
+      "tag": "0014_appointment_revenue",
+      "breakpoints": true
     }
   ]
 }

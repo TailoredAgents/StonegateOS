@@ -383,15 +383,26 @@ function ContactCard({ contact }: ContactCardProps) {
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                 />
               </label>
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span>Services (optional)</span>
-                <input
-                  name="services"
-                  placeholder="e.g. junk_removal_primary"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                />
-              </label>
-            </div>
+               <label className="flex flex-col gap-1 sm:col-span-2">
+                 <span>Services (optional)</span>
+                 <input
+                   name="services"
+                   placeholder="e.g. junk_removal_primary"
+                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                 />
+               </label>
+               <label className="flex flex-col gap-1 sm:col-span-2">
+                 <span>Quoted price (optional)</span>
+                 <input
+                   name="quotedTotal"
+                   type="number"
+                   min={0}
+                   step="0.01"
+                   placeholder="e.g. 350"
+                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                 />
+               </label>
+             </div>
             <div className="flex flex-wrap items-center gap-2">
               <SubmitButton className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700" pendingLabel="Booking...">
                 Confirm booking (adds to calendar)

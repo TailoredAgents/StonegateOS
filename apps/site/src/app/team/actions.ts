@@ -22,6 +22,18 @@ export async function updateApptStatus(formData: FormData) {
   if (typeof crew === "string") payload["crew"] = crew.length ? crew : null;
   if (typeof owner === "string") payload["owner"] = owner.length ? owner : null;
 
+  if (status === "completed") {
+    const finalTotalCents = parseUsdToCents(formData.get("finalTotal"));
+    const same = formData.get("finalTotalSameAsQuoted");
+    const finalTotalSameAsQuoted = typeof same === "string" && (same === "true" || same === "on");
+
+    if (finalTotalCents !== null) {
+      payload["finalTotalCents"] = finalTotalCents;
+    } else if (finalTotalSameAsQuoted) {
+      payload["finalTotalSameAsQuoted"] = true;
+    }
+  }
+
   await callAdminApi(`/api/appointments/${id}/status`, {
     method: "POST",
     body: JSON.stringify(payload)
@@ -426,6 +438,7 @@ export async function bookAppointmentAction(formData: FormData) {
   const durationMinutes = formData.get("durationMinutes");
   const travelBufferMinutes = formData.get("travelBufferMinutes");
   const servicesRaw = formData.get("services");
+  const quotedTotalCents = parseUsdToCents(formData.get("quotedTotal"));
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
     jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
@@ -461,6 +474,9 @@ export async function bookAppointmentAction(formData: FormData) {
   if (typeof propertyId === "string" && propertyId.trim().length > 0) {
     payload["propertyId"] = propertyId.trim();
   }
+  if (quotedTotalCents !== null) {
+    payload["quotedTotalCents"] = quotedTotalCents;
+  }
 
   const response = await callAdminApi("/api/admin/booking/book", {
     method: "POST",
@@ -489,6 +505,15 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
     // ignore
   }
   return fallback;
+}
+
+function parseUsdToCents(value: FormDataEntryValue | null): number | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/[$,]/g, "").trim();
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.round(parsed * 100);
 }
 
 export async function saveCallAgentPhoneAction(formData: FormData) {

@@ -558,6 +558,8 @@ export const appointments = pgTable(
     startAt: timestamp("start_at", { withTimezone: true }),
     durationMinutes: integer("duration_min").default(60).notNull(),
     status: appointmentStatusEnum("status").default("requested").notNull(),
+    quotedTotalCents: integer("quoted_total_cents"),
+    finalTotalCents: integer("final_total_cents"),
     calendarEventId: text("calendar_event_id"),
     crew: text("crew"),
     owner: text("owner"),

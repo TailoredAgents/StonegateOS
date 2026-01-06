@@ -11,7 +11,9 @@ import { deleteCalendarEvent } from "@/lib/calendar";
 const StatusSchema = z.object({
   status: z.enum(["requested", "confirmed", "completed", "no_show", "canceled"]),
   crew: z.string().optional().nullable(),
-  owner: z.string().optional().nullable()
+  owner: z.string().optional().nullable(),
+  finalTotalCents: z.number().int().nonnegative().optional(),
+  finalTotalSameAsQuoted: z.boolean().optional()
 });
 
 export async function POST(
@@ -42,6 +44,33 @@ export async function POST(
   const status = parsed.data.status;
   const crew = parsed.data.crew;
   const owner = parsed.data.owner;
+  const finalTotalCentsInput = parsed.data.finalTotalCents;
+  const finalTotalSameAsQuoted = parsed.data.finalTotalSameAsQuoted === true;
+
+  const [existing] = await db
+    .select({
+      id: appointments.id,
+      leadId: appointments.leadId,
+      calendarEventId: appointments.calendarEventId,
+      quotedTotalCents: appointments.quotedTotalCents,
+      finalTotalCents: appointments.finalTotalCents
+    })
+    .from(appointments)
+    .where(eq(appointments.id, appointmentId))
+    .limit(1);
+
+  if (!existing) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
+  let finalTotalCentsToSet: number | null | undefined = undefined;
+  if (status === "completed") {
+    if (typeof finalTotalCentsInput === "number") {
+      finalTotalCentsToSet = finalTotalCentsInput;
+    } else if (finalTotalSameAsQuoted) {
+      finalTotalCentsToSet = existing.quotedTotalCents ?? null;
+    }
+  }
 
   const [updated] = await db
     .update(appointments)
@@ -49,6 +78,7 @@ export async function POST(
       status,
       ...(crew !== undefined ? { crew: crew ?? null } : {}),
       ...(owner !== undefined ? { owner: owner ?? null } : {}),
+      ...(finalTotalCentsToSet !== undefined ? { finalTotalCents: finalTotalCentsToSet } : {}),
       updatedAt: new Date()
     })
     .where(eq(appointments.id, appointmentId))
@@ -90,7 +120,8 @@ export async function POST(
     entityId: updated.id,
     meta: {
       status,
-      leadId: updated.leadId ?? null
+      leadId: updated.leadId ?? null,
+      ...(finalTotalCentsToSet !== undefined ? { finalTotalCents: finalTotalCentsToSet } : {})
     }
   });
 

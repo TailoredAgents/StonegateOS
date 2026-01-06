@@ -12,12 +12,23 @@ import { callAdminApi, fmtTime } from "../lib/api";
 
 type AppointmentStatus = "requested" | "confirmed" | "completed" | "no_show" | "canceled";
 
+function fmtUsdCents(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value / 100);
+  } catch {
+    return `$${(value / 100).toFixed(2)}`;
+  }
+}
+
 interface AppointmentDto {
   id: string;
   status: AppointmentStatus;
   startAt: string | null;
   durationMinutes: number | null;
   travelBufferMinutes: number | null;
+  quotedTotalCents: number | null;
+  finalTotalCents: number | null;
   services: string[];
   rescheduleToken: string;
   contact: {
@@ -106,6 +117,16 @@ export async function MyDaySection(): Promise<ReactElement> {
                   Pipeline: {a.pipelineStage}
                 </span>
               ) : null}
+              {fmtUsdCents(a.quotedTotalCents) ? (
+                <span className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                  Quoted: {fmtUsdCents(a.quotedTotalCents)}
+                </span>
+              ) : null}
+              {fmtUsdCents(a.finalTotalCents) ? (
+                <span className="rounded-full bg-primary-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
+                  Final: {fmtUsdCents(a.finalTotalCents)}
+                </span>
+              ) : null}
               {a.quoteStatus ? (
                 <span className="rounded-full bg-primary-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
                   Quote: {a.quoteStatus}
@@ -114,9 +135,21 @@ export async function MyDaySection(): Promise<ReactElement> {
             </div>
 
             <div className="mt-2 flex flex-wrap gap-2">
-              <form action={updateApptStatus}>
+              <form action={updateApptStatus} className="flex flex-wrap items-end gap-2">
                 <input type="hidden" name="appointmentId" value={a.id} />
                 <input type="hidden" name="status" value="completed" />
+                <input type="hidden" name="finalTotalSameAsQuoted" value="true" />
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] text-neutral-600">Final total (optional)</span>
+                  <input
+                    name="finalTotal"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder="leave blank = quoted"
+                    className="w-40 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                  />
+                </label>
                 <SubmitButton className="rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white hover:bg-primary-700" pendingLabel="Saving...">
                   Mark complete
                 </SubmitButton>

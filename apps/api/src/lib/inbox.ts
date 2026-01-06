@@ -406,7 +406,7 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         })
         .returning({ id: conversationThreads.id });
       threadId = thread?.id ?? null;
-    } else if (existingThread?.status !== "open") {
+    } else if (existingThread && existingThread.status !== "open") {
       await tx
         .update(conversationThreads)
         .set({

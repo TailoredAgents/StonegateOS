@@ -16,6 +16,8 @@ interface AppointmentResponse {
   durationMinutes: number | null;
   services: string[];
   rescheduleToken: string;
+  quotedTotalCents?: number | null;
+  finalTotalCents?: number | null;
   contact: {
     id: string | null;
     name: string;
@@ -40,14 +42,17 @@ interface AppointmentListPayload {
   appointments: AppointmentResponse[];
 }
 
-interface PaymentsSummaryPayload {
-  payments: Array<unknown>;
-  summary?: {
-    total: number;
-    matched: number;
-    unmatched: number;
+type RevenueWindow = { totalCents: number; count: number };
+
+type RevenuePayload = {
+  ok: true;
+  currency: string;
+  windows: {
+    last30Days: RevenueWindow;
+    monthToDate: RevenueWindow;
+    yearToDate: RevenueWindow;
   };
-}
+};
 
 async function callAdminApi(path: string, init?: RequestInit): Promise<Response> {
   if (!ADMIN_API_KEY) {
@@ -97,6 +102,14 @@ function servicesLabel(services: string[]) {
     return services[0];
   }
   return `${services[0]} +${services.length - 1}`;
+}
+
+function fmtMoney(cents: number, currency: string) {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
+  } catch {
+    return `$${(cents / 100).toFixed(2)}`;
+  }
 }
 
 const STATUS_LABEL: Record<AppointmentStatus, string> = {
@@ -205,27 +218,25 @@ export default async function OwnerHubPage() {
     notFound();
   }
 
-  const [appointmentsResponse, paymentsResponse] = await Promise.all([
+  const [appointmentsResponse, revenueResponse] = await Promise.all([
     callAdminApi("/api/appointments?status=all"),
-    callAdminApi("/api/payments?status=all")
+    callAdminApi("/api/revenue/summary")
   ]);
 
   if (!appointmentsResponse.ok) {
     throw new Error("Unable to load appointments");
   }
-  if (!paymentsResponse.ok) {
-    throw new Error("Unable to load payments summary");
+  if (!revenueResponse.ok) {
+    throw new Error("Unable to load revenue summary");
   }
 
   const appointmentsPayload = (await appointmentsResponse.json()) as AppointmentListPayload;
-  const paymentsPayload = (await paymentsResponse.json()) as PaymentsSummaryPayload;
+  const revenuePayload = (await revenueResponse.json()) as RevenuePayload;
 
   const appointments = appointmentsPayload.appointments ?? [];
   const summaryCounts = summarizeByStatus(appointments);
   const grouped = groupByStatus(appointments);
   const todaysAppointments = appointments.filter((appointment) => isToday(appointment.startAt));
-
-  const unmatchedPayments = paymentsPayload.summary?.unmatched ?? 0;
 
   return (
     <main className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-10 sm:px-6">
@@ -237,13 +248,11 @@ export default async function OwnerHubPage() {
           </p>
         </div>
         <div className="flex items-center gap-4 rounded-lg border border-neutral-200 bg-white px-4 py-2 shadow-sm">
-          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-500">Unmatched payments</span>
+          <span className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-500">Month-to-date revenue</span>
           <span
-            className={`rounded-full px-3 py-1 text-sm font-semibold ${
-              unmatchedPayments > 0 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
-            }`}
+            className="rounded-full bg-emerald-100 px-3 py-1 text-sm font-semibold text-emerald-700"
           >
-            {unmatchedPayments}
+            {fmtMoney(revenuePayload.windows.monthToDate.totalCents, revenuePayload.currency)}
           </span>
         </div>
       </header>

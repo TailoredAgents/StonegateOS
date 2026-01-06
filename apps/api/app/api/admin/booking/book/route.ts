@@ -17,6 +17,7 @@ type BookRequest = {
   durationMinutes?: number;
   travelBufferMinutes?: number;
   services?: string[];
+  quotedTotalCents?: number;
 };
 
 const PLACEHOLDER_CITY = "Unknown";
@@ -42,6 +43,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       startAt: form.get("startAt")?.toString(),
       durationMinutes: form.get("durationMinutes") ? Number(form.get("durationMinutes")) : undefined,
       travelBufferMinutes: form.get("travelBufferMinutes") ? Number(form.get("travelBufferMinutes")) : undefined,
+      quotedTotalCents: form.get("quotedTotalCents") ? Number(form.get("quotedTotalCents")) : undefined,
       services: form.get("services")
         ? form
             .get("services")!
@@ -62,6 +64,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     typeof payload.travelBufferMinutes === "number" && payload.travelBufferMinutes >= 0
       ? payload.travelBufferMinutes
       : 30;
+  const quotedTotalCents =
+    typeof payload.quotedTotalCents === "number" &&
+    Number.isFinite(payload.quotedTotalCents) &&
+    Number.isInteger(payload.quotedTotalCents) &&
+    payload.quotedTotalCents >= 0
+      ? payload.quotedTotalCents
+      : null;
 
   if (!contactId || !startAtIso) {
     return NextResponse.json({ error: "contact_and_start_required" }, { status: 400 });
@@ -110,19 +119,20 @@ export async function POST(request: NextRequest): Promise<Response> {
         throw new Error("property_create_failed");
       }
 
-      const [appt] = await tx
-        .insert(appointments)
-        .values({
-          contactId,
-          propertyId: resolvedPropertyId,
-          startAt,
-          durationMinutes,
-          travelBufferMinutes,
-          status: "confirmed",
-          rescheduleToken: nanoid(24),
-          type: "estimate"
-        })
-        .returning({ id: appointments.id });
+       const [appt] = await tx
+         .insert(appointments)
+         .values({
+           contactId,
+           propertyId: resolvedPropertyId,
+           startAt,
+           durationMinutes,
+           travelBufferMinutes,
+           status: "confirmed",
+           rescheduleToken: nanoid(24),
+           type: "estimate",
+           quotedTotalCents: quotedTotalCents ?? undefined
+         })
+         .returning({ id: appointments.id });
 
       if (!appt?.id) {
         throw new Error("appointment_create_failed");
@@ -149,21 +159,22 @@ export async function POST(request: NextRequest): Promise<Response> {
       });
     }
 
-    await recordAuditEvent({
-      actor,
-      action: "appointment.booked",
-      entityType: "appointment",
-      entityId: result.appointmentId,
-      meta: {
-        contactId,
-        propertyId: result.propertyId,
-        startAt: startAt.toISOString(),
-        durationMinutes,
-        travelBufferMinutes,
-        services,
-        source: "manual_booking"
-      }
-    });
+      await recordAuditEvent({
+        actor,
+        action: "appointment.booked",
+        entityType: "appointment",
+        entityId: result.appointmentId,
+        meta: {
+          contactId,
+          propertyId: result.propertyId,
+          startAt: startAt.toISOString(),
+          durationMinutes,
+          travelBufferMinutes,
+          services,
+          quotedTotalCents,
+          source: "manual_booking"
+        }
+      });
 
     return NextResponse.json({
       ok: true,
