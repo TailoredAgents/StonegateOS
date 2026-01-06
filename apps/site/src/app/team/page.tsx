@@ -12,7 +12,6 @@ import {
   updatePipelineStageAction
 } from "./actions";
 import { MyDaySection } from "./components/MyDaySection";
-import { EstimatesSection } from "./components/EstimatesSection";
 import { QuotesSection } from "./components/QuotesSection";
 import { InstantQuotesSection } from "./components/InstantQuotesSection";
 import { ContactsSection } from "./components/ContactsSection";
@@ -57,7 +56,13 @@ export default async function TeamPage({
   const austinCallPhone = cookieStore.get("myst-call-agent-owner-phone")?.value ?? "";
   const callAgentChoice = cookieStore.get("myst-call-agent-choice")?.value ?? "devon";
 
-  const tab = params?.tab || (hasCrew && !hasOwner ? "myday" : "estimates");
+  const requestedTab = params?.tab;
+  const tab =
+    requestedTab === "estimates"
+      ? hasOwner
+        ? "inbox"
+        : "myday"
+      : requestedTab || (hasCrew && !hasOwner ? "myday" : "inbox");
   const contactsQuery = typeof params?.q === "string" ? params.q : undefined;
   let contactsOffset: number | undefined;
   if (typeof params?.offset === "string") {
@@ -75,7 +80,6 @@ export default async function TeamPage({
   const dismissedNewLeadId = cookieStore.get("myst-new-lead-dismissed")?.value ?? null;
   const tabs: TabNavItem[] = [
     { id: "myday", label: "My Day", href: "/team?tab=myday", requires: "crew" },
-    { id: "estimates", label: "Estimates", href: "/team?tab=estimates", requires: "owner" },
     { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "owner" },
     { id: "quote-builder", label: "Quote Builder", href: "/team?tab=quote-builder", requires: "crew" },
     { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "owner" },
@@ -93,7 +97,7 @@ export default async function TeamPage({
   ];
   const tabGroups: TabNavGroup[] = [
     { id: "ops", label: "Ops", itemIds: ["myday", "calendar", "chat"] },
-    { id: "sales", label: "Sales", itemIds: ["estimates", "quotes", "quote-builder", "pipeline", "contacts", "inbox"] },
+    { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "pipeline", "contacts", "inbox"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
     { id: "control", label: "Control", itemIds: ["policy", "automation", "access", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
@@ -301,18 +305,6 @@ export default async function TeamPage({
             }
           >
             <CalendarSection searchParams={params as any} />
-          </React.Suspense>
-        ) : null}
-
-        {tab === "estimates" && hasOwner ? (
-          <React.Suspense
-            fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading Estimates
-              </div>
-            }
-          >
-            <EstimatesSection />
           </React.Suspense>
         ) : null}
 
