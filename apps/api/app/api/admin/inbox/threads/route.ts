@@ -229,6 +229,16 @@ export async function GET(request: NextRequest): Promise<Response> {
     const normalizedPostalCode = normalizePostalCode(row.propertyPostalCode ?? null);
     const outOfArea =
       normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
+    let lastInboundIso: string | null = null;
+    const rawLastInbound = row.lastInboundAt as unknown;
+    if (rawLastInbound instanceof Date) {
+      lastInboundIso = rawLastInbound.toISOString();
+    } else if (typeof rawLastInbound === "string" && rawLastInbound.trim().length) {
+      const parsed = new Date(rawLastInbound);
+      if (!Number.isNaN(parsed.getTime())) {
+        lastInboundIso = parsed.toISOString();
+      }
+    }
     return {
       id: row.id,
       status: row.status,
@@ -239,7 +249,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       lastMessageAt: row.lastMessageAt ? row.lastMessageAt.toISOString() : null,
       updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
       stateUpdatedAt: row.stateUpdatedAt ? row.stateUpdatedAt.toISOString() : null,
-      lastInboundAt: row.lastInboundAt instanceof Date ? row.lastInboundAt.toISOString() : null,
+      lastInboundAt: lastInboundIso,
       contact: row.contactId
         ? {
             id: row.contactId,
