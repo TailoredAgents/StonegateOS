@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { asc, eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray, sql } from "drizzle-orm";
 import {
   getDb,
   conversationThreads,
@@ -71,7 +71,12 @@ export async function GET(
       propertyCity: properties.city,
       propertyState: properties.state,
       propertyPostalCode: properties.postalCode,
-      assignedName: teamMembers.name
+      assignedName: teamMembers.name,
+      lastInboundAt: sql<Date | null>`(
+        select max(coalesce(cm.received_at, cm.created_at))
+        from conversation_messages cm
+        where cm.thread_id = ${conversationThreads.id} and cm.direction = 'inbound'
+      )`
     })
     .from(conversationThreads)
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
@@ -238,6 +243,7 @@ export async function GET(
       lastMessageAt: threadRow.lastMessageAt ? threadRow.lastMessageAt.toISOString() : null,
       updatedAt: threadRow.updatedAt ? threadRow.updatedAt.toISOString() : null,
       createdAt: threadRow.createdAt.toISOString(),
+      lastInboundAt: threadRow.lastInboundAt ? threadRow.lastInboundAt.toISOString() : null,
       stateUpdatedAt: threadRow.stateUpdatedAt ? threadRow.stateUpdatedAt.toISOString() : null,
       contact: threadRow.contactId
         ? {

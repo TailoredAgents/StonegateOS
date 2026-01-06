@@ -95,6 +95,16 @@ export async function GET(request: NextRequest): Promise<Response> {
   const whereClause = filters.length ? and(...filters) : undefined;
 
   const db = getDb();
+  const inboundLatest = db
+    .select({
+      threadId: conversationMessages.threadId,
+      lastInboundAt: sql<Date | null>`max(coalesce(${conversationMessages.receivedAt}, ${conversationMessages.createdAt}))`
+    })
+    .from(conversationMessages)
+    .where(eq(conversationMessages.direction, "inbound"))
+    .groupBy(conversationMessages.threadId)
+    .as("inboundLatest");
+
   const totalResult = whereClause
     ? await db
         .select({ count: sql<number>`count(*)` })
@@ -132,7 +142,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           assignedName: teamMembers.name,
           followupState: leadAutomationStates.followupState,
           followupStep: leadAutomationStates.followupStep,
-          nextFollowupAt: leadAutomationStates.nextFollowupAt
+          nextFollowupAt: leadAutomationStates.nextFollowupAt,
+          lastInboundAt: inboundLatest.lastInboundAt
         })
         .from(conversationThreads)
         .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
@@ -145,6 +156,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           )
         )
         .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id))
+        .leftJoin(inboundLatest, eq(inboundLatest.threadId, conversationThreads.id))
         .where(whereClause)
     : db
         .select({
@@ -173,7 +185,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           assignedName: teamMembers.name,
           followupState: leadAutomationStates.followupState,
           followupStep: leadAutomationStates.followupStep,
-          nextFollowupAt: leadAutomationStates.nextFollowupAt
+          nextFollowupAt: leadAutomationStates.nextFollowupAt,
+          lastInboundAt: inboundLatest.lastInboundAt
         })
         .from(conversationThreads)
         .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
@@ -185,7 +198,8 @@ export async function GET(request: NextRequest): Promise<Response> {
             sql`${leadAutomationStates.channel}::text = ${conversationThreads.channel}::text`
           )
         )
-        .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id)))
+        .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id))
+        .leftJoin(inboundLatest, eq(inboundLatest.threadId, conversationThreads.id)))
     .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
     .limit(limit)
     .offset(offset);
@@ -225,6 +239,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       lastMessageAt: row.lastMessageAt ? row.lastMessageAt.toISOString() : null,
       updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
       stateUpdatedAt: row.stateUpdatedAt ? row.stateUpdatedAt.toISOString() : null,
+      lastInboundAt: row.lastInboundAt ? row.lastInboundAt.toISOString() : null,
       contact: row.contactId
         ? {
             id: row.contactId,

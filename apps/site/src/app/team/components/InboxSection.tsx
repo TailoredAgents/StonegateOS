@@ -21,6 +21,7 @@ type ThreadSummary = {
   subject: string | null;
   lastMessagePreview: string | null;
   lastMessageAt: string | null;
+  lastInboundAt?: string | null;
   contact: {
     id: string;
     name: string;
@@ -51,6 +52,7 @@ type ThreadDetail = {
   channel: string;
   subject: string | null;
   lastMessageAt: string | null;
+  lastInboundAt?: string | null;
   contact: {
     id: string;
     name: string;
@@ -192,6 +194,15 @@ function formatTimestamp(value: string | null): string {
 function formatFailureDetail(detail: string | null): string {
   if (!detail) return "Send failed";
   return detail.replace(/_/g, " ");
+}
+
+function isDmExpired(thread: ThreadSummary, nowMs: number): boolean {
+  if (thread.channel !== "dm") return false;
+  if (!thread.lastInboundAt) return false;
+  const lastInbound = new Date(thread.lastInboundAt);
+  if (Number.isNaN(lastInbound.getTime())) return false;
+  const elapsedMs = nowMs - lastInbound.getTime();
+  return elapsedMs > 24 * 60 * 60 * 1000;
 }
 
 function readMetaNumber(meta: Record<string, unknown> | null | undefined, key: string): number | null {
@@ -373,6 +384,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
           ) : (
             <div className="space-y-3">
               {threads.map((thread) => {
+                const expired = isDmExpired(thread, Date.now());
                 const isActive = thread.id === activeThread?.id;
                 return (
                   <a
@@ -384,27 +396,35 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                         : "border-slate-200 bg-white hover:border-primary-200 hover:bg-primary-50/30"
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-start justify-between gap-2">
                       <div className="font-semibold text-slate-900">
                         {thread.contact?.name ?? "Unknown contact"}
                       </div>
-                        <div className="flex flex-wrap items-center gap-1">
-                          {thread.property?.outOfArea ? (
-                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
-                              Out of area
-                            </span>
-                          ) : null}
-                          {thread.followup?.nextAt && thread.followup.state === "running" ? (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                              Follow-up {formatTimestamp(thread.followup.nextAt)}
-                            </span>
-                          ) : null}
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                            {formatStateLabel(thread.state ?? "new")}
+                      <div className="flex flex-wrap items-center gap-1">
+                        {thread.property?.outOfArea ? (
+                          <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                            Out of area
                           </span>
+                        ) : null}
+                        {thread.followup?.nextAt && thread.followup.state === "running" ? (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                            Follow-up {formatTimestamp(thread.followup.nextAt)}
+                          </span>
+                        ) : null}
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                          {formatStateLabel(thread.state ?? "new")}
+                        </span>
                         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                           {thread.channel}
                         </span>
+                        {expired ? (
+                          <span
+                            className="inline-flex items-center justify-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800"
+                            title="Chat has expired; please message directly in Messenger or wait for the customer to reply."
+                          >
+                            ⚠️
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                     <p className="mt-1 text-xs text-slate-500">
