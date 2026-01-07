@@ -6,7 +6,7 @@ import { Circle, CircleMarker, MapContainer, TileLayer, useMap, ZoomControl } fr
 import { cn } from "@myst-os/ui";
 
 const WOODSTOCK_CITY_CENTER: [number, number] = [34.1014112, -84.5192192];
-const SERVICE_RADIUS_METERS = 30 * 1609.344;
+const SERVICE_RADIUS_METERS = 20 * 1609.344;
 
 function FitServiceRadiusBounds({ center, radiusMeters }: { center: [number, number]; radiusMeters: number }) {
   const map = useMap();
