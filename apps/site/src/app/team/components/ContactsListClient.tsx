@@ -565,7 +565,6 @@ function ContactCard({ contact }: ContactCardProps) {
                 <form
                   action={createContactNoteAction}
                   className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600"
-                  onSubmit={() => setShowNoteForm(false)}
                 >
                   <input type="hidden" name="contactId" value={contactState.id} />
                   <label className="flex flex-col gap-1">
