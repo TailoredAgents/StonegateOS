@@ -12,7 +12,7 @@ function FitServiceRadiusBounds({ center, radiusMeters }: { center: [number, num
   const map = useMap();
 
   useEffect(() => {
-    const bounds = Leaflet.circle(center, { radius: radiusMeters }).getBounds();
+    const bounds = Leaflet.latLng(center).toBounds(radiusMeters);
     map.fitBounds(bounds, { padding: [24, 24] });
   }, [center, map, radiusMeters]);
 
@@ -53,4 +53,3 @@ export function ServiceAreaMap({ className }: { className?: string }) {
     </div>
   );
 }
-
