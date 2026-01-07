@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
@@ -78,9 +78,15 @@ function ContactCard({ contact }: ContactCardProps) {
   const [addingProperty, setAddingProperty] = useState(false);
   const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
   const [showNoteForm, setShowNoteForm] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [noteSubmitArmed, setNoteSubmitArmed] = useState(false);
+  const noteSubmitStartCountRef = useRef<number>(0);
 
   useEffect(() => {
     setContactState(contact);
+    setShowNoteForm(false);
+    setNoteDraft("");
+    setNoteSubmitArmed(false);
   }, [contact]);
 
   const primaryProperty = contactState.properties[0];
@@ -92,6 +98,15 @@ function ContactCard({ contact }: ContactCardProps) {
   const sortedNotes = useMemo(() => {
     return [...(contactState.notes ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }, [contactState.notes]);
+
+  useEffect(() => {
+    if (!noteSubmitArmed) return;
+    if (sortedNotes.length > noteSubmitStartCountRef.current) {
+      setNoteDraft("");
+      setShowNoteForm(false);
+      setNoteSubmitArmed(false);
+    }
+  }, [noteSubmitArmed, sortedNotes.length]);
 
   return (
     <li className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60">
@@ -565,6 +580,10 @@ function ContactCard({ contact }: ContactCardProps) {
                 <form
                   action={createContactNoteAction}
                   className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600"
+                  onSubmit={() => {
+                    noteSubmitStartCountRef.current = sortedNotes.length;
+                    setNoteSubmitArmed(true);
+                  }}
                 >
                   <input type="hidden" name="contactId" value={contactState.id} />
                   <label className="flex flex-col gap-1">
@@ -575,6 +594,8 @@ function ContactCard({ contact }: ContactCardProps) {
                       rows={3}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                       placeholder="What happened? Next steps?"
+                      value={noteDraft}
+                      onChange={(event) => setNoteDraft(event.target.value)}
                     />
                   </label>
                   <div className="flex gap-2">
@@ -584,7 +605,10 @@ function ContactCard({ contact }: ContactCardProps) {
                     <button
                       type="button"
                       className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800"
-                      onClick={() => setShowNoteForm(false)}
+                      onClick={() => {
+                        setShowNoteForm(false);
+                        setNoteSubmitArmed(false);
+                      }}
                     >
                       Cancel
                     </button>
