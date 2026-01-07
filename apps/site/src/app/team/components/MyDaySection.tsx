@@ -139,15 +139,22 @@ export async function MyDaySection(): Promise<ReactElement> {
               <form action={updateApptStatus} className="flex flex-wrap items-end gap-2">
                 <input type="hidden" name="appointmentId" value={a.id} />
                 <input type="hidden" name="status" value="completed" />
-                <input type="hidden" name="finalTotalSameAsQuoted" value="true" />
                 <label className="flex flex-col gap-1">
-                  <span className="text-[11px] text-neutral-600">Final total (optional)</span>
+                  <span className="text-[11px] text-neutral-600">Amount collected</span>
                   <input
                     name="finalTotal"
                     type="number"
                     min={0}
                     step="0.01"
-                    placeholder="leave blank = quoted"
+                    required
+                    defaultValue={
+                      a.finalTotalCents !== null
+                        ? (a.finalTotalCents / 100).toFixed(2)
+                        : a.quotedTotalCents !== null
+                          ? (a.quotedTotalCents / 100).toFixed(2)
+                          : ""
+                    }
+                    placeholder="e.g. 350.00"
                     className="w-40 rounded-md border border-neutral-300 px-2 py-1 text-xs"
                   />
                 </label>
