@@ -10,6 +10,7 @@ import {
 import { addApptAttachmentAction } from "../actions/attachments";
 import { callAdminApi, fmtTime } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
+import { labelForPipelineStage } from "./pipeline.stages";
 
 type AppointmentStatus = "requested" | "confirmed" | "completed" | "no_show" | "canceled";
 
@@ -91,7 +92,7 @@ export async function EstimatesSection(): Promise<ReactElement> {
                   </span>
                   {a.pipelineStage ? (
                     <span className="rounded-full bg-neutral-100 px-2 py-0.5 font-semibold text-neutral-700">
-                      Pipeline: {a.pipelineStage}
+                      Pipeline: {labelForPipelineStage(a.pipelineStage)}
                     </span>
                   ) : null}
                   {a.quoteStatus ? (

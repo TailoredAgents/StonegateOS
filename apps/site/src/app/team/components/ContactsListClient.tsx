@@ -4,6 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
+  PIPELINE_STAGES,
+  badgeClassForPipelineStage,
+  labelForPipelineStage
+} from "./pipeline.stages";
+import {
   addPropertyAction,
   bookAppointmentAction,
   createContactNoteAction,
@@ -16,40 +21,6 @@ import {
   updatePropertyAction
 } from "../actions";
 import type { ContactNoteSummary, ContactSummary, PropertySummary } from "./contacts.types";
-
-const PIPELINE_STAGE_LABELS: Record<string, string> = {
-  new: "New",
-  contacted: "Contacted",
-  qualified: "Booked",
-  quoted: "Quoted",
-  won: "Won",
-  lost: "Lost"
-};
-
-const PIPELINE_STAGES = ["new", "contacted", "qualified", "quoted", "won", "lost"] as const;
-
-function stageLabel(stage: string): string {
-  return PIPELINE_STAGE_LABELS[stage] ?? stage;
-}
-
-function stageBadgeClass(stage: string): string {
-  switch (stage) {
-    case "new":
-      return "bg-primary-100 text-primary-700";
-    case "contacted":
-      return "bg-amber-100 text-amber-800";
-    case "qualified":
-      return "bg-sky-100 text-sky-800";
-    case "quoted":
-      return "bg-indigo-100 text-indigo-800";
-    case "won":
-      return "bg-emerald-100 text-emerald-800";
-    case "lost":
-      return "bg-rose-100 text-rose-800";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
-}
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "N/A";
@@ -130,11 +101,11 @@ function ContactCard({ contact }: ContactCardProps) {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
               <h3 className="text-lg font-semibold text-slate-900">{contactState.name}</h3>
               <span
-                className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${stageBadgeClass(
+                className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${badgeClassForPipelineStage(
                   contactState.pipeline.stage
                 )}`}
               >
-                {stageLabel(contactState.pipeline.stage)}
+                {labelForPipelineStage(contactState.pipeline.stage)}
               </span>
             </div>
             <form action={updatePipelineStageAction} className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
@@ -148,7 +119,7 @@ function ContactCard({ contact }: ContactCardProps) {
                 >
                   {PIPELINE_STAGES.map((value) => (
                     <option key={value} value={value}>
-                      {stageLabel(value)}
+                      {labelForPipelineStage(value)}
                     </option>
                   ))}
                 </select>

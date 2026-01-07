@@ -5,86 +5,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { updatePipelineStageAction } from "../actions";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import type { PipelineContact, PipelineLane } from "./pipeline.types";
-
-const STAGE_LABELS: Record<string, string> = {
-  new: "New",
-  contacted: "Contacted",
-  qualified: "Scheduled Quote",
-  quoted: "Quoted",
-  won: "Won",
-  lost: "Lost"
-};
-
-type StageTheme = {
-  dot: string;
-  badge: string;
-  cardBorder: string;
-  cardBackground: string;
-};
-
-const STAGE_THEMES: Record<string, StageTheme> = {
-  new: {
-    dot: "bg-blue-400",
-    badge: "bg-blue-100 text-blue-700",
-    cardBorder: "border-blue-100 hover:border-blue-200",
-    cardBackground: "bg-gradient-to-br from-white to-blue-50/60"
-  },
-  contacted: {
-    dot: "bg-sky-400",
-    badge: "bg-sky-100 text-sky-700",
-    cardBorder: "border-sky-100 hover:border-sky-200",
-    cardBackground: "bg-gradient-to-br from-white to-sky-50/60"
-  },
-  qualified: {
-    dot: "bg-amber-400",
-    badge: "bg-amber-100 text-amber-700",
-    cardBorder: "border-amber-100 hover:border-amber-200",
-    cardBackground: "bg-gradient-to-br from-white to-amber-50/60"
-  },
-  quoted: {
-    dot: "bg-indigo-400",
-    badge: "bg-indigo-100 text-indigo-700",
-    cardBorder: "border-indigo-100 hover:border-indigo-200",
-    cardBackground: "bg-gradient-to-br from-white to-indigo-50/60"
-  },
-  won: {
-    dot: "bg-emerald-400",
-    badge: "bg-emerald-100 text-emerald-700",
-    cardBorder: "border-emerald-100 hover:border-emerald-200",
-    cardBackground: "bg-gradient-to-br from-white to-emerald-50/60"
-  },
-  lost: {
-    dot: "bg-rose-400",
-    badge: "bg-rose-100 text-rose-700",
-    cardBorder: "border-rose-100 hover:border-rose-200",
-    cardBackground: "bg-gradient-to-br from-white to-rose-50/60"
-  },
-  default: {
-    dot: "bg-slate-400",
-    badge: "bg-slate-100 text-slate-600",
-    cardBorder: "border-slate-200 hover:border-slate-300",
-    cardBackground: "bg-white"
-  }
-};
-
-const DEFAULT_STAGE_THEME: StageTheme = {
-  dot: "bg-slate-400",
-  badge: "bg-slate-100 text-slate-600",
-  cardBorder: "border-slate-200 hover:border-slate-300",
-  cardBackground: "bg-white"
-};
-
-function labelForStage(stage: string): string {
-  return STAGE_LABELS[stage] ?? stage;
-}
-
-function themeForStage(stage: string): StageTheme {
-  const theme = STAGE_THEMES[stage];
-  if (theme) {
-    return theme;
-  }
-  return DEFAULT_STAGE_THEME;
-}
+import { labelForPipelineStage, themeForPipelineStage } from "./pipeline.stages";
 
 function sortContacts(contacts: PipelineContact[]): PipelineContact[] {
   return [...contacts].sort((a, b) => {
@@ -229,7 +150,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
         {stages.map((stage) => {
           const lane = board.find((item) => item.stage === stage) ?? { stage, contacts: [] };
           const isHover = hoverStage === stage;
-          const laneTheme = themeForStage(stage);
+          const laneTheme = themeForPipelineStage(stage);
           return (
             <section
               key={stage}
@@ -247,7 +168,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
               <header className="flex items-center justify-between gap-3 rounded-t-3xl border-b border-slate-200/60 bg-white/90 px-5 py-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                   <span className={`h-2.5 w-2.5 rounded-full ${laneTheme.dot}`} />
-                  {labelForStage(stage)}
+                  {labelForPipelineStage(stage)}
                 </div>
                 <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">
                   {lane.contacts.length}
@@ -260,7 +181,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                   </p>
                 ) : (
                   lane.contacts.map((contact) => {
-                    const theme = themeForStage(contact.pipeline.stage);
+                    const theme = themeForPipelineStage(contact.pipeline.stage);
                     return (
                       <article
                         key={contact.id}
@@ -285,7 +206,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                           <span
                             className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${theme.badge}`}
                           >
-                            {labelForStage(contact.pipeline.stage)}
+                            {labelForPipelineStage(contact.pipeline.stage)}
                           </span>
                         </div>
                         {contact.property?.outOfArea ? (
@@ -328,7 +249,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                             >
                               {stages.map((option) => (
                                 <option key={option} value={option}>
-                                  {labelForStage(option)}
+                                  {labelForPipelineStage(option)}
                                 </option>
                               ))}
                             </select>

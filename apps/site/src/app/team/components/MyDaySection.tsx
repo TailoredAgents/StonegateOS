@@ -9,6 +9,7 @@ import {
   updateApptStatus
 } from "../actions";
 import { callAdminApi, fmtTime } from "../lib/api";
+import { labelForPipelineStage } from "./pipeline.stages";
 
 type AppointmentStatus = "requested" | "confirmed" | "completed" | "no_show" | "canceled";
 
@@ -114,7 +115,7 @@ export async function MyDaySection(): Promise<ReactElement> {
             <div className="mt-3 flex flex-wrap gap-2">
               {a.pipelineStage ? (
                 <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                  Pipeline: {a.pipelineStage}
+                  Pipeline: {labelForPipelineStage(a.pipelineStage)}
                 </span>
               ) : null}
               {fmtUsdCents(a.quotedTotalCents) ? (

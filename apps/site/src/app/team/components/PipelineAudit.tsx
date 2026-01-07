@@ -1,5 +1,6 @@
 import React from "react";
 import { callAdminApi } from "../lib/api";
+import { labelForPipelineStage } from "./pipeline.stages";
 
 type AuditEvent = {
   id: string;
@@ -59,13 +60,14 @@ export async function PipelineAudit(): Promise<React.ReactElement | null> {
               <span className="text-xs text-slate-500">{formatAgo(event.createdAt)}</span>
             </div>
             <div className="mt-1 text-sm font-medium text-slate-900">
-              {event.contactName ?? "Contact"} &mdash; {event.fromStage ?? "unknown"} → {event.toStage ?? "unknown"}
+              {event.contactName ?? "Contact"} &mdash; {labelForPipelineStage(event.fromStage ?? "unknown")} →{" "}
+              {labelForPipelineStage(event.toStage ?? "unknown")}
             </div>
             {event.meta && typeof event.meta === "object" ? (
               <div className="mt-1 text-xs text-slate-500">
                 {Object.entries(event.meta)
                   .map(([key, value]) => `${key}: ${String(value)}`)
-                  .join(" • ")}
+                  .join(" · ")}
               </div>
             ) : null}
           </li>
@@ -74,3 +76,4 @@ export async function PipelineAudit(): Promise<React.ReactElement | null> {
     </div>
   );
 }
+

@@ -4,6 +4,7 @@ import { createContactAction } from "../actions";
 import { callAdminApi } from "../lib/api";
 import ContactsListClient from "./ContactsListClient";
 import type { ContactSummary, PaginationInfo } from "./contacts.types";
+import { PIPELINE_STAGES, labelForPipelineStage } from "./pipeline.stages";
 
 const PAGE_SIZE = 25;
 
@@ -120,12 +121,11 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
               defaultValue="new"
               className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
             >
-              <option value="new">New</option>
-              <option value="contacted">Contacted</option>
-              <option value="quoted">Quoted</option>
-              <option value="qualified">Booked (estimate scheduled)</option>
-              <option value="won">Won (job booked)</option>
-              <option value="lost">Lost</option>
+              {PIPELINE_STAGES.map((stage) => (
+                <option key={stage} value={stage}>
+                  {labelForPipelineStage(stage)}
+                </option>
+              ))}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm text-slate-600 sm:col-span-2">
