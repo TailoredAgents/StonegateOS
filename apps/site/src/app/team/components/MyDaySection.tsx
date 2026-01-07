@@ -86,7 +86,7 @@ export async function MyDaySection(): Promise<ReactElement> {
                 Confirmed
               </span>
               <span>{fmtTime(a.startAt)}</span>
-              <span>â€¢</span>
+              <span aria-hidden="true">&bull;</span>
               <span>
                 {a.services[0] ?? "Junk removal"}
                 {a.services.length > 1 ? ` +${a.services.length - 1}` : ""}
