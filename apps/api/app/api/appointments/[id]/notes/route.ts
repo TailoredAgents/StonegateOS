@@ -1,10 +1,11 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getDb, appointmentNotes } from "@/db";
+import { appointmentNotes, appointments, crmTasks, getDb } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
+import { eq } from "drizzle-orm";
 
 const NoteSchema = z.object({
   body: z.string().min(1).max(2000)
@@ -37,6 +38,16 @@ export async function POST(
   const db = getDb();
   const createdAt = new Date();
 
+  const [appt] = await db
+    .select({ contactId: appointments.contactId })
+    .from(appointments)
+    .where(eq(appointments.id, appointmentId))
+    .limit(1);
+
+  if (!appt?.contactId) {
+    return NextResponse.json({ error: "appointment_not_found" }, { status: 404 });
+  }
+
   const [note] = await db
     .insert(appointmentNotes)
     .values({
@@ -54,6 +65,17 @@ export async function POST(
   if (!note) {
     return NextResponse.json({ error: "note_failed" }, { status: 500 });
   }
+
+  await db.insert(crmTasks).values({
+    contactId: appt.contactId,
+    title: "Note",
+    status: "completed",
+    notes: parsed.data.body,
+    dueAt: null,
+    assignedTo: null,
+    createdAt,
+    updatedAt: createdAt
+  });
 
   await recordAuditEvent({
     actor: getAuditActorFromRequest(request),

@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { and, gte, inArray, lte, eq } from "drizzle-orm";
-import { getDb, appointmentNotes, appointments, contacts, properties } from "@/db";
+import { and, gte, inArray, lte, eq, desc } from "drizzle-orm";
+import { getDb, appointments, contacts, crmTasks, properties } from "@/db";
 import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "@/lib/calendar";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -47,6 +47,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
   const dbRows = await db
     .select({
       id: appointments.id,
+      contactId: appointments.contactId,
       status: appointments.status,
       startAt: appointments.startAt,
       durationMinutes: appointments.durationMinutes,
@@ -68,27 +69,40 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
       )
     );
 
-  const appointmentIds = dbRows.map((row) => row.id).filter((id): id is string => typeof id === "string" && id.length > 0);
-  const notesByAppointmentId = new Map<string, Array<{ id: string; body: string; createdAt: string }>>();
-  if (appointmentIds.length) {
+  const contactIds = Array.from(
+    new Set(
+      dbRows
+        .map((row) => row.contactId)
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+    )
+  );
+  const notesByContactId = new Map<string, Array<{ id: string; body: string; createdAt: string }>>();
+  if (contactIds.length) {
     const noteRows = await db
       .select({
-        id: appointmentNotes.id,
-        appointmentId: appointmentNotes.appointmentId,
-        body: appointmentNotes.body,
-        createdAt: appointmentNotes.createdAt
+        id: crmTasks.id,
+        contactId: crmTasks.contactId,
+        body: crmTasks.notes,
+        createdAt: crmTasks.createdAt,
+        status: crmTasks.status,
+        dueAt: crmTasks.dueAt
       })
-      .from(appointmentNotes)
-      .where(inArray(appointmentNotes.appointmentId, appointmentIds));
+      .from(crmTasks)
+      .where(inArray(crmTasks.contactId, contactIds))
+      .orderBy(desc(crmTasks.createdAt));
 
     for (const row of noteRows) {
-      const list = notesByAppointmentId.get(row.appointmentId) ?? [];
+      if (!row.contactId) continue;
+      if (!row.body || row.body.trim().length === 0) continue;
+      if (row.status !== "completed") continue;
+      if (row.dueAt) continue;
+      const list = notesByContactId.get(row.contactId) ?? [];
       list.push({
         id: row.id,
         body: row.body,
         createdAt: row.createdAt.toISOString()
       });
-      notesByAppointmentId.set(row.appointmentId, list);
+      notesByContactId.set(row.contactId, list);
     }
   }
 
@@ -115,7 +129,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
         contactName,
         address: addressParts.length ? addressParts : null,
         status: row.status ?? null,
-        notes: notesByAppointmentId.get(row.id) ?? []
+        notes: row.contactId ? notesByContactId.get(row.contactId) ?? [] : []
       };
     });
 

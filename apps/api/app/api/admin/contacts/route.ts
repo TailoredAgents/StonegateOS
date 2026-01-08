@@ -447,11 +447,22 @@ export async function POST(request: NextRequest): Promise<Response> {
         .values({
           contactId: contact.id,
           stage: resolvedStage,
-          notes: resolvedNotes
+          notes: null
         })
         .onConflictDoNothing({
           target: crmPipeline.contactId
         });
+
+      if (resolvedNotes) {
+        await tx.insert(crmTasks).values({
+          contactId: contact.id,
+          title: "Note",
+          status: "completed",
+          notes: resolvedNotes,
+          dueAt: null,
+          assignedTo: null
+        });
+      }
 
       return { contact, property };
     });
@@ -491,7 +502,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         updatedAt: contact.updatedAt.toISOString(),
         pipeline: {
           stage: resolvedStage,
-          notes: resolvedNotes,
+          notes: null,
           updatedAt: contact.updatedAt.toISOString()
         },
         property: property

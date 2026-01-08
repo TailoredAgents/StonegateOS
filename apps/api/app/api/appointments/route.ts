@@ -7,10 +7,10 @@ import {
   contacts,
   properties,
   leads,
-  appointmentNotes,
   appointmentAttachments,
   appointmentTasks,
   crmPipeline,
+  crmTasks,
   quotes
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
@@ -114,32 +114,41 @@ export async function GET(request: NextRequest): Promise<Response> {
   >();
   const tasksMap = new Map<string, { id: string; title: string; status: string; createdAt: string }[]>();
 
-  if (appointmentIds.length > 0) {
-    const noteRows = await db
+  if (contactIds.length > 0) {
+    const taskRows = await db
       .select({
-        id: appointmentNotes.id,
-        appointmentId: appointmentNotes.appointmentId,
-        body: appointmentNotes.body,
-        createdAt: appointmentNotes.createdAt
+        id: crmTasks.id,
+        contactId: crmTasks.contactId,
+        body: crmTasks.notes,
+        createdAt: crmTasks.createdAt,
+        status: crmTasks.status,
+        dueAt: crmTasks.dueAt
       })
-      .from(appointmentNotes)
-      .where(inArray(appointmentNotes.appointmentId, appointmentIds));
+      .from(crmTasks)
+      .where(inArray(crmTasks.contactId, contactIds))
+      .orderBy(desc(crmTasks.createdAt));
 
-    for (const note of noteRows) {
-      if (!notesMap.has(note.appointmentId)) {
-        notesMap.set(note.appointmentId, []);
+    for (const row of taskRows) {
+      if (!row.contactId) continue;
+      if (!row.body || row.body.trim().length === 0) continue;
+      if (row.status !== "completed") continue;
+      if (row.dueAt) continue;
+      if (!notesMap.has(row.contactId)) {
+        notesMap.set(row.contactId, []);
       }
-      notesMap.get(note.appointmentId)!.push({
-        id: note.id,
-        body: note.body,
-        createdAt: note.createdAt.toISOString()
+      notesMap.get(row.contactId)!.push({
+        id: row.id,
+        body: row.body,
+        createdAt: row.createdAt.toISOString()
       });
     }
 
     for (const noteList of notesMap.values()) {
       noteList.sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
     }
+  }
 
+  if (appointmentIds.length > 0) {
     const attachmentRows = await db
       .select({
         id: appointmentAttachments.id,
@@ -272,7 +281,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       rescheduleToken: row.rescheduleToken,
       crew: row.crew ?? null,
       owner: row.owner ?? null,
-      notes: notesMap.get(row.id) ?? [],
+      notes: row.contactId ? notesMap.get(row.contactId) ?? [] : [],
       attachments: attachmentsMap.get(row.id) ?? [],
       tasks: tasksMap.get(row.id) ?? []
     };

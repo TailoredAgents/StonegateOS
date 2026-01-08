@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
-import { getDb, appointmentNotes, appointments, outboxEvents, properties } from "@/db";
+import { appointmentNotes, appointments, crmTasks, getDb, outboxEvents, properties } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
@@ -146,6 +146,16 @@ export async function POST(request: NextRequest): Promise<Response> {
            appointmentId: appt.id,
            body: notes,
            createdAt: now
+         });
+         await tx.insert(crmTasks).values({
+           contactId,
+           title: "Note",
+           status: "completed",
+           notes,
+           dueAt: null,
+           assignedTo: null,
+           createdAt: now,
+           updatedAt: now
          });
        }
 

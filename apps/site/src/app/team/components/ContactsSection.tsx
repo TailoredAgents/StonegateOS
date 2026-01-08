@@ -128,7 +128,7 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm text-slate-600 sm:col-span-2">
-            <span>Pipeline notes</span>
+            <span>Notes</span>
             <textarea
               name="pipelineNotes"
               rows={2}

@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getDb, crmPipeline, contacts } from "@/db";
+import { crmPipeline, crmTasks, contacts, getDb } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../../web/admin";
 import { PIPELINE_STAGE_SET, type PipelineStage } from "../stages";
@@ -66,7 +66,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     .values({
       contactId,
       stage: targetStage,
-      notes: noteValue ?? null,
+      notes: null,
       createdAt: now,
       updatedAt: now
     })
@@ -74,7 +74,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
       target: crmPipeline.contactId,
       set: {
         stage: targetStage,
-        notes: noteValue ?? null,
+        notes: null,
         updatedAt: now
       }
     })
@@ -89,6 +89,17 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     return NextResponse.json({ error: "pipeline_update_failed" }, { status: 500 });
   }
 
+  if (noteValue) {
+    await db.insert(crmTasks).values({
+      contactId,
+      title: "Note",
+      status: "completed",
+      notes: noteValue,
+      dueAt: null,
+      assignedTo: null
+    });
+  }
+
   await recordAuditEvent({
     actor,
     action: "pipeline.updated",
@@ -97,7 +108,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     meta: {
       contactId,
       stage: pipeline.stage,
-      notes: pipeline.notes ?? null
+      notes: noteValue ?? null
     }
   });
 
@@ -105,7 +116,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     pipeline: {
       contactId: pipeline.contactId,
       stage: pipeline.stage,
-      notes: pipeline.notes,
+      notes: null,
       updatedAt: pipeline.updatedAt.toISOString()
     }
   });
