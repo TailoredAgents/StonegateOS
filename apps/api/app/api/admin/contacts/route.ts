@@ -22,6 +22,18 @@ const PIPELINE_STAGES = ["new", "contacted", "qualified", "quoted", "won", "lost
 type PipelineStage = (typeof PIPELINE_STAGES)[number];
 const PIPELINE_STAGE_SET = new Set<string>(PIPELINE_STAGES);
 
+function isContactNoteTask(task: {
+  status: string | null;
+  dueAt: Date | null;
+  title: string | null;
+  notes: string | null;
+}): boolean {
+  if (task.status !== "completed") return false;
+  if (task.dueAt) return false;
+  const body = (task.notes ?? task.title ?? "").trim();
+  return body.length > 0;
+}
+
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
   const parsed = Number(value);
@@ -253,17 +265,19 @@ export async function GET(request: NextRequest): Promise<Response> {
     const pipeline = pipelineMap.get(contact.id);
     const tasksForContact = tasksMap.get(contact.id) ?? [];
 
-    const notes = tasksForContact
+    const noteTasks = tasksForContact.filter(isContactNoteTask);
+
+    const notes = noteTasks
       .slice()
       .sort((a, b) => (b.updatedAt?.getTime?.() ?? 0) - (a.updatedAt?.getTime?.() ?? 0))
       .map((task) => ({
         id: task.id,
-        body: (task.notes ?? task.title).trim(),
+        body: (task.notes ?? task.title ?? "").trim(),
         createdAt: task.createdAt.toISOString(),
         updatedAt: task.updatedAt.toISOString()
       }));
 
-    const latestNoteUpdatedAt = tasksForContact
+    const latestNoteUpdatedAt = noteTasks
       .map((task) => task.updatedAt)
       .filter((value): value is Date => value instanceof Date)
       .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;

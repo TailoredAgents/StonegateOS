@@ -77,14 +77,21 @@ function ContactCard({ contact }: ContactCardProps) {
   const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
   const [showNoteForm, setShowNoteForm] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
-  const [noteSubmitArmed, setNoteSubmitArmed] = useState(false);
-  const noteSubmitStartCountRef = useRef<number>(0);
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteDeletingId, setNoteDeletingId] = useState<string | null>(null);
+  const contactIdRef = useRef(contact.id);
 
   useEffect(() => {
     setContactState(contact);
-    setShowNoteForm(false);
-    setNoteDraft("");
-    setNoteSubmitArmed(false);
+    if (contactIdRef.current !== contact.id) {
+      contactIdRef.current = contact.id;
+      setShowNoteForm(false);
+      setNoteDraft("");
+      setNoteError(null);
+      setNoteSaving(false);
+      setNoteDeletingId(null);
+    }
   }, [contact]);
 
   const primaryProperty = contactState.properties[0];
@@ -97,14 +104,123 @@ function ContactCard({ contact }: ContactCardProps) {
     return [...(contactState.notes ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }, [contactState.notes]);
 
-  useEffect(() => {
-    if (!noteSubmitArmed) return;
-    if (sortedNotes.length > noteSubmitStartCountRef.current) {
+  async function submitNote(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (noteSaving) return;
+
+    const body = noteDraft.trim();
+    if (!body) {
+      setNoteError("Please type a note first.");
+      return;
+    }
+
+    setNoteSaving(true);
+    setNoteError(null);
+
+    try {
+      const response = await fetch("/api/team/contacts/notes", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ contactId: contactState.id, body })
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as unknown;
+        const message =
+          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+            ? String((data as Record<string, unknown>)["message"])
+            : "Unable to save note. Please try again.";
+        setNoteError(message);
+        return;
+      }
+
+      const data = (await response.json().catch(() => null)) as unknown;
+      const note =
+        data && typeof data === "object" ? (data as Record<string, unknown>)["note"] : null;
+      if (!note || typeof note !== "object") {
+        setNoteError("Unable to save note. Please try again.");
+        return;
+      }
+
+      const noteRecord = note as Record<string, unknown>;
+      if (
+        typeof noteRecord["id"] !== "string" ||
+        typeof noteRecord["body"] !== "string" ||
+        typeof noteRecord["createdAt"] !== "string" ||
+        typeof noteRecord["updatedAt"] !== "string"
+      ) {
+        setNoteError("Unable to save note. Please try again.");
+        return;
+      }
+
+      const created = {
+        id: noteRecord["id"],
+        body: noteRecord["body"],
+        createdAt: noteRecord["createdAt"],
+        updatedAt: noteRecord["updatedAt"]
+      } satisfies ContactNoteSummary;
+
+      setContactState((prev) => {
+        const nextNotes = [created, ...(prev.notes ?? [])];
+        const previousCount = prev.notesCount ?? (prev.notes?.length ?? 0);
+        const nextLastActivity =
+          prev.lastActivityAt && Date.parse(prev.lastActivityAt) > Date.parse(created.updatedAt)
+            ? prev.lastActivityAt
+            : created.updatedAt;
+        return {
+          ...prev,
+          notes: nextNotes,
+          notesCount: previousCount + 1,
+          lastActivityAt: nextLastActivity
+        };
+      });
+
       setNoteDraft("");
       setShowNoteForm(false);
-      setNoteSubmitArmed(false);
+    } finally {
+      setNoteSaving(false);
     }
-  }, [noteSubmitArmed, sortedNotes.length]);
+  }
+
+  async function deleteNote(noteId: string) {
+    if (noteDeletingId) return;
+    if (!window.confirm("Delete this note?")) return;
+
+    setNoteDeletingId(noteId);
+    setNoteError(null);
+
+    try {
+      const response = await fetch(`/api/team/contacts/notes/${noteId}`, {
+        method: "POST",
+        headers: { Accept: "application/json" }
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as unknown;
+        const message =
+          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+            ? String((data as Record<string, unknown>)["message"])
+            : "Unable to delete note. Please try again.";
+        setNoteError(message);
+        return;
+      }
+
+      setContactState((prev) => {
+        const nextNotes = (prev.notes ?? []).filter((existing) => existing.id !== noteId);
+        const previousCount = prev.notesCount ?? (prev.notes?.length ?? 0);
+        return {
+          ...prev,
+          notes: nextNotes,
+          notesCount: Math.max(0, previousCount - 1)
+        };
+      });
+    } finally {
+      setNoteDeletingId(null);
+    }
+  }
 
   return (
     <li className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60">
@@ -569,7 +685,10 @@ function ContactCard({ contact }: ContactCardProps) {
                 <button
                   type="button"
                   className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-primary-300 hover:text-primary-700"
-                  onClick={() => setShowNoteForm((prev) => !prev)}
+                  onClick={() => {
+                    setShowNoteForm((prev) => !prev);
+                    setNoteError(null);
+                  }}
                 >
                   {showNoteForm ? "Close" : "Add note"}
                 </button>
@@ -580,18 +699,27 @@ function ContactCard({ contact }: ContactCardProps) {
                     No notes yet. Capture details from calls and follow-ups so everyone stays aligned.
                   </p>
                 ) : (
-                  sortedNotes.map((note) => <NoteRow key={note.id} note={note} />)
+                  sortedNotes.map((note) => (
+                    <NoteRow
+                      key={note.id}
+                      note={note}
+                      deleting={noteDeletingId === note.id}
+                      onDelete={deleteNote}
+                    />
+                  ))
                 )}
               </div>
+              {noteError ? (
+                <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                  {noteError}
+                </p>
+              ) : null}
               {showNoteForm ? (
                 <form
                   action="/api/team/contacts/notes"
                   method="post"
                   className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600"
-                  onSubmit={() => {
-                    noteSubmitStartCountRef.current = sortedNotes.length;
-                    setNoteSubmitArmed(true);
-                  }}
+                  onSubmit={submitNote}
                 >
                   <input type="hidden" name="contactId" value={contactState.id} />
                   <label className="flex flex-col gap-1">
@@ -607,15 +735,19 @@ function ContactCard({ contact }: ContactCardProps) {
                     />
                   </label>
                   <div className="flex gap-2">
-                    <SubmitButton className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700" pendingLabel="Saving...">
-                      Add note
-                    </SubmitButton>
+                    <button
+                      type="submit"
+                      disabled={noteSaving}
+                      className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {noteSaving ? "Saving..." : "Add note"}
+                    </button>
                     <button
                       type="button"
                       className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800"
                       onClick={() => {
                         setShowNoteForm(false);
-                        setNoteSubmitArmed(false);
+                        setNoteError(null);
                       }}
                     >
                       Cancel
@@ -631,7 +763,15 @@ function ContactCard({ contact }: ContactCardProps) {
   );
 }
 
-function NoteRow({ note }: { note: ContactNoteSummary }) {
+function NoteRow({
+  note,
+  deleting,
+  onDelete
+}: {
+  note: ContactNoteSummary;
+  deleting: boolean;
+  onDelete: (noteId: string) => void;
+}) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-xs text-slate-700 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -639,20 +779,14 @@ function NoteRow({ note }: { note: ContactNoteSummary }) {
           <p className="text-[11px] text-slate-500">Added {formatDateTime(note.createdAt)}</p>
           <p className="whitespace-pre-wrap text-sm font-semibold text-slate-800">{note.body}</p>
         </div>
-        <form
-          action={`/api/team/contacts/notes/${note.id}`}
-          method="post"
-          onSubmit={(event) => {
-            if (!window.confirm("Delete this note?")) {
-              event.preventDefault();
-            }
-          }}
+        <button
+          type="button"
+          disabled={deleting}
+          className="rounded-full border border-rose-200 px-3 py-1.5 font-medium text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-70"
+          onClick={() => onDelete(note.id)}
         >
-          <input type="hidden" name="noteId" value={note.id} />
-          <SubmitButton className="rounded-full border border-rose-200 px-3 py-1.5 font-medium text-rose-600 hover:bg-rose-50" pendingLabel="Removing...">
-            Delete
-          </SubmitButton>
-        </form>
+          {deleting ? "Removing..." : "Delete"}
+        </button>
       </div>
     </div>
   );
