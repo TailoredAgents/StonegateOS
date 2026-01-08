@@ -44,8 +44,8 @@ export const serviceRates: ServiceBaseRate[] = [
   // Junk removal catalog (additive; keep legacy wash services for compatibility)
   {
     service: "single-item",
-    label: "Single Item Pickup",
-    description: "Mattress, TV, or small furniture hauled curbside.",
+    label: "Rubbish",
+    description: "Common household waste hauled away.",
     flatRate: 95,
     basePrice: 95
   },
@@ -191,4 +191,3 @@ export const weeklyAvailability: WeeklyAvailability = {
     endHour: 8
   }
 };
-

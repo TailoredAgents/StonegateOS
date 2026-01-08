@@ -169,10 +169,10 @@ export default function HomePage() {
       </Section>
 
       <Section className="mt-4">
-        <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="font-display text-headline text-primary-800">Services for every pickup need</h2>
-            <p className="mt-3 max-w-2xl text-body text-neutral-600">From single-item pickups to full cleanouts, Stonegate builds each visit around your space and schedule with clear, upfront estimates.</p>
+            <p className="mt-3 max-w-2xl text-body text-neutral-600">From rubbish removal to full cleanouts, Stonegate builds each visit around your space and schedule with clear, upfront estimates.</p>
           </div>
           <Button variant="secondary" asChild>
             <Link href="/services">Explore Services</Link>
@@ -261,4 +261,3 @@ export default function HomePage() {
     </div>
   );
 }
-
