@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { LRUCache } from "lru-cache";
 import { z } from "zod";
 import { nanoid } from "nanoid";
-import { getDb, leads, outboxEvents, appointments } from "@/db";
+import { crmPipeline, getDb, leads, outboxEvents, appointments } from "@/db";
 import { sendConversion } from "@/lib/ga";
 import { getBookingRulesPolicy } from "@/lib/policy";
 import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
@@ -177,6 +177,11 @@ export async function POST(request: NextRequest) {
       phoneE164: normalizedPhone.e164,
       source: "web"
     });
+
+    await tx
+      .insert(crmPipeline)
+      .values({ contactId: contact.id, stage: "new" })
+      .onConflictDoNothing({ target: crmPipeline.contactId });
 
     const property = await upsertProperty(tx, {
       contactId: contact.id,
