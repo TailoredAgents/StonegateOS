@@ -7,7 +7,7 @@ export function Footer() {
       <div className="mx-auto max-w-6xl px-6 py-16 md:px-10">
         <Cta
           eyebrow="Book Today"
-          title="Ready to see your exterior glow again?"
+          title="Ready to reclaim your space?"
           description="Schedule an on-site estimate or call the crew now. We are standing by with premium service windows across North Metro Atlanta."
           primaryAction={
             <Button asChild>
