@@ -11,9 +11,7 @@ import {
 import {
   addPropertyAction,
   bookAppointmentAction,
-  createContactNoteAction,
   deleteContactAction,
-  deleteContactNoteAction,
   deletePropertyAction,
   startContactCallAction,
   updateContactAction,
@@ -578,7 +576,8 @@ function ContactCard({ contact }: ContactCardProps) {
               </div>
               {showNoteForm ? (
                 <form
-                  action={createContactNoteAction}
+                  action="/api/team/contacts/notes"
+                  method="post"
                   className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600"
                   onSubmit={() => {
                     noteSubmitStartCountRef.current = sortedNotes.length;
@@ -632,7 +631,8 @@ function NoteRow({ note }: { note: ContactNoteSummary }) {
           <p className="whitespace-pre-wrap text-sm font-semibold text-slate-800">{note.body}</p>
         </div>
         <form
-          action={deleteContactNoteAction}
+          action={`/api/team/contacts/notes/${note.id}`}
+          method="post"
           onSubmit={(event) => {
             if (!window.confirm("Delete this note?")) {
               event.preventDefault();

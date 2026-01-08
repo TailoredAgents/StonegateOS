@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { and, gte, lte, eq } from "drizzle-orm";
 import { getDb, appointments, contacts, properties } from "@/db";
-import { getCalendarConfig, getAccessToken } from "@/lib/calendar";
+import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "@/lib/calendar";
 import { isAdminRequest } from "../../../web/admin";
 
 type CalendarEvent = {
@@ -94,48 +94,50 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
     });
 
   const externalEvents: CalendarEvent[] = [];
-  const config = getCalendarConfig();
-  if (config) {
-    const token = await getAccessToken(config);
-    if (token) {
-      const params = new URLSearchParams({
-        timeMin: windowStart.toISOString(),
-        timeMax: windowEnd.toISOString(),
-        singleEvents: "true",
-        orderBy: "startTime",
-        showDeleted: "false"
-      });
-      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
-        config.calendarId
-      )}/events?${params.toString()}`;
-      const res = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      });
-      if (res.ok) {
-        const data = (await res.json()) as {
-          items?: Array<{
-            id?: string;
-            status?: string;
-            summary?: string;
-            start?: { dateTime?: string; date?: string };
-            end?: { dateTime?: string; date?: string };
-          }>;
-        };
-        for (const item of data.items ?? []) {
-          if (!item || item.status === "cancelled") continue;
-          const startIso = item.start?.dateTime ?? (item.start?.date ? `${item.start.date}T00:00:00.000Z` : null);
-          const endIso = item.end?.dateTime ?? (item.end?.date ? `${item.end.date}T00:00:00.000Z` : null);
-          if (!startIso || !endIso) continue;
-          externalEvents.push({
-            id: `google:${item.id ?? randomUUID()}`,
-            title: item.summary ?? "Calendar event",
-            source: "google",
-            start: new Date(startIso).toISOString(),
-            end: new Date(endIso).toISOString(),
-            status: item.status ?? null
-          });
+  if (isGoogleCalendarEnabled()) {
+    const config = getCalendarConfig();
+    if (config) {
+      const token = await getAccessToken(config);
+      if (token) {
+        const params = new URLSearchParams({
+          timeMin: windowStart.toISOString(),
+          timeMax: windowEnd.toISOString(),
+          singleEvents: "true",
+          orderBy: "startTime",
+          showDeleted: "false"
+        });
+        const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+          config.calendarId
+        )}/events?${params.toString()}`;
+        const res = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = (await res.json()) as {
+            items?: Array<{
+              id?: string;
+              status?: string;
+              summary?: string;
+              start?: { dateTime?: string; date?: string };
+              end?: { dateTime?: string; date?: string };
+            }>;
+          };
+          for (const item of data.items ?? []) {
+            if (!item || item.status === "cancelled") continue;
+            const startIso = item.start?.dateTime ?? (item.start?.date ? `${item.start.date}T00:00:00.000Z` : null);
+            const endIso = item.end?.dateTime ?? (item.end?.date ? `${item.end.date}T00:00:00.000Z` : null);
+            if (!startIso || !endIso) continue;
+            externalEvents.push({
+              id: `google:${item.id ?? randomUUID()}`,
+              title: item.summary ?? "Calendar event",
+              source: "google",
+              start: new Date(startIso).toISOString(),
+              end: new Date(endIso).toISOString(),
+              status: item.status ?? null
+            });
+          }
         }
       }
     }

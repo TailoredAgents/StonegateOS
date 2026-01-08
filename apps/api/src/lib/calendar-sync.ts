@@ -3,7 +3,7 @@ import { eq, inArray } from "drizzle-orm";
 import { getDb, appointments, calendarSyncState } from "@/db";
 import type { DatabaseClient } from "@/db";
 import type { CalendarConfig } from "./calendar";
-import { getCalendarConfig, getAccessToken } from "./calendar";
+import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "./calendar";
 
 const GOOGLE_API_BASE = "https://www.googleapis.com/calendar/v3";
 const WATCH_RENEW_BUFFER_MS = 10 * 60 * 1000;
@@ -88,6 +88,10 @@ export interface CalendarNotificationMetadata {
 let syncInFlight: Promise<CalendarSyncResult> | null = null;
 
 export async function ensureCalendarWatch(): Promise<boolean> {
+  if (!isGoogleCalendarEnabled()) {
+    return false;
+  }
+
   const config = getCalendarConfig();
   if (!config) {
     return false;
@@ -113,6 +117,10 @@ export async function ensureCalendarWatch(): Promise<boolean> {
 }
 
 export async function syncGoogleCalendar(options: SyncOptions = {}): Promise<CalendarSyncResult> {
+  if (!isGoogleCalendarEnabled()) {
+    return { ok: true, reason: "disabled" };
+  }
+
   if (syncInFlight) {
     return syncInFlight;
   }
@@ -166,7 +174,7 @@ export async function recordCalendarNotification(metadata: CalendarNotificationM
 async function performSync(options: SyncOptions): Promise<CalendarSyncResult> {
   const config = getCalendarConfig();
   if (!config) {
-    return { ok: false, reason: "missing_config" };
+    return { ok: true, reason: "disabled" };
   }
 
   const db = getDb();

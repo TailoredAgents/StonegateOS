@@ -1,5 +1,5 @@
 import type { AppointmentCalendarPayload } from "./calendar";
-import { createCalendarEvent, updateCalendarEvent } from "./calendar";
+import { createCalendarEvent, isGoogleCalendarEnabled, updateCalendarEvent } from "./calendar";
 import { ensureCalendarWatch } from "./calendar-sync";
 import { recordProviderFailure, recordProviderSuccess } from "./provider-health";
 
@@ -71,6 +71,10 @@ export async function createCalendarEventWithRetry(
   payload: AppointmentCalendarPayload,
   options?: RetryOptions
 ): Promise<string | null> {
+  if (!isGoogleCalendarEnabled()) {
+    return null;
+  }
+
   try {
     const eventId = await withRetry(
       () => createCalendarEvent(payload),
@@ -110,6 +114,10 @@ export async function updateCalendarEventWithRetry(
   payload: AppointmentCalendarPayload,
   options?: RetryOptions
 ): Promise<boolean> {
+  if (!isGoogleCalendarEnabled()) {
+    return true;
+  }
+
   try {
     const updated = await withRetry(
       () => updateCalendarEvent(eventId, payload),

@@ -44,7 +44,16 @@ let cachedToken:
     }
   | undefined;
 
+export function isGoogleCalendarEnabled(): boolean {
+  const raw = (process.env["GOOGLE_CALENDAR_ENABLED"] ?? "").trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes";
+}
+
 export function getCalendarConfig(): CalendarConfig | null {
+  if (!isGoogleCalendarEnabled()) {
+    return null;
+  }
+
   const clientId = process.env["GOOGLE_CLIENT_ID"];
   const clientSecret = process.env["GOOGLE_CLIENT_SECRET"];
   const refreshToken = process.env["GOOGLE_REFRESH_TOKEN"];
@@ -63,6 +72,10 @@ export function getCalendarConfig(): CalendarConfig | null {
 }
 
 export async function getAccessToken(config: CalendarConfig): Promise<string | null> {
+  if (!isGoogleCalendarEnabled()) {
+    return null;
+  }
+
   const cacheKey = `${config.clientId}:${config.calendarId}`;
   const now = Date.now();
 
@@ -332,7 +345,6 @@ export async function deleteCalendarEvent(eventId: string): Promise<void> {
     console.warn("[calendar] delete_failed", { status: response.status, text });
   }
 }
-
 
 
 

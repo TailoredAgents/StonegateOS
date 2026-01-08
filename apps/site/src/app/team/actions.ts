@@ -914,7 +914,7 @@ function makeNoteTitle(body: string): string {
   if (normalized.length === 0) return "Note";
   const maxLen = 60;
   if (normalized.length <= maxLen) return normalized;
-  return `${normalized.slice(0, maxLen - 1)}…`;
+  return `${normalized.slice(0, Math.max(0, maxLen - 3))}...`;
 }
 
 export async function createContactNoteAction(formData: FormData) {

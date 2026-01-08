@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { getDb, calendarSyncState } from "@/db";
-import { getCalendarConfig } from "@/lib/calendar";
+import { getCalendarConfig, isGoogleCalendarEnabled } from "@/lib/calendar";
 import { isAdminRequest } from "../../web/admin";
 
 interface CalendarStatusPayload {
@@ -38,6 +38,17 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarSt
   }
 
   try {
+    if (!isGoogleCalendarEnabled()) {
+      return NextResponse.json({
+        ok: true,
+        config: {
+          calendarId: null,
+          webhookConfigured: false
+        },
+        status: null
+      });
+    }
+
     const config = getCalendarConfig();
     const db = getDb();
     const calendarId = config?.calendarId ?? process.env["GOOGLE_CALENDAR_ID"] ?? null;
