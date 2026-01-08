@@ -73,7 +73,7 @@ export function HeroV2({ className, variant = "lean" }: { className?: string; va
               className="w-full justify-center shadow-soft sm:w-auto"
               onClick={handleSchedule}
             >
-              <Link href="#schedule-estimate">Get My Estimate</Link>
+              <Link href="/estimate">Get My Estimate</Link>
             </Button>
             <Button
               asChild

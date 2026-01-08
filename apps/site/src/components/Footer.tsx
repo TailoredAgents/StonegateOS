@@ -11,7 +11,7 @@ export function Footer() {
           description="Schedule an on-site estimate or call the crew now. We are standing by with premium service windows across North Metro Atlanta."
           primaryAction={
             <Button asChild>
-              <Link href="#schedule-estimate">Schedule Estimate</Link>
+              <Link href="/estimate">Schedule Estimate</Link>
             </Button>
           }
           secondaryAction={

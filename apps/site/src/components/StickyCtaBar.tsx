@@ -31,10 +31,9 @@ export function StickyCtaBar({ className }: StickyCtaBarProps) {
           <a href="sms:+14046920768">Text</a>
         </Button>
         <Button asChild className="flex-1 min-h-[48px] rounded-md text-base font-semibold">
-          <Link href="#schedule-estimate">Schedule Estimate</Link>
+          <Link href="/estimate">Schedule Estimate</Link>
         </Button>
       </div>
     </div>
   );
 }
-

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Badge, Button, Card, Section } from "@myst-os/ui";
@@ -61,7 +62,7 @@ export default async function ServicePage({ params }: ServicePageProps) {
           </div>
         ) : null}
         <Button asChild>
-          <a href="#schedule-estimate">Schedule an on-site estimate</a>
+          <Link href="/estimate">Schedule an on-site estimate</Link>
         </Button>
       </div>
     </Section>

@@ -63,7 +63,7 @@ export function Header() {
         </nav>
         <div className="hidden md:flex">
           <Button asChild>
-            <Link href="#schedule-estimate">Schedule Estimate</Link>
+            <Link href="/estimate">Schedule Estimate</Link>
           </Button>
         </div>
         <button
@@ -123,7 +123,7 @@ export function Header() {
           </nav>
           <div className="flex flex-col gap-3">
             <Button asChild size="lg" className="w-full">
-              <Link href="#schedule-estimate">Schedule Estimate</Link>
+              <Link href="/estimate">Schedule Estimate</Link>
             </Button>
             <Button
               asChild

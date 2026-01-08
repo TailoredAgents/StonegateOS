@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Badge, Button, Card, Section } from "@myst-os/ui";
@@ -43,7 +44,7 @@ export default async function AreaPage({ params }: AreaPageProps) {
           <MdxContent code={area.body.code} />
         </Card>
         <Button asChild>
-          <a href="#schedule-estimate">Request an on-site estimate in this area</a>
+          <Link href="/estimate">Request an on-site estimate in this area</Link>
         </Button>
       </div>
     </Section>
