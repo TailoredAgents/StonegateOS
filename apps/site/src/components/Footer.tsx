@@ -56,7 +56,7 @@ export function Footer() {
           <div>
             <p className="font-semibold text-neutral-700">Hours</p>
             <p className="mt-2">Mon - Sat: 8:00 AM - 6:00 PM</p>
-            <p>Sunday: On-call for emergencies</p>
+            <p>Sunday: Closed (Calls still accepted)</p>
           </div>
         </div>
         <p className="mt-12 text-xs text-neutral-400">
