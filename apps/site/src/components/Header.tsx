@@ -9,6 +9,7 @@ import { Button, cn } from "@myst-os/ui";
 
 const navItems = [
   { href: "/services", label: "Services" },
+  { href: "/contractors", label: "For Contractors" },
   { href: "/areas", label: "Service Areas" },
   { href: "/pricing", label: "Pricing" },
   { href: "/reviews", label: "Reviews" },

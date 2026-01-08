@@ -7,6 +7,8 @@ import { Check } from "lucide-react";
 import { DEFAULT_LEAD_SERVICE_OPTIONS } from "@/lib/lead-services";
 import { useUTM } from "@/lib/use-utm";
 
+type EstimateFormContext = "default" | "contractor";
+
 type SubmitState =
   | { status: "idle" }
   | { status: "submitting" }
@@ -30,9 +32,58 @@ function todayIso(): string {
   return `${year}-${month}-${day}`;
 }
 
-export function EstimateRequestForm({ className }: { className?: string }) {
+function normalizeServiceList(value: unknown): string[] {
+  if (!value) return [];
+  const raw = Array.isArray(value) ? value : [value];
+  const normalized: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (!trimmed.length) continue;
+    if (!normalized.includes(trimmed)) normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+const CONTRACTOR_TRADE_OPTIONS = [
+  "General contractor",
+  "Remodeling",
+  "Siding",
+  "Roofing",
+  "Flooring",
+  "Drywall",
+  "Property management",
+  "Other"
+] as const;
+
+const CONTRACTOR_DEBRIS_OPTIONS = [
+  "Drywall",
+  "Lumber",
+  "Siding",
+  "Roofing shingles",
+  "Flooring / carpet",
+  "Tile / masonry",
+  "Cabinets / fixtures",
+  "Mixed jobsite debris",
+  "Other"
+] as const;
+
+export function EstimateRequestForm({
+  className,
+  initialServices,
+  context = "default"
+}: {
+  className?: string;
+  initialServices?: string[];
+  context?: EstimateFormContext;
+}) {
   const utm = useUTM();
-  const [services, setServices] = React.useState<string[]>([]);
+  const resolvedInitialServices =
+    context === "contractor" && (!initialServices || initialServices.length === 0)
+      ? ["construction-debris"]
+      : normalizeServiceList(initialServices);
+
+  const [services, setServices] = React.useState<string[]>(() => resolvedInitialServices);
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
   const [email, setEmail] = React.useState("");
@@ -44,6 +95,10 @@ export function EstimateRequestForm({ className }: { className?: string }) {
   const [timeWindow, setTimeWindow] = React.useState<string>("morning");
   const [alternateDate, setAlternateDate] = React.useState("");
   const [notes, setNotes] = React.useState("");
+  const [company, setCompany] = React.useState("");
+  const [trade, setTrade] = React.useState<string>("");
+  const [debrisKinds, setDebrisKinds] = React.useState<string[]>([]);
+  const [needsLightDemo, setNeedsLightDemo] = React.useState<string>("");
   const [hpCompany, setHpCompany] = React.useState("");
   const [submitState, setSubmitState] = React.useState<SubmitState>({ status: "idle" });
 
@@ -52,6 +107,10 @@ export function EstimateRequestForm({ className }: { className?: string }) {
 
   const toggleService = (slug: string) => {
     setServices((prev) => (prev.includes(slug) ? prev.filter((entry) => entry !== slug) : [...prev, slug]));
+  };
+
+  const toggleDebrisKind = (value: string) => {
+    setDebrisKinds((prev) => (prev.includes(value) ? prev.filter((entry) => entry !== value) : [...prev, value]));
   };
 
   const submit = async () => {
@@ -75,6 +134,17 @@ export function EstimateRequestForm({ className }: { className?: string }) {
     setSubmitState({ status: "submitting" });
 
     try {
+      const noteLines: string[] = [];
+      if (context === "contractor") {
+        noteLines.push("Lead type: Contractor haul-off");
+        if (company.trim().length) noteLines.push(`Company: ${company.trim()}`);
+        if (trade.trim().length) noteLines.push(`Trade: ${trade.trim()}`);
+        if (needsLightDemo === "yes") noteLines.push("Light demo requested: Yes");
+        if (debrisKinds.length) noteLines.push(`Debris: ${debrisKinds.join(", ")}`);
+      }
+
+      const combinedNotes = [notes.trim(), noteLines.join("\n")].filter((part) => part.length > 0).join("\n");
+
       const payload = {
         services,
         name: name.trim(),
@@ -84,7 +154,7 @@ export function EstimateRequestForm({ className }: { className?: string }) {
         city: city.trim(),
         state: stateField.trim().slice(0, 2).toUpperCase(),
         postalCode: postalCode.trim(),
-        notes: notes.trim().length ? notes.trim() : undefined,
+        notes: combinedNotes.length ? combinedNotes.slice(0, 1000) : undefined,
         scheduling: {
           preferredDate: preferredDate.trim(),
           alternateDate: alternateDate.trim().length ? alternateDate.trim() : undefined,
@@ -153,10 +223,12 @@ export function EstimateRequestForm({ className }: { className?: string }) {
   }
 
   return (
-    <div className={cn("rounded-2xl border border-neutral-200 bg-white p-6 shadow-soft", className)}>
+      <div className={cn("rounded-2xl border border-neutral-200 bg-white p-6 shadow-soft", className)}>
       <div className="space-y-1">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-500">Request a time window</p>
-        <h2 className="font-display text-2xl text-primary-900">Schedule your estimate</h2>
+        <h2 className="font-display text-2xl text-primary-900">
+          {context === "contractor" ? "Request a haul-off estimate" : "Schedule your estimate"}
+        </h2>
         <p className="text-sm text-neutral-600">
           Pick a preferred date/time window and we’ll follow up to confirm. No obligation.
         </p>
@@ -211,7 +283,91 @@ export function EstimateRequestForm({ className }: { className?: string }) {
               );
             })}
           </div>
+          {context === "contractor" ? (
+            <p className="text-xs text-neutral-500">
+              Tip: Construction debris is a good default for jobsite haul‑offs. You can also select additional services if needed.
+            </p>
+          ) : null}
         </div>
+
+        {context === "contractor" ? (
+          <div className="space-y-3">
+            <p className="text-sm font-semibold text-neutral-800">Contractor details (optional)</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className="text-sm font-semibold text-neutral-800">Company</label>
+                <input
+                  type="text"
+                  value={company}
+                  onChange={(e) => setCompany(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                  placeholder="Company name (optional)"
+                  autoComplete="organization"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-neutral-800">Trade</label>
+                <select
+                  value={trade}
+                  onChange={(e) => setTrade(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                >
+                  <option value="">Select (optional)</option>
+                  {CONTRACTOR_TRADE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-neutral-800">Light demo needed?</label>
+                <select
+                  value={needsLightDemo}
+                  onChange={(e) => setNeedsLightDemo(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                >
+                  <option value="">Select (optional)</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-neutral-800">Debris type (optional)</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {CONTRACTOR_DEBRIS_OPTIONS.map((option) => {
+                  const selected = debrisKinds.includes(option);
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => toggleDebrisKind(option)}
+                      className={cn(
+                        "flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition",
+                        selected
+                          ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                          : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                      )}
+                    >
+                      <span className="font-medium text-neutral-900">{option}</span>
+                      {selected ? (
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-primary-700 bg-white text-black">
+                          <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                        </span>
+                      ) : (
+                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-neutral-300 bg-white text-transparent">
+                          <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
@@ -375,4 +531,3 @@ export function EstimateRequestForm({ className }: { className?: string }) {
     </div>
   );
 }
-
