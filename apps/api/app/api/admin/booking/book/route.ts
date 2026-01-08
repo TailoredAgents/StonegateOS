@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
-import { getDb, appointments, outboxEvents, properties } from "@/db";
+import { getDb, appointmentNotes, appointments, outboxEvents, properties } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
@@ -18,6 +18,7 @@ type BookRequest = {
   travelBufferMinutes?: number;
   services?: string[];
   quotedTotalCents?: number;
+  notes?: string;
 };
 
 const PLACEHOLDER_CITY = "Unknown";
@@ -44,6 +45,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       durationMinutes: form.get("durationMinutes") ? Number(form.get("durationMinutes")) : undefined,
       travelBufferMinutes: form.get("travelBufferMinutes") ? Number(form.get("travelBufferMinutes")) : undefined,
       quotedTotalCents: form.get("quotedTotalCents") ? Number(form.get("quotedTotalCents")) : undefined,
+      notes: form.get("notes")?.toString(),
       services: form.get("services")
         ? form
             .get("services")!
@@ -71,6 +73,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     payload.quotedTotalCents >= 0
       ? payload.quotedTotalCents
       : null;
+  const notes = typeof payload.notes === "string" && payload.notes.trim().length > 0 ? payload.notes.trim() : null;
 
   if (!contactId || !startAtIso) {
     return NextResponse.json({ error: "contact_and_start_required" }, { status: 400 });
@@ -120,31 +123,39 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
 
        const [appt] = await tx
-         .insert(appointments)
-         .values({
-           contactId,
-           propertyId: resolvedPropertyId,
-           startAt,
-           durationMinutes,
-           travelBufferMinutes,
-           status: "confirmed",
-           rescheduleToken: nanoid(24),
-           type: "estimate",
-           quotedTotalCents: quotedTotalCents ?? undefined
-         })
-         .returning({ id: appointments.id });
+          .insert(appointments)
+          .values({
+            contactId,
+            propertyId: resolvedPropertyId,
+            startAt,
+            durationMinutes,
+            travelBufferMinutes,
+            status: "confirmed",
+            rescheduleToken: nanoid(24),
+            type: "estimate",
+            quotedTotalCents: quotedTotalCents ?? undefined
+          })
+          .returning({ id: appointments.id });
 
-      if (!appt?.id) {
-        throw new Error("appointment_create_failed");
-      }
+       if (!appt?.id) {
+         throw new Error("appointment_create_failed");
+       }
 
-      await tx.insert(outboxEvents).values({
-        type: "estimate.requested",
-        payload: {
-          appointmentId: appt.id,
-          services
-        }
-      });
+       if (notes) {
+         await tx.insert(appointmentNotes).values({
+           appointmentId: appt.id,
+           body: notes,
+           createdAt: now
+         });
+       }
+
+       await tx.insert(outboxEvents).values({
+         type: "estimate.requested",
+         payload: {
+           appointmentId: appt.id,
+           services
+         }
+       });
 
       return { appointmentId: appt.id, createdPropertyId, propertyId: resolvedPropertyId };
     });
@@ -172,6 +183,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           travelBufferMinutes,
           services,
           quotedTotalCents,
+          notesProvided: Boolean(notes),
           source: "manual_booking"
         }
       });

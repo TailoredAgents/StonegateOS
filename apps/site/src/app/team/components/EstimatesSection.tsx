@@ -5,7 +5,6 @@ import {
   createQuoteAction,
   rescheduleAppointmentAction,
   updateApptStatus,
-  addApptNote
 } from "../actions";
 import { addApptAttachmentAction } from "../actions/attachments";
 import { callAdminApi, fmtTime } from "../lib/api";
@@ -214,7 +213,7 @@ export async function EstimatesSection(): Promise<ReactElement> {
                 ) : null}
                 <details className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
                   <summary className="cursor-pointer text-xs font-medium text-neutral-700">Add note</summary>
-                  <form action={addApptNote} className="mt-2 flex flex-col gap-2">
+                  <form action="/api/team/appointments/notes" method="post" className="mt-2 flex flex-col gap-2">
                     <input type="hidden" name="appointmentId" value={a.id} />
                     <label className="flex flex-col gap-1">
                       <span>Note</span>

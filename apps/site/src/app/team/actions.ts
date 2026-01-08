@@ -438,6 +438,7 @@ export async function bookAppointmentAction(formData: FormData) {
   const durationMinutes = formData.get("durationMinutes");
   const travelBufferMinutes = formData.get("travelBufferMinutes");
   const servicesRaw = formData.get("services");
+  const notesRaw = formData.get("notes");
   const quotedTotalCents = parseUsdToCents(formData.get("quotedTotal"));
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
@@ -473,6 +474,9 @@ export async function bookAppointmentAction(formData: FormData) {
 
   if (typeof propertyId === "string" && propertyId.trim().length > 0) {
     payload["propertyId"] = propertyId.trim();
+  }
+  if (typeof notesRaw === "string" && notesRaw.trim().length > 0) {
+    payload["notes"] = notesRaw.trim();
   }
   if (quotedTotalCents !== null) {
     payload["quotedTotalCents"] = quotedTotalCents;

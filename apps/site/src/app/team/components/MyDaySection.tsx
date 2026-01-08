@@ -4,12 +4,12 @@ import { CopyButton } from "@/components/CopyButton";
 import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
-  addApptNote,
   createQuoteAction,
   rescheduleAppointmentAction,
   updateApptStatus
 } from "../actions";
 import { callAdminApi, fmtTime } from "../lib/api";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { labelForPipelineStage } from "./pipeline.stages";
 
 type AppointmentStatus = "requested" | "confirmed" | "completed" | "no_show" | "canceled";
@@ -285,7 +285,20 @@ export async function MyDaySection(): Promise<ReactElement> {
                 </>
               ) : null}
             </div>
-            <form action={addApptNote} className="mt-3 flex gap-2">
+            {a.notes.length ? (
+              <div className="mt-3 space-y-1 rounded-md border border-neutral-200 bg-neutral-50 p-2 text-xs text-neutral-700">
+                <div className="text-[11px] font-semibold uppercase text-neutral-500">Notes</div>
+                {a.notes.map((note) => (
+                  <div key={note.id} className="rounded-md bg-white px-2 py-1">
+                    <div>{note.body}</div>
+                    <div className="text-[10px] text-neutral-400">
+                      {new Date(note.createdAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <form action="/api/team/appointments/notes" method="post" className="mt-3 flex gap-2">
               <input type="hidden" name="appointmentId" value={a.id} />
               <input name="body" placeholder="Add note" className="flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs" />
               <SubmitButton className="rounded-md bg-neutral-800 px-3 py-1 text-xs font-semibold text-white hover:bg-neutral-700" pendingLabel="Saving...">
