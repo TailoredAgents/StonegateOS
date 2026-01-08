@@ -1,0 +1,136 @@
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import { callAdminApi } from "@/app/team/lib/api";
+
+const ADMIN_COOKIE = "myst-admin-session";
+const CREW_COOKIE = "myst-crew-session";
+
+export const dynamic = "force-dynamic";
+
+function getSafeRedirectUrl(request: NextRequest): URL {
+  const fallback = new URL("/team?tab=contacts", request.url);
+  const referer = request.headers.get("referer");
+  if (!referer) return fallback;
+  try {
+    const refererUrl = new URL(referer);
+    if (refererUrl.origin !== fallback.origin) return fallback;
+    return refererUrl;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function POST(request: NextRequest): Promise<Response> {
+  const jar = request.cookies;
+  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
+  const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
+  const redirectTo = getSafeRedirectUrl(request);
+
+  if (!hasOwner && !hasCrew) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    response.cookies.set({
+      name: "myst-flash-error",
+      value: "Please sign in again and retry.",
+      path: "/"
+    });
+    return response;
+  }
+
+  const formData = await request.formData();
+  const firstName = formData.get("firstName");
+  const lastName = formData.get("lastName");
+  const email = formData.get("email");
+  const phone = formData.get("phone");
+  const pipelineStage = formData.get("pipelineStage");
+  const pipelineNotes = formData.get("pipelineNotes");
+  const addressLine1 = formData.get("addressLine1");
+  const city = formData.get("city");
+  const state = formData.get("state");
+  const postalCode = formData.get("postalCode");
+
+  if (
+    typeof firstName !== "string" ||
+    typeof lastName !== "string" ||
+    firstName.trim().length === 0 ||
+    lastName.trim().length === 0
+  ) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    response.cookies.set({
+      name: "myst-flash-error",
+      value: "First and last name are required",
+      path: "/"
+    });
+    return response;
+  }
+
+  const payload: Record<string, unknown> = {
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+    email: typeof email === "string" && email.trim().length ? email.trim() : undefined,
+    phone: typeof phone === "string" && phone.trim().length ? phone.trim() : undefined,
+    pipelineStage:
+      typeof pipelineStage === "string" && pipelineStage.trim().length ? pipelineStage.trim() : undefined,
+    pipelineNotes:
+      typeof pipelineNotes === "string" && pipelineNotes.trim().length ? pipelineNotes.trim() : undefined
+  };
+
+  const hasAddress =
+    typeof addressLine1 === "string" &&
+    typeof city === "string" &&
+    typeof state === "string" &&
+    typeof postalCode === "string" &&
+    addressLine1.trim().length > 0 &&
+    city.trim().length > 0 &&
+    state.trim().length > 0 &&
+    postalCode.trim().length > 0;
+
+  const anyAddressField =
+    (typeof addressLine1 === "string" && addressLine1.trim().length > 0) ||
+    (typeof city === "string" && city.trim().length > 0) ||
+    (typeof state === "string" && state.trim().length > 0) ||
+    (typeof postalCode === "string" && postalCode.trim().length > 0);
+
+  if (anyAddressField && !hasAddress) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    response.cookies.set({
+      name: "myst-flash-error",
+      value: "If you add an address, include street, city, state, and postal code",
+      path: "/"
+    });
+    return response;
+  }
+
+  if (hasAddress) {
+    payload["property"] = {
+      addressLine1: (addressLine1 as string).trim(),
+      city: (city as string).trim(),
+      state: (state as string).trim(),
+      postalCode: (postalCode as string).trim()
+    };
+  }
+
+  const apiResponse = await callAdminApi("/api/admin/contacts", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!apiResponse.ok) {
+    let message = "Unable to create contact";
+    try {
+      const data = (await apiResponse.json()) as { error?: string };
+      if (data.error) {
+        message = data.error.replace(/_/g, " ");
+      }
+    } catch {
+      // ignore
+    }
+    const response = NextResponse.redirect(redirectTo, 303);
+    response.cookies.set({ name: "myst-flash-error", value: message, path: "/" });
+    return response;
+  }
+
+  const response = NextResponse.redirect(redirectTo, 303);
+  response.cookies.set({ name: "myst-flash", value: "Contact created", path: "/" });
+  return response;
+}
+

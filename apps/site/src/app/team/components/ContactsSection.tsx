@@ -1,6 +1,5 @@
 import React, { type ReactElement } from "react";
 import { SubmitButton } from "@/components/SubmitButton";
-import { createContactAction } from "../actions";
 import { callAdminApi } from "../lib/api";
 import ContactsListClient from "./ContactsListClient";
 import type { ContactSummary, PaginationInfo } from "./contacts.types";
@@ -79,7 +78,7 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
             <p className="mt-1 text-sm text-slate-600">Capture new homeowners or manual leads. Address is optional and can be added later.</p>
           </div>
         </div>
-        <form action={createContactAction} className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <form action="/api/team/contacts" method="post" className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm text-slate-600">
             <span>First name</span>
             <input
