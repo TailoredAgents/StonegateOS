@@ -80,7 +80,7 @@ export function CalendarViewer({ initialView, events, conflicts }: Props) {
             onSelectDay={handleSelectDay}
             onSelectEvent={handleSelectEvent}
           />
-          <div className="sm:hidden rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+          <div className="rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm sm:hidden">
             <div className="mb-2 text-xs font-semibold uppercase text-slate-500">
               {formatDayKeyLabel(selectedDay)}
             </div>
@@ -159,5 +159,6 @@ function formatTime(iso: string): string {
 }
 
 function formatTimeRange(startIso: string, endIso: string): string {
-  return `${formatTime(startIso)}–${formatTime(endIso)}`;
+  return `${formatTime(startIso)} - ${formatTime(endIso)}`;
 }
+

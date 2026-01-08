@@ -14,6 +14,7 @@ export function CalendarEventDetail({ event }: Props): React.ReactElement {
       ? `/schedule?appointmentId=${encodeURIComponent(appointmentId)}&token=${encodeURIComponent(event.rescheduleToken)}`
       : null;
   const teamLink = appointmentId ? `/team?tab=myday&appointmentId=${encodeURIComponent(appointmentId)}` : null;
+  const notes = event.notes ?? [];
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
@@ -33,6 +34,19 @@ export function CalendarEventDetail({ event }: Props): React.ReactElement {
       </p>
       {event.address ? <p className="text-xs text-slate-500">{event.address}</p> : null}
       {event.contactName ? <p className="text-xs text-slate-500">Contact: {event.contactName}</p> : null}
+      {notes.length ? (
+        <div className="mt-3 space-y-1 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Notes</div>
+          {notes.map((note) => (
+            <div key={note.id} className="rounded-lg bg-white px-3 py-2 shadow-sm">
+              <div className="whitespace-pre-wrap text-sm font-semibold text-slate-900">{note.body}</div>
+              <div className="mt-1 text-[11px] text-slate-500">
+                {new Date(note.createdAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="mt-3 flex flex-wrap gap-2 text-xs">
         {teamLink ? (
           <a

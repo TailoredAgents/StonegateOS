@@ -12,6 +12,7 @@ export type CalendarEvent = {
   contactName?: string | null;
   address?: string | null;
   status?: string | null;
+  notes?: Array<{ id: string; body: string; createdAt: string }>;
 };
 
 type Props = {
@@ -134,5 +135,6 @@ function formatTime(iso: string): string {
 }
 
 function formatTimeRange(startIso: string, endIso: string): string {
-  return `${formatTime(startIso)}–${formatTime(endIso)}`;
+  return `${formatTime(startIso)} - ${formatTime(endIso)}`;
 }
+

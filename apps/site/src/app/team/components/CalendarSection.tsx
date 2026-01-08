@@ -13,6 +13,7 @@ type CalendarEvent = {
   contactName?: string | null;
   address?: string | null;
   status?: string | null;
+  notes?: Array<{ id: string; body: string; createdAt: string }>;
 };
 
 type CalendarFeedResponse = {

@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { and, gte, lte, eq } from "drizzle-orm";
-import { getDb, appointments, contacts, properties } from "@/db";
+import { and, gte, inArray, lte, eq } from "drizzle-orm";
+import { getDb, appointmentNotes, appointments, contacts, properties } from "@/db";
 import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "@/lib/calendar";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -17,6 +17,7 @@ type CalendarEvent = {
   contactName?: string | null;
   address?: string | null;
   status?: string | null;
+  notes?: Array<{ id: string; body: string; createdAt: string }>;
 };
 
 type CalendarFeedResponse = {
@@ -67,6 +68,30 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
       )
     );
 
+  const appointmentIds = dbRows.map((row) => row.id).filter((id): id is string => typeof id === "string" && id.length > 0);
+  const notesByAppointmentId = new Map<string, Array<{ id: string; body: string; createdAt: string }>>();
+  if (appointmentIds.length) {
+    const noteRows = await db
+      .select({
+        id: appointmentNotes.id,
+        appointmentId: appointmentNotes.appointmentId,
+        body: appointmentNotes.body,
+        createdAt: appointmentNotes.createdAt
+      })
+      .from(appointmentNotes)
+      .where(inArray(appointmentNotes.appointmentId, appointmentIds));
+
+    for (const row of noteRows) {
+      const list = notesByAppointmentId.get(row.appointmentId) ?? [];
+      list.push({
+        id: row.id,
+        body: row.body,
+        createdAt: row.createdAt.toISOString()
+      });
+      notesByAppointmentId.set(row.appointmentId, list);
+    }
+  }
+
   const appointmentsEvents: CalendarEvent[] = dbRows
     .filter((row) => row.startAt)
     .map((row) => {
@@ -89,7 +114,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
         end: end.toISOString(),
         contactName,
         address: addressParts.length ? addressParts : null,
-        status: row.status ?? null
+        status: row.status ?? null,
+        notes: notesByAppointmentId.get(row.id) ?? []
       };
     });
 

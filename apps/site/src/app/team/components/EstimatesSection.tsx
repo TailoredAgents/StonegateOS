@@ -80,7 +80,7 @@ export async function EstimatesSection(): Promise<ReactElement> {
             {byStatus[status].map((a) => (
               <li key={a.id} className="px-4 py-3">
                 <p className="text-sm text-neutral-600">
-                  {fmtTime(a.startAt)} • {a.contact.name}
+                  {fmtTime(a.startAt)} <span aria-hidden="true">&bull;</span> {a.contact.name}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
                   <span className="rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700">
