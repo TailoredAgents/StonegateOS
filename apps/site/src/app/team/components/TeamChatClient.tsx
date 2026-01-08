@@ -2,6 +2,7 @@
 
 import React from "react";
 import { Button, cn } from "@myst-os/ui";
+import { formatServiceLabel } from "@/lib/service-labels";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type BookingSuggestion = { startAt: string; endAt: string; reason: string; services?: string[] };
@@ -694,7 +695,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                 : ["junk_removal_primary"]
                               ).map((svc) => (
                                 <option key={svc} value={svc}>
-                                  {svc.replace(/_/g, " ")}
+                                  {formatServiceLabel(svc)}
                                 </option>
                               ))}
                             </select>

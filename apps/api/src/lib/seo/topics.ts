@@ -81,9 +81,9 @@ export const SEO_TOPICS: SeoTopic[] = [
     relatedServiceSlugs: ["construction-debris", "single-item"]
   },
   {
-    key: "single-item-pickup",
-    titleHint: "Single-Item Junk Pickup: When You Only Need One Thing Gone",
-    primaryKeyword: "single item pickup",
+    key: "rubbish-removal",
+    titleHint: "Rubbish Removal: Common Household Waste Pickup Made Easy",
+    primaryKeyword: "rubbish removal",
     relatedServiceSlugs: ["single-item"]
   },
   {
@@ -123,4 +123,3 @@ export const SEO_TOPICS: SeoTopic[] = [
     relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
   }
 ];
-

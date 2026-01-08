@@ -98,6 +98,42 @@ function checkRateLimit(key: string): boolean {
   return false;
 }
 
+function normalizeServiceSlug(value: string): string {
+  const raw = value.trim();
+  const key = raw.toLowerCase();
+
+  switch (key) {
+    case "rubbish":
+    case "trash":
+    case "garbage":
+    case "household waste":
+    case "household_waste":
+    case "household-waste":
+      return "single-item";
+    case "single_item":
+      return "single-item";
+    case "yard_waste":
+      return "yard-waste";
+    case "construction_debris":
+      return "construction-debris";
+    case "hot_tub":
+      return "hot-tub";
+    default:
+      return raw;
+  }
+}
+
+function normalizeServiceSelection(raw: string[]): string[] {
+  const normalized: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    const cleaned = normalizeServiceSlug(entry);
+    if (!cleaned.length) continue;
+    if (!normalized.includes(cleaned)) normalized.push(cleaned);
+  }
+  return normalized;
+}
+
 export async function POST(request: NextRequest) {
   const ip = resolveClientIp(request);
 
@@ -123,7 +159,7 @@ export async function POST(request: NextRequest) {
     return corsJson({ ok: true });
   }
 
-  const servicesRequested = payload.services ?? (payload.service ? [payload.service] : []);
+  const servicesRequested = normalizeServiceSelection(payload.services ?? (payload.service ? [payload.service] : []));
   if (!servicesRequested.length) {
     return corsJson(
       { error: "invalid_payload", message: "At least one service must be selected." },

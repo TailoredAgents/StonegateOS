@@ -98,7 +98,7 @@ Markdown/MDX content lives under `apps/site/content`. Re-run `pnpm -w build` aft
 
 ### Junk Removal Service Catalog
 The site ships with a junk removal catalog:
-- Single Item Pickup (`apps/site/content/services/single-item.mdx`)
+- Rubbish (common household waste) (`apps/site/content/services/single-item.mdx`)
 - Furniture Removal (`apps/site/content/services/furniture.mdx`)
 - Appliance Removal (`apps/site/content/services/appliances.mdx`)
 - Yard Waste & Debris (`apps/site/content/services/yard-waste.mdx`)

@@ -2,6 +2,7 @@
 import { availabilityWindows, zones } from "@myst-os/pricing/src/config/defaults";
 import { CopyButton } from "@/components/CopyButton";
 import { SubmitButton } from "@/components/SubmitButton";
+import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
   addApptNote,
   createQuoteAction,
@@ -88,8 +89,7 @@ export async function MyDaySection(): Promise<ReactElement> {
               <span>{fmtTime(a.startAt)}</span>
               <span aria-hidden="true">&bull;</span>
               <span>
-                {a.services[0] ?? "Junk removal"}
-                {a.services.length > 1 ? ` +${a.services.length - 1}` : ""}
+                {summarizeServiceLabels(a.services ?? [])}
               </span>
             </div>
             <h3 className="mt-1 text-lg font-semibold text-primary-900">{a.contact.name}</h3>

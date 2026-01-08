@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import { DateTime } from "luxon";
 import { generateEstimateNotificationCopy, generateQuoteNotificationCopy } from "@/lib/ai";
+import { joinServiceLabels, summarizeServiceLabels } from "@/lib/service-labels";
 
 interface BaseContact {
   name: string;
@@ -125,7 +126,7 @@ function createIcsAttachment(payload: EstimateNotificationPayload): {
 
   const summary = `Stonegate Junk Removal - ${contact.name}`;
   const descriptionLines = [
-    `Services: ${payload.services.join(", ") || "Junk removal"}`,
+    `Services: ${joinServiceLabels(payload.services)}`,
     payload.notes ? `Notes: ${payload.notes}` : null,
     appointment.rescheduleUrl ? `Reschedule: ${appointment.rescheduleUrl}` : null
   ]
@@ -267,21 +268,7 @@ function getQuoteAlertRecipients(): string[] {
 }
 
 function servicesSummary(services: string[]): string {
-  if (!services.length) {
-    return "Junk removal";
-  }
-
-  const [first, ...rest] = services.filter((service): service is string => Boolean(service && service.length));
-
-  if (!first) {
-    return "Junk removal";
-  }
-
-  if (rest.length === 0) {
-    return first;
-  }
-
-  return `${first} +${rest.length}`;
+  return summarizeServiceLabels(services);
 }
 
 function buildRescheduleUrl(appointment: EstimateNotificationPayload["appointment"]): string {
@@ -296,7 +283,7 @@ function buildRescheduleUrl(appointment: EstimateNotificationPayload["appointmen
 }
 
 function joinServices(services: string[]): string {
-  return services.length ? services.join(", ") : "Junk removal";
+  return joinServiceLabels(services);
 }
 
 export async function sendEstimateConfirmation(
@@ -464,7 +451,7 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
   const fallbackBody = [
     `Hi ${payload.contact.name},`,
     "",
-    `Your quote for ${payload.services.join(", ") || "junk removal"} is ready.`,
+    `Your quote for ${joinServiceLabels(payload.services)} is ready.`,
     `Total: ${formatCurrency(payload.total)}.`,
     "No deposit is required; payment is due after the work is complete.",
     `Review and approve: ${payload.shareUrl}`,
@@ -554,7 +541,7 @@ export async function sendQuoteDecisionNotification(
     payload.decision === "accepted"
       ? "Thanks for approving your quote! We'll reach out to lock in the service window."
       : "We've recorded your decision. If you'd like revisions or have questions, we're happy to help.",
-    `Services: ${payload.services.join(", ") || "Junk removal"}`,
+    `Services: ${joinServiceLabels(payload.services)}`,
     `Total: ${formatCurrency(payload.total)}.`,
     "No deposit is required; payment will be collected after service.",
     `Quote link: ${payload.shareUrl}`,

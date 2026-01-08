@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { joinServiceLabels } from "@/lib/service-labels";
 
 interface BaseAddress {
   line1: string;
@@ -186,7 +187,7 @@ Constraints:
     contactName
   } = summary;
 
-  const servicesText = services.length ? services.join(", ") : "Junk removal";
+  const servicesText = joinServiceLabels(services);
   const lines = [
     `Recipient: ${contactName}`,
     `Appointment time: ${when}`,
@@ -231,7 +232,7 @@ Constraints:
     reason
   } = summary;
 
-  const serviceText = services.length ? services.join(", ") : "Junk removal services";
+  const serviceText = joinServiceLabels(services);
   const expiresText = expiresAtIso ? `Quote expires ${expiresAtIso}` : "Quote does not expire yet";
 
   const userPrompt = [

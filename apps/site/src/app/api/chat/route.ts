@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
+import { formatServiceLabel } from "@/lib/service-labels";
 
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const PUBLIC_VOICE_MODEL = "gpt-4.1-mini";
@@ -1424,7 +1425,7 @@ function extractQuoteSuggestion(
   return {
     id: newActionId(),
     type: "create_quote",
-    summary: `Create quote (${services.join(", ")})${propertyLabel ? ` at ${propertyLabel}` : ""}`,
+    summary: `Create quote (${services.map(formatServiceLabel).join(", ")})${propertyLabel ? ` at ${propertyLabel}` : ""}`,
     payload: {
       contactId: ctx.contactId,
       propertyId: ctx.propertyId,
@@ -1438,7 +1439,7 @@ function extractQuoteSuggestion(
 }
 
 const SERVICE_KEYWORDS: Array<{ id: string; patterns: RegExp[] }> = [
-  { id: "single-item", patterns: [/single/i, /item/i, /tv/i, /mattress/i] },
+  { id: "single-item", patterns: [/rubbish/i, /trash/i, /garbage/i, /household/i, /single/i, /item/i, /tv/i, /mattress/i] },
   { id: "furniture", patterns: [/furniture/i, /sofa/i, /couch/i, /dresser/i, /bed/i] },
   { id: "appliances", patterns: [/appliance/i, /fridge/i, /washer/i, /dryer/i, /stove/i, /oven/i] },
   { id: "yard-waste", patterns: [/yard/i, /brush/i, /leaves/i, /branches/i] },

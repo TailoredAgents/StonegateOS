@@ -17,6 +17,7 @@ type CreateQuotePayload = {
 };
 
 const SERVICE_IDS = new Set<ServiceCategory>(serviceRates.map((rate) => rate.service));
+const SERVICE_LABELS = new Map<ServiceCategory, string>(serviceRates.map((rate) => [rate.service, rate.label]));
 const DEFAULT_ZONE_ID = zones[0]?.id ?? "zone-core";
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -209,7 +210,7 @@ function normalizeServiceToken(token: string): ServiceCategory | null {
   const lower = trimmed.toLowerCase();
 
   const keywordMap: Array<[ServiceCategory, RegExp]> = [
-    ["single-item", /(single|item|tv|mattress)/i],
+    ["single-item", /(rubbish|trash|garbage|household|single|item|tv|mattress)/i],
     ["furniture", /(furniture|sofa|couch|dresser|bed|chair)/i],
     ["appliances", /(appliance|fridge|freezer|washer|dryer|stove|oven|microwave)/i],
     ["yard-waste", /(yard|brush|green|tree|branch|leaves|yard waste)/i],
@@ -249,7 +250,7 @@ function buildSummary(input: {
   ].filter((part) => typeof part === "string" && part.trim().length > 0);
 
   const address = addressParts.join(", " );
-  const svc = input.services.join(", " );
+  const svc = input.services.map((service) => SERVICE_LABELS.get(service) ?? service).join(", ");
   const total = fmtMoney(input.total);
   return (
     "Quote created for " +

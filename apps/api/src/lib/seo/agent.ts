@@ -91,7 +91,7 @@ function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string
     { label: "Pricing", url: "/pricing" },
     { label: "Services", url: "/services" },
     { label: "Service areas", url: "/areas" },
-    { label: "Schedule an estimate", url: "/#schedule-estimate" }
+    { label: "Schedule an estimate", url: "/estimate" }
   ];
 
   const serviceLabels: Record<string, string> = {
@@ -100,7 +100,7 @@ function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string
     "yard-waste": "Yard waste removal",
     "construction-debris": "Construction debris removal",
     "hot-tub": "Hot tub removal",
-    "single-item": "Single-item pickup"
+    "single-item": "Rubbish removal"
   };
 
   for (const slug of topic.relatedServiceSlugs) {
