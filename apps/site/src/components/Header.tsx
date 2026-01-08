@@ -12,7 +12,6 @@ const navItems = [
   { href: "/contractors", label: "For Contractors" },
   { href: "/areas", label: "Service Areas" },
   { href: "/pricing", label: "Pricing" },
-  { href: "/gallery", label: "Gallery" },
   { href: "/blog", label: "Blog" },
   { href: "/about", label: "About" },
   { href: "/contact", label: "Contact" }
