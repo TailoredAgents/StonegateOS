@@ -48,7 +48,7 @@ export function ServiceAreaMap({ className }: { className?: string }) {
       </MapContainer>
       <div className="pointer-events-none absolute left-4 top-4 z-[400] max-w-[260px] rounded-2xl bg-white/90 px-4 py-3 shadow-soft ring-1 ring-black/5 backdrop-blur">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-neutral-600">Service radius</p>
-        <p className="mt-1 text-sm text-neutral-700">30-mile coverage area from Woodstock, GA</p>
+        <p className="mt-1 text-sm text-neutral-700">20-mile coverage area from Woodstock, GA</p>
       </div>
     </div>
   );
