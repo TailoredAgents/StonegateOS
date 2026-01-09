@@ -81,6 +81,41 @@ function supportsReasoningEffort(model: string): boolean {
   return normalized.startsWith("gpt-5") || normalized.startsWith("o");
 }
 
+function tryParseJsonObject(raw: string): unknown | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    // continue
+  }
+
+  const unfenced = trimmed
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  if (unfenced !== trimmed) {
+    try {
+      return JSON.parse(unfenced) as unknown;
+    } catch {
+      // continue
+    }
+  }
+
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  if (start !== -1 && end !== -1 && end > start) {
+    const sliced = unfenced.slice(start, end + 1);
+    try {
+      return JSON.parse(sliced) as unknown;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 async function callOpenAIJsonSchema(input: {
   apiKey: string;
   model: string;
@@ -100,7 +135,7 @@ async function callOpenAIJsonSchema(input: {
       ],
       max_output_tokens: input.maxOutputTokens,
       text: {
-        verbosity: "medium",
+        verbosity: "low",
         format: {
           type: "json_schema",
           name: input.schemaName,
@@ -155,7 +190,8 @@ async function callOpenAIJsonSchema(input: {
         ?.text ??
       null;
     if (!raw) return { ok: false, error: "openai_empty_response" };
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = tryParseJsonObject(raw);
+    if (!parsed) return { ok: false, error: "openai_parse_failed" };
     return { ok: true, value: parsed };
   } catch (error) {
     console.warn("[inbox.suggest] openai.response_error", { error: String(error) });
@@ -447,7 +483,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       model: config.thinkModel,
       systemPrompt: planSystemPrompt,
       userPrompt: baseUserPrompt,
-      maxOutputTokens: 350,
+      maxOutputTokens: 600,
       schemaName: "reply_plan",
       schema: REPLY_PLAN_SCHEMA,
       reasoningEffort: "low"
@@ -470,7 +506,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     model: config.writeModel,
     systemPrompt,
     userPrompt,
-    maxOutputTokens: 500,
+    maxOutputTokens: 800,
     schemaName: "reply_suggestion",
     schema: REPLY_SUGGESTION_SCHEMA
   });
