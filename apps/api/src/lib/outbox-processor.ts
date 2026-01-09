@@ -345,17 +345,6 @@ function formatReminderDueAt(dueAt: Date, timezone: string): string {
   }
 }
 
-function buildContactLink(contactId: string): string {
-  const base =
-    process.env["NEXT_PUBLIC_SITE_URL"] ??
-    process.env["SITE_URL"] ??
-    "http://localhost:3000";
-  const url = new URL("/team", base);
-  url.searchParams.set("tab", "contacts");
-  url.searchParams.set("contactId", contactId);
-  return url.toString();
-}
-
 function normalizeEmailForHash(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -1580,8 +1569,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       const message =
         `Reminder: ${row.title}\n` +
         `${contactName}${contactLine}\n` +
-        `Due: ${dueLabel}${details}\n` +
-        `Open: ${buildContactLink(row.contactId)}`;
+        `Due: ${dueLabel}${details}`;
 
       console.info("[outbox] crm.reminder.sending", {
         id: event.id,
