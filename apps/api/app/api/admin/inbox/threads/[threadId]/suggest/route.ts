@@ -55,59 +55,72 @@ function isReplyChannel(value: string): value is ReplyChannel {
   return value === "sms" || value === "email" || value === "dm";
 }
 
-function getOpenAIConfig(): { apiKey: string; model: string } | null {
-  const apiKey = process.env["OPENAI_API_KEY"];
-  if (!apiKey) return null;
-  const configured =
-    process.env["OPENAI_INBOX_SUGGEST_MODEL"] ??
-    process.env["OPENAI_MODEL"] ??
-    null;
-  const model = configured && configured.trim().length > 0 ? configured.trim() : "gpt-5-mini";
-  return { apiKey, model };
+function readEnvString(key: string): string | null {
+  const value = process.env[key];
+  if (!value) return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
 }
 
-async function callOpenAIReply(input: {
+function getOpenAIConfig(): { apiKey: string; thinkModel: string | null; writeModel: string } | null {
+  const apiKey = process.env["OPENAI_API_KEY"];
+  if (!apiKey) return null;
+  const thinkModel = readEnvString("OPENAI_INBOX_SUGGEST_THINK_MODEL") ?? null;
+  const writeModel =
+    readEnvString("OPENAI_INBOX_SUGGEST_WRITE_MODEL") ??
+    readEnvString("OPENAI_INBOX_SUGGEST_MODEL") ??
+    readEnvString("OPENAI_MODEL") ??
+    "gpt-5-mini";
+  return { apiKey, thinkModel, writeModel };
+}
+
+type ReasoningEffort = "low" | "medium" | "high";
+
+function supportsReasoningEffort(model: string): boolean {
+  const normalized = model.trim().toLowerCase();
+  return normalized.startsWith("gpt-5") || normalized.startsWith("o");
+}
+
+async function callOpenAIJsonSchema(input: {
   apiKey: string;
   model: string;
   systemPrompt: string;
   userPrompt: string;
-}): Promise<
-  | { ok: true; body: string; subject: string | null }
-  | { ok: false; error: string; detail?: string | null }
-> {
+  maxOutputTokens: number;
+  schemaName: string;
+  schema: Record<string, unknown>;
+  reasoningEffort?: ReasoningEffort;
+}): Promise<{ ok: true; value: unknown } | { ok: false; error: string; detail?: string | null }> {
   async function request(targetModel: string) {
+    const payload: Record<string, unknown> = {
+      model: targetModel,
+      input: [
+        { role: "system", content: input.systemPrompt },
+        { role: "user", content: input.userPrompt }
+      ],
+      max_output_tokens: input.maxOutputTokens,
+      text: {
+        verbosity: "medium",
+        format: {
+          type: "json_schema",
+          name: input.schemaName,
+          strict: true,
+          schema: input.schema
+        }
+      }
+    };
+
+    if (input.reasoningEffort && supportsReasoningEffort(targetModel)) {
+      payload["reasoning"] = { effort: input.reasoningEffort };
+    }
+
     return fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${input.apiKey}`
       },
-      body: JSON.stringify({
-        model: targetModel,
-        input: [
-          { role: "system", content: input.systemPrompt },
-          { role: "user", content: input.userPrompt }
-        ],
-        max_output_tokens: 500,
-        reasoning: { effort: "low" },
-        text: {
-          verbosity: "medium",
-          format: {
-            type: "json_schema",
-            name: "reply_suggestion",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                body: { type: "string" },
-                subject: { type: "string" }
-              },
-              required: ["body", "subject"]
-            }
-          }
-        }
-      })
+      body: JSON.stringify(payload)
     });
   }
 
@@ -142,20 +155,64 @@ async function callOpenAIReply(input: {
         ?.text ??
       null;
     if (!raw) return { ok: false, error: "openai_empty_response" };
-
-    const parsed = JSON.parse(raw) as { body?: unknown; subject?: unknown };
-    const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
-    if (!body) return { ok: false, error: "openai_empty_body" };
-    const subject =
-      typeof parsed.subject === "string" && parsed.subject.trim().length > 0
-        ? parsed.subject.trim()
-        : null;
-    return { ok: true, body, subject };
+    const parsed = JSON.parse(raw) as unknown;
+    return { ok: true, value: parsed };
   } catch (error) {
     console.warn("[inbox.suggest] openai.response_error", { error: String(error) });
     return { ok: false, error: "openai_parse_failed" };
   }
 }
+
+type ReplySuggestion = { body: string; subject: string };
+
+function isReplySuggestion(value: unknown): value is ReplySuggestion {
+  if (!isRecord(value)) return false;
+  return typeof value["body"] === "string" && typeof value["subject"] === "string";
+}
+
+type ReplyPlan = {
+  intent: string;
+  tone: string;
+  facts: string[];
+  questions: string[];
+  next_action: string;
+  constraints: string[];
+};
+
+function isReplyPlan(value: unknown): value is ReplyPlan {
+  if (!isRecord(value)) return false;
+  if (typeof value["intent"] !== "string") return false;
+  if (typeof value["tone"] !== "string") return false;
+  if (!Array.isArray(value["facts"]) || !value["facts"].every((item) => typeof item === "string")) return false;
+  if (!Array.isArray(value["questions"]) || !value["questions"].every((item) => typeof item === "string")) return false;
+  if (typeof value["next_action"] !== "string") return false;
+  if (!Array.isArray(value["constraints"]) || !value["constraints"].every((item) => typeof item === "string")) return false;
+  return true;
+}
+
+const REPLY_SUGGESTION_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    body: { type: "string" },
+    subject: { type: "string" }
+  },
+  required: ["body", "subject"]
+};
+
+const REPLY_PLAN_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    intent: { type: "string" },
+    tone: { type: "string" },
+    facts: { type: "array", items: { type: "string" } },
+    questions: { type: "array", items: { type: "string" } },
+    next_action: { type: "string" },
+    constraints: { type: "array", items: { type: "string" } }
+  },
+  required: ["intent", "tone", "facts", "questions", "next_action", "constraints"]
+};
 
 async function ensureAiParticipant(tx: Tx, threadId: string, now: Date) {
   const [existing] = await tx
@@ -346,20 +403,20 @@ export async function POST(
       : null;
 
   const systemPrompt = `
-You are Stonegate Assist, the warm, human, front-office voice for Stonegate Junk Removal in North Metro Atlanta.
-Write a reply the customer will receive.
+ You are Stonegate Assist, the warm, human, front-office voice for Stonegate Junk Removal in North Metro Atlanta.
+ Write a reply the customer will receive.
 
-Rules:
-- Sound like a helpful local office rep. No emojis.
-- Be concise and specific; avoid filler.
-- Ask for only the missing info needed to book: address (or ZIP), item details, and preferred timing.
-- If the customer is out of the service area, politely explain service area limits and offer a phone call.
-- Do NOT mention internal systems, databases, webhooks, or that you're an AI.
-- Output ONLY JSON with keys: body (string), subject (string optional).
+ Rules:
+ - Sound like a helpful local office rep. No emojis. Keep it natural and human.
+ - Be concise and specific; avoid filler.
+ - Ask for only the missing info needed to book: address (or ZIP), item details, and preferred timing.
+ - If the customer is out of the service area, politely explain service area limits and offer a phone call.
+ - Do NOT mention internal systems, databases, webhooks, or that you're an AI.
+ - Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
 
-Business hours policy timezone: ${businessHours.timezone}
-Company notes: We can message any time, and we typically schedule jobs during business hours.
-`.trim();
+ Business hours policy timezone: ${businessHours.timezone}
+ Company notes: We can message any time, and we typically schedule jobs during business hours.
+ `.trim();
 
   const contextLines = [
     `Channel: ${replyChannel}`,
@@ -376,23 +433,69 @@ Company notes: We can message any time, and we typically schedule jobs during bu
     `Transcript:\n${buildTranscript(messages)}`
   ].filter((line): line is string => Boolean(line));
 
-  const userPrompt = `Write the best next reply for this conversation.\n${contextLines.join("\n")}`;
+  const baseUserPrompt = `Write the best next reply for this conversation.\n${contextLines.join("\n")}`;
 
-  const suggestion = await callOpenAIReply({
+  let plan: ReplyPlan | null = null;
+  if (config.thinkModel) {
+    const planSystemPrompt = `
+You are Stonegate Assist. Read the conversation and produce a short internal plan for the best next reply.
+Do not write the customer message. Output ONLY JSON matching the schema.
+`.trim();
+
+    const planResult = await callOpenAIJsonSchema({
+      apiKey: config.apiKey,
+      model: config.thinkModel,
+      systemPrompt: planSystemPrompt,
+      userPrompt: baseUserPrompt,
+      maxOutputTokens: 350,
+      schemaName: "reply_plan",
+      schema: REPLY_PLAN_SCHEMA,
+      reasoningEffort: "low"
+    });
+
+    if (planResult.ok && isReplyPlan(planResult.value)) {
+      plan = planResult.value;
+    } else if (!planResult.ok) {
+      console.warn("[inbox.suggest] openai.plan_failed", { error: planResult.error, detail: planResult.detail ?? null });
+    }
+  }
+
+  const userPrompt =
+    plan
+      ? `${baseUserPrompt}\n\nReply plan (internal):\n${JSON.stringify(plan)}`
+      : baseUserPrompt;
+
+  const suggestionResult = await callOpenAIJsonSchema({
     apiKey: config.apiKey,
-    model: config.model,
+    model: config.writeModel,
     systemPrompt,
-    userPrompt
+    userPrompt,
+    maxOutputTokens: 500,
+    schemaName: "reply_suggestion",
+    schema: REPLY_SUGGESTION_SCHEMA
   });
 
-  if (!suggestion.ok) {
+  if (!suggestionResult.ok) {
     return NextResponse.json(
       {
-        error: suggestion.error,
-        detail: suggestion.detail ?? null
+        error: suggestionResult.error,
+        detail: suggestionResult.detail ?? null
       },
       { status: 502 }
     );
+  }
+
+  if (!isReplySuggestion(suggestionResult.value)) {
+    return NextResponse.json({ error: "openai_invalid_response" }, { status: 502 });
+  }
+
+  const suggestion = {
+    body: suggestionResult.value.body.trim(),
+    subject: suggestionResult.value.subject.trim().length ? suggestionResult.value.subject.trim() : null
+  };
+
+  if (!suggestion.body) {
+    return NextResponse.json({ error: "openai_invalid_response" }, { status: 502 });
   }
 
   const now = new Date();
@@ -413,7 +516,7 @@ Company notes: We can message any time, and we typically schedule jobs during bu
           ...(replyChannel === "dm" ? (dmMetadata ?? {}) : {}),
           draft: true,
           aiSuggested: true,
-          aiModel: config.model,
+          aiModel: config.writeModel,
           outOfArea: outOfArea === true ? true : undefined
         },
         createdAt: now
