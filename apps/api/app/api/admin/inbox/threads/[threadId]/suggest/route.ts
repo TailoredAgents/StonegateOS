@@ -88,7 +88,6 @@ async function callOpenAIReply(input: {
           { role: "system", content: input.systemPrompt },
           { role: "user", content: input.userPrompt }
         ],
-        temperature: 0.4,
         max_output_tokens: 500,
         reasoning: { effort: "low" },
         text: {
