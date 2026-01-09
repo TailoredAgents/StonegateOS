@@ -161,7 +161,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                   setHoverStage(null);
                 }
               }}
-              className={`group flex min-h-[360px] flex-col rounded-3xl border border-slate-200 bg-white/80 shadow-xl shadow-slate-200/60 transition ${
+              className={`group flex h-[min(620px,calc(100vh-14rem))] min-h-[360px] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white/80 shadow-xl shadow-slate-200/60 transition sm:h-[min(720px,calc(100vh-18rem))] ${
                 isHover ? "border-primary-400 ring-2 ring-primary-200/60" : ""
               }`}
             >
