@@ -5,8 +5,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
   createQuoteAction,
-  rescheduleAppointmentAction,
-  updateApptStatus
+  rescheduleAppointmentAction
 } from "../actions";
 import { callAdminApi, fmtTime } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
@@ -136,7 +135,7 @@ export async function MyDaySection(): Promise<ReactElement> {
             </div>
 
             <div className="mt-2 flex flex-wrap gap-2">
-              <form action={updateApptStatus} className="flex flex-wrap items-end gap-2">
+              <form action="/api/team/appointments/status" method="post" className="flex flex-wrap items-end gap-2">
                 <input type="hidden" name="appointmentId" value={a.id} />
                 <input type="hidden" name="status" value="completed" />
                 <label className="flex flex-col gap-1">
@@ -162,7 +161,7 @@ export async function MyDaySection(): Promise<ReactElement> {
                   Mark complete
                 </SubmitButton>
               </form>
-              <form action={updateApptStatus}>
+              <form action="/api/team/appointments/status" method="post">
                 <input type="hidden" name="appointmentId" value={a.id} />
                 <input type="hidden" name="status" value="no_show" />
                 <SubmitButton className="rounded-md border border-warning px-3 py-1 text-xs text-warning" pendingLabel="Saving...">
