@@ -31,12 +31,16 @@ type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends 
 type DbExecutor = DatabaseClient | TransactionExecutor;
 
 type AutomationMode = "draft" | "assist" | "auto";
-type AutoReplyChannel = "sms" | "email";
+type AutoReplyChannel = "sms" | "email" | "dm";
 
 type AutoReplyOutcome = {
   status: "processed" | "skipped";
   error?: string | null;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 const AUTO_REPLY_MIN_DELAY_MS = 10_000;
 const AUTO_REPLY_MAX_DELAY_MS = 30_000;
@@ -54,7 +58,9 @@ function resolveCandidateChannels(inboundChannel: string): AutoReplyChannel[] {
     case "call":
       return ["sms"];
     case "email":
+      return ["email"];
     case "dm":
+      return ["dm"];
     case "web":
       return ["sms", "email"];
     default:
@@ -511,6 +517,9 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
       direction: conversationMessages.direction,
       channel: conversationMessages.channel,
       body: conversationMessages.body,
+      metadata: conversationMessages.metadata,
+      fromAddress: conversationMessages.fromAddress,
+      toAddress: conversationMessages.toAddress,
       createdAt: conversationMessages.createdAt,
       threadId: conversationThreads.id,
       threadSubject: conversationThreads.subject,
@@ -612,7 +621,9 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
     const toAddress =
       channel === "sms"
         ? row.contactPhoneE164 ?? row.contactPhone ?? null
-        : row.contactEmail ?? null;
+        : channel === "email"
+          ? row.contactEmail ?? null
+          : row.fromAddress ?? null;
     if (!toAddress) {
       attempted.push({ channel, reason: "missing_recipient" });
       continue;
@@ -642,7 +653,9 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
   const toAddress =
     replyChannel === "sms"
       ? row.contactPhoneE164 ?? row.contactPhone ?? null
-      : row.contactEmail ?? null;
+      : replyChannel === "email"
+        ? row.contactEmail ?? null
+        : row.fromAddress ?? null;
 
   const [existingAutoReply] = await db
     .select({ id: conversationMessages.id })
@@ -711,6 +724,7 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
         : "Stonegate Junk Removal"
       : null;
   const isDraft = selectedMode === "draft";
+  const inboundMetadata = isRecord(row.metadata) ? row.metadata : null;
 
   const created = await db.transaction(async (tx) => {
     const participantId = await ensureSystemParticipant(tx, threadId, now);
@@ -727,6 +741,7 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
         toAddress,
         deliveryStatus: "queued",
         metadata: {
+          ...(inboundMetadata ?? {}),
           autoReply: true,
           autoReplyToMessageId: row.messageId,
           autoReplyDelayMs: delayMs,

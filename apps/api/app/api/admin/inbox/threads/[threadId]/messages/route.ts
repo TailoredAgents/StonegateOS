@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import {
   getDb,
   conversationThreads,
@@ -25,6 +25,10 @@ function isChannel(value: string | null): value is Channel {
 
 function isDirection(value: string | null): value is Direction {
   return value ? (DIRECTIONS as readonly string[]).includes(value) : false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function POST(
@@ -97,6 +101,8 @@ export async function POST(
     const now = new Date();
 
     let participantId: string | null = null;
+    let resolvedToAddress: string | null = toAddress;
+    let resolvedMetadata: Record<string, unknown> | null = null;
 
     if (direction === "inbound") {
       const contactParticipant = await tx
@@ -110,31 +116,33 @@ export async function POST(
         )
         .limit(1);
 
-      if (!contactParticipant[0] && thread.contactId) {
-        const [contact] = await tx
-          .select({
-            id: contacts.id,
-            firstName: contacts.firstName,
-            lastName: contacts.lastName,
-            email: contacts.email,
-            phone: contacts.phone,
-            phoneE164: contacts.phoneE164
-          })
-          .from(contacts)
-          .where(eq(contacts.id, thread.contactId))
-          .limit(1);
+       if (!contactParticipant[0] && thread.contactId) {
+         const [contact] = await tx
+           .select({
+             id: contacts.id,
+             firstName: contacts.firstName,
+             lastName: contacts.lastName,
+             email: contacts.email,
+             phone: contacts.phone,
+             phoneE164: contacts.phoneE164
+           })
+           .from(contacts)
+           .where(eq(contacts.id, thread.contactId))
+           .limit(1);
 
-        const displayName =
-          contact ? [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim() : "Contact";
-        const externalAddress =
-          messageChannel === "email"
-            ? contact?.email ?? null
-            : contact?.phoneE164 ?? contact?.phone ?? null;
+         const displayName =
+           contact ? [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim() : "Contact";
+         const externalAddress =
+           messageChannel === "email"
+             ? contact?.email ?? null
+             : messageChannel === "dm"
+               ? fromAddress ?? toAddress ?? null
+               : contact?.phoneE164 ?? contact?.phone ?? null;
 
-        const [created] = await tx
-          .insert(conversationParticipants)
-          .values({
-            threadId,
+         const [created] = await tx
+           .insert(conversationParticipants)
+           .values({
+             threadId,
             participantType: "contact",
             contactId: contact?.id ?? null,
             displayName: displayName || "Contact",
@@ -146,7 +154,7 @@ export async function POST(
       } else {
         participantId = contactParticipant[0]?.id ?? null;
       }
-    } else {
+     } else {
       const teamFilters = [
         eq(conversationParticipants.threadId, threadId),
         eq(conversationParticipants.participantType, "team")
@@ -178,6 +186,52 @@ export async function POST(
       }
     }
 
+    if (direction === "outbound") {
+      if (messageChannel === "dm") {
+        const [lastInboundDm] = await tx
+          .select({
+            fromAddress: conversationMessages.fromAddress,
+            metadata: conversationMessages.metadata
+          })
+          .from(conversationMessages)
+          .where(
+            and(
+              eq(conversationMessages.threadId, threadId),
+              eq(conversationMessages.direction, "inbound"),
+              eq(conversationMessages.channel, "dm")
+            )
+          )
+          .orderBy(desc(conversationMessages.createdAt))
+          .limit(1);
+
+        resolvedToAddress = resolvedToAddress ?? (lastInboundDm?.fromAddress ?? null);
+        resolvedMetadata = isRecord(lastInboundDm?.metadata) ? lastInboundDm!.metadata : null;
+        resolvedMetadata = resolvedMetadata ?? { source: "facebook" };
+      } else {
+        const [contact] = thread.contactId
+          ? await tx
+              .select({
+                email: contacts.email,
+                phone: contacts.phone,
+                phoneE164: contacts.phoneE164
+              })
+              .from(contacts)
+              .where(eq(contacts.id, thread.contactId))
+              .limit(1)
+          : [null];
+
+        resolvedToAddress =
+          resolvedToAddress ??
+          (messageChannel === "email"
+            ? contact?.email ?? null
+            : contact?.phoneE164 ?? contact?.phone ?? null);
+      }
+
+      if (!resolvedToAddress) {
+        throw new Error("missing_recipient");
+      }
+    }
+
     const deliveryStatus =
       direction === "inbound" ? "delivered" : direction === "internal" ? "sent" : "queued";
 
@@ -191,11 +245,12 @@ export async function POST(
         subject,
         body,
         mediaUrls,
-        toAddress,
+        toAddress: resolvedToAddress,
         fromAddress,
         deliveryStatus,
         sentAt: deliveryStatus === "sent" ? now : null,
         receivedAt: direction === "inbound" ? now : null,
+        metadata: resolvedMetadata,
         createdAt: now
       })
       .returning();

@@ -47,6 +47,10 @@ type MessageContext = {
   participantName: string | null;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function isReplyChannel(value: string): value is ReplyChannel {
   return value === "sms" || value === "email" || value === "dm";
 }
@@ -247,6 +251,34 @@ export async function POST(
     return NextResponse.json({ error: "unsupported_channel" }, { status: 400 });
   }
 
+  let toAddress: string | null = null;
+  let dmMetadata: Record<string, unknown> | null = null;
+
+  if (replyChannel === "sms") {
+    toAddress = thread.contactPhoneE164 ?? thread.contactPhone ?? null;
+  } else if (replyChannel === "email") {
+    toAddress = thread.contactEmail ?? null;
+  } else {
+    const [latestInboundDm] = await db
+      .select({
+        fromAddress: conversationMessages.fromAddress,
+        metadata: conversationMessages.metadata
+      })
+      .from(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.threadId, threadId),
+          eq(conversationMessages.direction, "inbound"),
+          eq(conversationMessages.channel, "dm")
+        )
+      )
+      .orderBy(desc(conversationMessages.createdAt))
+      .limit(1);
+
+    toAddress = latestInboundDm?.fromAddress ?? null;
+    dmMetadata = isRecord(latestInboundDm?.metadata) ? latestInboundDm!.metadata : null;
+  }
+
   const messageRows = await db
     .select({
       direction: conversationMessages.direction,
@@ -376,8 +408,10 @@ Company notes: We can message any time, and we typically schedule jobs during bu
         channel: replyChannel,
         subject: replyChannel === "email" ? suggestion.subject ?? thread.subject ?? "Stonegate message" : null,
         body: suggestion.body,
+        toAddress,
         deliveryStatus: "queued",
         metadata: {
+          ...(replyChannel === "dm" ? (dmMetadata ?? {}) : {}),
           draft: true,
           aiSuggested: true,
           aiModel: config.model,

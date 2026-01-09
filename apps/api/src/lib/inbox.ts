@@ -5,6 +5,7 @@ import {
   conversationMessages,
   conversationParticipants,
   conversationThreads,
+  crmPipeline,
   getDb,
   leadAutomationStates,
   leads,
@@ -81,6 +82,76 @@ function normalizePhone(input: string): { raw: string; e164: string } {
 function resolveContactName(fallbackName: string | null | undefined): { firstName: string; lastName: string } {
   const cleaned = typeof fallbackName === "string" && fallbackName.trim().length > 0 ? fallbackName.trim() : "Unknown Contact";
   return normalizeName(cleaned);
+}
+
+function extractEmailFromText(body: string): string | null {
+  const match = body.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  if (!match) return null;
+  return match[0].trim().toLowerCase();
+}
+
+function extractUsZipFromText(body: string): string | null {
+  const match = body.match(/\b\d{5}(?:-\d{4})?\b/);
+  if (!match) return null;
+  const value = match[0].trim();
+  return value.length ? value : null;
+}
+
+function extractPhoneFromText(body: string): { raw: string; e164: string } | null {
+  const regex = /(?:\+?1[\s.-]*)?(?:\(\s*\d{3}\s*\)|\d{3})[\s.-]*\d{3}[\s.-]*\d{4}/g;
+  const matches = body.match(regex) ?? [];
+  for (const raw of matches) {
+    try {
+      return normalizePhone(raw);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function extractNameFromText(body: string): string | null {
+  const normalized = body.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  const match = normalized.match(/\b(?:my name is|this is|i am|i'm)\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,2})\b/i);
+  if (!match) return null;
+  const name = match[1]?.trim() ?? "";
+  if (!name) return null;
+  if (name.toLowerCase().includes("stonegate")) return null;
+  return name;
+}
+
+async function findContactByExternalAddress(
+  db: DbExecutor,
+  channel: InboundChannel,
+  externalAddress: string
+): Promise<ContactMatch | null> {
+  if (!externalAddress.trim()) return null;
+  if (channel !== "dm") return null;
+
+  const [row] = await db
+    .select({
+      id: contacts.id,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      email: contacts.email,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164
+    })
+    .from(conversationParticipants)
+    .innerJoin(conversationThreads, eq(conversationParticipants.threadId, conversationThreads.id))
+    .innerJoin(contacts, eq(conversationParticipants.contactId, contacts.id))
+    .where(
+      and(
+        eq(conversationParticipants.participantType, "contact"),
+        eq(conversationParticipants.externalAddress, externalAddress),
+        eq(conversationThreads.channel, "dm")
+      )
+    )
+    .orderBy(desc(conversationThreads.updatedAt), desc(conversationThreads.createdAt))
+    .limit(1);
+
+  return row ?? null;
 }
 
 async function findContactByPhone(
@@ -322,6 +393,10 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         contact = await ensureContactEmail(tx, contact, parsed.email);
       }
     } else {
+      if (channel === "dm") {
+        contact = await findContactByExternalAddress(tx, channel, resolvedFromAddress);
+      }
+
       const normalizedContactEmail =
         typeof input.contactEmail === "string" && input.contactEmail.trim().length > 0
           ? input.contactEmail.trim().toLowerCase()
@@ -346,15 +421,27 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         contact = await findContactByPhone(tx, normalizedContactPhone.e164, normalizedContactPhone.raw);
       }
 
+      const extractedName = extractNameFromText(body);
+      if (!senderName && extractedName) {
+        senderName = extractedName;
+      }
+      if ((!senderName || senderName.trim().length === 0) && channel === "dm" && resolvedFromAddress) {
+        const suffix = resolvedFromAddress.length > 6 ? resolvedFromAddress.slice(-6) : resolvedFromAddress;
+        senderName = `Messenger ${suffix}`;
+      }
+      const extractedEmail = extractEmailFromText(body);
+      const extractedPhone = extractPhoneFromText(body);
+      const extractedZip = extractUsZipFromText(body);
+
       if (!contact) {
         const name = resolveContactName(senderName);
         contact = await createContact({
           db: tx,
           firstName: name.firstName,
           lastName: name.lastName,
-          email: normalizedContactEmail,
-          phone: normalizedContactPhone?.raw ?? null,
-          phoneE164: normalizedContactPhone?.e164 ?? null,
+          email: normalizedContactEmail ?? extractedEmail,
+          phone: normalizedContactPhone?.raw ?? extractedPhone?.raw ?? null,
+          phoneE164: normalizedContactPhone?.e164 ?? extractedPhone?.e164 ?? null,
           source: "inbound"
         });
       } else {
@@ -363,6 +450,78 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         }
         if (normalizedContactPhone) {
           contact = await ensureContactPhone(tx, contact, normalizedContactPhone.raw, normalizedContactPhone.e164);
+        }
+      }
+
+      if (contact) {
+        const updates: Partial<Pick<typeof contacts.$inferInsert, "firstName" | "lastName" | "email" | "phone" | "phoneE164">> =
+          {};
+
+        const nameCandidate = extractedName ?? senderName;
+        if (nameCandidate && nameCandidate.trim().toLowerCase() !== "unknown contact") {
+          const isUnknownName = contact.firstName === "Unknown" && contact.lastName === "Contact";
+          const isMessengerPlaceholder = contact.firstName === "Messenger" && /^\d+$/.test(contact.lastName.trim());
+          const allowOverwritePlaceholder = Boolean(extractedName) && isMessengerPlaceholder;
+          if (isUnknownName || allowOverwritePlaceholder) {
+            const name = resolveContactName(nameCandidate);
+            updates.firstName = name.firstName;
+            updates.lastName = name.lastName;
+          }
+        }
+
+        if (extractedEmail && !contact.email) {
+          updates.email = extractedEmail;
+        }
+        if (extractedPhone && !contact.phoneE164 && !contact.phone) {
+          updates.phone = extractedPhone.raw;
+          updates.phoneE164 = extractedPhone.e164;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          try {
+            const [updated] = await tx
+              .update(contacts)
+              .set({ ...updates, updatedAt: now })
+              .where(eq(contacts.id, contact.id))
+              .returning({
+                id: contacts.id,
+                firstName: contacts.firstName,
+                lastName: contacts.lastName,
+                email: contacts.email,
+                phone: contacts.phone,
+                phoneE164: contacts.phoneE164
+              });
+            if (updated) {
+              contact = updated;
+            }
+          } catch {
+            // Ignore unique constraint collisions (e.g. email already used).
+          }
+        }
+
+        if (extractedZip) {
+          const [pipelineRow] = await tx
+            .select({ notes: crmPipeline.notes })
+            .from(crmPipeline)
+            .where(eq(crmPipeline.contactId, contact.id))
+            .limit(1);
+
+          if (!pipelineRow) {
+            await tx
+              .insert(crmPipeline)
+              .values({
+                contactId: contact.id,
+                stage: "new",
+                notes: `ZIP: ${extractedZip}`
+              })
+              .onConflictDoNothing({ target: crmPipeline.contactId });
+          } else if (!pipelineRow.notes || !pipelineRow.notes.includes(extractedZip)) {
+            const nextNotes = pipelineRow.notes ? `${pipelineRow.notes}\nZIP: ${extractedZip}` : `ZIP: ${extractedZip}`;
+            await tx
+              .update(crmPipeline)
+              .set({ notes: nextNotes, updatedAt: now })
+              .where(eq(crmPipeline.contactId, contact.id));
+          }
         }
       }
     }
