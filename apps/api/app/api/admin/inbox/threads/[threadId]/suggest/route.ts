@@ -135,7 +135,7 @@ async function callOpenAIJsonSchema(input: {
       ],
       max_output_tokens: input.maxOutputTokens,
       text: {
-        verbosity: "low",
+        verbosity: "medium",
         format: {
           type: "json_schema",
           name: input.schemaName,
