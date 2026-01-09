@@ -133,10 +133,58 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
     return () => document.removeEventListener("click", handleClickOutside);
   }, [openGroupId]);
 
+  const mobileAllowedIds = resolvedGroups
+    ? resolvedGroups.flatMap((group) =>
+        group.items.filter((item) => resolveAllowed(item.requires)).map((item) => item.id)
+      )
+    : items.filter((item) => resolveAllowed(item.requires)).map((item) => item.id);
+
+  const mobileValue = mobileAllowedIds.includes(activeId) ? activeId : mobileAllowedIds[0] ?? activeId;
+
   return (
     <div className="flex flex-col gap-3">
+      <div className="sm:hidden">
+        <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
+          <span>Section</span>
+          <select
+            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-200"
+            value={mobileValue}
+            onChange={(event) => {
+              const nextId = event.target.value;
+              const item = items.find((candidate) => candidate.id === nextId);
+              if (!item) return;
+              if (!resolveAllowed(item.requires)) return;
+              handleNavigate(item.href);
+            }}
+          >
+            {resolvedGroups
+              ? resolvedGroups
+                  .map((group) => ({
+                    label: group.label,
+                    items: group.items.filter((item) => resolveAllowed(item.requires))
+                  }))
+                  .filter((group) => group.items.length > 0)
+                  .map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.items.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))
+              : items
+                  .filter((item) => resolveAllowed(item.requires))
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+          </select>
+        </label>
+      </div>
       <nav
-        className={teamTabTokens.container}
+        className={cn(teamTabTokens.container, "hidden sm:flex")}
         aria-label={ariaLabel ?? "Team console sections"}
         ref={navRef}
       >
