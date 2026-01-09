@@ -1,5 +1,6 @@
 import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
+import { CopyButton } from "@/components/CopyButton";
 import { callAdminApi } from "../lib/api";
 import { createRoleAction, createTeamMemberAction, updateTeamMemberAction } from "../actions";
 
@@ -111,6 +112,11 @@ export async function AccessSection(): Promise<React.ReactElement> {
                   <div>
                     <div className="font-semibold text-slate-900">{member.name}</div>
                     <div className="text-[11px] text-slate-500">{member.email ?? "No email"}</div>
+                    <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-500">
+                      <span className="font-medium text-slate-600">ID:</span>
+                      <code className="rounded bg-white/70 px-2 py-0.5">{member.id}</code>
+                      <CopyButton value={member.id} label="Copy" />
+                    </div>
                   </div>
                   <label className="flex items-center gap-2 text-[11px]">
                     <input type="checkbox" name="active" defaultChecked={member.active} className="h-4 w-4 rounded border-slate-300" />
