@@ -1524,21 +1524,40 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         .limit(1);
 
       if (!row) {
+        console.info("[outbox] crm.reminder.task_not_found", { id: event.id, taskId });
         return { status: "processed" };
       }
 
       if (row.status !== "open" || !row.dueAt) {
+        console.info("[outbox] crm.reminder.not_open_or_missing_due", {
+          id: event.id,
+          taskId: row.id,
+          status: row.status,
+          dueAt: row.dueAt ? row.dueAt.toISOString() : null
+        });
         return { status: "processed" };
       }
 
       const now = new Date();
       if (row.dueAt.getTime() > now.getTime() + 60_000) {
+        console.info("[outbox] crm.reminder.not_due_yet", {
+          id: event.id,
+          taskId: row.id,
+          dueAt: row.dueAt.toISOString(),
+          nextAttemptAt: row.dueAt.toISOString()
+        });
         return { status: "retry", nextAttemptAt: row.dueAt };
       }
 
       const phoneMap = await getTeamMemberPhoneMap(db);
       const recipient = row.assignedTo ? phoneMap[row.assignedTo] ?? null : null;
       if (!recipient) {
+        console.warn("[outbox] crm.reminder.missing_recipient", {
+          id: event.id,
+          taskId: row.id,
+          assignedTo: row.assignedTo ?? null,
+          phoneMapCount: Object.keys(phoneMap).length
+        });
         await recordProviderFailureSafe("sms", "missing_recipient");
         await recordAuditEvent({
           actor: { type: "worker", label: "outbox" },
@@ -1564,6 +1583,14 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         `Due: ${dueLabel}${details}\n` +
         `Open: ${buildContactLink(row.contactId)}`;
 
+      console.info("[outbox] crm.reminder.sending", {
+        id: event.id,
+        taskId: row.id,
+        assignedTo: row.assignedTo ?? null,
+        recipient,
+        dueAt: row.dueAt.toISOString()
+      });
+
       const result = await sendSmsMessage(recipient, message);
       if (result.ok) {
         await recordProviderSuccessSafe("sms");
@@ -1579,6 +1606,12 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
 
       const detail = result.detail ?? "reminder_send_failed";
       const retryable = isRetryableSendFailure(detail);
+      console.warn("[outbox] crm.reminder.send_failed", {
+        id: event.id,
+        taskId: row.id,
+        recipient,
+        detail
+      });
 
       await recordAuditEvent({
         actor: { type: "worker", label: "outbox" },
