@@ -1,10 +1,36 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { getDb, teamMembers } from "@/db";
+import { getDb, policySettings, teamMembers } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function normalizeE164(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!trimmed.startsWith("+")) return null;
+  const digits = trimmed.slice(1).replace(/[^\d]/g, "");
+  if (digits.length < 10 || digits.length > 15) return null;
+  return `+${digits}`;
+}
+
+function readPhoneMap(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const phonesRaw = value["phones"];
+  if (!isRecord(phonesRaw)) return {};
+  const phones: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(phonesRaw)) {
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      phones[key] = raw.trim();
+    }
+  }
+  return phones;
+}
 
 export async function PATCH(
   request: NextRequest,
@@ -26,6 +52,7 @@ export async function PATCH(
     email?: string | null;
     roleId?: string | null;
     active?: boolean;
+    phone?: string | null;
   } | null;
 
   if (!payload || typeof payload !== "object") {
@@ -33,6 +60,7 @@ export async function PATCH(
   }
 
   const updates: Record<string, unknown> = {};
+  let phoneUpdate: { value: string | null } | null = null;
 
   if (typeof payload.name === "string" && payload.name.trim().length > 0) {
     updates["name"] = payload.name.trim();
@@ -49,18 +77,84 @@ export async function PATCH(
     updates["active"] = payload.active;
   }
 
-  if (Object.keys(updates).length === 0) {
+  if (payload.phone !== undefined) {
+    if (payload.phone === null) {
+      phoneUpdate = { value: null };
+    } else if (typeof payload.phone === "string") {
+      if (payload.phone.trim().length === 0) {
+        phoneUpdate = { value: null };
+      } else {
+        const normalized = normalizeE164(payload.phone);
+        if (!normalized) {
+          return NextResponse.json({ error: "invalid_phone" }, { status: 400 });
+        }
+        phoneUpdate = { value: normalized };
+      }
+    } else {
+      return NextResponse.json({ error: "invalid_phone" }, { status: 400 });
+    }
+  }
+
+  if (Object.keys(updates).length === 0 && !phoneUpdate) {
     return NextResponse.json({ error: "no_updates" }, { status: 400 });
   }
 
-  updates["updatedAt"] = new Date();
-
   const db = getDb();
   const [member] = await db
-    .update(teamMembers)
-    .set(updates)
-    .where(eq(teamMembers.id, memberId))
-    .returning();
+    .transaction(async (tx) => {
+      let updatedMember: typeof teamMembers.$inferSelect | null = null;
+
+      if (Object.keys(updates).length > 0) {
+        updates["updatedAt"] = new Date();
+        const [row] = await tx
+          .update(teamMembers)
+          .set(updates)
+          .where(eq(teamMembers.id, memberId))
+          .returning();
+        updatedMember = row ?? null;
+      } else {
+        const [row] = await tx.select().from(teamMembers).where(eq(teamMembers.id, memberId)).limit(1);
+        updatedMember = row ?? null;
+      }
+
+      if (!updatedMember) {
+        return [null] as const;
+      }
+
+      if (phoneUpdate) {
+        const [existing] = await tx
+          .select({ value: policySettings.value })
+          .from(policySettings)
+          .where(eq(policySettings.key, "team_member_phones"))
+          .limit(1);
+
+        const phoneMap = readPhoneMap(existing?.value);
+        if (phoneUpdate.value) {
+          phoneMap[memberId] = phoneUpdate.value;
+        } else {
+          delete phoneMap[memberId];
+        }
+
+        const actor = getAuditActorFromRequest(request);
+        await tx
+          .insert(policySettings)
+          .values({
+            key: "team_member_phones",
+            value: { phones: phoneMap },
+            updatedBy: actor.id ?? null
+          })
+          .onConflictDoUpdate({
+            target: policySettings.key,
+            set: {
+              value: { phones: phoneMap },
+              updatedBy: actor.id ?? null,
+              updatedAt: new Date()
+            }
+          });
+      }
+
+      return [updatedMember] as const;
+    });
 
   if (!member) {
     return NextResponse.json({ error: "member_not_found" }, { status: 404 });
@@ -71,7 +165,7 @@ export async function PATCH(
     action: "team_member.updated",
     entityType: "team_member",
     entityId: memberId,
-    meta: { updates }
+    meta: { updates, phone: phoneUpdate?.value ?? undefined }
   });
 
   return NextResponse.json({

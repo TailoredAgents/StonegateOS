@@ -7,6 +7,8 @@ import {
   automationSettings,
   leads,
   contacts,
+  crmTasks,
+  policySettings,
   properties,
   quotes,
   crmPipeline,
@@ -304,6 +306,54 @@ function parseLeadAlertRecipients(raw: string | undefined): string[] {
     .split(/[,\s]+/)
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
+}
+
+function readPhoneMapValue(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const phonesRaw = value["phones"];
+  if (!isRecord(phonesRaw)) return {};
+  const phones: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(phonesRaw)) {
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      phones[key] = raw.trim();
+    }
+  }
+  return phones;
+}
+
+async function getTeamMemberPhoneMap(db: ReturnType<typeof getDb>): Promise<Record<string, string>> {
+  const [row] = await db
+    .select({ value: policySettings.value })
+    .from(policySettings)
+    .where(eq(policySettings.key, "team_member_phones"))
+    .limit(1);
+  return readPhoneMapValue(row?.value);
+}
+
+function formatReminderDueAt(dueAt: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    }).format(dueAt);
+  } catch {
+    return dueAt.toISOString();
+  }
+}
+
+function buildContactLink(contactId: string): string {
+  const base =
+    process.env["NEXT_PUBLIC_SITE_URL"] ??
+    process.env["SITE_URL"] ??
+    "http://localhost:3000";
+  const url = new URL("/team", base);
+  url.searchParams.set("tab", "contacts");
+  url.searchParams.set("contactId", contactId);
+  return url.toString();
 }
 
 function normalizeEmailForHash(value: string): string {
@@ -1443,6 +1493,107 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
 
       return { status: "processed", error: lastFailure };
+    }
+
+    case "crm.reminder.sms": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const taskId = typeof payload?.["taskId"] === "string" ? payload["taskId"].trim() : "";
+      if (!taskId) {
+        console.warn("[outbox] crm.reminder.missing_task_id", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const db = getDb();
+      const [row] = await db
+        .select({
+          id: crmTasks.id,
+          contactId: crmTasks.contactId,
+          title: crmTasks.title,
+          notes: crmTasks.notes,
+          dueAt: crmTasks.dueAt,
+          assignedTo: crmTasks.assignedTo,
+          status: crmTasks.status,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          phone: contacts.phone,
+          phoneE164: contacts.phoneE164
+        })
+        .from(crmTasks)
+        .leftJoin(contacts, eq(crmTasks.contactId, contacts.id))
+        .where(eq(crmTasks.id, taskId))
+        .limit(1);
+
+      if (!row) {
+        return { status: "processed" };
+      }
+
+      if (row.status !== "open" || !row.dueAt) {
+        return { status: "processed" };
+      }
+
+      const now = new Date();
+      if (row.dueAt.getTime() > now.getTime() + 60_000) {
+        return { status: "retry", nextAttemptAt: row.dueAt };
+      }
+
+      const phoneMap = await getTeamMemberPhoneMap(db);
+      const recipient = row.assignedTo ? phoneMap[row.assignedTo] ?? null : null;
+      if (!recipient) {
+        await recordProviderFailureSafe("sms", "missing_recipient");
+        await recordAuditEvent({
+          actor: { type: "worker", label: "outbox" },
+          action: "crm.reminder.failed",
+          entityType: "crm_task",
+          entityId: row.id,
+          meta: { detail: "missing_recipient", assignedTo: row.assignedTo ?? null }
+        });
+        return { status: "processed", error: "missing_recipient" };
+      }
+
+      const business = await getBusinessHoursPolicy(db);
+      const contactName = `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || "Contact";
+      const contactPhone = row.phoneE164 ?? row.phone ?? null;
+      const dueLabel = formatReminderDueAt(row.dueAt, business.timezone);
+      const details =
+        typeof row.notes === "string" && row.notes.trim().length > 0 ? `\n${row.notes.trim()}` : "";
+      const contactLine = contactPhone ? ` (${contactPhone})` : "";
+
+      const message =
+        `Reminder: ${row.title}\n` +
+        `${contactName}${contactLine}\n` +
+        `Due: ${dueLabel}${details}\n` +
+        `Open: ${buildContactLink(row.contactId)}`;
+
+      const result = await sendSmsMessage(recipient, message);
+      if (result.ok) {
+        await recordProviderSuccessSafe("sms");
+        await recordAuditEvent({
+          actor: { type: "worker", label: "outbox" },
+          action: "crm.reminder.sent",
+          entityType: "crm_task",
+          entityId: row.id,
+          meta: { recipient, contactId: row.contactId, provider: result.provider ?? null }
+        });
+        return { status: "processed" };
+      }
+
+      const detail = result.detail ?? "reminder_send_failed";
+      const retryable = isRetryableSendFailure(detail);
+
+      await recordAuditEvent({
+        actor: { type: "worker", label: "outbox" },
+        action: "crm.reminder.failed",
+        entityType: "crm_task",
+        entityId: row.id,
+        meta: { recipient, contactId: row.contactId, provider: result.provider ?? null, detail }
+      });
+
+      if (retryable) {
+        return { status: "retry", error: detail };
+      }
+
+      await recordProviderFailureSafe("sms", detail);
+      return { status: "processed", error: detail };
     }
 
     case "meta.lead_event": {

@@ -15,6 +15,17 @@ export type ContactNoteSummary = {
   updatedAt: string;
 };
 
+export type ContactReminderSummary = {
+  id: string;
+  title: string;
+  notes: string | null;
+  dueAt: string | null;
+  assignedTo: string | null;
+  status: "open" | "completed";
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PipelineSummary = {
   stage: string;
   notes: string | null;
@@ -36,6 +47,8 @@ export type ContactSummary = {
   properties: PropertySummary[];
   notes: ContactNoteSummary[];
   notesCount: number;
+  reminders: ContactReminderSummary[];
+  remindersCount: number;
   stats: {
     appointments: number;
     quotes: number;

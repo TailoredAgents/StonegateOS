@@ -1,10 +1,27 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { asc, eq } from "drizzle-orm";
-import { getDb, teamMembers, teamRoles } from "@/db";
+import { getDb, policySettings, teamMembers, teamRoles } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readPhoneMap(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const phonesRaw = value["phones"];
+  if (!isRecord(phonesRaw)) return {};
+  const phones: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(phonesRaw)) {
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      phones[key] = raw.trim();
+    }
+  }
+  return phones;
+}
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -14,6 +31,13 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (permissionError) return permissionError;
 
   const db = getDb();
+  const [phoneSetting] = await db
+    .select({ value: policySettings.value })
+    .from(policySettings)
+    .where(eq(policySettings.key, "team_member_phones"))
+    .limit(1);
+  const phoneMap = readPhoneMap(phoneSetting?.value);
+
   const rows = await db
     .select({
       id: teamMembers.id,
@@ -34,6 +58,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     id: row.id,
     name: row.name,
     email: row.email ?? null,
+    phone: phoneMap[row.id] ?? null,
     role: row.roleId
       ? {
           id: row.roleId,

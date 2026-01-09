@@ -1816,6 +1816,11 @@ export async function updateTeamMemberAction(formData: FormData) {
     payload["roleId"] = roleId.trim();
   }
 
+  const phone = formData.get("phone");
+  if (typeof phone === "string") {
+    payload["phone"] = phone.trim().length > 0 ? phone.trim() : null;
+  }
+
   const response = await callAdminApi(`/api/admin/team/members/${memberId}`, {
     method: "PATCH",
     body: JSON.stringify(payload)

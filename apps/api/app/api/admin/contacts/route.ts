@@ -265,6 +265,20 @@ export async function GET(request: NextRequest): Promise<Response> {
     const pipeline = pipelineMap.get(contact.id);
     const tasksForContact = tasksMap.get(contact.id) ?? [];
 
+    const reminderTasks = tasksForContact
+      .filter((task) => task.status === "open" && task.dueAt instanceof Date)
+      .sort((a, b) => (a.dueAt?.getTime?.() ?? 0) - (b.dueAt?.getTime?.() ?? 0));
+    const reminders = reminderTasks.slice(0, 3).map((task) => ({
+      id: task.id,
+      title: task.title ?? "Reminder",
+      notes: task.notes ?? null,
+      dueAt: task.dueAt ? task.dueAt.toISOString() : null,
+      assignedTo: task.assignedTo ?? null,
+      status: task.status,
+      createdAt: task.createdAt.toISOString(),
+      updatedAt: task.updatedAt.toISOString()
+    }));
+
     const noteTasks = tasksForContact.filter(isContactNoteTask);
 
     const notes = noteTasks
@@ -322,6 +336,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       })),
       notes,
       notesCount: notes.length,
+      reminders,
+      remindersCount: reminderTasks.length,
       stats: {
         appointments: appointmentStat?.count ?? 0,
         quotes: quoteStat?.count ?? 0

@@ -18,7 +18,7 @@ import {
   updatePipelineStageAction,
   updatePropertyAction
 } from "../actions";
-import type { ContactNoteSummary, ContactSummary, PropertySummary } from "./contacts.types";
+import type { ContactNoteSummary, ContactReminderSummary, ContactSummary, PropertySummary } from "./contacts.types";
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "N/A";
@@ -80,6 +80,13 @@ function ContactCard({ contact }: ContactCardProps) {
   const [noteError, setNoteError] = useState<string | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
   const [noteDeletingId, setNoteDeletingId] = useState<string | null>(null);
+  const [showReminderForm, setShowReminderForm] = useState(false);
+  const [reminderTitleDraft, setReminderTitleDraft] = useState("Call back");
+  const [reminderDueDraft, setReminderDueDraft] = useState("");
+  const [reminderNotesDraft, setReminderNotesDraft] = useState("");
+  const [reminderError, setReminderError] = useState<string | null>(null);
+  const [reminderSaving, setReminderSaving] = useState(false);
+  const [reminderCompletingId, setReminderCompletingId] = useState<string | null>(null);
   const contactIdRef = useRef(contact.id);
 
   useEffect(() => {
@@ -91,6 +98,13 @@ function ContactCard({ contact }: ContactCardProps) {
       setNoteError(null);
       setNoteSaving(false);
       setNoteDeletingId(null);
+      setShowReminderForm(false);
+      setReminderTitleDraft("Call back");
+      setReminderDueDraft("");
+      setReminderNotesDraft("");
+      setReminderError(null);
+      setReminderSaving(false);
+      setReminderCompletingId(null);
     }
   }, [contact]);
 
@@ -103,6 +117,14 @@ function ContactCard({ contact }: ContactCardProps) {
   const sortedNotes = useMemo(() => {
     return [...(contactState.notes ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }, [contactState.notes]);
+
+  const sortedReminders = useMemo(() => {
+    return [...(contactState.reminders ?? [])].sort((a, b) => {
+      const ax = a.dueAt ? Date.parse(a.dueAt) : Number.POSITIVE_INFINITY;
+      const bx = b.dueAt ? Date.parse(b.dueAt) : Number.POSITIVE_INFINITY;
+      return ax - bx;
+    });
+  }, [contactState.reminders]);
 
   async function submitNote(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -219,6 +241,135 @@ function ContactCard({ contact }: ContactCardProps) {
       });
     } finally {
       setNoteDeletingId(null);
+    }
+  }
+
+  async function submitReminder(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (reminderSaving) return;
+
+    const dueRaw = reminderDueDraft.trim();
+    if (!dueRaw) {
+      setReminderError("Pick a date/time for the reminder.");
+      return;
+    }
+
+    const dueDate = new Date(dueRaw);
+    if (Number.isNaN(dueDate.getTime())) {
+      setReminderError("Invalid reminder time.");
+      return;
+    }
+
+    const dueAt = dueDate.toISOString();
+    const title = reminderTitleDraft.trim().length ? reminderTitleDraft.trim() : "Call back";
+    const notes = reminderNotesDraft.trim();
+
+    setReminderSaving(true);
+    setReminderError(null);
+
+    try {
+      const response = await fetch("/api/team/contacts/reminders", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          contactId: contactState.id,
+          dueAt,
+          title,
+          notes: notes.length ? notes : undefined
+        })
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as unknown;
+        const message =
+          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+            ? String((data as Record<string, unknown>)["message"])
+            : "Unable to create reminder. Please try again.";
+        setReminderError(message);
+        return;
+      }
+
+      const data = (await response.json().catch(() => null)) as unknown;
+      const reminder =
+        data && typeof data === "object" ? (data as Record<string, unknown>)["reminder"] : null;
+      if (!reminder || typeof reminder !== "object") {
+        setReminderError("Unable to create reminder. Please try again.");
+        return;
+      }
+
+      const reminderRecord = reminder as Record<string, unknown>;
+      if (
+        typeof reminderRecord["id"] !== "string" ||
+        typeof reminderRecord["title"] !== "string" ||
+        typeof reminderRecord["status"] !== "string" ||
+        typeof reminderRecord["createdAt"] !== "string" ||
+        typeof reminderRecord["updatedAt"] !== "string"
+      ) {
+        setReminderError("Unable to create reminder. Please try again.");
+        return;
+      }
+
+      const created: ContactReminderSummary = {
+        id: reminderRecord["id"],
+        title: reminderRecord["title"],
+        notes: typeof reminderRecord["notes"] === "string" ? reminderRecord["notes"] : null,
+        dueAt: typeof reminderRecord["dueAt"] === "string" ? reminderRecord["dueAt"] : null,
+        assignedTo: typeof reminderRecord["assignedTo"] === "string" ? reminderRecord["assignedTo"] : null,
+        status: reminderRecord["status"] === "completed" ? "completed" : "open",
+        createdAt: reminderRecord["createdAt"],
+        updatedAt: reminderRecord["updatedAt"]
+      };
+
+      setContactState((prev) => ({
+        ...prev,
+        reminders: [created, ...(prev.reminders ?? [])],
+        remindersCount: (prev.remindersCount ?? (prev.reminders?.length ?? 0)) + 1
+      }));
+
+      setReminderTitleDraft("Call back");
+      setReminderDueDraft("");
+      setReminderNotesDraft("");
+      setShowReminderForm(false);
+    } finally {
+      setReminderSaving(false);
+    }
+  }
+
+  async function completeReminder(taskId: string) {
+    if (reminderCompletingId) return;
+    setReminderCompletingId(taskId);
+    setReminderError(null);
+
+    try {
+      const response = await fetch(`/api/team/contacts/reminders/${taskId}`, {
+        method: "POST",
+        headers: { Accept: "application/json" }
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as unknown;
+        const message =
+          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+            ? String((data as Record<string, unknown>)["message"])
+            : "Unable to complete reminder. Please try again.";
+        setReminderError(message);
+        return;
+      }
+
+      setContactState((prev) => {
+        const next = (prev.reminders ?? []).filter((reminder) => reminder.id !== taskId);
+        const previousCount = prev.remindersCount ?? (prev.reminders?.length ?? 0);
+        return {
+          ...prev,
+          reminders: next,
+          remindersCount: Math.max(0, previousCount - 1)
+        };
+      });
+    } finally {
+      setReminderCompletingId(null);
     }
   }
 
@@ -679,6 +830,122 @@ function ContactCard({ contact }: ContactCardProps) {
           </div>
 
           <div className="space-y-4 lg:col-span-2">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 shadow-inner">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-slate-800">
+                  Reminders{" "}
+                  <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                    {contactState.remindersCount ?? (contactState.reminders?.length ?? 0)}
+                  </span>
+                </h4>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                  onClick={() => {
+                    setShowReminderForm((prev) => !prev);
+                    setReminderError(null);
+                  }}
+                >
+                  {showReminderForm ? "Close" : "Add reminder"}
+                </button>
+              </div>
+
+              <div className="mt-3 space-y-3">
+                {sortedReminders.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-200 bg-white/60 px-3 py-2 text-xs text-slate-500">
+                    No reminders yet. Use these for call-backs, no-response follow-ups, and payment follow-ups.
+                  </p>
+                ) : (
+                  sortedReminders.map((reminder) => (
+                    <div
+                      key={reminder.id}
+                      className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-xs text-slate-700 shadow-sm"
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="space-y-1">
+                          <p className="text-[11px] text-slate-500">
+                            Due {formatDateTime(reminder.dueAt)}
+                          </p>
+                          <p className="text-sm font-semibold text-slate-800">{reminder.title}</p>
+                          {reminder.notes ? (
+                            <p className="whitespace-pre-wrap text-[11px] text-slate-600">{reminder.notes}</p>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={reminderCompletingId === reminder.id}
+                          className="rounded-full border border-emerald-200 px-3 py-1.5 font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-70"
+                          onClick={() => completeReminder(reminder.id)}
+                        >
+                          {reminderCompletingId === reminder.id ? "Saving..." : "Mark done"}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {reminderError ? (
+                <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                  {reminderError}
+                </p>
+              ) : null}
+
+              {showReminderForm ? (
+                <form className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600" onSubmit={submitReminder}>
+                  <label className="flex flex-col gap-1">
+                    <span>When</span>
+                    <input
+                      type="datetime-local"
+                      value={reminderDueDraft}
+                      onChange={(event) => setReminderDueDraft(event.target.value)}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                      required
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span>What</span>
+                    <input
+                      value={reminderTitleDraft}
+                      onChange={(event) => setReminderTitleDraft(event.target.value)}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                      placeholder="Call back, follow up, payment, etc."
+                      required
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span>Details (optional)</span>
+                    <textarea
+                      rows={2}
+                      value={reminderNotesDraft}
+                      onChange={(event) => setReminderNotesDraft(event.target.value)}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                      placeholder="Any context Devon should see in the SMS"
+                    />
+                  </label>
+                  <div className="flex gap-2">
+                    <button
+                      type="submit"
+                      disabled={reminderSaving}
+                      className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {reminderSaving ? "Saving..." : "Save reminder"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800"
+                      onClick={() => {
+                        setShowReminderForm(false);
+                        setReminderError(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : null}
+            </div>
+
             <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 shadow-inner">
               <div className="flex items-center justify-between">
                 <h4 className="text-sm font-semibold text-slate-800">Notes</h4>
