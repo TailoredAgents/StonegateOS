@@ -510,6 +510,23 @@ export default async function TeamPage({
               </div>
             </div>
 
+            {hasOwner ? (
+              <div className="space-y-4">
+                <h2 className="text-base font-semibold text-slate-900">Exports</h2>
+                <p className="text-xs text-slate-500">
+                  Download all inbound/outbound client messages as a JSONL file for analysis or fine tuning (drafts + media omitted).
+                </p>
+                <div>
+                  <a
+                    className="inline-flex items-center justify-center rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-700"
+                    href="/api/team/inbox/export"
+                  >
+                    Download conversations (JSONL)
+                  </a>
+                </div>
+              </div>
+            ) : null}
+
             {hasOwner && calendarBadge ? (
               <div
                 className={`rounded-xl border px-4 py-3 text-xs ${calendarBadgeToneClasses[calendarBadge.tone]}`}
