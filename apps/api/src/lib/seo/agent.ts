@@ -189,7 +189,7 @@ Rules:
 - Mention "Stonegate Junk Removal" in the intro.
 - Include a short FAQ section (4 Q&As).
 - Include internal links exactly as provided (use [label](url)).
-- End with a short CTA to schedule an estimate or call (404) 692-0768.`.trim();
+- End with a short CTA to schedule an estimate or call (404) 777-2631.`.trim();
 
   const payload = {
     model: VOICE_MODEL,

@@ -484,9 +484,9 @@ export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
     email: "We appreciate your business. If you have a moment, please share a review."
   },
   out_of_area: {
-    sms: "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock. If you are just outside, call (404) 692-0768 and we will try to help.",
-    email: "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock. If you are just outside our zone, call (404) 692-0768 and we will try to help.",
-    web: "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock. If you are just outside our zone, call (404) 692-0768 and we will try to help."
+    sms: "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock. If you are just outside, call (404) 777-2631 and we will try to help.",
+    email: "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock. If you are just outside our zone, call (404) 777-2631 and we will try to help.",
+    web: "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock. If you are just outside our zone, call (404) 777-2631 and we will try to help."
   }
 };
 
