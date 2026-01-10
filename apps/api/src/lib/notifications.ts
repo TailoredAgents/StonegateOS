@@ -61,8 +61,22 @@ const DEFAULT_TIME_ZONE =
   process.env["GOOGLE_CALENDAR_TIMEZONE"] ??
   "America/New_York";
 
-const SITE_URL =
-  process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "http://localhost:3000";
+function resolvePublicSiteBaseUrl(): string | null {
+  const raw = (process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "").trim();
+  if (!raw) {
+    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
+  }
+  if (process.env["NODE_ENV"] === "production") {
+    const lowered = raw.toLowerCase();
+    if (lowered.includes("localhost") || lowered.includes("127.0.0.1")) return null;
+  }
+  return raw;
+}
+
+function isLocalhostUrl(value: string): boolean {
+  const lowered = value.toLowerCase();
+  return lowered.includes("localhost") || lowered.includes("127.0.0.1");
+}
 
 let cachedTransporter: nodemailer.Transporter | null;
 
@@ -271,12 +285,17 @@ function servicesSummary(services: string[]): string {
   return summarizeServiceLabels(services);
 }
 
-function buildRescheduleUrl(appointment: EstimateNotificationPayload["appointment"]): string {
+function buildRescheduleUrl(appointment: EstimateNotificationPayload["appointment"]): string | null {
   if (appointment.rescheduleUrl) {
-    return appointment.rescheduleUrl;
+    if (process.env["NODE_ENV"] !== "production" || !isLocalhostUrl(appointment.rescheduleUrl)) {
+      return appointment.rescheduleUrl;
+    }
   }
 
-  const url = new URL("/schedule", SITE_URL);
+  const base = resolvePublicSiteBaseUrl();
+  if (!base) return null;
+
+  const url = new URL("/schedule", base);
   url.searchParams.set("appointmentId", appointment.id);
   url.searchParams.set("token", appointment.rescheduleToken);
   return url.toString();
@@ -303,34 +322,40 @@ export async function sendEstimateConfirmation(
     scheduling.timeWindow ? `Preferred window: ${scheduling.timeWindow}` : null,
     payload.notes ? `Notes: ${payload.notes}` : null,
     "",
-    `Need to reschedule? ${rescheduleUrl}`
+    rescheduleUrl ? `Need to reschedule? ${rescheduleUrl}` : null
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
 
   const fallbackSms =
     reason === "requested"
-      ? `Stonegate confirm: appointment on ${when}. Need to adjust? ${rescheduleUrl}`
-      : `Stonegate update: new appointment time ${when}. Need changes? ${rescheduleUrl}`;
+      ? rescheduleUrl
+        ? `Stonegate confirm: appointment on ${when}. Need to adjust? ${rescheduleUrl}`
+        : `Stonegate confirm: appointment on ${when}. Reply here if you need changes.`
+      : rescheduleUrl
+        ? `Stonegate update: new appointment time ${when}. Need changes? ${rescheduleUrl}`
+        : `Stonegate update: new appointment time ${when}. Reply here if you need changes.`;
 
   let generated = null;
-  try {
-    generated = await generateEstimateNotificationCopy({
-      when,
-      services: payload.services,
-      notes: payload.notes,
-      rescheduleUrl,
-      reason,
-      address: {
-        line1: property.addressLine1,
-        city: property.city,
-        state: property.state,
-        postalCode: property.postalCode
-      },
-      contactName: contact.name
-    });
-  } catch (error) {
-    console.warn("[notify] ai.copy.error", { error: String(error) });
+  if (rescheduleUrl) {
+    try {
+      generated = await generateEstimateNotificationCopy({
+        when,
+        services: payload.services,
+        notes: payload.notes,
+        rescheduleUrl,
+        reason,
+        address: {
+          line1: property.addressLine1,
+          city: property.city,
+          state: property.state,
+          postalCode: property.postalCode
+        },
+        contactName: contact.name
+      });
+    } catch (error) {
+      console.warn("[notify] ai.copy.error", { error: String(error) });
+    }
   }
 
   if (contact.phone) {
@@ -358,34 +383,38 @@ async function sendEstimateReminderInternal(
   const rescheduleUrl = buildRescheduleUrl(appointment);
   const windowHours = Math.round(options.windowMinutes / 60);
 
-  const fallbackSms = `Stonegate reminder: appointment in ${windowHours}h (${when}). Need to reschedule? ${rescheduleUrl}`;
+  const fallbackSms = rescheduleUrl
+    ? `Stonegate reminder: appointment in ${windowHours}h (${when}). Need to reschedule? ${rescheduleUrl}`
+    : `Stonegate reminder: appointment in ${windowHours}h (${when}). Reply here if you need changes.`;
   const fallbackEmailBody = [
     `Quick reminder: your Stonegate Junk Removal appointment is in ${windowHours} hours (${when}).`,
     `Location: ${payload.property.addressLine1}, ${payload.property.city}, ${payload.property.state} ${payload.property.postalCode}`,
     "",
-    `Need to adjust? ${rescheduleUrl}`
+    rescheduleUrl ? `Need to adjust? ${rescheduleUrl}` : "Need to adjust? Reply to this message."
   ].join("\n");
   const fallbackSubject = `Reminder: Stonegate appointment ${when}`;
 
   let generated = null;
-  try {
-    generated = await generateEstimateNotificationCopy({
-      when,
-      services: payload.services,
-      notes: payload.notes,
-      rescheduleUrl,
-      reason: "reminder",
-      reminderWindowHours: windowHours,
-      address: {
-        line1: payload.property.addressLine1,
-        city: payload.property.city,
-        state: payload.property.state,
-        postalCode: payload.property.postalCode
-      },
-      contactName: payload.contact.name
-    });
-  } catch (error) {
-    console.warn("[notify] reminder.ai.error", { error: String(error) });
+  if (rescheduleUrl) {
+    try {
+      generated = await generateEstimateNotificationCopy({
+        when,
+        services: payload.services,
+        notes: payload.notes,
+        rescheduleUrl,
+        reason: "reminder",
+        reminderWindowHours: windowHours,
+        address: {
+          line1: payload.property.addressLine1,
+          city: payload.property.city,
+          state: payload.property.state,
+          postalCode: payload.property.postalCode
+        },
+        contactName: payload.contact.name
+      });
+    } catch (error) {
+      console.warn("[notify] reminder.ai.error", { error: String(error) });
+    }
   }
 
   if (contact.phone) {

@@ -281,19 +281,26 @@ async function resolveDmRecipient(db: ReturnType<typeof getDb>, threadId: string
     : null;
 }
 
+function resolvePublicSiteBaseUrl(): string | null {
+  const raw = (process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "").trim();
+  if (!raw) {
+    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
+  }
+  if (process.env["NODE_ENV"] === "production") {
+    const lowered = raw.toLowerCase();
+    if (lowered.includes("localhost") || lowered.includes("127.0.0.1")) return null;
+  }
+  return raw;
+}
+
 function buildQuoteShareUrl(token: string): string {
-  const base =
-    process.env["NEXT_PUBLIC_SITE_URL"] ??
-    process.env["SITE_URL"] ??
-    "http://localhost:3000";
+  const base = resolvePublicSiteBaseUrl() ?? "http://localhost:3000";
   return `${base.replace(/\/$/, "")}/quote/${token}`;
 }
 
-function buildRescheduleUrlForAppointment(appointmentId: string, token: string): string {
-  const base =
-    process.env["NEXT_PUBLIC_SITE_URL"] ??
-    process.env["SITE_URL"] ??
-    "http://localhost:3000";
+function buildRescheduleUrlForAppointment(appointmentId: string, token: string): string | null {
+  const base = resolvePublicSiteBaseUrl();
+  if (!base) return null;
   const url = new URL("/schedule", base);
   url.searchParams.set("appointmentId", appointmentId);
   url.searchParams.set("token", token);
@@ -410,7 +417,7 @@ function buildCalendarPayloadFromNotification(
   }
 
   const rescheduleUrl =
-    appointment.rescheduleUrl ?? buildRescheduleUrlForAppointment(appointment.id, appointment.rescheduleToken);
+    appointment.rescheduleUrl ?? buildRescheduleUrlForAppointment(appointment.id, appointment.rescheduleToken) ?? undefined;
 
   return {
     appointmentId: appointment.id,
@@ -601,7 +608,7 @@ async function buildNotificationPayload(
   }
 
   const rescheduleUrl =
-    overrides?.rescheduleUrl ?? buildRescheduleUrlForAppointment(row.appointmentId, rescheduleToken);
+    overrides?.rescheduleUrl ?? buildRescheduleUrlForAppointment(row.appointmentId, rescheduleToken) ?? undefined;
 
   const payload: EstimateNotificationPayload = {
     leadId: row.leadId ?? "unknown",
