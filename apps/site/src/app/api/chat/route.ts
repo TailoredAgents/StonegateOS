@@ -21,7 +21,7 @@ Principles:
   Speak in ranges only and never promise an exact total.
 - Process notes (use when relevant): licensed and insured two-person crews, careful in-home handling, responsible disposal and recycling when possible.
 - Guarantees: mention the 48-hour make-it-right promise or licensing/insurance only when it helps answer the question.
-- Scheduling: if the user asks to book, collect what you need (name, address, phone) and offer a couple of available 1-hour windows to choose from. Mention the "Schedule Estimate" page (/estimate) or call (404) 692-0768 only when the user asks about booking, timing, or next steps.
+- Scheduling: if the user asks to book, collect what you need (name, address, phone) and offer a couple of available 1-hour windows to choose from. Mention the "Schedule Estimate" page (/estimate) or call (404) 777-2631 only when the user asks about booking, timing, or next steps.
 - Preparation tips (share only if asked): separate items for pickup, ensure clear pathways, and mention any mattresses/paint/tire quantities if they have them.
 - Escalate politely to a human if the request is hazardous, urgent, or needs a firm commitment.
 - Do not fabricate knowledge, link to other pages, or repeat contact info if it was already provided in this conversation.
@@ -821,7 +821,7 @@ async function handlePublicBookingMessage(
   if (!suggestions || !suggestions.length) {
     state.phase = "idle";
     return {
-      reply: "I'm not seeing open times right now - want to try again, or would you rather call (404) 692-0768?",
+      reply: "I'm not seeing open times right now - want to try again, or would you rather call (404) 777-2631?",
       state
     };
   }

@@ -37,7 +37,7 @@ export default function ContractorsPage() {
                 <a href="#request-hauloff">Request an estimate</a>
               </Button>
               <Button asChild size="lg" variant="secondary">
-                <a href="tel:+14046920768">Call (404) 692-0768</a>
+                <a href="tel:+14047772631">Call (404) 777-2631</a>
               </Button>
               <Button asChild size="lg" variant="ghost" className="border border-neutral-300/70 text-primary-800 hover:border-primary-300">
                 <Link href="/services/construction-debris">Construction debris service details</Link>

@@ -866,7 +866,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                  placeholder="(404) 692-0768"
+                  placeholder="(404) 777-2631"
                 />
               </div>
               <div className="sm:col-span-2">
@@ -1186,7 +1186,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                       {bookingStatus === "loading" ? "Booking..." : "Book this pickup"}
                     </Button>
                     <Button asChild variant="secondary" className="justify-center">
-                      <a href="tel:+14046920768" aria-label="Call to confirm and book">
+                      <a href="tel:+14047772631" aria-label="Call to confirm and book">
                         Call to confirm &amp; book
                       </a>
                     </Button>

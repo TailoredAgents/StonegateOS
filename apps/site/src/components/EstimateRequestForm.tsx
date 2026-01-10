@@ -214,7 +214,7 @@ export function EstimateRequestForm({
             <h2 className="font-display text-xl text-primary-900">You’re all set</h2>
             <p className="mt-1 text-sm text-neutral-600">{submitState.message}</p>
             <p className="mt-2 text-xs text-neutral-500">
-              We’ll usually respond quickly by text/call. If you need help right now, call (404) 692-0768.
+              We’ll usually respond quickly by text/call. If you need help right now, call (404) 777-2631.
             </p>
           </div>
         </div>
@@ -390,7 +390,7 @@ export function EstimateRequestForm({
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-              placeholder="(404) 692-0768"
+              placeholder="(404) 777-2631"
               autoComplete="tel"
             />
           </div>
@@ -524,7 +524,7 @@ export function EstimateRequestForm({
             {submitState.status === "submitting" ? "Sending..." : "Request estimate"}
           </Button>
           <p className="text-xs text-neutral-500">
-            Prefer to book by phone? Call <a className="font-semibold text-primary-700 hover:text-primary-800" href="tel:+14046920768">(404) 692-0768</a>.
+            Prefer to book by phone? Call <a className="font-semibold text-primary-700 hover:text-primary-800" href="tel:+14047772631">(404) 777-2631</a>.
           </p>
         </div>
       </form>
