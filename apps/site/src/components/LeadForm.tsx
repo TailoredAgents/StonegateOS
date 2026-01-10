@@ -819,15 +819,17 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               />
             </div>
 
-            <div className="space-y-1">
-              <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
-              <input
-                type="text"
-                value={zip}
-                onChange={(e) => setZip(e.target.value)}
-                required
-                placeholder="30189"
-                className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+              <div className="space-y-1">
+                <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
+                <input
+                  type="text"
+                  autoComplete="postal-code"
+                  inputMode="numeric"
+                  value={zip}
+                  onChange={(e) => setZip(e.target.value)}
+                  required
+                  placeholder="30189"
+                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
               />
             </div>
 
@@ -846,6 +848,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 <input
                   ref={nameInputRef}
                   type="text"
+                  autoComplete="name"
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -857,6 +860,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 <label className="text-sm font-semibold text-neutral-800">Mobile number</label>
                 <input
                   type="tel"
+                  autoComplete="tel"
+                  inputMode="tel"
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
@@ -868,6 +873,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 <label className="text-sm font-semibold text-neutral-800">Email (optional)</label>
                 <input
                   type="email"
+                  autoComplete="email"
+                  inputMode="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
@@ -939,40 +946,45 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 <div className="text-xs text-neutral-600">
                   We&apos;ll confirm the exact price on-site before we start. If we use less space than expected, your price goes down.
                 </div>
-                <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
-                  <div className="text-xs font-semibold text-neutral-700">Book this pickup</div>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <input
-                      type="text"
-                      placeholder="Street address"
-                      value={addressLine1}
-                      onChange={(e) => setAddressLine1(e.target.value)}
-                      className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                    />
-                    <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
+                    <div className="text-xs font-semibold text-neutral-700">Book this pickup</div>
+                    <div className="grid gap-2 md:grid-cols-2">
                       <input
                         type="text"
-                        placeholder="City"
-                        value={city}
-                        onChange={(e) => setCity(e.target.value)}
-                        className="col-span-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                        autoComplete="street-address"
+                        placeholder="Street address"
+                        value={addressLine1}
+                        onChange={(e) => setAddressLine1(e.target.value)}
+                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                       />
+                      <div className="grid grid-cols-3 gap-2">
+                        <input
+                          type="text"
+                          autoComplete="address-level2"
+                          placeholder="City"
+                          value={city}
+                          onChange={(e) => setCity(e.target.value)}
+                          className="col-span-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                        />
+                        <input
+                          type="text"
+                          autoComplete="address-level1"
+                          placeholder="GA"
+                          maxLength={2}
+                          value={stateField}
+                          onChange={(e) => setStateField(e.target.value.toUpperCase())}
+                          className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 uppercase"
+                        />
+                      </div>
                       <input
                         type="text"
-                        placeholder="GA"
-                        maxLength={2}
-                        value={stateField}
-                        onChange={(e) => setStateField(e.target.value.toUpperCase())}
-                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 uppercase"
+                        autoComplete="postal-code"
+                        inputMode="numeric"
+                        placeholder="ZIP"
+                        value={postalCode}
+                        onChange={(e) => setPostalCode(e.target.value)}
+                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                       />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="ZIP"
-                      value={postalCode}
-                      onChange={(e) => setPostalCode(e.target.value)}
-                      className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                    />
                     <div className="md:col-span-2 space-y-2 rounded-md border border-neutral-200 bg-white p-3">
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-xs font-semibold text-neutral-700">Choose a time</div>
