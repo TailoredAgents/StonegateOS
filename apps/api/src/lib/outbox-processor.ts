@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, isNull, lte, ne, or, sql } from "drizzle-orm";
 import crypto from "node:crypto";
+import { nanoid } from "nanoid";
 import {
   getDb,
   outboxEvents,
@@ -621,10 +622,17 @@ async function buildNotificationPayload(
 
   const status: AppointmentStatus = isValidAppointmentStatus(row.status) ? row.status : "requested";
 
-  const rescheduleToken = row.rescheduleToken;
+  let rescheduleToken = typeof row.rescheduleToken === "string" ? row.rescheduleToken.trim() : "";
   if (!rescheduleToken) {
-    console.warn("[outbox] missing_reschedule_token", { appointmentId });
-    return null;
+    rescheduleToken = nanoid(24);
+    try {
+      await db
+        .update(appointments)
+        .set({ rescheduleToken, updatedAt: new Date() })
+        .where(eq(appointments.id, appointmentId));
+    } catch (error) {
+      console.warn("[outbox] reschedule_token_backfill_failed", { appointmentId, error: String(error) });
+    }
   }
 
   const rescheduleUrl =
