@@ -3,16 +3,14 @@ import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
 
 const ADMIN_COOKIE = "myst-admin-session";
-const CREW_COOKIE = "myst-crew-session";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest): Promise<Response> {
   const jar = request.cookies;
   const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
-  const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
 
-  if (!hasOwner && !hasCrew) {
+  if (!hasOwner) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -44,4 +42,3 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
   });
 }
-
