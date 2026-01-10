@@ -107,6 +107,11 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
   const [photoSkipped, setPhotoSkipped] = React.useState(false);
   const trackedScheduleRef = React.useRef(false);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const quoteCardRef = React.useRef<HTMLDivElement | null>(null);
+  const nameInputRef = React.useRef<HTMLInputElement | null>(null);
+  const prevStepRef = React.useRef<1 | 2 | null>(null);
+  const prevQuoteStatusRef = React.useRef<QuoteState["status"] | null>(null);
 
   const apiBase = process.env["NEXT_PUBLIC_API_BASE_URL"]?.replace(/\/$/, "") ?? "";
   const quoteId = quoteState.status === "ready" ? quoteState.quoteId : null;
@@ -119,6 +124,51 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   React.useEffect(() => {
     selectedSlotStartAtRef.current = selectedSlotStartAt;
   }, [selectedSlotStartAt]);
+
+  const prefersReducedMotion = React.useCallback(() => {
+    if (typeof window === "undefined") return false;
+    if (typeof window.matchMedia !== "function") return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }, []);
+
+  const scrollToElement = React.useCallback(
+    (el: HTMLElement | null) => {
+      if (!el) return;
+      const behavior: ScrollBehavior = prefersReducedMotion() ? "auto" : "smooth";
+      try {
+        el.scrollIntoView({ behavior, block: "start" });
+      } catch {
+        el.scrollIntoView();
+      }
+    },
+    [prefersReducedMotion]
+  );
+
+  React.useEffect(() => {
+    const previousStep = prevStepRef.current;
+    prevStepRef.current = step;
+    if (previousStep === null) return;
+    if (previousStep === step) return;
+
+    scrollToElement(containerRef.current);
+
+    if (step === 2) {
+      window.setTimeout(() => {
+        nameInputRef.current?.focus();
+      }, prefersReducedMotion() ? 0 : 100);
+    }
+  }, [prefersReducedMotion, scrollToElement, step]);
+
+  React.useEffect(() => {
+    const previousStatus = prevQuoteStatusRef.current;
+    prevQuoteStatusRef.current = quoteState.status;
+    if (previousStatus === null) return;
+    if (previousStatus !== "ready" && quoteState.status === "ready" && step === 2) {
+      window.setTimeout(() => {
+        scrollToElement(quoteCardRef.current);
+      }, prefersReducedMotion() ? 0 : 100);
+    }
+  }, [prefersReducedMotion, quoteState.status, scrollToElement, step]);
 
   const trackMetaEvent = React.useCallback((eventName: string, params?: Record<string, unknown>) => {
     if (typeof window === "undefined") return;
@@ -617,7 +667,11 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       : null;
 
   return (
-    <div className={cn("rounded-xl bg-white p-6 shadow-soft shadow-primary-900/10", className)} {...props}>
+    <div
+      ref={containerRef}
+      className={cn("scroll-mt-24 rounded-xl bg-white p-6 shadow-soft shadow-primary-900/10", className)}
+      {...props}
+    >
       <div className="mb-4 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
         <span className="rounded-full border border-neutral-200 px-3 py-1">Step {step} of 2</span>
         <span className="text-[10px] font-medium normal-case tracking-normal">Takes &lt; 1 minute. No spam.</span>
@@ -790,6 +844,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <div>
                 <label className="text-sm font-semibold text-neutral-800">Name</label>
                 <input
+                  ref={nameInputRef}
                   type="text"
                   required
                   value={name}
@@ -861,7 +916,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             </Button>
 
             {quoteState.status === "ready" ? (
-              <div className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/70 p-4">
+              <div ref={quoteCardRef} className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/70 p-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-primary-900">
                   {quoteState.discountPercent > 0 ? (
                     <span className="rounded-full bg-primary-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
