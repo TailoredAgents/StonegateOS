@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 
 declare global {
   interface Window {
@@ -11,14 +11,17 @@ declare global {
 
 export function MetaPixelPageView() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const didMountRef = React.useRef(false);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
     if (typeof window.fbq !== "function") return;
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
     window.fbq("track", "PageView");
-  }, [pathname, searchParams]);
+  }, [pathname]);
 
   return null;
 }
-
