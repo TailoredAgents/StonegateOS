@@ -697,13 +697,17 @@ export async function POST(request: NextRequest) {
       }
 
       if (outboxType) {
+        const customerName = `${firstName} ${lastName}`.trim();
         await tx.insert(outboxEvents).values({
           type: outboxType,
           payload: {
             appointmentId,
             leadId,
             services: quote.jobTypes ?? [],
-            notes
+            notes,
+            customerPhone: normalizedPhone.e164,
+            customerEmail: body.email ?? null,
+            customerName
           }
         });
       }

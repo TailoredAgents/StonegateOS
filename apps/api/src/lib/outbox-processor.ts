@@ -533,6 +533,7 @@ async function buildNotificationPayload(
     rescheduleUrl?: string | null;
     scheduling?: Partial<EstimateNotificationPayload["scheduling"]>;
     notes?: string | null;
+    contact?: Partial<EstimateNotificationPayload["contact"]>;
   }
 ): Promise<EstimateNotificationPayload | null> {
   const db = getDb();
@@ -599,11 +600,24 @@ async function buildNotificationPayload(
   const contactNameParts = [row.contactFirstName, row.contactLastName].filter(
     (value): value is string => typeof value === "string" && value.trim().length > 0
   );
+  const overrideContactName =
+    typeof overrides?.contact?.name === "string" && overrides.contact.name.trim().length > 0
+      ? overrides.contact.name.trim()
+      : null;
   const contactName =
+    overrideContactName ||
     contactNameParts.join(" ").trim() ||
     row.contactFirstName ||
     row.contactLastName ||
     "Stonegate Customer";
+  const overrideContactPhone =
+    typeof overrides?.contact?.phone === "string" && overrides.contact.phone.trim().length > 0
+      ? overrides.contact.phone.trim()
+      : null;
+  const overrideContactEmail =
+    typeof overrides?.contact?.email === "string" && overrides.contact.email.trim().length > 0
+      ? overrides.contact.email.trim()
+      : null;
 
   const status: AppointmentStatus = isValidAppointmentStatus(row.status) ? row.status : "requested";
 
@@ -622,8 +636,8 @@ async function buildNotificationPayload(
     services,
     contact: {
       name: contactName,
-      email: row.contactEmail ?? undefined,
-      phone: row.contactPhoneE164 ?? row.contactPhone ?? undefined
+      email: overrideContactEmail ?? row.contactEmail ?? undefined,
+      phone: overrideContactPhone ?? row.contactPhoneE164 ?? row.contactPhone ?? undefined
     },
     property: {
       addressLine1: row.propertyAddressLine1 ?? "Undisclosed address",
@@ -1189,6 +1203,9 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
 
       const services = coerceServices(payload?.["services"]);
       const schedulingOverride = payload && isRecord(payload["scheduling"]) ? payload["scheduling"] : null;
+      const customerPhone = typeof payload?.["customerPhone"] === "string" ? payload["customerPhone"] : null;
+      const customerName = typeof payload?.["customerName"] === "string" ? payload["customerName"] : null;
+      const customerEmail = typeof payload?.["customerEmail"] === "string" ? payload["customerEmail"] : null;
 
       const notification = await buildNotificationPayload(appointmentId, {
         services,
@@ -1208,7 +1225,15 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
                   : undefined
             }
           : undefined,
-        notes: typeof payload?.["notes"] === "string" ? payload["notes"] : undefined
+        notes: typeof payload?.["notes"] === "string" ? payload["notes"] : undefined,
+        contact:
+          customerPhone || customerName || customerEmail
+            ? {
+                phone: customerPhone ?? undefined,
+                name: customerName ?? undefined,
+                email: customerEmail ?? undefined
+              }
+            : undefined
       });
 
       if (!notification) {
@@ -1237,9 +1262,20 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "skipped" };
       }
 
+      const customerPhone = typeof payload?.["customerPhone"] === "string" ? payload["customerPhone"] : null;
+      const customerName = typeof payload?.["customerName"] === "string" ? payload["customerName"] : null;
+      const customerEmail = typeof payload?.["customerEmail"] === "string" ? payload["customerEmail"] : null;
       const notification = await buildNotificationPayload(appointmentId, {
         services: coerceServices(payload?.["services"]),
-        rescheduleUrl: typeof payload?.["rescheduleUrl"] === "string" ? payload["rescheduleUrl"] : undefined
+        rescheduleUrl: typeof payload?.["rescheduleUrl"] === "string" ? payload["rescheduleUrl"] : undefined,
+        contact:
+          customerPhone || customerName || customerEmail
+            ? {
+                phone: customerPhone ?? undefined,
+                name: customerName ?? undefined,
+                email: customerEmail ?? undefined
+              }
+            : undefined
       });
 
       if (!notification) {
