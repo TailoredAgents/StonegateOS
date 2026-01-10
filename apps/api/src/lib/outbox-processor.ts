@@ -286,11 +286,17 @@ function resolvePublicSiteBaseUrl(): string | null {
   if (!raw) {
     return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
   }
-  if (process.env["NODE_ENV"] === "production") {
-    const lowered = raw.toLowerCase();
-    if (lowered.includes("localhost") || lowered.includes("127.0.0.1")) return null;
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(withScheme);
+    if (process.env["NODE_ENV"] === "production") {
+      const lowered = url.hostname.toLowerCase();
+      if (lowered === "localhost" || lowered === "127.0.0.1") return null;
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
   }
-  return raw;
 }
 
 function buildQuoteShareUrl(token: string): string {

@@ -102,10 +102,11 @@ function parseConfirmationIntent(body: string): ConfirmationIntent | null {
 }
 
 function buildRescheduleUrlForAppointment(appointmentId: string, token: string): string {
-  const base =
+  const rawBase =
     process.env["NEXT_PUBLIC_SITE_URL"] ??
     process.env["SITE_URL"] ??
     "http://localhost:3000";
+  const base = /^https?:\/\//i.test(rawBase) ? rawBase : `https://${rawBase}`;
   const url = new URL("/schedule", base);
   url.searchParams.set("appointmentId", appointmentId);
   url.searchParams.set("token", token);
