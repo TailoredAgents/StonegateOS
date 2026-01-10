@@ -5,6 +5,12 @@ import { Button, cn } from "@myst-os/ui";
 import { Check } from "lucide-react";
 import { useUTM } from "../lib/use-utm";
 
+declare global {
+  interface Window {
+    fbq?: (...args: any[]) => void;
+  }
+}
+
 type QuoteState =
   | { status: "idle" | "loading" }
   | {
@@ -100,6 +106,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [bookingStatus, setBookingStatus] = React.useState<"idle" | "loading" | "success" | "error">("idle");
   const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
   const [photoSkipped, setPhotoSkipped] = React.useState(false);
+  const trackedScheduleRef = React.useRef(false);
 
   const apiBase = process.env["NEXT_PUBLIC_API_BASE_URL"]?.replace(/\/$/, "") ?? "";
   const quoteId = quoteState.status === "ready" ? quoteState.quoteId : null;
@@ -112,6 +119,16 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   React.useEffect(() => {
     selectedSlotStartAtRef.current = selectedSlotStartAt;
   }, [selectedSlotStartAt]);
+
+  const trackMetaEvent = React.useCallback((eventName: string, params?: Record<string, unknown>) => {
+    if (typeof window === "undefined") return;
+    if (typeof window.fbq !== "function") return;
+    try {
+      window.fbq("track", eventName, params ?? {});
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const formatSlotLabel = React.useCallback(
     (iso: string) => {
@@ -576,6 +593,10 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         `You're booked for ${formatSlotLabel(bookedAt)}. We'll text${email.trim().length ? " (and email)" : ""} you a confirmation.`
       );
       setHoldStatus("idle");
+      if (!trackedScheduleRef.current) {
+        trackedScheduleRef.current = true;
+        trackMetaEvent("Schedule", { content_name: "Book pickup", content_category: "junk_removal" });
+      }
     } catch (err) {
       setBookingStatus("error");
       setBookingMessage((err as Error).message);
