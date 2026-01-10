@@ -335,12 +335,8 @@ export async function sendEstimateConfirmation(
 
   const fallbackSms =
     reason === "requested"
-      ? rescheduleUrl
-        ? `Stonegate confirm: appointment on ${when}. Need to adjust? ${rescheduleUrl}`
-        : `Stonegate confirm: appointment on ${when}. Reply here if you need changes.`
-      : rescheduleUrl
-        ? `Stonegate update: new appointment time ${when}. Need changes? ${rescheduleUrl}`
-        : `Stonegate update: new appointment time ${when}. Reply here if you need changes.`;
+      ? `Stonegate: You're booked for ${when}. Reply here if you need changes.`
+      : `Stonegate: Updated appointment to ${when}. Reply here if you need changes.`;
 
   let generated = null;
   if (rescheduleUrl) {
@@ -365,7 +361,7 @@ export async function sendEstimateConfirmation(
   }
 
   if (contact.phone) {
-    const smsBody = generated?.smsBody && generated.smsBody.length <= 320 ? generated.smsBody : fallbackSms;
+    const smsBody = fallbackSms;
     await sendSms(contact.phone, smsBody, { leadId: payload.leadId, appointmentId: appointment.id });
   }
 
