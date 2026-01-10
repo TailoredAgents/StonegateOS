@@ -226,6 +226,19 @@ function isReplyPlan(value: unknown): value is ReplyPlan {
   return true;
 }
 
+function stripDashLikeChars(text: string): string {
+  return text
+    .replace(/[-–—]/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function containsDashLikeChars(text: string): boolean {
+  return /[-–—]/.test(text);
+}
+
 const REPLY_SUGGESTION_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
@@ -445,6 +458,7 @@ export async function POST(
  Rules:
  - Sound like a helpful local office rep. No emojis. Keep it natural and human.
  - Be concise and specific; avoid filler.
+ - No bullet points, no numbered lists, no hyphens/dashes (do not use "-" "–" "—" anywhere in the customer message).
  - Ask for only the missing info needed to book: address (or ZIP), item details, and preferred timing.
  - If the customer is out of the service area, politely explain service area limits and offer a phone call.
  - Do NOT mention internal systems, databases, webhooks, or that you're an AI.
@@ -452,7 +466,7 @@ export async function POST(
 
  Business hours policy timezone: ${businessHours.timezone}
  Company notes: We can message any time, and we typically schedule jobs during business hours.
- `.trim();
+  `.trim();
 
   const contextLines = [
     `Channel: ${replyChannel}`,
@@ -529,6 +543,29 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     body: suggestionResult.value.body.trim(),
     subject: suggestionResult.value.subject.trim().length ? suggestionResult.value.subject.trim() : null
   };
+
+  if (containsDashLikeChars(suggestion.body) || (suggestion.subject && containsDashLikeChars(suggestion.subject))) {
+    const retryPrompt = `${userPrompt}\n\nIMPORTANT: Rewrite the reply with ZERO hyphen or dash characters of any kind. Do not use lists. Use only sentences.`;
+    const retry = await callOpenAIJsonSchema({
+      apiKey: config.apiKey,
+      model: config.writeModel,
+      systemPrompt,
+      userPrompt: retryPrompt,
+      maxOutputTokens: 800,
+      schemaName: "reply_suggestion",
+      schema: REPLY_SUGGESTION_SCHEMA
+    });
+
+    if (retry.ok && isReplySuggestion(retry.value)) {
+      suggestion.body = retry.value.body.trim();
+      suggestion.subject = retry.value.subject.trim().length ? retry.value.subject.trim() : null;
+    }
+  }
+
+  suggestion.body = stripDashLikeChars(suggestion.body);
+  if (suggestion.subject) {
+    suggestion.subject = stripDashLikeChars(suggestion.subject);
+  }
 
   if (!suggestion.body) {
     return NextResponse.json({ error: "openai_invalid_response" }, { status: 502 });
