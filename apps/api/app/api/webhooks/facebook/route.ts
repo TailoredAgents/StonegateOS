@@ -195,16 +195,18 @@ function parseLeadFormFilter(): Set<string> | null {
   return ids.length ? new Set(ids) : null;
 }
 
-function resolveFacebookToken(): { systemUserToken: string | null; pageTokenOverride: string | null } {
-  const pageToken = process.env["FB_PAGE_ACCESS_TOKEN"];
-  const systemUserToken =
+function resolveFacebookToken(): { systemUserToken: string | null; pageAccessToken: string | null } {
+  const pageAccessToken =
+    process.env["FB_PAGE_ACCESS_TOKEN"] ??
     process.env["FB_MESSENGER_ACCESS_TOKEN"] ??
-    process.env["FB_LEADGEN_ACCESS_TOKEN"] ??
+    null;
+  const systemUserToken =
     process.env["FB_MARKETING_ACCESS_TOKEN"] ??
+    process.env["FB_LEADGEN_ACCESS_TOKEN"] ??
     null;
   return {
     systemUserToken: systemUserToken && systemUserToken.trim().length > 0 ? systemUserToken.trim() : null,
-    pageTokenOverride: pageToken && pageToken.trim().length > 0 ? pageToken.trim() : null
+    pageAccessToken: pageAccessToken && pageAccessToken.trim().length > 0 ? pageAccessToken.trim() : null
   };
 }
 
@@ -240,8 +242,8 @@ async function fetchPageAccessToken(pageId: string, systemUserToken: string): Pr
 async function fetchSenderName(pageId: string | null, senderId: string | null): Promise<string | null> {
   if (!senderId) return null;
 
-  const { systemUserToken, pageTokenOverride } = resolveFacebookToken();
-  let accessToken: string | null = pageTokenOverride ?? null;
+  const { systemUserToken, pageAccessToken } = resolveFacebookToken();
+  let accessToken: string | null = pageAccessToken ?? null;
 
   if (!accessToken && pageId && systemUserToken) {
     accessToken = await fetchPageAccessToken(pageId, systemUserToken);

@@ -121,6 +121,22 @@ function extractNameFromText(body: string): string | null {
   return name;
 }
 
+function isMessengerFallbackName(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (!/^messenger\s+\d+$/i.test(trimmed)) return false;
+  return true;
+}
+
+function isMeaningfulName(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "unknown contact") return false;
+  if (isMessengerFallbackName(trimmed)) return false;
+  return true;
+}
+
 async function findContactByExternalAddress(
   db: DbExecutor,
   channel: InboundChannel,
@@ -425,10 +441,6 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
       if (!senderName && extractedName) {
         senderName = extractedName;
       }
-      if ((!senderName || senderName.trim().length === 0) && channel === "dm" && resolvedFromAddress) {
-        const suffix = resolvedFromAddress.length > 6 ? resolvedFromAddress.slice(-6) : resolvedFromAddress;
-        senderName = `Messenger ${suffix}`;
-      }
       const extractedEmail = extractEmailFromText(body);
       const extractedPhone = extractPhoneFromText(body);
       const extractedZip = extractUsZipFromText(body);
@@ -458,11 +470,10 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
           {};
 
         const nameCandidate = extractedName ?? senderName;
-        if (nameCandidate && nameCandidate.trim().toLowerCase() !== "unknown contact") {
+        if (nameCandidate && isMeaningfulName(nameCandidate)) {
           const isUnknownName = contact.firstName === "Unknown" && contact.lastName === "Contact";
           const isMessengerPlaceholder = contact.firstName === "Messenger" && /^\d+$/.test(contact.lastName.trim());
-          const allowOverwritePlaceholder = Boolean(extractedName) && isMessengerPlaceholder;
-          if (isUnknownName || allowOverwritePlaceholder) {
+          if (isUnknownName || isMessengerPlaceholder) {
             const name = resolveContactName(nameCandidate);
             updates.firstName = name.firstName;
             updates.lastName = name.lastName;
