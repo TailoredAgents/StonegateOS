@@ -44,6 +44,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       name: teamMembers.name,
       email: teamMembers.email,
       roleId: teamMembers.roleId,
+      defaultCrewSplitBps: teamMembers.defaultCrewSplitBps,
       active: teamMembers.active,
       createdAt: teamMembers.createdAt,
       updatedAt: teamMembers.updatedAt,
@@ -59,6 +60,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     name: row.name,
     email: row.email ?? null,
     phone: phoneMap[row.id] ?? null,
+    defaultCrewSplitBps: row.defaultCrewSplitBps ?? null,
     role: row.roleId
       ? {
           id: row.roleId,

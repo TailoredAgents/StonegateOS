@@ -30,6 +30,15 @@ function parseUsdToCents(value: unknown): number | null {
   return Math.round(parsed * 100);
 }
 
+function parsePercentToBps(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return null;
+  return Math.round(parsed * 100);
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   const jar = request.cookies;
   const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
@@ -77,6 +86,44 @@ export async function POST(request: NextRequest): Promise<Response> {
       return response;
     }
     payload["finalTotalCents"] = cents;
+
+    const soldByMemberId = formData.get("soldByMemberId");
+    if (typeof soldByMemberId === "string" && soldByMemberId.trim().length > 0) {
+      payload["soldByMemberId"] = soldByMemberId.trim();
+    }
+
+    const crewIds = formData.getAll("crewMemberId").filter((value): value is string => typeof value === "string");
+    if (crewIds.length > 0) {
+      const crewMembers: Array<{ memberId: string; splitBps: number }> = [];
+      let totalBps = 0;
+      for (const id of crewIds) {
+        const percentRaw = formData.get(`crewSplitPercent_${id}`);
+        const bps = parsePercentToBps(percentRaw);
+        if (bps === null) {
+          const response = NextResponse.redirect(redirectTo, 303);
+          response.cookies.set({
+            name: "myst-flash-error",
+            value: "Crew split % is required for each selected crew member.",
+            path: "/"
+          });
+          return response;
+        }
+        totalBps += bps;
+        crewMembers.push({ memberId: id, splitBps: bps });
+      }
+
+      if (totalBps !== 10000) {
+        const response = NextResponse.redirect(redirectTo, 303);
+        response.cookies.set({
+          name: "myst-flash-error",
+          value: "Crew split % must add up to 100.",
+          path: "/"
+        });
+        return response;
+      }
+
+      payload["crewMembers"] = crewMembers;
+    }
   }
 
   const apiResponse = await callAdminApi(`/api/appointments/${appointmentId.trim()}/status`, {

@@ -1827,6 +1827,26 @@ export async function updateTeamMemberAction(formData: FormData) {
     payload["phone"] = phone.trim().length > 0 ? phone.trim() : null;
   }
 
+  const defaultCrewSplitPercent = formData.get("defaultCrewSplitPercent");
+  if (typeof defaultCrewSplitPercent === "string") {
+    const trimmed = defaultCrewSplitPercent.trim();
+    if (trimmed.length === 0) {
+      payload["defaultCrewSplitBps"] = null;
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+        jar.set({
+          name: "myst-flash-error",
+          value: "Crew split % must be between 0 and 100",
+          path: "/"
+        });
+        revalidatePath("/team");
+        return;
+      }
+      payload["defaultCrewSplitBps"] = Math.round(parsed * 100);
+    }
+  }
+
   const response = await callAdminApi(`/api/admin/team/members/${memberId}`, {
     method: "PATCH",
     body: JSON.stringify(payload)

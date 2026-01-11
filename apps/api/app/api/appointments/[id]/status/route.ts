@@ -2,18 +2,29 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { getDb, appointments, leads, outboxEvents } from "@/db";
+import { getDb, appointmentCrewMembers, appointments, leads, outboxEvents } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
+import { recalculateAppointmentCommissions } from "@/lib/commissions";
 
 const StatusSchema = z.object({
   status: z.enum(["requested", "confirmed", "completed", "no_show", "canceled"]),
   crew: z.string().optional().nullable(),
   owner: z.string().optional().nullable(),
+  soldByMemberId: z.string().uuid().optional().nullable(),
+  marketingMemberId: z.string().uuid().optional().nullable(),
   finalTotalCents: z.number().int().nonnegative().optional(),
-  finalTotalSameAsQuoted: z.boolean().optional()
+  finalTotalSameAsQuoted: z.boolean().optional(),
+  crewMembers: z
+    .array(
+      z.object({
+        memberId: z.string().uuid(),
+        splitBps: z.number().int().min(0).max(10000)
+      })
+    )
+    .optional()
 });
 
 export async function POST(
@@ -44,8 +55,11 @@ export async function POST(
   const status = parsed.data.status;
   const crew = parsed.data.crew;
   const owner = parsed.data.owner;
+  const soldByMemberId = parsed.data.soldByMemberId;
+  const marketingMemberId = parsed.data.marketingMemberId;
   const finalTotalCentsInput = parsed.data.finalTotalCents;
   const finalTotalSameAsQuoted = parsed.data.finalTotalSameAsQuoted === true;
+  const crewMembers = parsed.data.crewMembers;
 
   const [existing] = await db
     .select({
@@ -53,7 +67,9 @@ export async function POST(
       leadId: appointments.leadId,
       calendarEventId: appointments.calendarEventId,
       quotedTotalCents: appointments.quotedTotalCents,
-      finalTotalCents: appointments.finalTotalCents
+      finalTotalCents: appointments.finalTotalCents,
+      completedAt: appointments.completedAt,
+      status: appointments.status
     })
     .from(appointments)
     .where(eq(appointments.id, appointmentId))
@@ -72,24 +88,67 @@ export async function POST(
     }
   }
 
-  const [updated] = await db
-    .update(appointments)
-    .set({
-      status,
-      ...(crew !== undefined ? { crew: crew ?? null } : {}),
-      ...(owner !== undefined ? { owner: owner ?? null } : {}),
-      ...(finalTotalCentsToSet !== undefined ? { finalTotalCents: finalTotalCentsToSet } : {}),
-      updatedAt: new Date()
-    })
-    .where(eq(appointments.id, appointmentId))
-    .returning({
-      id: appointments.id,
-      leadId: appointments.leadId,
-      calendarEventId: appointments.calendarEventId
-    });
+  const becameCompleted = existing.status !== "completed" && status === "completed";
+  const leavingCompleted = existing.status === "completed" && status !== "completed";
+
+  const completedAtToSet =
+    leavingCompleted ? null : becameCompleted ? new Date() : existing.completedAt ?? undefined;
+
+  const needsRecalc =
+    status === "completed" &&
+    (becameCompleted ||
+      finalTotalCentsToSet !== undefined ||
+      soldByMemberId !== undefined ||
+      marketingMemberId !== undefined ||
+      crewMembers !== undefined);
+
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(appointments)
+      .set({
+        status,
+        ...(crew !== undefined ? { crew: crew ?? null } : {}),
+        ...(owner !== undefined ? { owner: owner ?? null } : {}),
+        ...(soldByMemberId !== undefined ? { soldByMemberId: soldByMemberId ?? null } : {}),
+        ...(marketingMemberId !== undefined ? { marketingMemberId: marketingMemberId ?? null } : {}),
+        ...(finalTotalCentsToSet !== undefined ? { finalTotalCents: finalTotalCentsToSet } : {}),
+        ...(completedAtToSet !== undefined ? { completedAt: completedAtToSet } : {}),
+        updatedAt: new Date()
+      })
+      .where(eq(appointments.id, appointmentId))
+      .returning({
+        id: appointments.id,
+        leadId: appointments.leadId,
+        calendarEventId: appointments.calendarEventId
+      });
+
+    if (!row) {
+      return null;
+    }
+
+    if (crewMembers !== undefined) {
+      await tx.delete(appointmentCrewMembers).where(eq(appointmentCrewMembers.appointmentId, appointmentId));
+      if (crewMembers.length > 0) {
+        await tx.insert(appointmentCrewMembers).values(
+          crewMembers.map((entry) => ({
+            appointmentId,
+            memberId: entry.memberId,
+            splitBps: entry.splitBps,
+            createdAt: new Date()
+          }))
+        );
+      }
+    }
+
+    return row;
+  });
 
   if (!updated) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
+  if (needsRecalc || leavingCompleted) {
+    await recalculateAppointmentCommissions(db, appointmentId);
   }
 
   if (updated.calendarEventId && status === "canceled") {
@@ -121,7 +180,10 @@ export async function POST(
     meta: {
       status,
       leadId: updated.leadId ?? null,
-      ...(finalTotalCentsToSet !== undefined ? { finalTotalCents: finalTotalCentsToSet } : {})
+      ...(finalTotalCentsToSet !== undefined ? { finalTotalCents: finalTotalCentsToSet } : {}),
+      ...(soldByMemberId !== undefined ? { soldByMemberId } : {}),
+      ...(marketingMemberId !== undefined ? { marketingMemberId } : {}),
+      ...(crewMembers !== undefined ? { crewMembersCount: crewMembers.length } : {})
     }
   });
 

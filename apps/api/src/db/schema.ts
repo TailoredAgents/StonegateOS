@@ -31,6 +31,8 @@ export const appointmentStatusEnum = pgEnum("appointment_status", [
   "no_show",
   "canceled"
 ]);
+export const commissionRoleEnum = pgEnum("commission_role", ["sales", "marketing", "crew"]);
+export const payoutRunStatusEnum = pgEnum("payout_run_status", ["draft", "locked", "paid"]);
 export const auditActorTypeEnum = pgEnum("audit_actor_type", ["human", "ai", "system", "worker"]);
 export const conversationChannelEnum = pgEnum("conversation_channel", [
   "sms",
@@ -94,6 +96,7 @@ export const contacts = pgTable(
     email: text("email"),
     phone: varchar("phone", { length: 32 }),
     phoneE164: varchar("phone_e164", { length: 32 }),
+    salespersonMemberId: uuid("salesperson_member_id"),
     preferredContactMethod: text("preferred_contact_method").default("phone"),
     source: text("source"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -255,6 +258,7 @@ export const teamMembers = pgTable(
     email: text("email"),
     roleId: uuid("role_id").references(() => teamRoles.id, { onDelete: "set null" }),
     active: boolean("active").default(true).notNull(),
+    defaultCrewSplitBps: integer("default_crew_split_bps"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
@@ -560,9 +564,12 @@ export const appointments = pgTable(
     status: appointmentStatusEnum("status").default("requested").notNull(),
     quotedTotalCents: integer("quoted_total_cents"),
     finalTotalCents: integer("final_total_cents"),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
     calendarEventId: text("calendar_event_id"),
     crew: text("crew"),
     owner: text("owner"),
+    soldByMemberId: uuid("sold_by_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    marketingMemberId: uuid("marketing_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
     rescheduleToken: varchar("reschedule_token", { length: 64 }).notNull(),
     travelBufferMinutes: integer("travel_buffer_min").default(30).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -634,6 +641,132 @@ export const appointmentAttachments = pgTable(
   },
   (table) => ({
     appointmentIdx: index("appointment_attachments_appointment_idx").on(table.appointmentId)
+  })
+);
+
+export const commissionSettings = pgTable("commission_settings", {
+  key: text("key").primaryKey(),
+  timezone: text("timezone").default("America/New_York").notNull(),
+  payoutWeekday: integer("payout_weekday").default(5).notNull(),
+  payoutHour: integer("payout_hour").default(12).notNull(),
+  payoutMinute: integer("payout_minute").default(0).notNull(),
+  salesRateBps: integer("sales_rate_bps").default(750).notNull(),
+  marketingRateBps: integer("marketing_rate_bps").default(1000).notNull(),
+  crewPoolRateBps: integer("crew_pool_rate_bps").default(2500).notNull(),
+  marketingMemberId: uuid("marketing_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+  updatedBy: uuid("updated_by").references(() => teamMembers.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date())
+});
+
+export const appointmentCrewMembers = pgTable(
+  "appointment_crew_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "restrict" }),
+    splitBps: integer("split_bps").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    apptIdx: index("appointment_crew_members_appt_idx").on(table.appointmentId),
+    uniqueIdx: uniqueIndex("appointment_crew_members_unique").on(table.appointmentId, table.memberId)
+  })
+);
+
+export const appointmentCommissions = pgTable(
+  "appointment_commissions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    role: commissionRoleEnum("role").notNull(),
+    baseCents: integer("base_cents").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    meta: jsonb("meta").$type<Record<string, unknown> | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    apptIdx: index("appointment_commissions_appt_idx").on(table.appointmentId),
+    memberIdx: index("appointment_commissions_member_idx").on(table.memberId),
+    uniqueIdx: uniqueIndex("appointment_commissions_unique").on(table.appointmentId, table.role, table.memberId)
+  })
+);
+
+export const payoutRuns = pgTable(
+  "payout_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    timezone: text("timezone").notNull(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    scheduledPayoutAt: timestamp("scheduled_payout_at", { withTimezone: true }).notNull(),
+    status: payoutRunStatusEnum("status").default("draft").notNull(),
+    createdBy: uuid("created_by").references(() => teamMembers.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    paidAt: timestamp("paid_at", { withTimezone: true })
+  },
+  (table) => ({
+    periodIdx: index("payout_runs_period_idx").on(table.periodStart, table.periodEnd),
+    statusIdx: index("payout_runs_status_idx").on(table.status)
+  })
+);
+
+export const payoutRunLines = pgTable(
+  "payout_run_lines",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    payoutRunId: uuid("payout_run_id")
+      .notNull()
+      .references(() => payoutRuns.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    salesCents: integer("sales_cents").default(0).notNull(),
+    marketingCents: integer("marketing_cents").default(0).notNull(),
+    crewCents: integer("crew_cents").default(0).notNull(),
+    adjustmentsCents: integer("adjustments_cents").default(0).notNull(),
+    totalCents: integer("total_cents").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    runIdx: index("payout_run_lines_run_idx").on(table.payoutRunId),
+    memberIdx: index("payout_run_lines_member_idx").on(table.memberId),
+    uniqueIdx: uniqueIndex("payout_run_lines_unique").on(table.payoutRunId, table.memberId)
+  })
+);
+
+export const payoutRunAdjustments = pgTable(
+  "payout_run_adjustments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    payoutRunId: uuid("payout_run_id")
+      .notNull()
+      .references(() => payoutRuns.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    amountCents: integer("amount_cents").notNull(),
+    note: text("note"),
+    createdBy: uuid("created_by").references(() => teamMembers.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    runIdx: index("payout_run_adjustments_run_idx").on(table.payoutRunId)
   })
 );
 

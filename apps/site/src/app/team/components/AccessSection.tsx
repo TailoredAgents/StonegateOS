@@ -16,6 +16,7 @@ type TeamMember = {
   name: string;
   email: string | null;
   phone: string | null;
+  defaultCrewSplitBps: number | null;
   active: boolean;
   role: {
     id: string;
@@ -142,6 +143,13 @@ export async function AccessSection(): Promise<React.ReactElement> {
                     defaultValue={member.phone ?? ""}
                     placeholder="SMS phone (E.164, e.g. +16785551234)"
                     className="min-w-[240px] flex-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                  />
+                  <input
+                    name="defaultCrewSplitPercent"
+                    defaultValue={member.defaultCrewSplitBps !== null ? String(member.defaultCrewSplitBps / 100) : ""}
+                    placeholder="Crew split % (e.g. 50)"
+                    inputMode="decimal"
+                    className="w-[170px] rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
                   />
                   <SubmitButton
                     className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"

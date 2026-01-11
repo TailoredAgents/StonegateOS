@@ -50,11 +50,22 @@ interface AppointmentDto {
   notes: Array<{ id: string; body: string; createdAt: string }>;
 }
 
+type TeamMemberDto = {
+  id: string;
+  name: string;
+  defaultCrewSplitBps: number | null;
+};
+
 export async function MyDaySection(): Promise<ReactElement> {
   let appts: AppointmentDto[] = [];
   let loadError: string | null = null;
+  let teamMembers: TeamMemberDto[] = [];
   try {
-    const res = await callAdminApi("/api/appointments?status=confirmed");
+    const [res, membersRes] = await Promise.all([
+      callAdminApi("/api/appointments?status=confirmed"),
+      callAdminApi("/api/admin/team/directory")
+    ]);
+
     if (!res.ok) {
       loadError = `Appointments request failed (HTTP ${res.status})`;
     } else {
@@ -64,6 +75,11 @@ export async function MyDaySection(): Promise<ReactElement> {
         const bx = b.startAt ? Date.parse(b.startAt) : 0;
         return ax - bx;
       });
+    }
+
+    if (membersRes.ok) {
+      const payload = (await membersRes.json()) as { members?: TeamMemberDto[] };
+      teamMembers = payload.members ?? [];
     }
   } catch (error) {
     loadError = `Appointments request error: ${(error as Error).message}`;
@@ -157,6 +173,52 @@ export async function MyDaySection(): Promise<ReactElement> {
                     className="w-40 rounded-md border border-neutral-300 px-2 py-1 text-xs"
                   />
                 </label>
+                <details className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
+                  <summary className="cursor-pointer select-none font-medium">Commissions</summary>
+                  <div className="mt-2 flex flex-col gap-2">
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] text-neutral-600">Sold by</span>
+                      <select
+                        name="soldByMemberId"
+                        defaultValue=""
+                        className="w-48 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                      >
+                        <option value="">(Not set)</option>
+                        {teamMembers.map((member) => (
+                          <option key={member.id} value={member.id}>
+                            {member.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="text-[11px] text-neutral-600">Crew split (must total 100%)</div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {teamMembers.map((member) => (
+                        <label
+                          key={member.id}
+                          className="flex items-center gap-2 rounded-md border border-neutral-200 bg-white px-2 py-1"
+                        >
+                          <input
+                            type="checkbox"
+                            name="crewMemberId"
+                            value={member.id}
+                            className="h-4 w-4 rounded border-neutral-300"
+                          />
+                          <span className="flex-1 text-xs">{member.name}</span>
+                          <input
+                            name={`crewSplitPercent_${member.id}`}
+                            defaultValue={
+                              member.defaultCrewSplitBps !== null ? String(member.defaultCrewSplitBps / 100) : ""
+                            }
+                            inputMode="decimal"
+                            placeholder="%"
+                            className="w-16 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </details>
                 <SubmitButton className="rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white hover:bg-primary-700" pendingLabel="Saving...">
                   Mark complete
                 </SubmitButton>

@@ -53,6 +53,7 @@ export async function PATCH(
     roleId?: string | null;
     active?: boolean;
     phone?: string | null;
+    defaultCrewSplitBps?: number | null;
   } | null;
 
   if (!payload || typeof payload !== "object") {
@@ -75,6 +76,19 @@ export async function PATCH(
   }
   if (typeof payload.active === "boolean") {
     updates["active"] = payload.active;
+  }
+  if (payload.defaultCrewSplitBps !== undefined) {
+    if (payload.defaultCrewSplitBps === null) {
+      updates["defaultCrewSplitBps"] = null;
+    } else if (typeof payload.defaultCrewSplitBps === "number") {
+      const value = Math.round(payload.defaultCrewSplitBps);
+      if (!Number.isFinite(value) || value < 0 || value > 10000) {
+        return NextResponse.json({ error: "invalid_default_crew_split" }, { status: 400 });
+      }
+      updates["defaultCrewSplitBps"] = value;
+    } else {
+      return NextResponse.json({ error: "invalid_default_crew_split" }, { status: 400 });
+    }
   }
 
   if (payload.phone !== undefined) {
