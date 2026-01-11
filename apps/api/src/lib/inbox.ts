@@ -16,6 +16,19 @@ import { recordAuditEvent } from "@/lib/audit";
 
 const OPEN_THREAD_STATUSES = ["open", "pending"] as const;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractPgCode(error: unknown): string | null {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  if (directCode) return directCode;
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  return causeCode;
+}
+
 export type InboundChannel = "sms" | "email" | "dm" | "call" | "web";
 
 export type InboundMessageInput = {
@@ -218,24 +231,52 @@ async function createContact(input: {
   source?: string;
 }): Promise<ContactMatch> {
   const db = input.db;
-  const [created] = await db
-    .insert(contacts)
-    .values({
-      firstName: input.firstName,
-      lastName: input.lastName,
-      email: input.email ?? null,
-      phone: input.phone ?? null,
-      phoneE164: input.phoneE164 ?? null,
-      source: input.source ?? "inbound"
-    })
-    .returning({
-      id: contacts.id,
-      firstName: contacts.firstName,
-      lastName: contacts.lastName,
-      email: contacts.email,
-      phone: contacts.phone,
-      phoneE164: contacts.phoneE164
-    });
+
+  const returning = {
+    id: contacts.id,
+    firstName: contacts.firstName,
+    lastName: contacts.lastName,
+    email: contacts.email,
+    phone: contacts.phone,
+    phoneE164: contacts.phoneE164
+  } as const;
+
+  let created: ContactMatch | undefined;
+  try {
+    const [row] = await db
+      .insert(contacts)
+      .values({
+        firstName: input.firstName,
+        lastName: input.lastName,
+        email: input.email ?? null,
+        phone: input.phone ?? null,
+        phoneE164: input.phoneE164 ?? null,
+        source: input.source ?? "inbound"
+      })
+      .returning(returning);
+    created = row;
+  } catch (error) {
+    const code = extractPgCode(error);
+    if (code !== "42703") {
+      throw error;
+    }
+
+    const rows = await (db as any).execute(
+      sql`
+        insert into "contacts" ("first_name", "last_name", "email", "phone", "phone_e164", "source")
+        values (${input.firstName}, ${input.lastName}, ${input.email ?? null}, ${input.phone ?? null}, ${input.phoneE164 ?? null}, ${input.source ?? "inbound"})
+        returning "id"
+      `
+    );
+
+    const insertedId = Array.isArray(rows) ? (rows[0] as any)?.id : null;
+    if (typeof insertedId !== "string" || !insertedId) {
+      throw new Error("contact_create_failed");
+    }
+
+    const [selected] = await db.select(returning).from(contacts).where(eq(contacts.id, insertedId)).limit(1);
+    created = selected ?? undefined;
+  }
 
   if (!created) {
     throw new Error("contact_create_failed");

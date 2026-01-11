@@ -14,6 +14,19 @@ const DEFAULT_PLACEHOLDER_CITY = "Unknown";
 const DEFAULT_PLACEHOLDER_STATE = "NA";
 const DEFAULT_PLACEHOLDER_POSTAL = "00000";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractPgCode(error: unknown): string | null {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  if (directCode) return directCode;
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  return causeCode;
+}
+
 type FacebookMessageAttachment = {
   type?: string;
   payload?: { url?: string };
@@ -375,17 +388,37 @@ async function upsertFacebookContact(db: DbExecutor, input: {
     return { id: contact.id };
   }
 
-  const [created] = await db
-    .insert(contacts)
-    .values({
-      firstName: input.firstName,
-      lastName: input.lastName,
-      email,
-      phone: phoneRaw ?? null,
-      phoneE164: phoneE164 ?? null,
-      source: "facebook_lead"
-    })
-    .returning({ id: contacts.id });
+  let created: { id: string } | undefined;
+  try {
+    const [row] = await db
+      .insert(contacts)
+      .values({
+        firstName: input.firstName,
+        lastName: input.lastName,
+        email,
+        phone: phoneRaw ?? null,
+        phoneE164: phoneE164 ?? null,
+        source: "facebook_lead"
+      })
+      .returning({ id: contacts.id });
+    created = row;
+  } catch (error) {
+    const code = extractPgCode(error);
+    if (code !== "42703") {
+      throw error;
+    }
+
+    const rows = await db.execute(
+      sql`
+        insert into "contacts" ("first_name", "last_name", "email", "phone", "phone_e164", "source")
+        values (${input.firstName}, ${input.lastName}, ${email ?? null}, ${phoneRaw ?? null}, ${phoneE164 ?? null}, ${"facebook_lead"})
+        returning "id"
+      `
+    );
+
+    const insertedId = Array.isArray(rows) ? (rows[0] as any)?.id : null;
+    created = typeof insertedId === "string" && insertedId ? { id: insertedId } : undefined;
+  }
 
   if (!created?.id) {
     throw new Error("facebook_contact_failed");

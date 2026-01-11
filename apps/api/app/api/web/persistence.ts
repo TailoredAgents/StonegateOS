@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { contacts, properties } from "@/db";
 import type { DatabaseClient } from "@/db";
 import type { InferModel } from "drizzle-orm";
@@ -32,6 +32,19 @@ type ContactRecordCompat = Omit<ContactRecord, "salespersonMemberId">;
 
 function toContactRecord(row: ContactRecordCompat): ContactRecord {
   return { ...row, salespersonMemberId: null } as ContactRecord;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractPgCode(error: unknown): string | null {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  if (directCode) return directCode;
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  return causeCode;
 }
 
 interface UpsertContactInput {
@@ -94,17 +107,41 @@ export async function upsertContact(
     return toContactRecord(updated);
   }
 
-  const [inserted] = await db
-    .insert(contacts)
-    .values({
-      firstName: input.firstName,
-      lastName: input.lastName,
-      phone: input.phoneRaw,
-      phoneE164: input.phoneE164,
-      email,
-      source: input.source ?? "web"
-    })
-    .returning(CONTACT_SELECT);
+  let inserted: ContactRecordCompat | undefined;
+  try {
+    const [row] = await db
+      .insert(contacts)
+      .values({
+        firstName: input.firstName,
+        lastName: input.lastName,
+        phone: input.phoneRaw,
+        phoneE164: input.phoneE164,
+        email,
+        source: input.source ?? "web"
+      })
+      .returning(CONTACT_SELECT);
+    inserted = row;
+  } catch (error) {
+    const code = extractPgCode(error);
+    if (code !== "42703") {
+      throw error;
+    }
+
+    const rows = await (db as any).execute(
+      sql`
+        insert into "contacts" ("first_name", "last_name", "phone", "phone_e164", "email", "source")
+        values (${input.firstName}, ${input.lastName}, ${input.phoneRaw}, ${input.phoneE164}, ${email ?? null}, ${input.source ?? "web"})
+        returning "id"
+      `
+    );
+    const insertedId = Array.isArray(rows) ? (rows[0] as any)?.id : null;
+    if (typeof insertedId !== "string" || !insertedId) {
+      throw new Error("contact_insert_failed");
+    }
+
+    const [selected] = await db.select(CONTACT_SELECT).from(contacts).where(eq(contacts.id, insertedId)).limit(1);
+    inserted = selected ?? undefined;
+  }
 
   if (!inserted) {
     throw new Error("contact_insert_failed");
