@@ -413,8 +413,14 @@ export async function createContactAction(formData: FormData) {
   if (!response.ok) {
     let message = "Unable to create contact";
     try {
-      const data = (await response.json()) as { error?: string };
-      if (data.error) {
+      const data = (await response.json()) as {
+        error?: string;
+        existingContact?: { firstName?: string | null; lastName?: string | null } | null;
+      };
+      if (data.error === "contact_already_exists") {
+        const existingName = `${data.existingContact?.firstName ?? ""} ${data.existingContact?.lastName ?? ""}`.trim();
+        message = existingName.length > 0 ? `Contact already exists (${existingName}).` : "Contact already exists.";
+      } else if (data.error) {
         message = data.error.replace(/_/g, " ");
       }
     } catch {

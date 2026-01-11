@@ -52,6 +52,23 @@ function sanitizeSearchTerm(term: string): string {
   return term.replace(/[%_]/g, "\\$&").replace(/\s+/g, " ").trim();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractPgMeta(error: unknown): { code?: string; constraint?: string } {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : undefined;
+  const directConstraint =
+    direct && typeof direct["constraint_name"] === "string" ? direct["constraint_name"] : undefined;
+  if (directCode || directConstraint) return { code: directCode, constraint: directConstraint };
+
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : undefined;
+  const causeConstraint = cause && typeof cause["constraint_name"] === "string" ? cause["constraint_name"] : undefined;
+  return { code: causeCode, constraint: causeConstraint };
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -548,6 +565,45 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
     });
   } catch (error) {
+    const meta = extractPgMeta(error);
+    if (meta.code === "23505") {
+      const normalizedEmail = typeof email === "string" && email.trim().length ? email.trim() : null;
+      const normalizedPhoneRaw = typeof phone === "string" && phone.trim().length ? phone.trim() : null;
+      const normalizedPhoneE164 = normalizedPhone?.e164 ?? null;
+
+      const conditions: SQL[] = [];
+      if (normalizedEmail) conditions.push(eq(contacts.email, normalizedEmail));
+      if (normalizedPhoneE164) conditions.push(eq(contacts.phoneE164, normalizedPhoneE164));
+      if (normalizedPhoneRaw) conditions.push(eq(contacts.phone, normalizedPhoneRaw));
+
+      const whereClause =
+        conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : or(...conditions);
+
+      const existing = whereClause
+        ? await db
+            .select({
+              id: contacts.id,
+              firstName: contacts.firstName,
+              lastName: contacts.lastName,
+              email: contacts.email,
+              phone: contacts.phone,
+              phoneE164: contacts.phoneE164
+            })
+            .from(contacts)
+            .where(whereClause)
+            .limit(1)
+            .then((rows) => rows[0] ?? null)
+        : null;
+
+      return NextResponse.json(
+        {
+          error: "contact_already_exists",
+          existingContact: existing
+        },
+        { status: 409 }
+      );
+    }
+
     const message = error instanceof Error ? error.message : "contact_create_failed";
     const status = message === "contact_insert_failed" ? 500 : 400;
     return NextResponse.json({ error: message }, { status });
