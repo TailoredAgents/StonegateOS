@@ -177,13 +177,14 @@ export async function POST(request: NextRequest) {
       standardPolicy,
       itemPolicy
     );
-    if (!evaluation.isStandard) {
-      return corsJson(
-        { error: "non_standard_job", message: buildStandardJobMessage(evaluation) },
-        requestOrigin,
-        { status: 400 }
-      );
-    }
+
+    const standardJobReview = evaluation.isStandard
+      ? null
+      : {
+          required: true,
+          message: buildStandardJobMessage(evaluation),
+          evaluation
+        };
 
     const travelBufferMinutes =
       typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
@@ -504,7 +505,8 @@ export async function POST(request: NextRequest) {
             travelBufferMinutes,
             timezone: schedulingZone,
             notes
-          }
+          },
+          standardJobReview
         } satisfies Record<string, unknown>;
 
         const [updatedLead] = await tx
@@ -548,6 +550,7 @@ export async function POST(request: NextRequest) {
               jobTypes: quote.jobTypes,
               photoUrls: quote.photoUrls,
               aiResult: quote.aiResult,
+              standardJobReview,
               booking: {
                 startAt: startAt.toISOString(),
                 durationMinutes,
@@ -730,7 +733,13 @@ export async function POST(request: NextRequest) {
     });
 
     return corsJson(
-      { ok: true, leadId: leadResult.leadId, appointmentId: leadResult.appointmentId, startAt: leadResult.startAt },
+      {
+        ok: true,
+        leadId: leadResult.leadId,
+        appointmentId: leadResult.appointmentId,
+        startAt: leadResult.startAt,
+        standardJobReview
+      },
       requestOrigin
     );
   } catch (error) {

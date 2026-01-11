@@ -173,17 +173,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       standardPolicy,
       itemPolicy
     );
-    if (!evaluation.isStandard) {
-      return corsJson(
-        {
-          ok: false,
-          error: "non_standard_job",
-          message: buildStandardJobMessage(evaluation)
-        },
-        requestOrigin,
-        { status: 400 }
-      );
-    }
+
+    const standardJobReview = evaluation.isStandard
+      ? null
+      : {
+          required: true,
+          message: buildStandardJobMessage(evaluation),
+          evaluation
+        };
 
     const durationMinutes = deriveDurationMinutes(quote);
     const travelBufferMinutes =
@@ -364,7 +361,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       return { holdId: created.id, expiresAt: created.expiresAt.toISOString() };
     });
 
-    return corsJson({ ok: true, ...holdResult }, requestOrigin);
+    return corsJson({ ok: true, ...holdResult, standardJobReview }, requestOrigin);
   } catch (error) {
     if (error instanceof HoldError) {
       return corsJson({ ok: false, error: error.code }, requestOrigin, { status: error.status });

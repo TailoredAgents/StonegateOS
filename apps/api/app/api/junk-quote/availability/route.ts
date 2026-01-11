@@ -253,17 +253,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       standardPolicy,
       itemPolicy
     );
-    if (!evaluation.isStandard) {
-      return corsJson(
-        {
-          ok: false,
-          error: "non_standard_job",
-          message: buildStandardJobMessage(evaluation)
-        },
-        requestOrigin,
-        { status: 400 }
-      );
-    }
+
+    const standardJobReview = evaluation.isStandard
+      ? null
+      : {
+          required: true,
+          message: buildStandardJobMessage(evaluation),
+          evaluation
+        };
 
     const durationInfo = deriveDurationMinutes(quote);
     const durationMinutes = durationInfo.durationMinutes;
@@ -462,7 +459,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         capacity,
         slotIntervalMinutes: SLOT_INTERVAL_MIN,
         suggestions: merged,
-        days
+        days,
+        standardJobReview
       },
       requestOrigin
     );

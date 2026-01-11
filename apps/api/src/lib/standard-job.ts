@@ -281,16 +281,16 @@ export function evaluateStandardJob(
 export function buildStandardJobMessage(evaluation: StandardJobEvaluation): string {
   if (evaluation.declinedItems.length > 0) {
     const list = evaluation.declinedItems.join(", ");
-    return `We cannot take: ${list}. Please call to confirm options.`;
+    return `We may not be able to take: ${list}. We'll confirm options by text.`;
   }
   if (evaluation.reasons.includes("volume_exceeds_limit") || evaluation.reasons.includes("item_count_exceeds_limit")) {
-    return "This job is larger than our instant-booking limit. Please call to confirm.";
+    return "This job looks larger than average. We'll confirm details by text.";
   }
   if (evaluation.reasons.includes("service_not_allowed")) {
-    return "This request needs a quick review before we book. Please call to confirm.";
+    return "This request needs a quick review. We'll confirm details by text.";
   }
   if (evaluation.reasons.includes("needs_in_person_estimate")) {
-    return "We need a quick review before booking. Please call to confirm.";
+    return "We may need a quick review before booking. We'll confirm details by text.";
   }
-  return "This request needs a quick review. Please call to confirm.";
+  return "This request needs a quick review. We'll confirm details by text.";
 }
