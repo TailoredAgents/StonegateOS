@@ -125,7 +125,7 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
             />
           </label>
           <label className="flex flex-col gap-1 text-sm text-slate-600">
-            <span>Sold by</span>
+            <span>Assigned to</span>
             <select
               name="salespersonMemberId"
               defaultValue=""

@@ -72,6 +72,8 @@ type ContactCardProps = {
 function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [contactState, setContactState] = useState<ContactSummary>(contact);
   const [editingContact, setEditingContact] = useState(false);
+  const [assigneeSaving, setAssigneeSaving] = useState(false);
+  const [assigneeError, setAssigneeError] = useState<string | null>(null);
   const [showBookingForm, setShowBookingForm] = useState(false);
   const [bookingStartAtIso, setBookingStartAtIso] = useState<string>("");
   const [addingProperty, setAddingProperty] = useState(false);
@@ -94,6 +96,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
     setContactState(contact);
     if (contactIdRef.current !== contact.id) {
       contactIdRef.current = contact.id;
+      setAssigneeSaving(false);
+      setAssigneeError(null);
       setShowNoteForm(false);
       setNoteDraft("");
       setNoteError(null);
@@ -118,6 +122,42 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
     contactState.salespersonMemberId && teamMembers.length
       ? teamMembers.find((m) => m.id === contactState.salespersonMemberId)?.name ?? null
       : null;
+
+  async function setAssignee(nextMemberId: string | null) {
+    if (assigneeSaving) return;
+    setAssigneeSaving(true);
+    setAssigneeError(null);
+    try {
+      const response = await fetch("/api/team/contacts/assignee", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          contactId: contactState.id,
+          salespersonMemberId: nextMemberId
+        })
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as unknown;
+        const message =
+          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+            ? String((data as Record<string, unknown>)["message"])
+            : "Unable to update assignment. Please try again.";
+        setAssigneeError(message);
+        return;
+      }
+
+      setContactState((prev) => ({
+        ...prev,
+        salespersonMemberId: nextMemberId
+      }));
+    } finally {
+      setAssigneeSaving(false);
+    }
+  }
 
   const sortedNotes = useMemo(() => {
     return [...(contactState.notes ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
@@ -424,9 +464,34 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">{contactState.phone}</span>
               ) : null}
               <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">
-                Sold by: {salespersonLabel ?? "Unassigned"}
+                Assigned to: {salespersonLabel ?? "Unassigned"}
               </span>
             </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <span className="text-[11px] font-medium text-slate-500">Assigned to</span>
+              <select
+                value={contactState.salespersonMemberId ?? ""}
+                disabled={assigneeSaving}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200 disabled:cursor-not-allowed disabled:opacity-70"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  void setAssignee(value.trim().length > 0 ? value : null);
+                }}
+              >
+                <option value="">(Unassigned)</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+              {assigneeSaving ? <span className="text-[11px] text-slate-500">Saving…</span> : null}
+            </div>
+            {assigneeError ? (
+              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                {assigneeError}
+              </p>
+            ) : null}
             <div className="flex flex-wrap gap-3 text-xs text-slate-500">
               <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">
                 Appointments: {contactState.stats.appointments}
@@ -558,7 +623,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 <input name="phone" defaultValue={contactState.phone ?? ""} className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
               </label>
               <label className="flex flex-col gap-1 sm:col-span-2">
-                <span>Sold by</span>
+                <span>Assigned to</span>
                 <select
                   name="salespersonMemberId"
                   defaultValue={contactState.salespersonMemberId ?? ""}
