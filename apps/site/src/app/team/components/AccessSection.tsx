@@ -26,23 +26,32 @@ type TeamMember = {
 };
 
 export async function AccessSection(): Promise<React.ReactElement> {
-  const [rolesRes, membersRes] = await Promise.all([
-    callAdminApi("/api/admin/roles"),
-    callAdminApi("/api/admin/team/members")
-  ]);
+  let roles: Role[] = [];
+  let members: TeamMember[] = [];
+  let loadError: string | null = null;
 
-  if (!rolesRes.ok) {
-    throw new Error("Failed to load roles");
+  try {
+    const [rolesRes, membersRes] = await Promise.all([
+      callAdminApi("/api/admin/roles"),
+      callAdminApi("/api/admin/team/members")
+    ]);
+
+    if (!rolesRes.ok) {
+      loadError = `Failed to load roles (HTTP ${rolesRes.status})`;
+    } else {
+      const rolesPayload = (await rolesRes.json()) as { roles?: Role[] };
+      roles = rolesPayload.roles ?? [];
+    }
+
+    if (!membersRes.ok) {
+      loadError = loadError ?? `Failed to load team members (HTTP ${membersRes.status})`;
+    } else {
+      const membersPayload = (await membersRes.json()) as { members?: TeamMember[] };
+      members = membersPayload.members ?? [];
+    }
+  } catch (error) {
+    loadError = `Failed to load access control: ${(error as Error).message}`;
   }
-  if (!membersRes.ok) {
-    throw new Error("Failed to load team members");
-  }
-
-  const rolesPayload = (await rolesRes.json()) as { roles?: Role[] };
-  const membersPayload = (await membersRes.json()) as { members?: TeamMember[] };
-
-  const roles = rolesPayload.roles ?? [];
-  const members = membersPayload.members ?? [];
 
   return (
     <section className="space-y-6">
@@ -51,6 +60,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
         <p className="mt-1 text-sm text-slate-600">
           Assign roles, permissions, and active access for the team.
         </p>
+        {loadError ? <p className="mt-2 text-sm text-amber-700">{loadError}</p> : null}
       </header>
 
       <div className="grid gap-4 lg:grid-cols-2">
