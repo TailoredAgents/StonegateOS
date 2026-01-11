@@ -489,6 +489,7 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         }
 
         if (Object.keys(updates).length > 0) {
+          let updatedContactDisplayName: string | null = null;
           try {
             const [updated] = await tx
               .update(contacts)
@@ -504,9 +505,25 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
               });
             if (updated) {
               contact = updated;
+              if (updates.firstName || updates.lastName) {
+                const displayName = [updated.firstName, updated.lastName].filter(Boolean).join(" ").trim();
+                updatedContactDisplayName = displayName.length > 0 ? displayName : null;
+              }
             }
           } catch {
             // Ignore unique constraint collisions (e.g. email already used).
+          }
+
+          if (updatedContactDisplayName && contact) {
+            await tx
+              .update(conversationParticipants)
+              .set({ displayName: updatedContactDisplayName })
+              .where(
+                and(
+                  eq(conversationParticipants.participantType, "contact"),
+                  eq(conversationParticipants.contactId, contact.id)
+                )
+              );
           }
         }
 
