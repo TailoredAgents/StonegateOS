@@ -10,6 +10,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function extractPgCode(error: unknown): string | null {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  if (directCode) return directCode;
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  return causeCode;
+}
+
 function readPhoneMap(value: unknown): Record<string, string> {
   if (!isRecord(value)) return {};
   const phonesRaw = value["phones"];
@@ -38,22 +47,63 @@ export async function GET(request: NextRequest): Promise<Response> {
     .limit(1);
   const phoneMap = readPhoneMap(phoneSetting?.value);
 
-  const rows = await db
-    .select({
-      id: teamMembers.id,
-      name: teamMembers.name,
-      email: teamMembers.email,
-      roleId: teamMembers.roleId,
-      defaultCrewSplitBps: teamMembers.defaultCrewSplitBps,
-      active: teamMembers.active,
-      createdAt: teamMembers.createdAt,
-      updatedAt: teamMembers.updatedAt,
-      roleName: teamRoles.name,
-      roleSlug: teamRoles.slug
-    })
-    .from(teamMembers)
-    .leftJoin(teamRoles, eq(teamMembers.roleId, teamRoles.id))
-    .orderBy(asc(teamMembers.name));
+  let rows: Array<{
+    id: string;
+    name: string;
+    email: string | null;
+    roleId: string | null;
+    defaultCrewSplitBps: number | null;
+    active: boolean | null;
+    createdAt: Date;
+    updatedAt: Date;
+    roleName: string | null;
+    roleSlug: string | null;
+  }> = [];
+
+  try {
+    rows = await db
+      .select({
+        id: teamMembers.id,
+        name: teamMembers.name,
+        email: teamMembers.email,
+        roleId: teamMembers.roleId,
+        defaultCrewSplitBps: teamMembers.defaultCrewSplitBps,
+        active: teamMembers.active,
+        createdAt: teamMembers.createdAt,
+        updatedAt: teamMembers.updatedAt,
+        roleName: teamRoles.name,
+        roleSlug: teamRoles.slug
+      })
+      .from(teamMembers)
+      .leftJoin(teamRoles, eq(teamMembers.roleId, teamRoles.id))
+      .orderBy(asc(teamMembers.name));
+  } catch (error) {
+    const code = extractPgCode(error);
+    if (code !== "42703") {
+      throw error;
+    }
+
+    const fallbackRows = await db
+      .select({
+        id: teamMembers.id,
+        name: teamMembers.name,
+        email: teamMembers.email,
+        roleId: teamMembers.roleId,
+        active: teamMembers.active,
+        createdAt: teamMembers.createdAt,
+        updatedAt: teamMembers.updatedAt,
+        roleName: teamRoles.name,
+        roleSlug: teamRoles.slug
+      })
+      .from(teamMembers)
+      .leftJoin(teamRoles, eq(teamMembers.roleId, teamRoles.id))
+      .orderBy(asc(teamMembers.name));
+
+    rows = fallbackRows.map((row) => ({
+      ...row,
+      defaultCrewSplitBps: null
+    }));
+  }
 
   const members = rows.map((row) => ({
     id: row.id,
