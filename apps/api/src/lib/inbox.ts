@@ -430,7 +430,7 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         }
       }
 
-      if (normalizedContactEmail) {
+      if (!contact && normalizedContactEmail) {
         contact = await findContactByEmail(tx, normalizedContactEmail);
       }
       if (!contact && normalizedContactPhone) {

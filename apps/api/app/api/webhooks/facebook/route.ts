@@ -243,10 +243,13 @@ async function fetchSenderName(pageId: string | null, senderId: string | null): 
   if (!senderId) return null;
 
   const { systemUserToken, pageAccessToken } = resolveFacebookToken();
-  let accessToken: string | null = pageAccessToken ?? null;
+  let accessToken: string | null = pageAccessToken ?? systemUserToken ?? null;
 
-  if (!accessToken && pageId && systemUserToken) {
-    accessToken = await fetchPageAccessToken(pageId, systemUserToken);
+  if (!pageAccessToken && pageId && systemUserToken) {
+    const pageToken = await fetchPageAccessToken(pageId, systemUserToken);
+    if (pageToken) {
+      accessToken = pageToken;
+    }
   }
 
   if (!accessToken) return null;
