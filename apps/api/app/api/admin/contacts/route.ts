@@ -13,6 +13,7 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../web/admin";
 import { normalizePhone } from "../../web/utils";
 import { forwardGeocode } from "@/lib/geocode";
+import { getContactAssigneeMap, setContactAssignee } from "@/lib/contact-assignees";
 import type { SQL } from "drizzle-orm";
 import { asc, desc, eq, inArray, ilike, or, sql } from "drizzle-orm";
 
@@ -134,6 +135,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     : await db.select({ count: sql<number>`count(*)` }).from(contacts);
   const total = Number(totalResult[0]?.count ?? 0);
 
+  const fallbackAssignees = await getContactAssigneeMap(db);
+
   const selectWithSalesperson = {
     id: contacts.id,
     firstName: contacts.firstName,
@@ -176,7 +179,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       : baseQuery.orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset));
     contactRows = rows.map((row) => ({
       ...row,
-      salespersonMemberId: row.salespersonMemberId ?? null
+      salespersonMemberId: row.salespersonMemberId ?? fallbackAssignees[row.id] ?? null
     }));
   } catch (error) {
     const meta = extractPgMeta(error);
@@ -187,7 +190,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       : baseQuery.orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset));
     contactRows = rows.map((row) => ({
       ...row,
-      salespersonMemberId: null
+      salespersonMemberId: fallbackAssignees[row.id] ?? null
     }));
   }
 
@@ -568,6 +571,19 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       if (!contact) {
         throw new Error("contact_insert_failed");
+      }
+
+      if (normalizedSalespersonMemberId !== undefined) {
+        const shouldFallback =
+          !("salespersonMemberId" in contact) || (contact as { salespersonMemberId?: unknown }).salespersonMemberId === null;
+        if (shouldFallback) {
+          await setContactAssignee(tx, {
+            contactId: contact.id,
+            memberId: normalizedSalespersonMemberId,
+            actorId: actor.id ?? null
+          });
+          (contact as any).salespersonMemberId = normalizedSalespersonMemberId;
+        }
       }
 
       let property: typeof properties.$inferSelect | null = null;

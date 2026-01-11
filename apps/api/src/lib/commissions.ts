@@ -12,6 +12,7 @@ import {
   payoutRuns,
   teamMembers
 } from "@/db";
+import { getContactAssignee } from "@/lib/contact-assignees";
 
 export type CommissionSettingsRow = {
   key: string;
@@ -250,7 +251,9 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
 
       const commissionRows: Array<typeof appointmentCommissions.$inferInsert> = [];
 
-      const soldBy = row.soldByMemberId ?? row.contactSalespersonId ?? null;
+      const fallbackContactAssignee =
+        !row.contactSalespersonId && row.contactId ? await getContactAssignee(tx, row.contactId) : null;
+      const soldBy = row.soldByMemberId ?? row.contactSalespersonId ?? fallbackContactAssignee ?? null;
       if (soldBy) {
         commissionRows.push({
           appointmentId,

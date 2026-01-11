@@ -8,6 +8,7 @@ import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
 import { getOrCreateCommissionSettings, recalculateAppointmentCommissions } from "@/lib/commissions";
+import { getContactAssignee } from "@/lib/contact-assignees";
 
 const StatusSchema = z.object({
   status: z.enum(["requested", "confirmed", "completed", "no_show", "canceled"]),
@@ -121,6 +122,13 @@ export async function POST(
     } catch (error) {
       const code = extractPgCode(error);
       if (code !== "42703") throw error;
+    }
+    if (!soldByToSet && existing.contactId) {
+      try {
+        soldByToSet = await getContactAssignee(db, existing.contactId);
+      } catch {
+        // ignore fallback errors
+      }
     }
   }
 

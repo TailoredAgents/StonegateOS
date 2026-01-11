@@ -5,6 +5,7 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { normalizePhone } from "../../../web/utils";
 import { eq, inArray, sql } from "drizzle-orm";
+import { setContactAssignee } from "@/lib/contact-assignees";
 
 type RouteContext = {
   params: Promise<{ contactId?: string }>;
@@ -21,6 +22,10 @@ function extractPgCode(error: unknown): string | null {
   const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
   const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
   return causeCode;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 export async function PATCH(request: NextRequest, context: RouteContext): Promise<Response> {
@@ -96,11 +101,15 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     updates["source"] = source.trim();
   }
 
-  if (salespersonMemberId !== undefined) {
-    if (typeof salespersonMemberId === "string") {
-      const trimmed = salespersonMemberId.trim();
+  const salespersonUpdateRaw = salespersonMemberId;
+  if (salespersonUpdateRaw !== undefined) {
+    if (typeof salespersonUpdateRaw === "string") {
+      const trimmed = salespersonUpdateRaw.trim();
+      if (trimmed.length > 0 && !isUuid(trimmed)) {
+        return NextResponse.json({ error: "invalid_salesperson" }, { status: 400 });
+      }
       updates["salespersonMemberId"] = trimmed.length > 0 ? trimmed : null;
-    } else if (salespersonMemberId === null) {
+    } else if (salespersonUpdateRaw === null) {
       updates["salespersonMemberId"] = null;
     } else {
       return NextResponse.json({ error: "invalid_salesperson" }, { status: 400 });
@@ -151,7 +160,14 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     const code = extractPgCode(error);
     if (code === "42703") {
       if ("salespersonMemberId" in updates) {
-        return NextResponse.json({ error: "schema_not_ready" }, { status: 503 });
+        const memberId = updates["salespersonMemberId"];
+        delete updates["salespersonMemberId"];
+
+        await setContactAssignee(db, {
+          contactId,
+          memberId: typeof memberId === "string" ? memberId : null,
+          actorId: actor.id ?? null
+        });
       }
       const [row] = await db
         .update(contacts)
@@ -168,7 +184,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
           source: contacts.source,
           updatedAt: contacts.updatedAt
         });
-      updated = row ? { ...row, salespersonMemberId: null } : undefined;
+      updated = row ? { ...row, salespersonMemberId: salespersonUpdateRaw === null ? null : typeof salespersonUpdateRaw === "string" ? salespersonUpdateRaw.trim() || null : null } : undefined;
     } else {
       throw error;
     }
