@@ -10,6 +10,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function extractPgCode(error: unknown): string | null {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  if (directCode) return directCode;
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  return causeCode;
+}
+
+const MEMBER_SELECT = {
+  id: teamMembers.id,
+  name: teamMembers.name,
+  email: teamMembers.email,
+  roleId: teamMembers.roleId,
+  active: teamMembers.active
+} as const;
+
 function normalizeE164(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -116,18 +133,45 @@ export async function PATCH(
   const db = getDb();
   const [member] = await db
     .transaction(async (tx) => {
-      let updatedMember: typeof teamMembers.$inferSelect | null = null;
+      let updatedMember: { id: string; name: string; email: string | null; roleId: string | null; active: boolean | null } | null =
+        null;
 
       if (Object.keys(updates).length > 0) {
         updates["updatedAt"] = new Date();
-        const [row] = await tx
-          .update(teamMembers)
-          .set(updates)
-          .where(eq(teamMembers.id, memberId))
-          .returning();
-        updatedMember = row ?? null;
+        try {
+          const [row] = await tx
+            .update(teamMembers)
+            .set(updates)
+            .where(eq(teamMembers.id, memberId))
+            .returning(MEMBER_SELECT);
+          updatedMember = row ?? null;
+        } catch (error) {
+          const code = extractPgCode(error);
+          if (code !== "42703" || updates["defaultCrewSplitBps"] === undefined) {
+            throw error;
+          }
+
+          const fallbackUpdates = { ...updates };
+          delete fallbackUpdates["defaultCrewSplitBps"];
+
+          if (Object.keys(fallbackUpdates).length === 1 && fallbackUpdates["updatedAt"]) {
+            const [row] = await tx
+              .select(MEMBER_SELECT)
+              .from(teamMembers)
+              .where(eq(teamMembers.id, memberId))
+              .limit(1);
+            updatedMember = row ?? null;
+          } else {
+            const [row] = await tx
+              .update(teamMembers)
+              .set(fallbackUpdates)
+              .where(eq(teamMembers.id, memberId))
+              .returning(MEMBER_SELECT);
+            updatedMember = row ?? null;
+          }
+        }
       } else {
-        const [row] = await tx.select().from(teamMembers).where(eq(teamMembers.id, memberId)).limit(1);
+        const [row] = await tx.select(MEMBER_SELECT).from(teamMembers).where(eq(teamMembers.id, memberId)).limit(1);
         updatedMember = row ?? null;
       }
 
@@ -212,7 +256,7 @@ export async function DELETE(
   const [member] = await db
     .delete(teamMembers)
     .where(eq(teamMembers.id, memberId))
-    .returning();
+    .returning(MEMBER_SELECT);
 
   if (!member) {
     return NextResponse.json({ error: "member_not_found" }, { status: 404 });

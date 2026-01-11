@@ -15,6 +15,25 @@ type DbExecutor = Database | TransactionExecutor;
 export type ContactRecord = InferModel<typeof contacts, "select">;
 export type PropertyRecord = InferModel<typeof properties, "select">;
 
+const CONTACT_SELECT = {
+  id: contacts.id,
+  firstName: contacts.firstName,
+  lastName: contacts.lastName,
+  email: contacts.email,
+  phone: contacts.phone,
+  phoneE164: contacts.phoneE164,
+  preferredContactMethod: contacts.preferredContactMethod,
+  source: contacts.source,
+  createdAt: contacts.createdAt,
+  updatedAt: contacts.updatedAt
+} as const;
+
+type ContactRecordCompat = Omit<ContactRecord, "salespersonMemberId">;
+
+function toContactRecord(row: ContactRecordCompat): ContactRecord {
+  return { ...row, salespersonMemberId: null } as ContactRecord;
+}
+
 interface UpsertContactInput {
   firstName: string;
   lastName: string;
@@ -33,20 +52,20 @@ export async function upsertContact(
 
   if (email) {
     const [existingByEmail] = await db
-      .select()
+      .select(CONTACT_SELECT)
       .from(contacts)
       .where(eq(contacts.email, email))
       .limit(1);
-    contact = existingByEmail as ContactRecord | undefined;
+    contact = existingByEmail ? toContactRecord(existingByEmail) : undefined;
   }
 
   if (!contact) {
     const [existingByPhone] = await db
-      .select()
+      .select(CONTACT_SELECT)
       .from(contacts)
       .where(eq(contacts.phoneE164, input.phoneE164))
       .limit(1);
-    contact = existingByPhone as ContactRecord | undefined;
+    contact = existingByPhone ? toContactRecord(existingByPhone) : undefined;
   }
 
   if (contact) {
@@ -66,9 +85,13 @@ export async function upsertContact(
       .update(contacts)
       .set(updatePayload)
       .where(eq(contacts.id, contact.id))
-      .returning();
+      .returning(CONTACT_SELECT);
 
-    return updated as ContactRecord;
+    if (!updated) {
+      return contact;
+    }
+
+    return toContactRecord(updated);
   }
 
   const [inserted] = await db
@@ -81,9 +104,13 @@ export async function upsertContact(
       email,
       source: input.source ?? "web"
     })
-    .returning();
+    .returning(CONTACT_SELECT);
 
-  return inserted as ContactRecord;
+  if (!inserted) {
+    throw new Error("contact_insert_failed");
+  }
+
+  return toContactRecord(inserted);
 }
 
 interface UpsertPropertyInput {
