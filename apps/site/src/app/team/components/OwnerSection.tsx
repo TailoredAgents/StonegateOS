@@ -204,7 +204,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
           <div>
             <h3 className="text-lg font-semibold text-slate-900">Commissions</h3>
             <p className="text-sm text-slate-600">
-              Calculated from completed jobs using final amount paid. Weekly payouts run Friday 12:00 PM (America/New_York).
+              Calculated from completed jobs using final amount paid. Sales is assigned on each contact, marketing is paid to the marketing recipient, and crews are selected when marking a job complete.
             </p>
           </div>
           <form action="/api/team/commissions/payout-runs" method="post">
@@ -253,7 +253,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
                 defaultValue={commissionSettings.marketingMemberId ?? ""}
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2"
               >
-                <option value="">(Not set)</option>
+                <option value="">(Select)</option>
                 {members.map((member) => (
                   <option key={member.id} value={member.id}>
                     {member.name}

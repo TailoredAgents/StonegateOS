@@ -43,6 +43,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const phone = formData.get("phone");
   const pipelineStage = formData.get("pipelineStage");
   const pipelineNotes = formData.get("pipelineNotes");
+  const salespersonMemberId = formData.get("salespersonMemberId");
   const addressLine1 = formData.get("addressLine1");
   const city = formData.get("city");
   const state = formData.get("state");
@@ -73,6 +74,11 @@ export async function POST(request: NextRequest): Promise<Response> {
     pipelineNotes:
       typeof pipelineNotes === "string" && pipelineNotes.trim().length ? pipelineNotes.trim() : undefined
   };
+
+  if (typeof salespersonMemberId === "string") {
+    const trimmed = salespersonMemberId.trim();
+    payload["salespersonMemberId"] = trimmed.length > 0 ? trimmed : null;
+  }
 
   const hasAddress =
     typeof addressLine1 === "string" &&

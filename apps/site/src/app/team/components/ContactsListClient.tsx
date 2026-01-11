@@ -66,9 +66,10 @@ function teamLink(tab: string, params?: Record<string, string | null | undefined
 
 type ContactCardProps = {
   contact: ContactSummary;
+  teamMembers: Array<{ id: string; name: string }>;
 };
 
-function ContactCard({ contact }: ContactCardProps) {
+function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [contactState, setContactState] = useState<ContactSummary>(contact);
   const [editingContact, setEditingContact] = useState(false);
   const [showBookingForm, setShowBookingForm] = useState(false);
@@ -113,6 +114,10 @@ function ContactCard({ contact }: ContactCardProps) {
   const phoneLink = normalizePhoneLink(contactState.phone);
   const callLink = phoneLink ? `tel:${phoneLink}` : null;
   const textLink = phoneLink ? `sms:${phoneLink}` : null;
+  const salespersonLabel =
+    contactState.salespersonMemberId && teamMembers.length
+      ? teamMembers.find((m) => m.id === contactState.salespersonMemberId)?.name ?? null
+      : null;
 
   const sortedNotes = useMemo(() => {
     return [...(contactState.notes ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
@@ -418,6 +423,9 @@ function ContactCard({ contact }: ContactCardProps) {
               {contactState.phone ? (
                 <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">{contactState.phone}</span>
               ) : null}
+              <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">
+                Sold by: {salespersonLabel ?? "Unassigned"}
+              </span>
             </div>
             <div className="flex flex-wrap gap-3 text-xs text-slate-500">
               <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">
@@ -548,6 +556,21 @@ function ContactCard({ contact }: ContactCardProps) {
               <label className="flex flex-col gap-1">
                 <span>Phone</span>
                 <input name="phone" defaultValue={contactState.phone ?? ""} className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+              </label>
+              <label className="flex flex-col gap-1 sm:col-span-2">
+                <span>Sold by</span>
+                <select
+                  name="salespersonMemberId"
+                  defaultValue={contactState.salespersonMemberId ?? ""}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                >
+                  <option value="">(Unassigned)</option>
+                  {teamMembers.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
             <div className="flex gap-2">
@@ -1059,11 +1082,17 @@ function NoteRow({
   );
 }
 
-export default function ContactsListClient({ contacts }: { contacts: ContactSummary[] }) {
+export default function ContactsListClient({
+  contacts,
+  teamMembers
+}: {
+  contacts: ContactSummary[];
+  teamMembers: Array<{ id: string; name: string }>;
+}) {
   return (
     <ul className="space-y-4">
       {contacts.map((contact) => (
-        <ContactCard key={contact.id} contact={contact} />
+        <ContactCard key={contact.id} contact={contact} teamMembers={teamMembers} />
       ))}
     </ul>
   );

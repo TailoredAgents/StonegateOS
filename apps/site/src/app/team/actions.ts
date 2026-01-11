@@ -700,6 +700,11 @@ export async function updateContactAction(formData: FormData) {
     }
   }
 
+  const salespersonMemberId = formData.get("salespersonMemberId");
+  if (typeof salespersonMemberId === "string") {
+    payload["salespersonMemberId"] = salespersonMemberId.trim().length > 0 ? salespersonMemberId.trim() : null;
+  }
+
   if (Object.keys(payload).length === 0) {
     jar.set({ name: "myst-flash-error", value: "No changes to apply", path: "/" });
     revalidatePath("/team");

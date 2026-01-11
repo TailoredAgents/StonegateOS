@@ -176,21 +176,9 @@ export async function MyDaySection(): Promise<ReactElement> {
                 <details className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
                   <summary className="cursor-pointer select-none font-medium">Commissions</summary>
                   <div className="mt-2 flex flex-col gap-2">
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[11px] text-neutral-600">Sold by</span>
-                      <select
-                        name="soldByMemberId"
-                        defaultValue=""
-                        className="w-48 rounded-md border border-neutral-300 px-2 py-1 text-xs"
-                      >
-                        <option value="">(Not set)</option>
-                        {teamMembers.map((member) => (
-                          <option key={member.id} value={member.id}>
-                            {member.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <div className="text-[11px] text-neutral-600">
+                      Sales commission comes from the contact&apos;s assigned salesperson.
+                    </div>
                     <div className="text-[11px] text-neutral-600">Crew split (must total 100%)</div>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                       {teamMembers.map((member) => (

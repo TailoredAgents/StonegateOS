@@ -134,22 +134,62 @@ export async function GET(request: NextRequest): Promise<Response> {
     : await db.select({ count: sql<number>`count(*)` }).from(contacts);
   const total = Number(totalResult[0]?.count ?? 0);
 
-  const baseContactsQuery = db
-    .select({
-      id: contacts.id,
-      firstName: contacts.firstName,
-      lastName: contacts.lastName,
-      email: contacts.email,
-      phone: contacts.phone,
-      phoneE164: contacts.phoneE164,
-      createdAt: contacts.createdAt,
-      updatedAt: contacts.updatedAt
-    })
-    .from(contacts);
+  const selectWithSalesperson = {
+    id: contacts.id,
+    firstName: contacts.firstName,
+    lastName: contacts.lastName,
+    email: contacts.email,
+    phone: contacts.phone,
+    phoneE164: contacts.phoneE164,
+    salespersonMemberId: contacts.salespersonMemberId,
+    createdAt: contacts.createdAt,
+    updatedAt: contacts.updatedAt
+  } as const;
 
-  const contactRows = await (whereClause
-    ? baseContactsQuery.where(whereClause).orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset)
-    : baseContactsQuery.orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset));
+  const selectWithoutSalesperson = {
+    id: contacts.id,
+    firstName: contacts.firstName,
+    lastName: contacts.lastName,
+    email: contacts.email,
+    phone: contacts.phone,
+    phoneE164: contacts.phoneE164,
+    createdAt: contacts.createdAt,
+    updatedAt: contacts.updatedAt
+  } as const;
+
+  let contactRows: Array<{
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string | null;
+    phone: string | null;
+    phoneE164: string | null;
+    salespersonMemberId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+
+  try {
+    const baseQuery = db.select(selectWithSalesperson).from(contacts);
+    const rows = await (whereClause
+      ? baseQuery.where(whereClause).orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset)
+      : baseQuery.orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset));
+    contactRows = rows.map((row) => ({
+      ...row,
+      salespersonMemberId: row.salespersonMemberId ?? null
+    }));
+  } catch (error) {
+    const meta = extractPgMeta(error);
+    if (meta.code !== "42703") throw error;
+    const baseQuery = db.select(selectWithoutSalesperson).from(contacts);
+    const rows = await (whereClause
+      ? baseQuery.where(whereClause).orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset)
+      : baseQuery.orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset));
+    contactRows = rows.map((row) => ({
+      ...row,
+      salespersonMemberId: null
+    }));
+  }
 
   const contactIds = contactRows.map((row) => row.id);
 
@@ -334,6 +374,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       email: contact.email,
       phone: contact.phone,
       phoneE164: contact.phoneE164,
+      salespersonMemberId: contact.salespersonMemberId ?? null,
       createdAt: contact.createdAt.toISOString(),
       updatedAt: contact.updatedAt.toISOString(),
       lastActivityAt: lastActivity ? lastActivity.toISOString() : null,
@@ -390,6 +431,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     lastName,
     email,
     phone,
+    salespersonMemberId,
     pipelineStage,
     pipelineNotes,
     property: propertyInput
@@ -438,24 +480,91 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
   }
 
+  const normalizedSalespersonMemberId =
+    typeof salespersonMemberId === "string" && salespersonMemberId.trim().length > 0
+      ? salespersonMemberId.trim()
+      : salespersonMemberId === null
+        ? null
+        : undefined;
+
+  if (
+    normalizedSalespersonMemberId !== undefined &&
+    normalizedSalespersonMemberId !== null &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      normalizedSalespersonMemberId
+    )
+  ) {
+    return NextResponse.json({ error: "invalid_salesperson" }, { status: 400 });
+  }
+
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
 
   try {
     const result = await db.transaction(async (tx) => {
-      const [contact] = await tx
-        .insert(contacts)
-        .values({
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          email: typeof email === "string" && email.trim().length ? email.trim() : null,
-          phone: normalizedPhone?.raw ?? (typeof phone === "string" ? phone.trim() : null),
-          phoneE164: normalizedPhone?.e164 ?? null,
-          source: "manual",
-          createdAt: new Date(),
-          updatedAt: new Date()
-        })
-        .returning();
+      const baseValues: typeof contacts.$inferInsert = {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: typeof email === "string" && email.trim().length ? email.trim() : null,
+        phone: normalizedPhone?.raw ?? (typeof phone === "string" ? phone.trim() : null),
+        phoneE164: normalizedPhone?.e164 ?? null,
+        source: "manual",
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      const returningWithSalesperson = {
+        id: contacts.id,
+        firstName: contacts.firstName,
+        lastName: contacts.lastName,
+        email: contacts.email,
+        phone: contacts.phone,
+        phoneE164: contacts.phoneE164,
+        salespersonMemberId: contacts.salespersonMemberId,
+        createdAt: contacts.createdAt,
+        updatedAt: contacts.updatedAt
+      } as const;
+
+      const returningWithoutSalesperson = {
+        id: contacts.id,
+        firstName: contacts.firstName,
+        lastName: contacts.lastName,
+        email: contacts.email,
+        phone: contacts.phone,
+        phoneE164: contacts.phoneE164,
+        createdAt: contacts.createdAt,
+        updatedAt: contacts.updatedAt
+      } as const;
+
+      let contact:
+        | ({
+            id: string;
+            firstName: string;
+            lastName: string;
+            email: string | null;
+            phone: string | null;
+            phoneE164: string | null;
+            createdAt: Date;
+            updatedAt: Date;
+          } & { salespersonMemberId?: string | null })
+        | null = null;
+
+      try {
+        const values: typeof contacts.$inferInsert =
+          normalizedSalespersonMemberId !== undefined
+            ? { ...baseValues, salespersonMemberId: normalizedSalespersonMemberId }
+            : baseValues;
+
+        const [row] = await tx.insert(contacts).values(values).returning(returningWithSalesperson);
+        contact = row ?? null;
+      } catch (error) {
+        const meta = extractPgMeta(error);
+        if (meta.code !== "42703") {
+          throw error;
+        }
+        const [row] = await tx.insert(contacts).values(baseValues).returning(returningWithoutSalesperson);
+        contact = row ? { ...row, salespersonMemberId: null } : null;
+      }
 
       if (!contact) {
         throw new Error("contact_insert_failed");
@@ -545,6 +654,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         email: contact.email,
         phone: contact.phone,
         phoneE164: contact.phoneE164,
+        salespersonMemberId: (contact as any).salespersonMemberId ?? null,
         createdAt: contact.createdAt.toISOString(),
         updatedAt: contact.updatedAt.toISOString(),
         pipeline: {

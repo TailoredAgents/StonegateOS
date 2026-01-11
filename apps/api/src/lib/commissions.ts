@@ -61,6 +61,18 @@ export async function getOrCreateCommissionSettings(db: DatabaseClient): Promise
 
   if (existing) return { ...existing, payoutWeekday: asWeekday(existing.payoutWeekday) };
 
+  let defaultMarketingMemberId: string | null = null;
+  try {
+    const [austin] = await db
+      .select({ id: teamMembers.id })
+      .from(teamMembers)
+      .where(sql`lower(${teamMembers.name}) like 'austin%'`)
+      .limit(1);
+    defaultMarketingMemberId = austin?.id ?? null;
+  } catch {
+    defaultMarketingMemberId = null;
+  }
+
   await db
     .insert(commissionSettings)
     .values({
@@ -72,7 +84,7 @@ export async function getOrCreateCommissionSettings(db: DatabaseClient): Promise
       salesRateBps: 750,
       marketingRateBps: 1000,
       crewPoolRateBps: 2500,
-      marketingMemberId: null,
+      marketingMemberId: defaultMarketingMemberId,
       updatedBy: null,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -133,124 +145,219 @@ function computeBpsAmount(baseCents: number, rateBps: number): number {
   return roundCents((baseCents * rateBps) / 10000);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractPgCode(error: unknown): string | null {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  if (directCode) return directCode;
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  return causeCode;
+}
+
 export async function recalculateAppointmentCommissions(db: DatabaseClient, appointmentId: string): Promise<void> {
-  const settings = await getOrCreateCommissionSettings(db);
-
-  await db.transaction(async (tx) => {
-    const [row] = await tx
-      .select({
-        id: appointments.id,
-        status: appointments.status,
-        finalTotalCents: appointments.finalTotalCents,
-        contactId: appointments.contactId,
-        soldByMemberId: appointments.soldByMemberId,
-        marketingMemberId: appointments.marketingMemberId,
-        contactSalespersonId: contacts.salespersonMemberId
-      })
-      .from(appointments)
-      .leftJoin(contacts, eq(appointments.contactId, contacts.id))
-      .where(eq(appointments.id, appointmentId))
-      .limit(1);
-
-    if (!row) {
-      throw new Error("appointment_not_found");
-    }
-
-    const baseCents = row.status === "completed" && typeof row.finalTotalCents === "number" ? row.finalTotalCents : null;
-
-    await tx.delete(appointmentCommissions).where(eq(appointmentCommissions.appointmentId, appointmentId));
-
-    if (baseCents === null) {
+  let settings: CommissionSettingsRow;
+  try {
+    settings = await getOrCreateCommissionSettings(db);
+  } catch (error) {
+    const code = extractPgCode(error);
+    if (code === "42P01" || code === "42703") {
       return;
     }
+    throw error;
+  }
 
-    const commissionRows: Array<typeof appointmentCommissions.$inferInsert> = [];
+  try {
+    await db.transaction(async (tx) => {
+      let row:
+        | {
+            id: string;
+            status: string | null;
+            finalTotalCents: number | null;
+            contactId: string | null;
+            soldByMemberId: string | null;
+            marketingMemberId: string | null;
+            contactSalespersonId: string | null;
+          }
+        | undefined;
 
-    const soldBy = row.soldByMemberId ?? row.contactSalespersonId ?? null;
-    if (soldBy) {
-      commissionRows.push({
-        appointmentId,
-        memberId: soldBy,
-        role: "sales",
-        baseCents,
-        amountCents: computeBpsAmount(baseCents, settings.salesRateBps),
-        meta: { rateBps: settings.salesRateBps }
-      });
-    }
+      try {
+        const [full] = await tx
+          .select({
+            id: appointments.id,
+            status: appointments.status,
+            finalTotalCents: appointments.finalTotalCents,
+            contactId: appointments.contactId,
+            soldByMemberId: appointments.soldByMemberId,
+            marketingMemberId: appointments.marketingMemberId,
+            contactSalespersonId: contacts.salespersonMemberId
+          })
+          .from(appointments)
+          .leftJoin(contacts, eq(appointments.contactId, contacts.id))
+          .where(eq(appointments.id, appointmentId))
+          .limit(1);
+        row = full;
+      } catch (error) {
+        const code = extractPgCode(error);
+        if (code !== "42703") {
+          throw error;
+        }
 
-    const marketingMemberId = row.marketingMemberId ?? settings.marketingMemberId ?? null;
-    if (marketingMemberId) {
-      commissionRows.push({
-        appointmentId,
-        memberId: marketingMemberId,
-        role: "marketing",
-        baseCents,
-        amountCents: computeBpsAmount(baseCents, settings.marketingRateBps),
-        meta: { rateBps: settings.marketingRateBps }
-      });
-    }
+        const [fallback] = await tx
+          .select({
+            id: appointments.id,
+            status: appointments.status,
+            finalTotalCents: appointments.finalTotalCents,
+            contactId: appointments.contactId
+          })
+          .from(appointments)
+          .where(eq(appointments.id, appointmentId))
+          .limit(1);
 
-    const crew = await tx
-      .select({
-        memberId: appointmentCrewMembers.memberId,
-        splitBps: appointmentCrewMembers.splitBps
-      })
-      .from(appointmentCrewMembers)
-      .where(eq(appointmentCrewMembers.appointmentId, appointmentId));
-
-    const totalSplitBps = crew.reduce((sum, entry) => sum + (entry.splitBps ?? 0), 0);
-    if (crew.length > 0 && totalSplitBps > 0) {
-      const poolCents = computeBpsAmount(baseCents, settings.crewPoolRateBps);
-      const allocations = crew.map((entry) => {
-        const numerator = poolCents * entry.splitBps;
-        const quotient = Math.floor(numerator / totalSplitBps);
-        const remainder = numerator % totalSplitBps;
-        return {
-          memberId: entry.memberId,
-          splitBps: entry.splitBps,
-          cents: quotient,
-          remainder
-        };
-      });
-
-      let allocated = allocations.reduce((sum, entry) => sum + entry.cents, 0);
-      let remaining = poolCents - allocated;
-      allocations.sort((a, b) => {
-        if (b.remainder !== a.remainder) return b.remainder - a.remainder;
-        return a.memberId.localeCompare(b.memberId);
-      });
-
-      for (let i = 0; i < allocations.length && remaining > 0; i += 1) {
-        allocations[i]!.cents += 1;
-        remaining -= 1;
+        row = fallback
+          ? {
+              ...fallback,
+              soldByMemberId: null,
+              marketingMemberId: null,
+              contactSalespersonId: null
+            }
+          : undefined;
       }
 
-      for (const entry of allocations) {
+      if (!row) {
+        throw new Error("appointment_not_found");
+      }
+
+      const baseCents =
+        row.status === "completed" && typeof row.finalTotalCents === "number" ? row.finalTotalCents : null;
+
+      try {
+        await tx.delete(appointmentCommissions).where(eq(appointmentCommissions.appointmentId, appointmentId));
+      } catch (error) {
+        const code = extractPgCode(error);
+        if (code === "42P01" || code === "42703") {
+          return;
+        }
+        throw error;
+      }
+
+      if (baseCents === null) {
+        return;
+      }
+
+      const commissionRows: Array<typeof appointmentCommissions.$inferInsert> = [];
+
+      const soldBy = row.soldByMemberId ?? row.contactSalespersonId ?? null;
+      if (soldBy) {
         commissionRows.push({
           appointmentId,
-          memberId: entry.memberId,
-          role: "crew",
+          memberId: soldBy,
+          role: "sales",
           baseCents,
-          amountCents: entry.cents,
-          meta: {
-            poolRateBps: settings.crewPoolRateBps,
-            splitBps: entry.splitBps,
-            totalSplitBps
-          }
+          amountCents: computeBpsAmount(baseCents, settings.salesRateBps),
+          meta: { rateBps: settings.salesRateBps }
         });
       }
-    }
 
-    if (commissionRows.length > 0) {
-      await tx.insert(appointmentCommissions).values(
-        commissionRows.map((rowInsert) => ({
-          ...rowInsert,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        }))
-      );
+      const marketingMemberId = row.marketingMemberId ?? settings.marketingMemberId ?? null;
+      if (marketingMemberId) {
+        commissionRows.push({
+          appointmentId,
+          memberId: marketingMemberId,
+          role: "marketing",
+          baseCents,
+          amountCents: computeBpsAmount(baseCents, settings.marketingRateBps),
+          meta: { rateBps: settings.marketingRateBps }
+        });
+      }
+
+      let crew: Array<{ memberId: string; splitBps: number }> = [];
+      try {
+        crew = await tx
+          .select({
+            memberId: appointmentCrewMembers.memberId,
+            splitBps: appointmentCrewMembers.splitBps
+          })
+          .from(appointmentCrewMembers)
+          .where(eq(appointmentCrewMembers.appointmentId, appointmentId));
+      } catch (error) {
+        const code = extractPgCode(error);
+        if (code !== "42P01" && code !== "42703") {
+          throw error;
+        }
+        crew = [];
+      }
+
+      const totalSplitBps = crew.reduce((sum, entry) => sum + (entry.splitBps ?? 0), 0);
+      if (crew.length > 0 && totalSplitBps > 0) {
+        const poolCents = computeBpsAmount(baseCents, settings.crewPoolRateBps);
+        const allocations = crew.map((entry) => {
+          const numerator = poolCents * entry.splitBps;
+          const quotient = Math.floor(numerator / totalSplitBps);
+          const remainder = numerator % totalSplitBps;
+          return {
+            memberId: entry.memberId,
+            splitBps: entry.splitBps,
+            cents: quotient,
+            remainder
+          };
+        });
+
+        let allocated = allocations.reduce((sum, entry) => sum + entry.cents, 0);
+        let remaining = poolCents - allocated;
+        allocations.sort((a, b) => {
+          if (b.remainder !== a.remainder) return b.remainder - a.remainder;
+          return a.memberId.localeCompare(b.memberId);
+        });
+
+        for (let i = 0; i < allocations.length && remaining > 0; i += 1) {
+          allocations[i]!.cents += 1;
+          remaining -= 1;
+        }
+
+        for (const entry of allocations) {
+          commissionRows.push({
+            appointmentId,
+            memberId: entry.memberId,
+            role: "crew",
+            baseCents,
+            amountCents: entry.cents,
+            meta: {
+              poolRateBps: settings.crewPoolRateBps,
+              splitBps: entry.splitBps,
+              totalSplitBps
+            }
+          });
+        }
+      }
+
+      if (commissionRows.length > 0) {
+        try {
+          await tx.insert(appointmentCommissions).values(
+            commissionRows.map((rowInsert) => ({
+              ...rowInsert,
+              createdAt: new Date(),
+              updatedAt: new Date()
+            }))
+          );
+        } catch (error) {
+          const code = extractPgCode(error);
+          if (code !== "42P01" && code !== "42703") {
+            throw error;
+          }
+        }
+      }
+    });
+  } catch (error) {
+    const code = extractPgCode(error);
+    if (code === "42P01" || code === "42703") {
+      return;
     }
-  });
+    throw error;
+  }
 }
 
 export async function createOrGetCurrentPayoutRun(db: DatabaseClient, input: { actorId?: string | null }): Promise<{ payoutRunId: string }> {

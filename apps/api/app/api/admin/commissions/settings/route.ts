@@ -27,8 +27,19 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (permissionError) return permissionError;
 
   const db = getDb();
-  const settings = await getOrCreateCommissionSettings(db);
-  return NextResponse.json({ ok: true, settings });
+  try {
+    const settings = await getOrCreateCommissionSettings(db);
+    return NextResponse.json({ ok: true, settings });
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error && typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : null;
+    if (code === "42P01" || code === "42703") {
+      return NextResponse.json({ error: "schema_not_ready" }, { status: 503 });
+    }
+    throw error;
+  }
 }
 
 export async function PUT(request: NextRequest): Promise<Response> {
@@ -51,6 +62,9 @@ export async function PUT(request: NextRequest): Promise<Response> {
   const actor = getAuditActorFromRequest(request);
 
   const settings = parsed.data;
+  if (settings.marketingRateBps > 0 && !settings.marketingMemberId) {
+    return NextResponse.json({ error: "marketing_recipient_required" }, { status: 400 });
+  }
   await db
     .insert(commissionSettings)
     .values({
@@ -109,4 +123,3 @@ export async function PUT(request: NextRequest): Promise<Response> {
 
   return NextResponse.json({ ok: true, settings: saved ?? settings });
 }
-

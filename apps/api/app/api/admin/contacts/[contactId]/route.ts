@@ -10,6 +10,19 @@ type RouteContext = {
   params: Promise<{ contactId?: string }>;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractPgCode(error: unknown): string | null {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  if (directCode) return directCode;
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  return causeCode;
+}
+
 export async function PATCH(request: NextRequest, context: RouteContext): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -25,7 +38,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
 
-  const { firstName, lastName, email, phone, preferredContactMethod, source } = payload as Record<
+  const { firstName, lastName, email, phone, preferredContactMethod, source, salespersonMemberId } = payload as Record<
     string,
     unknown
   >;
@@ -83,6 +96,17 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     updates["source"] = source.trim();
   }
 
+  if (salespersonMemberId !== undefined) {
+    if (typeof salespersonMemberId === "string") {
+      const trimmed = salespersonMemberId.trim();
+      updates["salespersonMemberId"] = trimmed.length > 0 ? trimmed : null;
+    } else if (salespersonMemberId === null) {
+      updates["salespersonMemberId"] = null;
+    } else {
+      return NextResponse.json({ error: "invalid_salesperson" }, { status: 400 });
+    }
+  }
+
   if (Object.keys(updates).length === 1) {
     return NextResponse.json({ error: "no_updates_provided" }, { status: 400 });
   }
@@ -90,21 +114,65 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
   const db = getDb();
   const actor = getAuditActorFromRequest(request);
 
-  const [updated] = await db
-    .update(contacts)
-    .set(updates)
-    .where(eq(contacts.id, contactId))
-    .returning({
-      id: contacts.id,
-      firstName: contacts.firstName,
-      lastName: contacts.lastName,
-      email: contacts.email,
-      phone: contacts.phone,
-      phoneE164: contacts.phoneE164,
-      preferredContactMethod: contacts.preferredContactMethod,
-      source: contacts.source,
-      updatedAt: contacts.updatedAt
-    });
+  let updated:
+    | {
+        id: string;
+        firstName: string;
+        lastName: string;
+        email: string | null;
+        phone: string | null;
+        phoneE164: string | null;
+        preferredContactMethod: string | null;
+        source: string | null;
+        updatedAt: Date;
+        salespersonMemberId?: string | null;
+      }
+    | undefined;
+
+  try {
+    const [row] = await db
+      .update(contacts)
+      .set(updates)
+      .where(eq(contacts.id, contactId))
+      .returning({
+        id: contacts.id,
+        firstName: contacts.firstName,
+        lastName: contacts.lastName,
+        email: contacts.email,
+        phone: contacts.phone,
+        phoneE164: contacts.phoneE164,
+        preferredContactMethod: contacts.preferredContactMethod,
+        source: contacts.source,
+        updatedAt: contacts.updatedAt,
+        salespersonMemberId: contacts.salespersonMemberId
+      });
+    updated = row;
+  } catch (error) {
+    const code = extractPgCode(error);
+    if (code === "42703") {
+      if ("salespersonMemberId" in updates) {
+        return NextResponse.json({ error: "schema_not_ready" }, { status: 503 });
+      }
+      const [row] = await db
+        .update(contacts)
+        .set(updates)
+        .where(eq(contacts.id, contactId))
+        .returning({
+          id: contacts.id,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          email: contacts.email,
+          phone: contacts.phone,
+          phoneE164: contacts.phoneE164,
+          preferredContactMethod: contacts.preferredContactMethod,
+          source: contacts.source,
+          updatedAt: contacts.updatedAt
+        });
+      updated = row ? { ...row, salespersonMemberId: null } : undefined;
+    } else {
+      throw error;
+    }
+  }
 
   if (!updated) {
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
@@ -128,6 +196,7 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
       email: updated.email,
       phone: updated.phone,
       phoneE164: updated.phoneE164,
+      salespersonMemberId: updated.salespersonMemberId ?? null,
       preferredContactMethod: updated.preferredContactMethod,
       source: updated.source,
       updatedAt: updated.updatedAt.toISOString()

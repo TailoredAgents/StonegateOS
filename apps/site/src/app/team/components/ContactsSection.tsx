@@ -37,6 +37,17 @@ type ContactsSectionProps = {
 export async function ContactsSection({ search, offset, contactId }: ContactsSectionProps): Promise<ReactElement> {
   const safeOffset = typeof offset === "number" && offset > 0 ? offset : 0;
 
+  let teamMembers: Array<{ id: string; name: string }> = [];
+  try {
+    const membersRes = await callAdminApi("/api/admin/team/directory");
+    if (membersRes.ok) {
+      const payload = (await membersRes.json()) as { members?: Array<{ id: string; name: string; active?: boolean }> };
+      teamMembers = (payload.members ?? []).filter((m) => m.active !== false).map((m) => ({ id: m.id, name: m.name }));
+    }
+  } catch {
+    teamMembers = [];
+  }
+
   const params = new URLSearchParams();
   params.set("limit", String(PAGE_SIZE));
   if (safeOffset > 0) params.set("offset", String(safeOffset));
@@ -112,6 +123,21 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
               placeholder="optional"
               className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
             />
+          </label>
+          <label className="flex flex-col gap-1 text-sm text-slate-600">
+            <span>Sold by</span>
+            <select
+              name="salespersonMemberId"
+              defaultValue=""
+              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+            >
+              <option value="">(Select)</option>
+              {teamMembers.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.name}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="flex flex-col gap-1 text-sm text-slate-600">
             <span>Pipeline stage</span>
@@ -229,7 +255,7 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
             </div>
           </div>
 
-          <ContactsListClient contacts={contacts} />
+          <ContactsListClient contacts={contacts} teamMembers={teamMembers} />
 
           <div className="flex flex-col gap-2 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
             <span>{formatRange(pagination, contacts.length)}</span>

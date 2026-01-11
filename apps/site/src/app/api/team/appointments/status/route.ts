@@ -87,11 +87,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
     payload["finalTotalCents"] = cents;
 
-    const soldByMemberId = formData.get("soldByMemberId");
-    if (typeof soldByMemberId === "string" && soldByMemberId.trim().length > 0) {
-      payload["soldByMemberId"] = soldByMemberId.trim();
-    }
-
     const crewIds = formData.getAll("crewMemberId").filter((value): value is string => typeof value === "string");
     if (crewIds.length > 0) {
       const crewMembers: Array<{ memberId: string; splitBps: number }> = [];

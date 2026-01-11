@@ -2,12 +2,12 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { getDb, appointmentCrewMembers, appointments, leads, outboxEvents } from "@/db";
+import { contacts, getDb, appointmentCrewMembers, appointments, leads, outboxEvents } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
-import { recalculateAppointmentCommissions } from "@/lib/commissions";
+import { getOrCreateCommissionSettings, recalculateAppointmentCommissions } from "@/lib/commissions";
 
 const StatusSchema = z.object({
   status: z.enum(["requested", "confirmed", "completed", "no_show", "canceled"]),
@@ -26,6 +26,19 @@ const StatusSchema = z.object({
     )
     .optional()
 });
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractPgCode(error: unknown): string | null {
+  const direct = isRecord(error) ? error : null;
+  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  if (directCode) return directCode;
+  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  return causeCode;
+}
 
 export async function POST(
   request: NextRequest,
@@ -64,11 +77,11 @@ export async function POST(
   const [existing] = await db
     .select({
       id: appointments.id,
+      contactId: appointments.contactId,
       leadId: appointments.leadId,
       calendarEventId: appointments.calendarEventId,
       quotedTotalCents: appointments.quotedTotalCents,
       finalTotalCents: appointments.finalTotalCents,
-      completedAt: appointments.completedAt,
       status: appointments.status
     })
     .from(appointments)
@@ -92,7 +105,37 @@ export async function POST(
   const leavingCompleted = existing.status === "completed" && status !== "completed";
 
   const completedAtToSet =
-    leavingCompleted ? null : becameCompleted ? new Date() : existing.completedAt ?? undefined;
+    leavingCompleted ? null : becameCompleted ? new Date() : undefined;
+
+  let soldByToSet: string | null | undefined = undefined;
+  if (becameCompleted && soldByMemberId === undefined) {
+    try {
+      const [row] = await db
+        .select({ salespersonMemberId: contacts.salespersonMemberId })
+        .from(contacts)
+        .where(eq(contacts.id, existing.contactId))
+        .limit(1);
+      if (row?.salespersonMemberId) {
+        soldByToSet = row.salespersonMemberId;
+      }
+    } catch (error) {
+      const code = extractPgCode(error);
+      if (code !== "42703") throw error;
+    }
+  }
+
+  let marketingToSet: string | null | undefined = undefined;
+  if (becameCompleted && marketingMemberId === undefined) {
+    try {
+      const settings = await getOrCreateCommissionSettings(db);
+      if (settings.marketingMemberId) {
+        marketingToSet = settings.marketingMemberId;
+      }
+    } catch (error) {
+      const code = extractPgCode(error);
+      if (code !== "42P01" && code !== "42703") throw error;
+    }
+  }
 
   const needsRecalc =
     status === "completed" &&
@@ -100,27 +143,65 @@ export async function POST(
       finalTotalCentsToSet !== undefined ||
       soldByMemberId !== undefined ||
       marketingMemberId !== undefined ||
+      marketingToSet !== undefined ||
       crewMembers !== undefined);
 
   const updated = await db.transaction(async (tx) => {
-    const [row] = await tx
-      .update(appointments)
-      .set({
+    const baseSet: Record<string, unknown> = {
+      status,
+      updatedAt: new Date()
+    };
+    if (crew !== undefined) baseSet["crew"] = crew ?? null;
+    if (owner !== undefined) baseSet["owner"] = owner ?? null;
+    if (soldByMemberId !== undefined) baseSet["soldByMemberId"] = soldByMemberId ?? null;
+    if (soldByToSet !== undefined) baseSet["soldByMemberId"] = soldByToSet;
+    if (marketingMemberId !== undefined) baseSet["marketingMemberId"] = marketingMemberId ?? null;
+    if (marketingToSet !== undefined) baseSet["marketingMemberId"] = marketingToSet;
+    if (finalTotalCentsToSet !== undefined) baseSet["finalTotalCents"] = finalTotalCentsToSet;
+    if (completedAtToSet !== undefined) baseSet["completedAt"] = completedAtToSet;
+
+    let row:
+      | {
+          id: string;
+          leadId: string | null;
+          calendarEventId: string | null;
+        }
+      | undefined;
+
+    try {
+      const [updatedRow] = await tx
+        .update(appointments)
+        .set(baseSet)
+        .where(eq(appointments.id, appointmentId))
+        .returning({
+          id: appointments.id,
+          leadId: appointments.leadId,
+          calendarEventId: appointments.calendarEventId
+        });
+      row = updatedRow;
+    } catch (error) {
+      const code = extractPgCode(error);
+      if (code !== "42703") throw error;
+
+      const fallbackSet: Record<string, unknown> = {
         status,
-        ...(crew !== undefined ? { crew: crew ?? null } : {}),
-        ...(owner !== undefined ? { owner: owner ?? null } : {}),
-        ...(soldByMemberId !== undefined ? { soldByMemberId: soldByMemberId ?? null } : {}),
-        ...(marketingMemberId !== undefined ? { marketingMemberId: marketingMemberId ?? null } : {}),
-        ...(finalTotalCentsToSet !== undefined ? { finalTotalCents: finalTotalCentsToSet } : {}),
-        ...(completedAtToSet !== undefined ? { completedAt: completedAtToSet } : {}),
-        updatedAt: new Date()
-      })
-      .where(eq(appointments.id, appointmentId))
-      .returning({
-        id: appointments.id,
-        leadId: appointments.leadId,
-        calendarEventId: appointments.calendarEventId
-      });
+        updatedAt: baseSet["updatedAt"]
+      };
+      if (crew !== undefined) fallbackSet["crew"] = crew ?? null;
+      if (owner !== undefined) fallbackSet["owner"] = owner ?? null;
+      if (finalTotalCentsToSet !== undefined) fallbackSet["finalTotalCents"] = finalTotalCentsToSet;
+
+      const [updatedRow] = await tx
+        .update(appointments)
+        .set(fallbackSet)
+        .where(eq(appointments.id, appointmentId))
+        .returning({
+          id: appointments.id,
+          leadId: appointments.leadId,
+          calendarEventId: appointments.calendarEventId
+        });
+      row = updatedRow;
+    }
 
     if (!row) {
       return null;
