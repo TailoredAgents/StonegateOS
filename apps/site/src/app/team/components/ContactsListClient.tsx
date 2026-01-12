@@ -497,7 +497,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   </option>
                 ))}
               </select>
-              {assigneeSaving ? <span className="text-[11px] text-slate-500">Saving…</span> : null}
+              {assigneeSaving ? <span className="text-[11px] text-slate-500">Saving...</span> : null}
             </div>
             {assigneeError ? (
               <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">

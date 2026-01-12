@@ -61,7 +61,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
                 </div>
               </div>
               <div className="text-xs text-slate-600">
-                {q.contactPhone} • {q.zip} • timeframe: {q.timeframe}
+                {q.contactPhone} - {q.zip} - timeframe: {q.timeframe}
               </div>
               <div className="mt-1 text-[13px] font-semibold text-primary-800">
                 ${low} – ${high}{" "}
@@ -72,7 +72,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
                 ) : null}
               </div>
               <div className="text-[12px] text-slate-600">
-                {q.aiResult.displayTierLabel} • {q.aiResult.loadFractionEstimate.toFixed(2)} trailer • {q.aiResult.reasonSummary}
+                {q.aiResult.displayTierLabel} - {q.aiResult.loadFractionEstimate.toFixed(2)} trailer - {q.aiResult.reasonSummary}
               </div>
               <div className="text-[12px] text-slate-600">
                 Types: {q.jobTypes.join(", ")} | Size: {q.perceivedSize} | Photos: {q.photoUrls.length}

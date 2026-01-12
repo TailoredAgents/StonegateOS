@@ -53,7 +53,7 @@ async function createTwilioCall(input: { agentPhone: string; toPhone: string; re
   const baseUrl = (process.env["TWILIO_API_BASE_URL"] ?? "https://api.twilio.com").replace(/\/$/, "");
 
   if (!sid || !token || !from) {
-    return { ok: false as const, error: "twilio_not_configured" };
+    return { ok: false as const, error: "twilio_not_configured", message: "Twilio is not configured on the API service." };
   }
 
   const callbackUrl = new URL(`${resolveApiBaseUrl(input.request)}/api/webhooks/twilio/connect`);
@@ -78,7 +78,30 @@ async function createTwilioCall(input: { agentPhone: string; toPhone: string; re
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    return { ok: false as const, error: `twilio_call_failed:${response.status}:${text}` };
+    let detail = text.trim();
+    try {
+      const parsed = JSON.parse(text) as { message?: unknown; code?: unknown; more_info?: unknown };
+      const message = typeof parsed.message === "string" ? parsed.message.trim() : "";
+      const code = typeof parsed.code === "number" ? parsed.code : null;
+      const moreInfo = typeof parsed.more_info === "string" ? parsed.more_info.trim() : "";
+
+      const parts = [
+        message.length ? message : null,
+        code ? `code ${code}` : null,
+        moreInfo.length ? moreInfo : null
+      ].filter(Boolean);
+
+      if (parts.length) {
+        detail = parts.join(" - ");
+      }
+    } catch {
+      // ignore json parsing; fall back to raw text
+    }
+
+    const message = detail.length
+      ? `Twilio rejected the call request (${response.status}): ${detail}`
+      : `Twilio rejected the call request (${response.status}).`;
+    return { ok: false as const, error: "twilio_call_failed", message };
   }
 
   const payload = (await response.json().catch(() => null)) as { sid?: string } | null;
@@ -160,9 +183,10 @@ export async function POST(request: NextRequest): Promise<Response> {
       contactId: resolvedContactId ?? contactId ?? null,
       agentPhone,
       toPhone,
-      detail: result.error
+      detail: result.error,
+      message: result.message
     });
-    return NextResponse.json({ error: result.error }, { status: 500 });
+    return NextResponse.json({ error: result.error, message: result.message }, { status: 502 });
   }
 
   const actor = getAuditActorFromRequest(request);

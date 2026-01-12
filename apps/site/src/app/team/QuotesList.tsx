@@ -72,7 +72,9 @@ export function QuotesList({
           <article key={q.id} className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-neutral-500">{q.status.toUpperCase()} • {q.contact.name}</p>
+                <p className="text-sm text-neutral-500">
+                  {q.status.toUpperCase()} - {q.contact.name}
+                </p>
                 <p className="text-sm text-neutral-700">{q.property.addressLine1}, {q.property.city}</p>
               </div>
               <p className="text-sm font-semibold text-primary-900">{q.total.toLocaleString("en-US", { style: "currency", currency: "USD" })}</p>

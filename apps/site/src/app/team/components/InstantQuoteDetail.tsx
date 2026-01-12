@@ -58,7 +58,7 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
         </div>
       </div>
       <div className="text-xs text-slate-600">
-        {quote.contactPhone} • {quote.zip} • timeframe: {quote.timeframe}
+        {quote.contactPhone} - {quote.zip} - timeframe: {quote.timeframe}
       </div>
       <div className="text-lg font-semibold text-primary-900">
         ${low} – ${high}{" "}
@@ -69,7 +69,7 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
         ) : null}
       </div>
       <div className="text-xs text-slate-600">
-        {quote.aiResult.displayTierLabel} • {quote.aiResult.loadFractionEstimate.toFixed(2)} trailer • {quote.aiResult.reasonSummary}
+        {quote.aiResult.displayTierLabel} - {quote.aiResult.loadFractionEstimate.toFixed(2)} trailer - {quote.aiResult.reasonSummary}
       </div>
       <div className="text-xs text-slate-600">
         Types: {quote.jobTypes.join(", ")} | Size: {quote.perceivedSize} | Photos: {quote.photoUrls.length}

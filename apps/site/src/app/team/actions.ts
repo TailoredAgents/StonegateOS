@@ -713,7 +713,10 @@ export async function startContactCallAction(formData: FormData) {
 
   jar.set({
     name: "myst-flash",
-    value: choice === "owner" ? "Ringing Austin now… answer to connect" : "Ringing Devon now… answer to connect",
+    value:
+      choice === "owner"
+        ? `Ringing Austin at ${agentPhone} now... answer to connect`
+        : `Ringing Devon at ${agentPhone} now... answer to connect`,
     path: "/"
   });
   revalidatePath("/team");
@@ -740,7 +743,7 @@ export async function sendDraftMessageAction(formData: FormData) {
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "Message sending…", path: "/" });
+  jar.set({ name: "myst-flash", value: "Message sending...", path: "/" });
   revalidatePath("/team");
 }
 

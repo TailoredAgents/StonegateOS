@@ -101,7 +101,9 @@ export function PaymentsList({
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-primary-900">{fmtMoney(p.amount, p.currency)}</p>
-                <p className="text-xs text-neutral-500">{p.stripeChargeId.slice(0, 10)}… • {p.status}</p>
+                <p className="text-xs text-neutral-500">
+                  {p.stripeChargeId.slice(0, 10)}... - {p.status}
+                </p>
                 {p.appointment ? (
                   <p className="text-xs text-neutral-600">Linked to {p.appointment.contactName ?? "appointment"}</p>
                 ) : (
@@ -124,7 +126,7 @@ export function PaymentsList({
                   <input list={`appts-${p.id}`} name="appointmentId" placeholder="Search or enter ID" className="min-w-[220px] rounded-md border border-neutral-300 px-2 py-1 text-xs" />
                   <datalist id={`appts-${p.id}`}>
                     {appts.map((a) => (
-                      <option key={a.id} value={a.id}>{`${a.contact.name} • ${a.property.addressLine1}, ${a.property.city}`}</option>
+                      <option key={a.id} value={a.id}>{`${a.contact.name} - ${a.property.addressLine1}, ${a.property.city}`}</option>
                     ))}
                   </datalist>
                   <SubmitButton className="rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white" pendingLabel="Attaching...">Attach</SubmitButton>

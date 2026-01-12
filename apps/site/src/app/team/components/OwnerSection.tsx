@@ -264,7 +264,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
                       ) : null}
                     </div>
                     <div className="truncate text-xs text-slate-600">
-                      {[expense.vendor, expense.memo].filter(Boolean).join(" • ") || "No details"}
+                      {[expense.vendor, expense.memo].filter(Boolean).join(" - ") || "No details"}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -389,4 +389,3 @@ export async function OwnerSection(): Promise<React.ReactElement> {
     </section>
   );
 }
-
