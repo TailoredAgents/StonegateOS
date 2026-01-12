@@ -62,7 +62,17 @@ export async function GET(request: NextRequest): Promise<Response> {
     .orderBy(asc(crmTasks.dueAt), asc(crmTasks.createdAt))
     .limit(100);
 
-  const items = rows.map((row) => {
+  const dedupedRows: typeof rows = [];
+  const seenTaskKeys = new Set<string>();
+  for (const row of rows) {
+    const kind = isSpeedTask(row.title) ? "speed_to_lead" : "follow_up";
+    const key = `${row.contactId}:${kind}`;
+    if (seenTaskKeys.has(key)) continue;
+    seenTaskKeys.add(key);
+    dedupedRows.push(row);
+  }
+
+  const items = dedupedRows.map((row) => {
     const dueAtIso = row.dueAt ? row.dueAt.toISOString() : null;
     const dueMs = row.dueAt ? row.dueAt.getTime() : null;
     const isOverdue = typeof dueMs === "number" ? dueMs < now.getTime() : false;

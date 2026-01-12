@@ -80,10 +80,40 @@ const NAME_FIELD_STOPWORDS = new Set([
   "state"
 ]);
 
+const GENERIC_NON_NAME_VALUES = new Set([
+  "interested",
+  "interest",
+  "hi",
+  "hello",
+  "hey",
+  "yo",
+  "ok",
+  "okay",
+  "yes",
+  "yep",
+  "yeah",
+  "thanks",
+  "thank you",
+  "need help",
+  "help",
+  "pricing",
+  "price",
+  "quote",
+  "estimate",
+  "info",
+  "information",
+  "book",
+  "booking",
+  "schedule",
+  "call",
+  "text",
+  "message"
+]);
+
 function sanitizeNameCandidate(value: string): string | null {
   const cleaned = value
     .replace(/\r\n/g, "\n")
-    .replace(/[^\w\s'ƒ?T-]/g, " ")
+    .replace(/[^\p{L}\p{N}\s'’\-–]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -91,15 +121,21 @@ function sanitizeNameCandidate(value: string): string | null {
   const lowered = cleaned.toLowerCase();
   if (lowered.includes("stonegate")) return null;
   if (lowered.includes("@")) return null;
+  if (GENERIC_NON_NAME_VALUES.has(lowered)) return null;
 
   const tokens = cleaned.split(" ").filter(Boolean);
+  if (tokens.some((token) => ["i", "im", "i'm", "i’m"].includes(token.toLowerCase()))) {
+    return null;
+  }
   while (tokens.length > 0 && NAME_FIELD_STOPWORDS.has(tokens[tokens.length - 1]!.toLowerCase())) {
     tokens.pop();
   }
   if (tokens.length === 0) return null;
 
   if (tokens.length > 4) return null;
-  const looksLikeName = tokens.every((part) => /^[A-Za-z][A-Za-z'ƒ?T-]{0,25}$/.test(part));
+  if (tokens.length === 1 && GENERIC_NON_NAME_VALUES.has(tokens[0]!.toLowerCase())) return null;
+
+  const looksLikeName = tokens.every((part) => /^[A-Za-z][A-Za-z'’\-–]{0,25}$/.test(part));
   if (!looksLikeName) return null;
 
   const normalized = tokens.join(" ").trim();
@@ -119,7 +155,10 @@ function normalizePhone(input: string): { raw: string; e164: string } {
 
 function resolveContactName(fallbackName: string | null | undefined): { firstName: string; lastName: string } {
   const cleaned = typeof fallbackName === "string" && fallbackName.trim().length > 0 ? fallbackName.trim() : "Unknown Contact";
-  const sanitized = sanitizeNameCandidate(cleaned) ?? cleaned;
+  const sanitized = sanitizeNameCandidate(cleaned);
+  if (!sanitized) {
+    return { firstName: "Unknown", lastName: "Contact" };
+  }
   const parts = sanitized.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 1 && parts[0]!.toLowerCase() !== "unknown") {
     return { firstName: parts[0]!, lastName: "" };
@@ -183,18 +222,31 @@ function extractNameFromText(body: string): string | null {
     if (candidate) return candidate;
   }
 
-  const patterns: RegExp[] = [
-    /\b(?:full\s+name|name)\s*[:=-]\s*([A-Za-z][A-Za-z'’-]*(?:\s+[A-Za-z][A-Za-z'’-]*){1,3})\b/i,
-    /\b(?:my name is|this is|i am|i'm)\s+([A-Za-z][A-Za-z'’-]*(?:\s+[A-Za-z][A-Za-z'’-]*){0,2})\b/i
+  const explicitNamePatterns: RegExp[] = [
+    /\b(?:full\s+name|name)\s*[:=-]\s*([A-Za-z][A-Za-z'’\-–]*(?:\s+[A-Za-z][A-Za-z'’\-–]*){1,3})\b/i,
+    /\b(?:my name is|this is)\s+([A-Za-z][A-Za-z'’\-–]*(?:\s+[A-Za-z][A-Za-z'’\-–]*){0,2})\b/i
   ];
 
-  for (const pattern of patterns) {
+  for (const pattern of explicitNamePatterns) {
     const match = normalized.match(pattern);
     const candidate = match?.[1]?.trim() ?? "";
     if (!candidate) continue;
     const sanitized = sanitizeNameCandidate(candidate);
     if (!sanitized) continue;
     return sanitized;
+  }
+
+  const imMatch = normalized.match(/\b(?:i am|i'm|i’m)\s+([A-Za-z][A-Za-z'’\-–]*(?:\s+[A-Za-z][A-Za-z'’\-–]*){0,2})\b/i);
+  if (imMatch?.[1]) {
+    const candidate = imMatch[1].trim();
+    const sanitized = sanitizeNameCandidate(candidate);
+    if (sanitized) {
+      const parts = sanitized.split(/\s+/).filter(Boolean);
+      const isSingleLowercase = parts.length === 1 && /^[a-z]/.test(parts[0] ?? "");
+      if (!isSingleLowercase) {
+        return sanitized;
+      }
+    }
   }
 
   const firstLine = normalized.split("\n")[0]?.trim() ?? "";
@@ -228,6 +280,7 @@ function isMeaningfulName(value: string): boolean {
   const lowered = trimmed.toLowerCase();
   if (lowered === "unknown contact") return false;
   if (isMessengerFallbackName(trimmed)) return false;
+  if (GENERIC_NON_NAME_VALUES.has(lowered)) return false;
   if (lowered.includes("phone number")) return false;
   if (lowered.includes("zip code")) return false;
   return true;

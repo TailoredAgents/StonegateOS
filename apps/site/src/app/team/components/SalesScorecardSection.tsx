@@ -249,11 +249,11 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white">
-          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-            <h3 className="text-sm font-semibold text-slate-900">Call within 5 minutes</h3>
-            <Pill tone={urgentItems.length === 0 ? "good" : "warn"}>{urgentItems.length} active</Pill>
-          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h3 className="text-sm font-semibold text-slate-900">Touch within 5 minutes</h3>
+              <Pill tone={urgentItems.length === 0 ? "good" : "warn"}>{urgentItems.length} active</Pill>
+            </div>
           <div className="divide-y divide-slate-100">
             {urgentItems.length ? (
               urgentItems.map((item) => (
