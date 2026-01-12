@@ -33,21 +33,8 @@ async function resolveActorRole(): Promise<string | null> {
 }
 
 async function resolveActorIdentity(): Promise<{ actorId: string | null; actorLabel: string | null }> {
-  try {
-    const jar = await cookies();
-    const rawId = jar.get(TEAM_ACTOR_ID_COOKIE)?.value ?? "";
-    const rawLabel = jar.get(TEAM_ACTOR_LABEL_COOKIE)?.value ?? "";
-
-    const actorId = rawId.trim();
-    const actorLabel = rawLabel.trim();
-
-    if (actorId && isUuid(actorId)) {
-      return { actorId, actorLabel: actorLabel.length ? actorLabel : null };
-    }
-  } catch {
-    // ignore cookie access in non-request contexts
-  }
-
+  // Shared "master login" mode: always attribute actions to the default actor (Devon)
+  // so Devon HQ metrics are consistent and not affected by per-browser cookie state.
   return { actorId: DEFAULT_ACTOR_ID, actorLabel: null };
 }
 
