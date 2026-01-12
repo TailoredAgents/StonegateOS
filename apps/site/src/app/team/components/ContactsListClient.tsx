@@ -117,7 +117,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const mapsLink = mapsUrl(primaryProperty);
   const phoneLink = normalizePhoneLink(contactState.phone);
   const callLink = phoneLink ? `tel:${phoneLink}` : null;
-  const textLink = phoneLink ? `sms:${phoneLink}` : null;
+  const textLink = phoneLink ? teamLink("inbox", { contactId: contactState.id, channel: "sms" }) : null;
   const salespersonLabel =
     contactState.salespersonMemberId && teamMembers.length
       ? teamMembers.find((m) => m.id === contactState.salespersonMemberId)?.name ?? null

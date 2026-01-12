@@ -1,4 +1,5 @@
-import React from "react";
+﻿import React from "react";
+import { redirect } from "next/navigation";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
@@ -237,13 +238,52 @@ function buildThreadHref(status: string | null, threadId: string): string {
   return `/team?${params.toString()}`;
 }
 
+function buildEnsureThreadHref(status: string | null, contactId: string, channel: string): string {
+  const params = new URLSearchParams();
+  params.set("tab", "inbox");
+  if (status) params.set("status", status);
+  params.set("contactId", contactId);
+  params.set("channel", channel);
+  return `/team?${params.toString()}`;
+}
+
 type InboxSectionProps = {
   threadId?: string;
   status?: string;
+  contactId?: string;
+  channel?: string;
 };
 
-export async function InboxSection({ threadId, status }: InboxSectionProps): Promise<React.ReactElement> {
+function isSupportedChannel(value: string | null | undefined): value is "sms" | "email" | "dm" {
+  return value === "sms" || value === "email" || value === "dm";
+}
+
+export async function InboxSection({ threadId, status, contactId, channel }: InboxSectionProps): Promise<React.ReactElement> {
   const activeStatus = status ?? "open";
+  const requestedChannel = isSupportedChannel(channel) ? channel : "sms";
+
+  if (!threadId && contactId) {
+    try {
+      const ensureRes = await callAdminApi("/api/admin/inbox/threads/ensure", {
+        method: "POST",
+        body: JSON.stringify({ contactId, channel: requestedChannel })
+      });
+      if (ensureRes.ok) {
+        const data = (await ensureRes.json().catch(() => null)) as { threadId?: string } | null;
+        const ensuredId = typeof data?.threadId === "string" ? data.threadId : null;
+        if (ensuredId) {
+          const qs = new URLSearchParams();
+          qs.set("tab", "inbox");
+          if (activeStatus && activeStatus !== "all") qs.set("status", activeStatus);
+          qs.set("threadId", ensuredId);
+          return redirect(`/team?${qs.toString()}`);
+        }
+      }
+    } catch {
+      // fall through and render the inbox list without selecting a thread
+    }
+  }
+
   const params = new URLSearchParams();
   params.set("limit", "50");
   if (activeStatus !== "all") {
@@ -253,6 +293,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
   const threadDetailPromise = threadId
     ? callAdminApi(`/api/admin/inbox/threads/${threadId}`).catch(() => null)
     : Promise.resolve(null);
+
   const [threadsRes, providerRes, failedRes, threadDetailRes] = await Promise.all([
     callAdminApi(`/api/admin/inbox/threads?${params.toString()}`).catch(() => null),
     callAdminApi("/api/admin/providers/health").catch(() => null),
@@ -303,6 +344,30 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
   const activePhone = normalizePhoneLink(activeThread?.contact?.phone);
   const callLink = activePhone ? `tel:${activePhone}` : null;
   const textLink = activePhone ? `sms:${activePhone}` : null;
+  const activeContactId = activeThread?.contact?.id ?? null;
+
+  let contactThreads: ThreadSummary[] = [];
+  if (activeContactId) {
+    try {
+      const res = await callAdminApi(
+        `/api/admin/inbox/threads?contactId=${encodeURIComponent(activeContactId)}&limit=200`
+      );
+      if (res.ok) {
+        const payload = (await res.json().catch(() => null)) as { threads?: ThreadSummary[] } | null;
+        contactThreads = payload?.threads ?? [];
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const channelThreadMap = new Map<string, string>();
+  for (const t of contactThreads) {
+    if (!t?.channel || !t?.id) continue;
+    if (!channelThreadMap.has(t.channel)) {
+      channelThreadMap.set(t.channel, t.id);
+    }
+  }
 
   return (
     <section className="space-y-6">
@@ -330,7 +395,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                 provider.lastFailureAt ? `Last issue: ${formatTimestamp(provider.lastFailureAt)}` : null,
                 provider.lastFailureDetail ? `Detail: ${provider.lastFailureDetail}` : null
               ].filter(Boolean);
-              const title = titleParts.length > 0 ? titleParts.join(" • ") : undefined;
+              const title = titleParts.length > 0 ? titleParts.join(" â€¢ ") : undefined;
               return (
                 <span
                   key={provider.provider}
@@ -423,7 +488,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                             className="inline-flex items-center justify-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800"
                             title="Chat has expired; please message directly in Messenger or wait for the customer to reply."
                           >
-                            ⚠️
+                            expired
                           </span>
                         ) : null}
                       </div>
@@ -542,7 +607,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                     {activeThread.contact?.name ?? "Unknown contact"}
                   </h3>
                   <p className="text-xs text-slate-500">
-                    {activeThread.channel.toUpperCase()} · {formatStatusLabel(activeThread.status)} ·{" "}
+                    {activeThread.channel.toUpperCase()} | {formatStatusLabel(activeThread.status)} |{" "}
                     {formatStateLabel(activeThread.state ?? "new")}
                   </p>
                   {activeThread.property?.outOfArea ? (
@@ -557,6 +622,52 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                   ) : null}
                 </div>
                 <div className="flex flex-col gap-2">
+                  {activeContactId ? (
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      {(["sms", "dm", "email"] as const).map((ch) => {
+                        const isActive = activeThread.channel === ch;
+                        const existingId = channelThreadMap.get(ch) ?? null;
+                        const hasPhone = Boolean(activeThread.contact?.phone);
+                        const hasEmail = Boolean(activeThread.contact?.email);
+                        const disabled =
+                          ch === "dm"
+                            ? !existingId
+                            : ch === "sms"
+                              ? !hasPhone
+                              : ch === "email"
+                                ? !hasEmail
+                                : false;
+
+                        const label = ch === "dm" ? "Messenger" : ch.toUpperCase();
+                        const href = existingId
+                          ? buildThreadHref(activeStatus, existingId)
+                          : buildEnsureThreadHref(activeStatus === "all" ? null : activeStatus, activeContactId, ch);
+
+                        return (
+                          <a
+                            key={ch}
+                            href={disabled ? "#" : href}
+                            className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
+                              isActive
+                                ? "border-primary-300 bg-primary-50 text-primary-800"
+                                : "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                            } ${disabled ? "pointer-events-none opacity-40" : ""}`}
+                            title={
+                              disabled
+                                ? ch === "dm"
+                                  ? "No Messenger thread yet"
+                                  : ch === "sms"
+                                    ? "No phone number on file"
+                                    : "No email on file"
+                                : undefined
+                            }
+                          >
+                            {label}
+                          </a>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                   <div className="flex flex-wrap items-center gap-2 text-xs">
                     <a
                       className={`rounded-full border px-3 py-2 text-xs font-semibold ${
@@ -658,7 +769,7 @@ export async function InboxSection({ threadId, status }: InboxSectionProps): Pro
                                 title="Delete message"
                                 aria-label="Delete message"
                               >
-                                🗑
+                                ðŸ—‘
                               </button>
                             </form>
                           </div>

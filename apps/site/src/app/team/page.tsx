@@ -47,7 +47,15 @@ type LeadContactSummary = {
 export default async function TeamPage({
   searchParams
 }: {
-  searchParams: Promise<{ tab?: string; q?: string; offset?: string; contactId?: string; threadId?: string; status?: string }>;
+  searchParams: Promise<{
+    tab?: string;
+    q?: string;
+    offset?: string;
+    contactId?: string;
+    threadId?: string;
+    status?: string;
+    channel?: string;
+  }>;
 }) {
   const params = await searchParams;
   const cookieStore = await cookies();
@@ -75,6 +83,7 @@ export default async function TeamPage({
   const contactIdParam = typeof params?.contactId === "string" ? params.contactId : undefined;
   const inboxThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
   const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
+  const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
 
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
@@ -86,7 +95,7 @@ export default async function TeamPage({
     { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "owner" },
     { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "owner" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
-    { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "owner" },
+    { id: "sales-hq", label: "Devon HQ", href: "/team?tab=sales-hq", requires: "owner" },
     { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
@@ -294,7 +303,7 @@ export default async function TeamPage({
               </div>
             }
           >
-            <InboxSection threadId={inboxThreadId} status={inboxStatus} />
+            <InboxSection threadId={inboxThreadId} status={inboxStatus} contactId={contactIdParam} channel={inboxChannel} />
           </React.Suspense>
         ) : null}
 

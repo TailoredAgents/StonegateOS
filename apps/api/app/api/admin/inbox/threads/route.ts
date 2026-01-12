@@ -24,6 +24,8 @@ const MAX_LIMIT = 200;
 
 const THREAD_STATUS = ["open", "pending", "closed"] as const;
 const CHANNELS = ["sms", "email", "dm", "call", "web"] as const;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type ThreadStatus = (typeof THREAD_STATUS)[number];
 type Channel = (typeof CHANNELS)[number];
@@ -67,6 +69,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const searchTerm = rawSearch ? normalizeSearch(rawSearch) : null;
   const status = isStatus(searchParams.get("status")) ? (searchParams.get("status") as ThreadStatus) : null;
   const channel = isChannel(searchParams.get("channel")) ? (searchParams.get("channel") as Channel) : null;
+  const contactId = searchParams.get("contactId");
   const limit = parseLimit(searchParams.get("limit"));
   const offset = parseOffset(searchParams.get("offset"));
 
@@ -90,6 +93,9 @@ export async function GET(request: NextRequest): Promise<Response> {
         ilike(conversationThreads.lastMessagePreview, likePattern)
       )
     );
+  }
+  if (typeof contactId === "string" && UUID_RE.test(contactId)) {
+    filters.push(eq(conversationThreads.contactId, contactId));
   }
 
   const whereClause = filters.length ? and(...filters) : undefined;

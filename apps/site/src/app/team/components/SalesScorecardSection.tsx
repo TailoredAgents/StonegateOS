@@ -126,7 +126,7 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
     <section className="rounded-3xl border border-white/70 bg-white/80 p-6 shadow-xl shadow-slate-200/60 backdrop-blur sm:p-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Sales HQ (Devon)</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Devon HQ</h2>
           <p className="mt-1 text-sm text-slate-600">
             7-day snapshot: speed-to-lead + follow-ups (call-first when a phone exists).
           </p>
@@ -277,4 +277,3 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
     </section>
   );
 }
-
