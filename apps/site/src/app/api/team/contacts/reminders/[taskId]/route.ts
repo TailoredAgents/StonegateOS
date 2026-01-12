@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
+import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
@@ -25,7 +26,7 @@ export async function POST(
     if (returnJson) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
-    return NextResponse.redirect(new URL("/team?tab=contacts", request.url), 303);
+    return NextResponse.redirect(getSafeRedirectUrl(request, "/team?tab=contacts"), 303);
   }
 
   const { taskId } = await context.params;
@@ -55,4 +56,3 @@ export async function POST(
 
   return NextResponse.json({ completed: true, taskId: id }, { status: 200 });
 }
-

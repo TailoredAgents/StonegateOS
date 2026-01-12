@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
+import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
@@ -12,19 +13,6 @@ function wantsJson(request: NextRequest): boolean {
   return accept.includes("application/json");
 }
 
-function getSafeRedirectUrl(request: NextRequest): URL {
-  const fallback = new URL("/team?tab=contacts", request.url);
-  const referer = request.headers.get("referer");
-  if (!referer) return fallback;
-  try {
-    const refererUrl = new URL(referer);
-    if (refererUrl.origin !== fallback.origin) return fallback;
-    return refererUrl;
-  } catch {
-    return fallback;
-  }
-}
-
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ noteId: string }> }
@@ -33,7 +21,7 @@ export async function POST(
   const returnJson = wantsJson(request);
   const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
   const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
-  const redirectTo = getSafeRedirectUrl(request);
+  const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
 
   if (!hasOwner && !hasCrew) {
     if (returnJson) {

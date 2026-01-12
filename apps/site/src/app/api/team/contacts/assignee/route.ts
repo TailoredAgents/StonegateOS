@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
+import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
@@ -19,9 +20,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
 
   if (!hasOwner && !hasCrew) {
+    const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
     return returnJson
       ? NextResponse.json({ error: "unauthorized" }, { status: 401 })
-      : NextResponse.redirect(new URL("/team?tab=contacts", request.url), 303);
+      : NextResponse.redirect(redirectTo, 303);
   }
 
   const payload = (await request.json().catch(() => null)) as unknown;
@@ -73,4 +75,3 @@ export async function POST(request: NextRequest): Promise<Response> {
   const contact = data && typeof data === "object" ? (data as Record<string, unknown>)["contact"] : null;
   return NextResponse.json({ ok: true, contact }, { status: 200 });
 }
-

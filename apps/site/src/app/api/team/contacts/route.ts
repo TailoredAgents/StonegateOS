@@ -1,30 +1,18 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
+import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
 
 export const dynamic = "force-dynamic";
 
-function getSafeRedirectUrl(request: NextRequest): URL {
-  const fallback = new URL("/team?tab=contacts", request.url);
-  const referer = request.headers.get("referer");
-  if (!referer) return fallback;
-  try {
-    const refererUrl = new URL(referer);
-    if (refererUrl.origin !== fallback.origin) return fallback;
-    return refererUrl;
-  } catch {
-    return fallback;
-  }
-}
-
 export async function POST(request: NextRequest): Promise<Response> {
   const jar = request.cookies;
   const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
   const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
-  const redirectTo = getSafeRedirectUrl(request);
+  const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
 
   if (!hasOwner && !hasCrew) {
     const response = NextResponse.redirect(redirectTo, 303);
