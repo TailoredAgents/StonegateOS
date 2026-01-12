@@ -3,7 +3,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 import { callAdminApi } from "../lib/api";
-import { resetSalesHqAction } from "../actions";
+import { resetSalesHqAction, updatePipelineStageAction } from "../actions";
 
 const DEVON_MEMBER_ID = "b45988bb-7417-48c5-af6d-fcdf71088282";
 
@@ -271,6 +271,17 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                     ) : (
                       <Pill tone="neutral">unscheduled</Pill>
                     )}
+                    <form action={updatePipelineStageAction} className="flex items-center gap-2">
+                      <input type="hidden" name="contactId" value={item.contact.id} />
+                      <input type="hidden" name="stage" value="lost" />
+                      <input type="hidden" name="notes" value="disqualify=out_of_service_area" />
+                      <SubmitButton
+                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-slate-300 hover:text-slate-800"
+                        pendingLabel="Saving..."
+                      >
+                        No service area
+                      </SubmitButton>
+                    </form>
                     <a
                       className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:border-slate-300"
                       href={`/team?tab=contacts&contactId=${encodeURIComponent(item.contact.id)}`}
@@ -308,6 +319,17 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                     ) : (
                       <Pill tone="neutral">unscheduled</Pill>
                     )}
+                    <form action={updatePipelineStageAction} className="flex items-center gap-2">
+                      <input type="hidden" name="contactId" value={item.contact.id} />
+                      <input type="hidden" name="stage" value="lost" />
+                      <input type="hidden" name="notes" value="disqualify=out_of_service_area" />
+                      <SubmitButton
+                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-slate-300 hover:text-slate-800"
+                        pendingLabel="Saving..."
+                      >
+                        No service area
+                      </SubmitButton>
+                    </form>
                     <a
                       className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:border-slate-300"
                       href={`/team?tab=contacts&contactId=${encodeURIComponent(item.contact.id)}`}

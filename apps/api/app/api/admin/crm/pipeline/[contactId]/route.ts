@@ -4,7 +4,7 @@ import { crmPipeline, crmTasks, contacts, getDb } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../../web/admin";
 import { PIPELINE_STAGE_SET, type PipelineStage } from "../stages";
-import { eq } from "drizzle-orm";
+import { and, eq, ilike, isNotNull, or } from "drizzle-orm";
 
 type RouteContext = {
   params: Promise<{ contactId?: string }>;
@@ -98,6 +98,21 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
       dueAt: null,
       assignedTo: null
     });
+  }
+
+  if (targetStage === "lost" || targetStage === "won") {
+    // Stop sales reminders / Devon HQ tasks when a lead is closed.
+    await db
+      .update(crmTasks)
+      .set({ status: "completed", updatedAt: now })
+      .where(
+        and(
+          eq(crmTasks.contactId, contactId),
+          eq(crmTasks.status, "open"),
+          isNotNull(crmTasks.notes),
+          or(ilike(crmTasks.notes, "%kind=speed_to_lead%"), ilike(crmTasks.notes, "%kind=follow_up%"))
+        )
+      );
   }
 
   await recordAuditEvent({

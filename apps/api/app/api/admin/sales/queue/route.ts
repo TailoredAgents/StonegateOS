@@ -4,7 +4,7 @@ import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lte, notInArray, or 
 import { contacts, crmPipeline, crmTasks, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
-import { getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
+import { getDisqualifiedContactIds, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -45,10 +45,12 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactFirst: contacts.firstName,
       contactLast: contacts.lastName,
       phone: contacts.phone,
-      phoneE164: contacts.phoneE164
+      phoneE164: contacts.phoneE164,
+      pipelineStage: crmPipeline.stage
     })
     .from(crmTasks)
     .innerJoin(contacts, eq(crmTasks.contactId, contacts.id))
+    .leftJoin(crmPipeline, eq(crmPipeline.contactId, contacts.id))
     .where(
       and(
         eq(crmTasks.assignedTo, memberId),
@@ -56,15 +58,22 @@ export async function GET(request: NextRequest): Promise<Response> {
         isNotNull(crmTasks.dueAt),
         isNotNull(crmTasks.notes),
         ...(effectiveSince ? [gte(crmTasks.createdAt, effectiveSince)] : []),
-        or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%"))
+        or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%")),
+        or(isNull(crmPipeline.stage), notInArray(crmPipeline.stage, ["won", "lost"]))
       )
     )
     .orderBy(asc(crmTasks.dueAt), asc(crmTasks.createdAt))
     .limit(100);
 
+  const disqualified = await getDisqualifiedContactIds({
+    db,
+    contactIds: rows.map((row) => row.contactId)
+  });
+
   const dedupedRows: typeof rows = [];
   const seenTaskKeys = new Set<string>();
   for (const row of rows) {
+    if (disqualified.has(row.contactId)) continue;
     const kind = isSpeedTask(row.title) ? "speed_to_lead" : "follow_up";
     const key = `${row.contactId}:${kind}`;
     if (seenTaskKeys.has(key)) continue;

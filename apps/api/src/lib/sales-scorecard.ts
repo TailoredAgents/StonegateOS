@@ -162,6 +162,34 @@ export function buildContactTag(contactId: string): string {
   return `[auto] contactId=${contactId}`;
 }
 
+function isDisqualifyMarker(notes: string | null): boolean {
+  if (!notes) return false;
+  return /\bdisqualify\s*=\s*[a-z0-9_]+\b/i.test(notes);
+}
+
+export async function getDisqualifiedContactIds(input: {
+  db?: DbExecutor;
+  contactIds: string[];
+}): Promise<Set<string>> {
+  const db = input.db ?? getDb();
+  const ids = Array.from(new Set(input.contactIds)).filter(Boolean);
+  if (!ids.length) return new Set<string>();
+
+  const rows = await db
+    .select({ contactId: crmTasks.contactId, notes: crmTasks.notes })
+    .from(crmTasks)
+    .where(and(inArray(crmTasks.contactId, ids), isNotNull(crmTasks.notes), ilike(crmTasks.notes, "%disqualify=%")))
+    .limit(5000);
+
+  const out = new Set<string>();
+  for (const row of rows) {
+    if (typeof row.contactId !== "string" || !row.contactId) continue;
+    const notes = typeof row.notes === "string" ? row.notes : null;
+    if (isDisqualifyMarker(notes)) out.add(row.contactId);
+  }
+  return out;
+}
+
 export type SpeedToLeadResult = {
   leadId: string | null;
   contactId: string;
@@ -203,6 +231,7 @@ export async function computeSpeedToLeadForMember(input: {
   if (!contactRows.length) return [];
 
   const contactIds = Array.from(new Set(contactRows.map((row) => row.contactId)));
+  const disqualified = await getDisqualifiedContactIds({ db, contactIds });
 
   const firstCalls = await db
     .select({
@@ -260,7 +289,9 @@ export async function computeSpeedToLeadForMember(input: {
     }
   }
 
-  return contactRows.map((row) => {
+  return contactRows
+    .filter((row) => !disqualified.has(row.contactId))
+    .map((row) => {
     const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
     const deadline = getSpeedToLeadDeadline(row.contactCreatedAt, config);
     const firstCallAt = callMap.get(row.contactId) ?? null;
@@ -307,6 +338,7 @@ export async function computeFollowupComplianceForMember(input: {
 
   const rows = await db
     .select({
+      contactId: crmTasks.contactId,
       dueAt: crmTasks.dueAt,
       status: crmTasks.status,
       updatedAt: crmTasks.updatedAt,
@@ -329,12 +361,18 @@ export async function computeFollowupComplianceForMember(input: {
     )
     .limit(2000);
 
+  const disqualified = await getDisqualifiedContactIds({
+    db,
+    contactIds: rows.map((row) => row.contactId).filter((id): id is string => typeof id === "string" && id.length > 0)
+  });
+
   let totalDue = 0;
   let completedOnTime = 0;
   let completedLate = 0;
   let stillOpen = 0;
 
   for (const row of rows) {
+    if (typeof row.contactId === "string" && disqualified.has(row.contactId)) continue;
     const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
     if (!hasPhone) continue;
     if (!(row.dueAt instanceof Date)) continue;
@@ -380,10 +418,16 @@ export async function computeConversionForMember(input: {
     )
     .limit(2000);
 
-  const totalLeads = rows.length;
+  const disqualified = await getDisqualifiedContactIds({
+    db,
+    contactIds: rows.map((row) => row.contactId).filter((id): id is string => typeof id === "string" && id.length > 0)
+  });
+
+  const filteredRows = rows.filter((row) => !disqualified.has(row.contactId));
+  const totalLeads = filteredRows.length;
   let booked = 0;
   let won = 0;
-  for (const row of rows) {
+  for (const row of filteredRows) {
     const stage = row.stage ?? null;
     if (stage === "qualified" || stage === "won") booked += 1;
     if (stage === "won") won += 1;
