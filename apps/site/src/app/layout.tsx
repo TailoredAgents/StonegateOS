@@ -1,22 +1,7 @@
 import "@/lib/react-internals-polyfill";
 import type { Metadata } from "next";
-import { Inter, Playfair_Display } from "next/font/google";
 import { absoluteUrl, siteUrl } from "@/lib/metadata";
 import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-sans",
-  weight: ["400", "500", "600"]
-});
-
-const playfair = Playfair_Display({
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-display",
-  weight: ["700"]
-});
 
 const defaultTitle = "Stonegate Junk Removal";
 const defaultDescription =
@@ -50,7 +35,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${playfair.variable}`}>
+    <html lang="en">
       <body className="antialiased bg-neutral-100 text-neutral-900 font-sans">
         {children}
       </body>

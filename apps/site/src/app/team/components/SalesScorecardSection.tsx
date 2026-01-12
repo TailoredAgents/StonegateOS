@@ -1,5 +1,7 @@
 import React from "react";
+import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
+import { resetSalesHqAction } from "../actions";
 
 const DEVON_MEMBER_ID = "b45988bb-7417-48c5-af6d-fcdf71088282";
 
@@ -228,6 +230,11 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
           <p className="mt-2 text-sm text-slate-700">
             Use the queue below to open the contact and call/text.
           </p>
+          <form action={resetSalesHqAction} className="mt-3">
+            <SubmitButton className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300" pendingLabel="Clearing...">
+              Clear Devon HQ
+            </SubmitButton>
+          </form>
         </div>
       </div>
 

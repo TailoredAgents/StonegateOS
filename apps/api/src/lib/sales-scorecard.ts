@@ -27,6 +27,7 @@ export type SalesScorecardConfig = {
   followupGraceMinutes: number;
   followupStepsMinutes: number[];
   defaultAssigneeMemberId: string;
+  trackingStartAt: string | null;
   weights: {
     speedToLead: number;
     followupCompliance: number;
@@ -46,6 +47,7 @@ const DEFAULT_CONFIG: SalesScorecardConfig = {
   followupGraceMinutes: 10,
   followupStepsMinutes: [15, 120, 1440, 4320],
   defaultAssigneeMemberId: FALLBACK_DEVON_MEMBER_ID,
+  trackingStartAt: null,
   weights: {
     speedToLead: 45,
     followupCompliance: 35,
@@ -108,6 +110,9 @@ export async function getSalesScorecardConfig(db: DbExecutor = getDb()): Promise
     typeof stored["defaultAssigneeMemberId"] === "string" && stored["defaultAssigneeMemberId"].trim().length > 0
       ? stored["defaultAssigneeMemberId"].trim()
       : base.defaultAssigneeMemberId;
+  const trackingStartAtRaw = typeof stored["trackingStartAt"] === "string" ? stored["trackingStartAt"].trim() : "";
+  const trackingStartAt =
+    trackingStartAtRaw.length > 0 && Number.isFinite(Date.parse(trackingStartAtRaw)) ? trackingStartAtRaw : base.trackingStartAt;
   const weights = coerceWeights(stored["weights"], base.weights);
 
   return {
@@ -118,6 +123,7 @@ export async function getSalesScorecardConfig(db: DbExecutor = getDb()): Promise
     followupGraceMinutes,
     followupStepsMinutes,
     defaultAssigneeMemberId,
+    trackingStartAt,
     weights
   };
 }
@@ -293,6 +299,12 @@ export async function computeFollowupComplianceForMember(input: {
   const db = input.db ?? getDb();
   const graceMs = input.graceMinutes * 60_000;
 
+  const config = await getSalesScorecardConfig(db);
+  const trackingStartAt =
+    config.trackingStartAt && Number.isFinite(Date.parse(config.trackingStartAt)) ? new Date(config.trackingStartAt) : null;
+  const effectiveSince =
+    trackingStartAt && trackingStartAt.getTime() > input.since.getTime() ? trackingStartAt : input.since;
+
   const rows = await db
     .select({
       dueAt: crmTasks.dueAt,
@@ -305,8 +317,9 @@ export async function computeFollowupComplianceForMember(input: {
       and(
         eq(crmTasks.assignedTo, input.memberId),
         isNotNull(crmTasks.dueAt),
-        gte(crmTasks.dueAt, input.since),
+        gte(crmTasks.dueAt, effectiveSince),
         lte(crmTasks.dueAt, input.until),
+        gte(crmTasks.createdAt, effectiveSince),
         isNotNull(crmTasks.notes),
         or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%"))
       )

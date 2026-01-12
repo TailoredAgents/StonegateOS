@@ -56,7 +56,11 @@ export async function GET(request: NextRequest): Promise<Response> {
   const rangeDays = clampInt(url.searchParams.get("rangeDays"), 7, { min: 1, max: 60 });
 
   const now = new Date();
-  const since = new Date(now.getTime() - rangeDays * 24 * 60_000 * 60);
+  const requestedSince = new Date(now.getTime() - rangeDays * 24 * 60_000 * 60);
+  const trackingStartAt =
+    config.trackingStartAt && Number.isFinite(Date.parse(config.trackingStartAt)) ? new Date(config.trackingStartAt) : null;
+  const since =
+    trackingStartAt && trackingStartAt.getTime() > requestedSince.getTime() ? trackingStartAt : requestedSince;
   const until = now;
 
   const speed = await computeSpeedToLeadForMember({ db, memberId, since, until });
@@ -116,6 +120,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       businessEndHour: config.businessEndHour,
       speedToLeadMinutes: config.speedToLeadMinutes,
       followupGraceMinutes: config.followupGraceMinutes,
+      trackingStartAt: config.trackingStartAt,
       weights: config.weights
     },
     score: {

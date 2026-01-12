@@ -2229,3 +2229,22 @@ export async function dismissNewLeadAction(formData: FormData) {
 
   revalidatePath("/team");
 }
+
+export async function resetSalesHqAction() {
+  const jar = await cookies();
+
+  const response = await callAdminApi("/api/admin/sales/reset", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to reset Devon HQ");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Devon HQ cleared. Only new leads will appear going forward.", path: "/" });
+  revalidatePath("/team");
+}

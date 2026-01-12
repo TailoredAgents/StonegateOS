@@ -31,6 +31,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const memberId = url.searchParams.get("memberId")?.trim() || config.defaultAssigneeMemberId;
 
   const now = new Date();
+  const trackingStartAt =
+    config.trackingStartAt && Number.isFinite(Date.parse(config.trackingStartAt)) ? new Date(config.trackingStartAt) : null;
+  const effectiveSince = trackingStartAt && trackingStartAt.getTime() < now.getTime() ? trackingStartAt : null;
   const rows = await db
     .select({
       id: crmTasks.id,
@@ -52,6 +55,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         eq(crmTasks.status, "open"),
         isNotNull(crmTasks.dueAt),
         isNotNull(crmTasks.notes),
+        ...(effectiveSince ? [gte(crmTasks.createdAt, effectiveSince)] : []),
         or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%"))
       )
     )
@@ -80,7 +84,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   });
 
   const seenContactIds = Array.from(new Set(rows.map((row) => row.contactId)));
-  const recentSince = new Date(now.getTime() - 7 * 24 * 60_000 * 60);
+  const defaultRecentSince = new Date(now.getTime() - 7 * 24 * 60_000 * 60);
+  const recentSince =
+    effectiveSince && effectiveSince.getTime() > defaultRecentSince.getTime() ? effectiveSince : defaultRecentSince;
   const missingFilters = [
     eq(contacts.salespersonMemberId, memberId),
     gte(contacts.createdAt, recentSince),
