@@ -428,6 +428,19 @@ async function ensureSalesFollowupsForLead(input: {
 
   const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
   const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
+  if (!hasPhone) {
+    await input.db
+      .update(outboxEvents)
+      .set({
+        payload: {
+          ...(input.payload ?? {}),
+          scheduledSalesFollowups: true,
+          skippedSalesFollowups: "missing_phone"
+        }
+      })
+      .where(eq(outboxEvents.id, input.outboxEventId));
+    return;
+  }
   const speedTitle = hasPhone ? "Auto: Call new lead (5 min SLA)" : "Auto: Message new lead (5 min SLA)";
   tasksToCreate.push({
     title: speedTitle,
@@ -549,6 +562,19 @@ async function ensureSalesFollowupsForContact(input: {
 
   const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
   const hasPhone = Boolean((contactRow.phoneE164 ?? contactRow.phone ?? "").trim().length);
+  if (!hasPhone) {
+    await input.db
+      .update(outboxEvents)
+      .set({
+        payload: {
+          ...(input.payload ?? {}),
+          scheduledSalesFollowups: true,
+          skippedSalesFollowups: "missing_phone"
+        }
+      })
+      .where(eq(outboxEvents.id, input.outboxEventId));
+    return;
+  }
   const speedTitle = hasPhone ? "Auto: Call new lead (5 min SLA)" : "Auto: Message new lead (5 min SLA)";
 
   const tagBlock = leadTag ? `${contactTag}\n${leadTag}` : contactTag;

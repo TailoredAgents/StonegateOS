@@ -310,9 +310,12 @@ export async function computeFollowupComplianceForMember(input: {
       dueAt: crmTasks.dueAt,
       status: crmTasks.status,
       updatedAt: crmTasks.updatedAt,
-      notes: crmTasks.notes
+      notes: crmTasks.notes,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164
     })
     .from(crmTasks)
+    .innerJoin(contacts, eq(crmTasks.contactId, contacts.id))
     .where(
       and(
         eq(crmTasks.assignedTo, input.memberId),
@@ -332,6 +335,8 @@ export async function computeFollowupComplianceForMember(input: {
   let stillOpen = 0;
 
   for (const row of rows) {
+    const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
+    if (!hasPhone) continue;
     if (!(row.dueAt instanceof Date)) continue;
     totalDue += 1;
     if (row.status === "completed") {

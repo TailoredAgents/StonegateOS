@@ -72,12 +72,24 @@ export async function GET(request: NextRequest): Promise<Response> {
     dedupedRows.push(row);
   }
 
-  const items = dedupedRows.map((row) => {
+  const items: Array<{
+    id: string;
+    leadId: string | null;
+    contact: { id: string; name: string; phone: string | null };
+    title: string;
+    dueAt: string | null;
+    overdue: boolean;
+    minutesUntilDue: number | null;
+    kind: "speed_to_lead" | "follow_up";
+  }> = [];
+  for (const row of dedupedRows) {
+    const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
+    if (!hasPhone) continue;
     const dueAtIso = row.dueAt ? row.dueAt.toISOString() : null;
     const dueMs = row.dueAt ? row.dueAt.getTime() : null;
     const isOverdue = typeof dueMs === "number" ? dueMs < now.getTime() : false;
     const minutesUntilDue = typeof dueMs === "number" ? Math.round((dueMs - now.getTime()) / 60_000) : null;
-    return {
+    items.push({
       id: row.id,
       leadId: parseLeadId(row.notes ?? null),
       contact: {
@@ -90,8 +102,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       overdue: isOverdue,
       minutesUntilDue,
       kind: isSpeedTask(row.title) ? "speed_to_lead" : "follow_up"
-    };
-  });
+    });
+  }
 
   const seenContactIds = Array.from(new Set(rows.map((row) => row.contactId)));
   const defaultRecentSince = new Date(now.getTime() - 7 * 24 * 60_000 * 60);
@@ -128,6 +140,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     const deadline = getSpeedToLeadDeadline(row.createdAt, config);
     const dueMs = deadline.getTime();
     const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
+    if (!hasPhone) continue;
     items.push({
       id: `contact:${row.id}`,
       leadId: null,
