@@ -152,8 +152,12 @@ export function buildLeadTag(leadId: string): string {
   return `[auto] leadId=${leadId}`;
 }
 
+export function buildContactTag(contactId: string): string {
+  return `[auto] contactId=${contactId}`;
+}
+
 export type SpeedToLeadResult = {
-  leadId: string;
+  leadId: string | null;
   contactId: string;
   createdAt: string;
   hasPhone: boolean;
@@ -172,30 +176,27 @@ export async function computeSpeedToLeadForMember(input: {
   const db = input.db ?? getDb();
   const config = await getSalesScorecardConfig(db);
 
-  const leadRows = await db
+  const contactRows = await db
     .select({
-      leadId: leads.id,
-      leadCreatedAt: leads.createdAt,
-      contactId: leads.contactId,
+      contactId: contacts.id,
+      contactCreatedAt: contacts.createdAt,
       phone: contacts.phone,
       phoneE164: contacts.phoneE164
     })
-    .from(leads)
-    .innerJoin(contacts, eq(leads.contactId, contacts.id))
+    .from(contacts)
     .where(
       and(
         eq(contacts.salespersonMemberId, input.memberId),
-        gte(leads.createdAt, input.since),
-        lte(leads.createdAt, input.until)
+        gte(contacts.createdAt, input.since),
+        lte(contacts.createdAt, input.until)
       )
     )
-    .orderBy(desc(leads.createdAt))
+    .orderBy(desc(contacts.createdAt))
     .limit(500);
 
-  if (!leadRows.length) return [];
+  if (!contactRows.length) return [];
 
-  const contactIds = Array.from(new Set(leadRows.map((row) => row.contactId)));
-  const leadIds = Array.from(new Set(leadRows.map((row) => row.leadId)));
+  const contactIds = Array.from(new Set(contactRows.map((row) => row.contactId)));
 
   const firstCalls = await db
     .select({
@@ -225,7 +226,6 @@ export async function computeSpeedToLeadForMember(input: {
 
   const firstOutboundMessages = await db
     .select({
-      leadId: conversationThreads.leadId,
       contactId: conversationThreads.contactId,
       firstOutboundAt: sql<Date>`min(${conversationMessages.createdAt})`.as("first_outbound_at")
     })
@@ -239,42 +239,34 @@ export async function computeSpeedToLeadForMember(input: {
         eq(conversationParticipants.teamMemberId, input.memberId),
         gte(conversationMessages.createdAt, input.since),
         lte(conversationMessages.createdAt, input.until),
-        or(
-          and(isNotNull(conversationThreads.leadId), inArray(conversationThreads.leadId, leadIds)),
-          and(isNull(conversationThreads.leadId), isNotNull(conversationThreads.contactId), inArray(conversationThreads.contactId, contactIds))
-        )
+        isNotNull(conversationThreads.contactId),
+        inArray(conversationThreads.contactId, contactIds)
       )
     )
-    .groupBy(conversationThreads.leadId, conversationThreads.contactId);
+    .groupBy(conversationThreads.contactId);
 
-  const outboundByLead = new Map<string, Date>();
   const outboundByContact = new Map<string, Date>();
   for (const row of firstOutboundMessages) {
     if (row.firstOutboundAt instanceof Date) {
-      if (typeof row.leadId === "string" && row.leadId.length) {
-        outboundByLead.set(row.leadId, row.firstOutboundAt);
-      } else if (typeof row.contactId === "string" && row.contactId.length) {
-        const existing = outboundByContact.get(row.contactId);
-        if (!existing || row.firstOutboundAt < existing) {
-          outboundByContact.set(row.contactId, row.firstOutboundAt);
-        }
+      if (typeof row.contactId === "string" && row.contactId.length) {
+        outboundByContact.set(row.contactId, row.firstOutboundAt);
       }
     }
   }
 
-  return leadRows.map((row) => {
+  return contactRows.map((row) => {
     const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
-    const deadline = getSpeedToLeadDeadline(row.leadCreatedAt, config);
+    const deadline = getSpeedToLeadDeadline(row.contactCreatedAt, config);
     const firstCallAt = callMap.get(row.contactId) ?? null;
-    const firstOutboundAt = outboundByLead.get(row.leadId) ?? outboundByContact.get(row.contactId) ?? null;
+    const firstOutboundAt = outboundByContact.get(row.contactId) ?? null;
     const met = hasPhone
       ? Boolean(firstCallAt && firstCallAt.getTime() <= deadline.getTime())
       : Boolean(firstOutboundAt && firstOutboundAt.getTime() <= deadline.getTime());
 
     return {
-      leadId: row.leadId,
+      leadId: null,
       contactId: row.contactId,
-      createdAt: row.leadCreatedAt.toISOString(),
+      createdAt: row.contactCreatedAt.toISOString(),
       hasPhone,
       deadlineAt: deadline.toISOString(),
       firstCallAt: firstCallAt ? firstCallAt.toISOString() : null,
@@ -316,7 +308,7 @@ export async function computeFollowupComplianceForMember(input: {
         gte(crmTasks.dueAt, input.since),
         lte(crmTasks.dueAt, input.until),
         isNotNull(crmTasks.notes),
-        ilike(crmTasks.notes, "%[auto] leadId=%")
+        or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%"))
       )
     )
     .limit(2000);

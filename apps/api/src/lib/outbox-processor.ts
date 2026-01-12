@@ -39,7 +39,13 @@ import {
 import type { AppointmentCalendarPayload } from "@/lib/calendar";
 import { createCalendarEventWithRetry, updateCalendarEventWithRetry } from "@/lib/calendar-events";
 import { sendDmMessage, sendDmTyping, sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
-import { buildLeadTag, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
+import {
+  buildContactTag,
+  buildLeadTag,
+  getLeadClockStart,
+  getSalesScorecardConfig,
+  getSpeedToLeadDeadline
+} from "@/lib/sales-scorecard";
 import { handleInboundAutoReply } from "@/lib/auto-replies";
 import { recordAuditEvent } from "@/lib/audit";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
@@ -371,6 +377,7 @@ async function ensureSalesFollowupsForLead(input: {
       leadId: leads.id,
       leadCreatedAt: leads.createdAt,
       contactId: leads.contactId,
+      contactCreatedAt: contacts.createdAt,
       stage: crmPipeline.stage,
       phone: contacts.phone,
       phoneE164: contacts.phoneE164,
@@ -393,11 +400,18 @@ async function ensureSalesFollowupsForLead(input: {
       .where(eq(contacts.id, row.contactId));
   }
 
-  const tag = buildLeadTag(row.leadId);
+  const leadTag = buildLeadTag(row.leadId);
+  const contactTag = buildContactTag(row.contactId);
   const [existing] = await input.db
     .select({ id: crmTasks.id })
     .from(crmTasks)
-    .where(and(eq(crmTasks.contactId, row.contactId), isNotNull(crmTasks.notes), ilike(crmTasks.notes, `%${tag}%`)))
+    .where(
+      and(
+        eq(crmTasks.contactId, row.contactId),
+        isNotNull(crmTasks.notes),
+        or(ilike(crmTasks.notes, `%${leadTag}%`), ilike(crmTasks.notes, `%${contactTag}%`))
+      )
+    )
     .limit(1);
 
   if (existing?.id) {
@@ -409,8 +423,8 @@ async function ensureSalesFollowupsForLead(input: {
   }
 
   const now = new Date();
-  const clockStart = getLeadClockStart(row.leadCreatedAt, config);
-  const speedDeadline = getSpeedToLeadDeadline(row.leadCreatedAt, config);
+  const clockStart = getLeadClockStart(row.contactCreatedAt ?? row.leadCreatedAt, config);
+  const speedDeadline = getSpeedToLeadDeadline(row.contactCreatedAt ?? row.leadCreatedAt, config);
 
   const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
   const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
@@ -418,7 +432,7 @@ async function ensureSalesFollowupsForLead(input: {
   tasksToCreate.push({
     title: speedTitle,
     dueAt: normalizeSalesDueAt(speedDeadline, config),
-    notes: `${tag}\nkind=speed_to_lead`
+    notes: `${contactTag}\n${leadTag}\nkind=speed_to_lead`
   });
 
   for (const minutes of config.followupStepsMinutes) {
@@ -427,7 +441,7 @@ async function ensureSalesFollowupsForLead(input: {
     tasksToCreate.push({
       title: "Auto: Follow up",
       dueAt: normalizeSalesDueAt(due, config),
-      notes: `${tag}\nkind=follow_up\nstepMinutes=${minutes}`
+      notes: `${contactTag}\n${leadTag}\nkind=follow_up\nstepMinutes=${minutes}`
     });
   }
 
@@ -437,6 +451,129 @@ async function ensureSalesFollowupsForLead(input: {
         .insert(crmTasks)
         .values({
           contactId: row.contactId,
+          title: task.title,
+          notes: task.notes,
+          dueAt: task.dueAt,
+          assignedTo: assigneeId,
+          status: "open",
+          createdAt: now,
+          updatedAt: now
+        })
+        .returning({ id: crmTasks.id });
+
+      if (!created?.id) continue;
+
+      await tx.insert(outboxEvents).values({
+        type: "crm.reminder.sms",
+        payload: { taskId: created.id },
+        nextAttemptAt: task.dueAt
+      });
+    }
+
+    await tx
+      .update(outboxEvents)
+      .set({ payload: { ...(input.payload ?? {}), scheduledSalesFollowups: true } })
+      .where(eq(outboxEvents.id, input.outboxEventId));
+  });
+}
+
+async function ensureSalesFollowupsForContact(input: {
+  db: ReturnType<typeof getDb>;
+  contactId: string;
+  outboxEventId: string;
+  payload: Record<string, unknown> | null;
+}): Promise<void> {
+  const existingFlag = input.payload?.["scheduledSalesFollowups"] === true;
+  if (existingFlag) return;
+
+  const config = await getSalesScorecardConfig(input.db);
+  const [contactRow] = await input.db
+    .select({
+      contactId: contacts.id,
+      createdAt: contacts.createdAt,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164,
+      salespersonMemberId: contacts.salespersonMemberId,
+      stage: crmPipeline.stage
+    })
+    .from(contacts)
+    .leftJoin(crmPipeline, eq(crmPipeline.contactId, contacts.id))
+    .where(eq(contacts.id, input.contactId))
+    .limit(1);
+
+  if (!contactRow?.contactId) return;
+  if (contactRow.stage === "won" || contactRow.stage === "lost") return;
+
+  const assigneeId = contactRow.salespersonMemberId ?? config.defaultAssigneeMemberId;
+  if (!contactRow.salespersonMemberId) {
+    await input.db
+      .update(contacts)
+      .set({ salespersonMemberId: assigneeId, updatedAt: new Date() })
+      .where(eq(contacts.id, contactRow.contactId));
+  }
+
+  const contactTag = buildContactTag(contactRow.contactId);
+  const [existingLead] = await input.db
+    .select({ id: leads.id })
+    .from(leads)
+    .where(eq(leads.contactId, contactRow.contactId))
+    .orderBy(desc(leads.createdAt), desc(leads.updatedAt))
+    .limit(1);
+  const leadTag = existingLead?.id ? buildLeadTag(existingLead.id) : null;
+
+  const [existing] = await input.db
+    .select({ id: crmTasks.id })
+    .from(crmTasks)
+    .where(
+      and(
+        eq(crmTasks.contactId, contactRow.contactId),
+        isNotNull(crmTasks.notes),
+        leadTag
+          ? or(ilike(crmTasks.notes, `%${contactTag}%`), ilike(crmTasks.notes, `%${leadTag}%`))
+          : ilike(crmTasks.notes, `%${contactTag}%`)
+      )
+    )
+    .limit(1);
+
+  if (existing?.id) {
+    await input.db
+      .update(outboxEvents)
+      .set({ payload: { ...(input.payload ?? {}), scheduledSalesFollowups: true } })
+      .where(eq(outboxEvents.id, input.outboxEventId));
+    return;
+  }
+
+  const now = new Date();
+  const clockStart = getLeadClockStart(contactRow.createdAt, config);
+  const speedDeadline = getSpeedToLeadDeadline(contactRow.createdAt, config);
+
+  const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
+  const hasPhone = Boolean((contactRow.phoneE164 ?? contactRow.phone ?? "").trim().length);
+  const speedTitle = hasPhone ? "Auto: Call new lead (5 min SLA)" : "Auto: Message new lead (5 min SLA)";
+
+  const tagBlock = leadTag ? `${contactTag}\n${leadTag}` : contactTag;
+  tasksToCreate.push({
+    title: speedTitle,
+    dueAt: normalizeSalesDueAt(speedDeadline, config),
+    notes: `${tagBlock}\nkind=speed_to_lead`
+  });
+
+  for (const minutes of config.followupStepsMinutes) {
+    if (minutes <= config.speedToLeadMinutes) continue;
+    const due = new Date(clockStart.getTime() + minutes * 60_000);
+    tasksToCreate.push({
+      title: "Auto: Follow up",
+      dueAt: normalizeSalesDueAt(due, config),
+      notes: `${tagBlock}\nkind=follow_up\nstepMinutes=${minutes}`
+    });
+  }
+
+  await input.db.transaction(async (tx) => {
+    for (const task of tasksToCreate) {
+      const [created] = await tx
+        .insert(crmTasks)
+        .values({
+          contactId: contactRow.contactId,
           title: task.title,
           notes: task.notes,
           dueAt: task.dueAt,
@@ -1666,6 +1803,24 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
 
       return { status: "processed", error: lastFailure };
+    }
+
+    case "contact.alert": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const contactId = typeof payload?.["contactId"] === "string" ? payload["contactId"] : null;
+      if (!contactId) {
+        console.warn("[outbox] contact.alert.missing_contact", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      await ensureSalesFollowupsForContact({
+        db: getDb(),
+        contactId,
+        outboxEventId: event.id,
+        payload
+      });
+
+      return { status: "processed" };
     }
 
     case "crm.reminder.sms": {

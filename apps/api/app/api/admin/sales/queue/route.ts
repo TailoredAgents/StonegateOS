@@ -1,10 +1,10 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, eq, ilike, isNotNull } from "drizzle-orm";
-import { contacts, crmTasks, getDb } from "@/db";
+import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lte, notInArray, or } from "drizzle-orm";
+import { contacts, crmPipeline, crmTasks, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
-import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
+import { getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -52,7 +52,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         eq(crmTasks.status, "open"),
         isNotNull(crmTasks.dueAt),
         isNotNull(crmTasks.notes),
-        ilike(crmTasks.notes, "%[auto] leadId=%")
+        or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%"))
       )
     )
     .orderBy(asc(crmTasks.dueAt), asc(crmTasks.createdAt))
@@ -79,6 +79,54 @@ export async function GET(request: NextRequest): Promise<Response> {
     };
   });
 
+  const seenContactIds = Array.from(new Set(rows.map((row) => row.contactId)));
+  const recentSince = new Date(now.getTime() - 7 * 24 * 60_000 * 60);
+  const missingFilters = [
+    eq(contacts.salespersonMemberId, memberId),
+    gte(contacts.createdAt, recentSince),
+    lte(contacts.createdAt, now),
+    or(isNull(crmPipeline.stage), notInArray(crmPipeline.stage, ["won", "lost"]))
+  ];
+  if (seenContactIds.length) {
+    missingFilters.push(notInArray(contacts.id, seenContactIds.slice(0, 500)));
+  }
+
+  const missingRows = await db
+    .select({
+      id: contacts.id,
+      createdAt: contacts.createdAt,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164
+    })
+    .from(contacts)
+    .leftJoin(crmPipeline, eq(crmPipeline.contactId, contacts.id))
+    .where(
+      and(...missingFilters)
+    )
+    .orderBy(desc(contacts.createdAt))
+    .limit(25);
+
+  for (const row of missingRows) {
+    const deadline = getSpeedToLeadDeadline(row.createdAt, config);
+    const dueMs = deadline.getTime();
+    const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
+    items.push({
+      id: `contact:${row.id}`,
+      leadId: null,
+      contact: {
+        id: row.id,
+        name: `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || "Contact",
+        phone: row.phoneE164 ?? row.phone ?? null
+      },
+      title: hasPhone ? "Auto: Call new lead (5 min SLA)" : "Auto: Message new lead (5 min SLA)",
+      dueAt: deadline.toISOString(),
+      overdue: dueMs < now.getTime(),
+      minutesUntilDue: Math.round((dueMs - now.getTime()) / 60_000),
+      kind: "speed_to_lead"
+    });
+  }
+
   return NextResponse.json({ ok: true, memberId, now: now.toISOString(), items });
 }
-

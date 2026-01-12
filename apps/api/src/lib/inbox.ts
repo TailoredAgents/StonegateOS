@@ -340,6 +340,10 @@ async function createContact(input: {
     .returning(returning);
 
   if (created) {
+    await db.insert(outboxEvents).values({
+      type: "contact.alert",
+      payload: { contactId: created.id, source: input.source ?? "inbound" }
+    });
     return created;
   }
 
