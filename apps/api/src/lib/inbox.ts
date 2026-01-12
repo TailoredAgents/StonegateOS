@@ -242,7 +242,12 @@ async function createContact(input: {
   } as const;
 
   let created: ContactMatch | undefined;
+  const exec = (db as unknown as { execute?: (query: unknown) => Promise<unknown> }).execute;
+  const canSavepoint = typeof exec === "function";
   try {
+    if (canSavepoint) {
+      await exec(sql`savepoint inbox_contact_insert`);
+    }
     const [row] = await db
       .insert(contacts)
       .values({
@@ -255,7 +260,19 @@ async function createContact(input: {
       })
       .returning(returning);
     created = row;
+    if (canSavepoint) {
+      await exec(sql`release savepoint inbox_contact_insert`);
+    }
   } catch (error) {
+    if (canSavepoint) {
+      try {
+        await exec(sql`rollback to savepoint inbox_contact_insert`);
+        await exec(sql`release savepoint inbox_contact_insert`);
+      } catch {
+        // ignore
+      }
+    }
+
     const code = extractPgCode(error);
     if (code !== "42703") {
       throw error;
