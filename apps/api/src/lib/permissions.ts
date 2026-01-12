@@ -63,6 +63,11 @@ export async function resolvePermissionContext(request: NextRequest): Promise<Pe
     return { enforce: false, role: null, permissions: ["*"] };
   }
 
+  // Owner sessions should always have full access, regardless of "acting as" attribution.
+  if (actorRole === "owner") {
+    return { enforce: true, role: "owner", permissions: ["*"] };
+  }
+
   const db = getDb();
 
   if (actorId) {
