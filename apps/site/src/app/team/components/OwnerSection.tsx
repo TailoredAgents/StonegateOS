@@ -51,6 +51,21 @@ type ExpensesSummaryPayload = {
   };
 };
 
+type CommissionSummaryPayload = {
+  ok: true;
+  timezone: string;
+  periodStart: string;
+  periodEnd: string;
+  scheduledPayoutAt: string;
+  totalsCents: {
+    sales: number;
+    marketing: number;
+    crew: number;
+    adjustments: number;
+    total: number;
+  };
+};
+
 function fmtMoney(cents: number, currency: string) {
   try {
     return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
@@ -104,6 +119,32 @@ export async function OwnerSection(): Promise<React.ReactElement> {
   } catch {
     expensesSummaryError = expensesSummaryError ?? "Expenses unavailable.";
     expensesError = expensesError ?? "Expenses unavailable.";
+  }
+
+  let commissionSummary: CommissionSummaryPayload | null = null;
+  let commissionError: string | null = null;
+  try {
+    const res = await callAdminApi("/api/admin/commissions/summary");
+    if (res.ok) {
+      commissionSummary = (await res.json()) as CommissionSummaryPayload;
+    } else if (res.status === 503) {
+      commissionError = "Commissions are still initializing. Try again in a minute.";
+    } else {
+      commissionError = `Commissions unavailable (HTTP ${res.status})`;
+    }
+  } catch {
+    commissionError = "Commissions unavailable.";
+  }
+
+  function fmtWhen(iso: string, timezone: string): string {
+    const d = new Date(iso);
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    }).format(d);
   }
 
   return (
@@ -238,15 +279,46 @@ export async function OwnerSection(): Promise<React.ReactElement> {
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">Commissions</h3>
-              <p className="mt-1 text-sm text-slate-600">Manage settings and payout runs in Control → Commissions.</p>
+              <p className="mt-1 text-sm text-slate-600">Weekly payout totals (settings + payouts live in Control → Commissions).</p>
             </div>
             <a href="/team?tab=commissions" className={teamButtonClass("secondary", "sm")}>
               Open
             </a>
           </div>
-          <p className="mt-4 text-sm text-slate-600">
-            Commissions are calculated from completed jobs using final amount paid.
-          </p>
+
+          {commissionError ? <p className="mt-3 text-sm text-amber-700">{commissionError}</p> : null}
+
+          {commissionSummary?.ok ? (
+            <div className="mt-4 space-y-3">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      This week (pay period)
+                    </div>
+                    <div className="mt-1 text-sm font-semibold text-slate-900">
+                      Total: {fmtMoney(commissionSummary.totalsCents.total, "USD")}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-600">
+                      Payout scheduled {fmtWhen(commissionSummary.scheduledPayoutAt, commissionSummary.timezone)}
+                    </div>
+                  </div>
+                  <div className="text-right text-xs text-slate-600">
+                    <div>Sales: {fmtMoney(commissionSummary.totalsCents.sales, "USD")}</div>
+                    <div>Marketing: {fmtMoney(commissionSummary.totalsCents.marketing, "USD")}</div>
+                    <div>Crew: {fmtMoney(commissionSummary.totalsCents.crew, "USD")}</div>
+                    {commissionSummary.totalsCents.adjustments ? (
+                      <div>Adjustments: {fmtMoney(commissionSummary.totalsCents.adjustments, "USD")}</div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-slate-600">
+              Commissions are calculated from completed jobs using final amount paid.
+            </p>
+          )}
         </div>
       </div>
 
