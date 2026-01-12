@@ -19,14 +19,31 @@ function readString(value: unknown): string | null {
 }
 
 function resolveApiBaseUrl(request: NextRequest): string {
-  const configured =
-    process.env["API_BASE_URL"] ??
-    process.env["NEXT_PUBLIC_API_BASE_URL"] ??
-    null;
-  if (configured && configured.trim().length > 0) {
-    return configured.replace(/\/$/, "");
+  const candidates = [
+    process.env["NEXT_PUBLIC_API_BASE_URL"],
+    process.env["API_BASE_URL"]
+  ]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0);
+
+  for (const candidate of candidates) {
+    try {
+      const url = new URL(candidate);
+      if (url.protocol !== "https:" && url.protocol !== "http:") continue;
+      const host = url.hostname.toLowerCase();
+      const isLocalhost =
+        host === "localhost" ||
+        host === "0.0.0.0" ||
+        host === "127.0.0.1" ||
+        host.endsWith(".internal");
+      if (isLocalhost) continue;
+      return url.toString().replace(/\/$/, "");
+    } catch {
+      continue;
+    }
   }
-  return request.nextUrl.origin;
+
+  return request.nextUrl.origin.replace(/\/$/, "");
 }
 
 async function createTwilioCall(input: { agentPhone: string; toPhone: string; request: NextRequest }) {
@@ -139,6 +156,12 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const result = await createTwilioCall({ agentPhone, toPhone, request });
   if (!result.ok) {
+    console.warn("[calls.start] twilio_call_failed", {
+      contactId: resolvedContactId ?? contactId ?? null,
+      agentPhone,
+      toPhone,
+      detail: result.error
+    });
     return NextResponse.json({ error: result.error }, { status: 500 });
   }
 
@@ -157,4 +180,3 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   return NextResponse.json({ ok: true, callSid: result.callSid });
 }
-
