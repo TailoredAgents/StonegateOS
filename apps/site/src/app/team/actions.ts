@@ -2015,13 +2015,47 @@ export async function updateThreadAction(formData: FormData) {
 export async function sendThreadMessageAction(formData: FormData) {
   const jar = await cookies();
   const threadId = formData.get("threadId");
+  const contactId = formData.get("contactId");
+  const channel = formData.get("channel");
   const body = formData.get("body");
   const subject = formData.get("subject");
 
-  if (typeof threadId !== "string" || threadId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
-    revalidatePath("/team");
-    return;
+  let resolvedThreadId = typeof threadId === "string" ? threadId.trim() : "";
+  if (resolvedThreadId.length === 0) {
+    const ensuredContactId = typeof contactId === "string" ? contactId.trim() : "";
+    const ensuredChannel = typeof channel === "string" ? channel.trim() : "";
+
+    if (!ensuredContactId || !ensuredChannel) {
+      jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    if (ensuredChannel === "dm") {
+      jar.set({ name: "myst-flash-error", value: "Messenger thread not found yet.", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    const ensureRes = await callAdminApi("/api/admin/inbox/threads/ensure", {
+      method: "POST",
+      body: JSON.stringify({ contactId: ensuredContactId, channel: ensuredChannel })
+    });
+
+    if (!ensureRes.ok) {
+      const message = await readErrorMessage(ensureRes, "Unable to open a thread for this contact");
+      jar.set({ name: "myst-flash-error", value: message, path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    const ensurePayload = (await ensureRes.json().catch(() => null)) as { threadId?: string } | null;
+    resolvedThreadId = typeof ensurePayload?.threadId === "string" ? ensurePayload.threadId.trim() : "";
+    if (!resolvedThreadId) {
+      jar.set({ name: "myst-flash-error", value: "Unable to open a thread for this contact", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
   }
   if (typeof body !== "string" || body.trim().length === 0) {
     jar.set({ name: "myst-flash-error", value: "Message body required", path: "/" });
@@ -2037,7 +2071,7 @@ export async function sendThreadMessageAction(formData: FormData) {
     payload["subject"] = subject.trim();
   }
 
-  const response = await callAdminApi(`/api/admin/inbox/threads/${threadId}/messages`, {
+  const response = await callAdminApi(`/api/admin/inbox/threads/${resolvedThreadId}/messages`, {
     method: "POST",
     body: JSON.stringify(payload)
   });
@@ -2105,13 +2139,48 @@ export async function deleteMessageAction(formData: FormData) {
 export async function suggestThreadReplyAction(formData: FormData) {
   const jar = await cookies();
   const threadId = formData.get("threadId");
-  if (typeof threadId !== "string" || threadId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
-    revalidatePath("/team");
-    return;
+  const contactId = formData.get("contactId");
+  const channel = formData.get("channel");
+
+  let resolvedThreadId = typeof threadId === "string" ? threadId.trim() : "";
+  if (resolvedThreadId.length === 0) {
+    const ensuredContactId = typeof contactId === "string" ? contactId.trim() : "";
+    const ensuredChannel = typeof channel === "string" ? channel.trim() : "";
+
+    if (!ensuredContactId || !ensuredChannel) {
+      jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    if (ensuredChannel === "dm") {
+      jar.set({ name: "myst-flash-error", value: "Messenger thread not found yet.", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    const ensureRes = await callAdminApi("/api/admin/inbox/threads/ensure", {
+      method: "POST",
+      body: JSON.stringify({ contactId: ensuredContactId, channel: ensuredChannel })
+    });
+
+    if (!ensureRes.ok) {
+      const message = await readErrorMessage(ensureRes, "Unable to open a thread for this contact");
+      jar.set({ name: "myst-flash-error", value: message, path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    const ensurePayload = (await ensureRes.json().catch(() => null)) as { threadId?: string } | null;
+    resolvedThreadId = typeof ensurePayload?.threadId === "string" ? ensurePayload.threadId.trim() : "";
+    if (!resolvedThreadId) {
+      jar.set({ name: "myst-flash-error", value: "Unable to open a thread for this contact", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
   }
 
-  const response = await callAdminApi(`/api/admin/inbox/threads/${threadId.trim()}/suggest`, {
+  const response = await callAdminApi(`/api/admin/inbox/threads/${resolvedThreadId}/suggest`, {
     method: "POST",
     body: JSON.stringify({})
   });

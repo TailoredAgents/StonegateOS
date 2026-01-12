@@ -7,6 +7,7 @@ import {
   appointments,
   commissionSettings,
   contacts,
+  expenses,
   payoutRunAdjustments,
   payoutRunLines,
   payoutRuns,
@@ -504,8 +505,64 @@ export async function lockPayoutRun(db: DatabaseClient, input: { payoutRunId: st
 }
 
 export async function markPayoutRunPaid(db: DatabaseClient, payoutRunId: string): Promise<void> {
-  await db
-    .update(payoutRuns)
-    .set({ status: "paid", paidAt: new Date(), updatedAt: new Date() })
-    .where(eq(payoutRuns.id, payoutRunId));
+  const now = new Date();
+
+  await db.transaction(async (tx) => {
+    const [run] = await tx
+      .select({
+        id: payoutRuns.id,
+        periodStart: payoutRuns.periodStart,
+        periodEnd: payoutRuns.periodEnd,
+        scheduledPayoutAt: payoutRuns.scheduledPayoutAt
+      })
+      .from(payoutRuns)
+      .where(eq(payoutRuns.id, payoutRunId))
+      .limit(1);
+
+    if (!run?.id) {
+      throw new Error("payout_run_not_found");
+    }
+
+    await tx
+      .update(payoutRuns)
+      .set({ status: "paid", paidAt: now, updatedAt: now })
+      .where(eq(payoutRuns.id, payoutRunId));
+
+    const expenseMemo = `payout_run:${payoutRunId}`;
+
+    const [existingExpense] = await tx
+      .select({ id: expenses.id })
+      .from(expenses)
+      .where(and(eq(expenses.source, "payout_run"), eq(expenses.memo, expenseMemo)))
+      .limit(1);
+
+    if (existingExpense?.id) {
+      return;
+    }
+
+    const [totals] = await tx
+      .select({
+        totalCents: sql<number>`sum(${payoutRunLines.totalCents})`.mapWith(Number)
+      })
+      .from(payoutRunLines)
+      .where(eq(payoutRunLines.payoutRunId, payoutRunId))
+      .limit(1);
+
+    const totalCents = Number(totals?.totalCents ?? 0);
+    if (totalCents <= 0) return;
+
+    await tx.insert(expenses).values({
+      amount: totalCents,
+      currency: "USD",
+      category: "Commissions",
+      vendor: "Payouts",
+      memo: expenseMemo,
+      source: "payout_run",
+      paidAt: run.scheduledPayoutAt ?? now,
+      coverageStartAt: run.periodStart,
+      coverageEndAt: run.periodEnd,
+      createdAt: now,
+      updatedAt: now
+    });
+  });
 }

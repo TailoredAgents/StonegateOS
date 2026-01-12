@@ -74,6 +74,7 @@ type ThreadDetail = {
 
 type MessageDetail = {
   id: string;
+  threadId?: string;
   direction: string;
   channel: string;
   subject: string | null;
@@ -87,6 +88,23 @@ type MessageDetail = {
 
 type ThreadResponse = {
   thread: ThreadDetail;
+  messages: MessageDetail[];
+};
+
+type TimelineThread = {
+  id: string;
+  status: string;
+  state?: string | null;
+  stateUpdatedAt?: string | null;
+  channel: string;
+  subject: string | null;
+  lastMessageAt: string | null;
+  lastInboundAt?: string | null;
+};
+
+type TimelineResponse = {
+  contact: { id: string; name: string; email: string | null; phone: string | null };
+  threads: TimelineThread[];
   messages: MessageDetail[];
 };
 
@@ -231,20 +249,18 @@ function getAllowedStates(currentState: string | null | undefined): string[] {
   return THREAD_STATES.slice(index);
 }
 
-function buildThreadHref(status: string | null, threadId: string): string {
+function buildInboxHref(input: {
+  status?: string | null;
+  threadId?: string | null;
+  contactId?: string | null;
+  channel?: string | null;
+}): string {
   const params = new URLSearchParams();
   params.set("tab", "inbox");
-  if (status) params.set("status", status);
-  params.set("threadId", threadId);
-  return `/team?${params.toString()}`;
-}
-
-function buildEnsureThreadHref(status: string | null, contactId: string, channel: string): string {
-  const params = new URLSearchParams();
-  params.set("tab", "inbox");
-  if (status) params.set("status", status);
-  params.set("contactId", contactId);
-  params.set("channel", channel);
+  if (input.status) params.set("status", input.status);
+  if (input.threadId) params.set("threadId", input.threadId);
+  if (input.contactId) params.set("contactId", input.contactId);
+  if (input.channel) params.set("channel", input.channel);
   return `/team?${params.toString()}`;
 }
 
@@ -262,28 +278,6 @@ function isSupportedChannel(value: string | null | undefined): value is "sms" | 
 export async function InboxSection({ threadId, status, contactId, channel }: InboxSectionProps): Promise<React.ReactElement> {
   const activeStatus = status ?? "open";
   const requestedChannel = isSupportedChannel(channel) ? channel : "sms";
-
-  if (!threadId && contactId) {
-    try {
-      const ensureRes = await callAdminApi("/api/admin/inbox/threads/ensure", {
-        method: "POST",
-        body: JSON.stringify({ contactId, channel: requestedChannel })
-      });
-      if (ensureRes.ok) {
-        const data = (await ensureRes.json().catch(() => null)) as { threadId?: string } | null;
-        const ensuredId = typeof data?.threadId === "string" ? data.threadId : null;
-        if (ensuredId) {
-          const qs = new URLSearchParams();
-          qs.set("tab", "inbox");
-          if (activeStatus && activeStatus !== "all") qs.set("status", activeStatus);
-          qs.set("threadId", ensuredId);
-          return redirect(`/team?${qs.toString()}`);
-        }
-      }
-    } catch {
-      // fall through and render the inbox list without selecting a thread
-    }
-  }
 
   const params = new URLSearchParams();
   params.set("limit", "50");
@@ -340,35 +334,44 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
   }
 
   const activeThread = threadDetail?.thread ?? null;
-  const activeMessages = threadDetail?.messages ?? [];
-  const allowedStates = activeThread ? getAllowedStates(activeThread.state ?? "new") : [...THREAD_STATES];
-  const activePhone = normalizePhoneLink(activeThread?.contact?.phone);
-  const callLink = activePhone ? `tel:${activePhone}` : null;
-  const textLink = activePhone ? `sms:${activePhone}` : null;
-  const activeContactId = activeThread?.contact?.id ?? null;
+  const activeThreadMessages = threadDetail?.messages ?? [];
+  const requestedContactId = typeof contactId === "string" && contactId.trim().length ? contactId.trim() : null;
+  const activeContactId = requestedContactId ?? activeThread?.contact?.id ?? null;
 
-  let contactThreads: ThreadSummary[] = [];
+  let timeline: TimelineResponse | null = null;
   if (activeContactId) {
     try {
-      const res = await callAdminApi(
-        `/api/admin/inbox/threads?contactId=${encodeURIComponent(activeContactId)}&limit=200`
-      );
+      const res = await callAdminApi(`/api/admin/inbox/timeline?contactId=${encodeURIComponent(activeContactId)}&limit=300`);
       if (res.ok) {
-        const payload = (await res.json().catch(() => null)) as { threads?: ThreadSummary[] } | null;
-        contactThreads = payload?.threads ?? [];
+        timeline = (await res.json().catch(() => null)) as TimelineResponse | null;
       }
     } catch {
-      // ignore
+      timeline = null;
     }
   }
 
+  const activeContact = timeline?.contact ?? activeThread?.contact ?? null;
+  const timelineThreads = timeline?.threads ?? [];
+  const timelineMessages = timeline?.messages?.length ? timeline.messages : activeThreadMessages;
+
   const channelThreadMap = new Map<string, string>();
-  for (const t of contactThreads) {
+  for (const t of timelineThreads) {
     if (!t?.channel || !t?.id) continue;
-    if (!channelThreadMap.has(t.channel)) {
-      channelThreadMap.set(t.channel, t.id);
-    }
+    if (!channelThreadMap.has(t.channel)) channelThreadMap.set(t.channel, t.id);
   }
+
+  const activeChannelThreadId = activeContactId ? (channelThreadMap.get(requestedChannel) ?? null) : null;
+  const selectedThreadId =
+    activeChannelThreadId ?? (activeThread?.id && activeThread.channel === requestedChannel ? activeThread.id : null);
+  const selectedThread = selectedThreadId
+    ? timelineThreads.find((t) => t.id === selectedThreadId) ?? (activeThread?.id === selectedThreadId ? activeThread : null)
+    : null;
+
+  const selectedThreadState = (selectedThread as { state?: string | null } | null)?.state ?? "new";
+  const allowedStates = selectedThread ? getAllowedStates(selectedThreadState) : [...THREAD_STATES];
+  const activePhone = normalizePhoneLink(activeContact?.phone);
+  const callLink = activePhone ? `tel:${activePhone}` : null;
+  const textLink = activePhone ? `sms:${activePhone}` : null;
 
   return (
     <section className="space-y-6">
@@ -452,11 +455,25 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
             <div className="space-y-3">
               {threads.map((thread) => {
                 const expired = isDmExpired(thread, Date.now());
-                const isActive = thread.id === activeThread?.id;
+                const threadContactId = thread.contact?.id ?? null;
+                const isActive =
+                  Boolean(threadContactId && activeContactId) &&
+                  threadContactId === activeContactId &&
+                  thread.channel === requestedChannel;
+                const href = threadContactId
+                  ? buildInboxHref({
+                      status: activeStatus === "all" ? null : activeStatus,
+                      contactId: threadContactId,
+                      channel: thread.channel
+                    })
+                  : buildInboxHref({
+                      status: activeStatus === "all" ? null : activeStatus,
+                      threadId: thread.id
+                    });
                 return (
                   <a
                     key={thread.id}
-                    href={buildThreadHref(activeStatus, thread.id)}
+                    href={href}
                     className={`block rounded-2xl border px-4 py-3 text-sm transition ${
                       isActive
                         ? "border-primary-300 bg-primary-50/60 shadow-md shadow-primary-100"
@@ -577,7 +594,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     </div>
                     <div className="mt-3 flex items-center justify-between">
                       <a
-                        href={buildThreadHref("all", message.threadId)}
+                        href={buildInboxHref({ status: "all", threadId: message.threadId })}
                         className="text-[11px] font-semibold text-primary-600 hover:text-primary-700"
                       >
                         View thread
@@ -600,25 +617,29 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
         </div>
 
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
-          {activeThread ? (
+          {activeContactId ? (
             <div className="space-y-5">
               <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="text-lg font-semibold text-slate-900">
-                    {activeThread.contact?.name ?? "Unknown contact"}
+                    {activeContact?.name ?? "Unknown contact"}
                   </h3>
                   <p className="text-xs text-slate-500">
-                    {activeThread.channel.toUpperCase()} | {formatStatusLabel(activeThread.status)} |{" "}
-                    {formatStateLabel(activeThread.state ?? "new")}
+                    {(requestedChannel === "dm" ? "Messenger" : requestedChannel.toUpperCase())}{" "}
+                    {selectedThread
+                      ? `| ${formatStatusLabel((selectedThread as { status: string }).status)} | ${formatStateLabel(
+                          (selectedThread as { state?: string | null }).state ?? "new"
+                        )}`
+                      : "| No thread yet"}
                   </p>
-                  {activeThread.property?.outOfArea ? (
+                  {activeThread?.property?.outOfArea ? (
                     <p className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
                       Out of area
                     </p>
                   ) : null}
-                  {activeThread.stateUpdatedAt ? (
+                  {(selectedThread as { stateUpdatedAt?: string | null } | null)?.stateUpdatedAt ? (
                     <p className="text-[11px] text-slate-400">
-                      State updated {formatTimestamp(activeThread.stateUpdatedAt)}
+                      State updated {formatTimestamp((selectedThread as { stateUpdatedAt: string }).stateUpdatedAt)}
                     </p>
                   ) : null}
                 </div>
@@ -626,10 +647,10 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                   {activeContactId ? (
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       {(["sms", "dm", "email"] as const).map((ch) => {
-                        const isActive = activeThread.channel === ch;
+                        const isActive = requestedChannel === ch;
                         const existingId = channelThreadMap.get(ch) ?? null;
-                        const hasPhone = Boolean(activeThread.contact?.phone);
-                        const hasEmail = Boolean(activeThread.contact?.email);
+                        const hasPhone = Boolean(activeContact?.phone);
+                        const hasEmail = Boolean(activeContact?.email);
                         const disabled =
                           ch === "dm"
                             ? !existingId
@@ -640,9 +661,11 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                                 : false;
 
                         const label = ch === "dm" ? "Messenger" : ch.toUpperCase();
-                        const href = existingId
-                          ? buildThreadHref(activeStatus, existingId)
-                          : buildEnsureThreadHref(activeStatus === "all" ? null : activeStatus, activeContactId, ch);
+                        const href = buildInboxHref({
+                          status: activeStatus === "all" ? null : activeStatus,
+                          contactId: activeContactId,
+                          channel: ch
+                        });
 
                         return (
                           <a
@@ -691,47 +714,51 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                       Text
                     </a>
                   </div>
-                  <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
-                    <input type="hidden" name="threadId" value={activeThread.id} />
-                    <select
-                      name="state"
-                      defaultValue={activeThread.state ?? "new"}
-                      className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
-                    >
-                      {allowedStates.map((value) => (
-                        <option key={value} value={value}>
-                          {formatStateLabel(value)}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      name="status"
-                      defaultValue={activeThread.status}
-                      className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
-                    >
-                      {THREAD_STATUSES.map((value) => (
-                        <option key={value} value={value}>
-                          {formatStatusLabel(value)}
-                        </option>
-                      ))}
-                    </select>
-                    <SubmitButton
-                      className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                      pendingLabel="Saving..."
-                    >
-                      Update thread
-                    </SubmitButton>
-                  </form>
+                  {selectedThreadId ? (
+                    <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
+                      <input type="hidden" name="threadId" value={selectedThreadId} />
+                      <select
+                        name="state"
+                        defaultValue={(selectedThread as { state?: string | null } | null)?.state ?? "new"}
+                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
+                      >
+                        {allowedStates.map((value) => (
+                          <option key={value} value={value}>
+                            {formatStateLabel(value)}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        name="status"
+                        defaultValue={(selectedThread as { status?: string } | null)?.status ?? "open"}
+                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
+                      >
+                        {THREAD_STATUSES.map((value) => (
+                          <option key={value} value={value}>
+                            {formatStatusLabel(value)}
+                          </option>
+                        ))}
+                      </select>
+                      <SubmitButton
+                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                        pendingLabel="Saving..."
+                      >
+                        Update thread
+                      </SubmitButton>
+                    </form>
+                  ) : (
+                    <div className="text-xs text-slate-400">No {requestedChannel === "dm" ? "Messenger" : requestedChannel.toUpperCase()} thread yet.</div>
+                  )}
                 </div>
               </div>
 
               <div className="space-y-3">
-                {activeMessages.length === 0 ? (
+                {timelineMessages.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-sm text-slate-500">
                     No messages yet. Send the first touch below.
                   </div>
                 ) : (
-                  activeMessages.map((message) => {
+                  timelineMessages.map((message) => {
                     const isOutbound = message.direction !== "inbound";
                     const autoReply = isAutoReply(message.metadata ?? null);
                     const autoReplyDelayMs = readMetaNumber(message.metadata ?? null, "autoReplyDelayMs");
@@ -761,6 +788,9 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                                   Draft
                                 </div>
                               ) : null}
+                              <div className="inline-flex items-center rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                                {message.channel === "dm" ? "Messenger" : message.channel.toUpperCase()}
+                              </div>
                             </div>
                             <form action={deleteMessageAction}>
                               <input type="hidden" name="messageId" value={message.id} />
@@ -807,26 +837,37 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 )}
               </div>
 
-              {["sms", "email", "dm"].includes(activeThread.channel) ? (
-                <form action={suggestThreadReplyAction} className="flex justify-end">
-                  <input type="hidden" name="threadId" value={activeThread.id} />
-                  <SubmitButton
-                    className={teamButtonClass("secondary", "sm")}
-                    pendingLabel="Thinking..."
-                  >
-                    AI Suggest
-                  </SubmitButton>
-                </form>
-              ) : null}
+              <form action={suggestThreadReplyAction} className="flex justify-end gap-2">
+                <input type="hidden" name="contactId" value={activeContactId} />
+                <input type="hidden" name="channel" value={requestedChannel} />
+                {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
+                <SubmitButton
+                  className={teamButtonClass("secondary", "sm")}
+                  pendingLabel="Thinking..."
+                  disabled={
+                    requestedChannel === "dm"
+                      ? !channelThreadMap.get("dm")
+                      : requestedChannel === "sms"
+                        ? !activeContact?.phone
+                        : requestedChannel === "email"
+                          ? !activeContact?.email
+                          : false
+                  }
+                >
+                  AI Suggest
+                </SubmitButton>
+              </form>
 
               <form action={sendThreadMessageAction} className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                <input type="hidden" name="threadId" value={activeThread.id} />
-                {activeThread.channel === "email" ? (
+                <input type="hidden" name="contactId" value={activeContactId} />
+                <input type="hidden" name="channel" value={requestedChannel} />
+                {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
+                {requestedChannel === "email" ? (
                   <label className="flex flex-col gap-1 text-xs text-slate-600">
                     <span>Subject</span>
                     <input
                       name="subject"
-                      defaultValue={activeThread.subject ?? ""}
+                      defaultValue={(selectedThread as { subject?: string | null } | null)?.subject ?? ""}
                       className={TEAM_INPUT_COMPACT}
                     />
                   </label>
@@ -843,6 +884,15 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 <SubmitButton
                   className={teamButtonClass("primary", "sm")}
                   pendingLabel="Sending..."
+                  disabled={
+                    requestedChannel === "dm"
+                      ? !channelThreadMap.get("dm")
+                      : requestedChannel === "sms"
+                        ? !activeContact?.phone
+                        : requestedChannel === "email"
+                          ? !activeContact?.email
+                          : false
+                  }
                 >
                   Send message
                 </SubmitButton>
