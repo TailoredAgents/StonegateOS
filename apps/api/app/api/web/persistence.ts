@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { contacts, properties } from "@/db";
 import type { DatabaseClient } from "@/db";
 import type { InferModel } from "drizzle-orm";
@@ -22,30 +22,12 @@ const CONTACT_SELECT = {
   email: contacts.email,
   phone: contacts.phone,
   phoneE164: contacts.phoneE164,
+  salespersonMemberId: contacts.salespersonMemberId,
   preferredContactMethod: contacts.preferredContactMethod,
   source: contacts.source,
   createdAt: contacts.createdAt,
   updatedAt: contacts.updatedAt
 } as const;
-
-type ContactRecordCompat = Omit<ContactRecord, "salespersonMemberId">;
-
-function toContactRecord(row: ContactRecordCompat): ContactRecord {
-  return { ...row, salespersonMemberId: null } as ContactRecord;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function extractPgCode(error: unknown): string | null {
-  const direct = isRecord(error) ? error : null;
-  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
-  if (directCode) return directCode;
-  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
-  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
-  return causeCode;
-}
 
 interface UpsertContactInput {
   firstName: string;
@@ -69,7 +51,7 @@ export async function upsertContact(
       .from(contacts)
       .where(eq(contacts.email, email))
       .limit(1);
-    contact = existingByEmail ? toContactRecord(existingByEmail) : undefined;
+    contact = existingByEmail ?? undefined;
   }
 
   if (!contact) {
@@ -78,7 +60,7 @@ export async function upsertContact(
       .from(contacts)
       .where(eq(contacts.phoneE164, input.phoneE164))
       .limit(1);
-    contact = existingByPhone ? toContactRecord(existingByPhone) : undefined;
+    contact = existingByPhone ?? undefined;
   }
 
   if (contact) {
@@ -104,70 +86,44 @@ export async function upsertContact(
       return contact;
     }
 
-    return toContactRecord(updated);
+    return updated;
   }
 
-  let inserted: ContactRecordCompat | undefined;
-  const exec =
-    typeof (db as unknown as { execute?: unknown }).execute === "function"
-      ? (db as unknown as { execute: (query: unknown) => Promise<unknown> }).execute.bind(db)
-      : null;
-  const canSavepoint = Boolean(exec);
-  try {
-    if (canSavepoint) {
-      await exec!(sql`savepoint upsert_contact_insert`);
-    }
-    const [row] = await db
-      .insert(contacts)
-      .values({
-        firstName: input.firstName,
-        lastName: input.lastName,
-        phone: input.phoneRaw,
-        phoneE164: input.phoneE164,
-        email,
-        source: input.source ?? "web"
-      })
-      .returning(CONTACT_SELECT);
-    inserted = row;
-    if (canSavepoint) {
-      await exec!(sql`release savepoint upsert_contact_insert`);
-    }
-  } catch (error) {
-    if (canSavepoint) {
-      try {
-        await exec!(sql`rollback to savepoint upsert_contact_insert`);
-        await exec!(sql`release savepoint upsert_contact_insert`);
-      } catch {
-        // If the connection doesn't support savepoints here, the original error will be thrown below.
-      }
-    }
+  const [inserted] = await db
+    .insert(contacts)
+    .values({
+      firstName: input.firstName,
+      lastName: input.lastName,
+      phone: input.phoneRaw,
+      phoneE164: input.phoneE164,
+      email: email ?? null,
+      source: input.source ?? "web"
+    })
+    .onConflictDoNothing()
+    .returning(CONTACT_SELECT);
 
-    const code = extractPgCode(error);
-    if (code !== "42703") {
-      throw error;
-    }
-
-    const rows = await (db as any).execute(
-      sql`
-        insert into "contacts" ("first_name", "last_name", "phone", "phone_e164", "email", "source")
-        values (${input.firstName}, ${input.lastName}, ${input.phoneRaw}, ${input.phoneE164}, ${email ?? null}, ${input.source ?? "web"})
-        returning "id"
-      `
-    );
-    const insertedId = Array.isArray(rows) ? (rows[0] as any)?.id : null;
-    if (typeof insertedId !== "string" || !insertedId) {
-      throw new Error("contact_insert_failed");
-    }
-
-    const [selected] = await db.select(CONTACT_SELECT).from(contacts).where(eq(contacts.id, insertedId)).limit(1);
-    inserted = selected ?? undefined;
+  if (inserted) {
+    return inserted;
   }
 
-  if (!inserted) {
-    throw new Error("contact_insert_failed");
+  if (email) {
+    const [existingByEmail] = await db
+      .select(CONTACT_SELECT)
+      .from(contacts)
+      .where(eq(contacts.email, email))
+      .limit(1);
+    if (existingByEmail) return existingByEmail;
   }
 
-  return toContactRecord(inserted);
+  const [existingByPhone] = await db
+    .select(CONTACT_SELECT)
+    .from(contacts)
+    .where(eq(contacts.phoneE164, input.phoneE164))
+    .limit(1);
+
+  if (existingByPhone) return existingByPhone;
+
+  throw new Error("contact_insert_failed");
 }
 
 interface UpsertPropertyInput {

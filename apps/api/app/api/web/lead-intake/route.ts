@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import { LRUCache } from "lru-cache";
 import { z } from "zod";
 import { nanoid } from "nanoid";
-import { sql } from "drizzle-orm";
 import { crmPipeline, getDb, leads, outboxEvents, appointments } from "@/db";
 import { sendConversion } from "@/lib/ga";
 import { getBookingRulesPolicy } from "@/lib/policy";
@@ -36,22 +35,6 @@ function corsJson(body: unknown, init?: ResponseInit): NextResponse {
 
 export function OPTIONS(): NextResponse {
   return applyCors(new NextResponse(null, { status: 204 }));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function firstRowId(result: unknown): string | null {
-  if (Array.isArray(result)) {
-    const id = (result[0] as any)?.id;
-    return typeof id === "string" && id.length > 0 ? id : null;
-  }
-  if (isRecord(result) && Array.isArray((result as any).rows)) {
-    const id = (result as any).rows[0]?.id;
-    return typeof id === "string" && id.length > 0 ? id : null;
-  }
-  return null;
 }
 
 const LeadSchema = z.object({
@@ -306,36 +289,24 @@ export async function POST(request: NextRequest) {
 
     if (appointmentType === "in_person_estimate") {
       const token = rescheduleToken ?? nanoid(12);
-      const rawResult = await tx.execute(sql`
-        insert into "appointments" (
-          "contact_id",
-          "property_id",
-          "lead_id",
-          "type",
-          "start_at",
-          "duration_min",
-          "status",
-          "reschedule_token",
-          "travel_buffer_min"
-        )
-        values (
-          ${contact.id},
-          ${property.id},
-          ${lead.id},
-          ${"estimate"},
-          ${timing.startAt ? timing.startAt.toISOString() : null},
-          ${timing.durationMinutes},
-          ${"requested"},
-          ${token},
-          ${travelBufferMinutes}
-        )
-        returning "id"
-      `);
+      const [appointment] = await tx
+        .insert(appointments)
+        .values({
+          contactId: contact.id,
+          propertyId: property.id,
+          leadId: lead.id,
+          type: "estimate",
+          startAt: timing.startAt ?? null,
+          durationMinutes: timing.durationMinutes,
+          status: "requested",
+          rescheduleToken: token,
+          travelBufferMinutes
+        })
+        .returning({ id: appointments.id });
 
-      const appointmentId = firstRowId(rawResult);
-      appointmentRecord = appointmentId
+      appointmentRecord = appointment?.id
         ? {
-            id: appointmentId,
+            id: appointment.id,
             startAt: timing.startAt,
             durationMinutes: timing.durationMinutes,
             travelBufferMinutes,

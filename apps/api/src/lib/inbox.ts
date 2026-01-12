@@ -16,19 +16,6 @@ import { recordAuditEvent } from "@/lib/audit";
 
 const OPEN_THREAD_STATUSES = ["open", "pending"] as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function extractPgCode(error: unknown): string | null {
-  const direct = isRecord(error) ? error : null;
-  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
-  if (directCode) return directCode;
-  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
-  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
-  return causeCode;
-}
-
 export type InboundChannel = "sms" | "email" | "dm" | "call" | "web";
 
 export type InboundMessageInput = {
@@ -241,68 +228,48 @@ async function createContact(input: {
     phoneE164: contacts.phoneE164
   } as const;
 
-  let created: ContactMatch | undefined;
-  const exec =
-    typeof (db as unknown as { execute?: unknown }).execute === "function"
-      ? (db as unknown as { execute: (query: unknown) => Promise<unknown> }).execute.bind(db)
-      : null;
-  const canSavepoint = Boolean(exec);
-  try {
-    if (canSavepoint) {
-      await exec!(sql`savepoint inbox_contact_insert`);
-    }
-    const [row] = await db
-      .insert(contacts)
-      .values({
-        firstName: input.firstName,
-        lastName: input.lastName,
-        email: input.email ?? null,
-        phone: input.phone ?? null,
-        phoneE164: input.phoneE164 ?? null,
-        source: input.source ?? "inbound"
-      })
-      .returning(returning);
-    created = row;
-    if (canSavepoint) {
-      await exec!(sql`release savepoint inbox_contact_insert`);
-    }
-  } catch (error) {
-    if (canSavepoint) {
-      try {
-        await exec!(sql`rollback to savepoint inbox_contact_insert`);
-        await exec!(sql`release savepoint inbox_contact_insert`);
-      } catch {
-        // ignore
-      }
-    }
+  const [created] = await db
+    .insert(contacts)
+    .values({
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email ?? null,
+      phone: input.phone ?? null,
+      phoneE164: input.phoneE164 ?? null,
+      source: input.source ?? "inbound"
+    })
+    .onConflictDoNothing()
+    .returning(returning);
 
-    const code = extractPgCode(error);
-    if (code !== "42703") {
-      throw error;
-    }
-
-    const rows = await (db as any).execute(
-      sql`
-        insert into "contacts" ("first_name", "last_name", "email", "phone", "phone_e164", "source")
-        values (${input.firstName}, ${input.lastName}, ${input.email ?? null}, ${input.phone ?? null}, ${input.phoneE164 ?? null}, ${input.source ?? "inbound"})
-        returning "id"
-      `
-    );
-
-    const insertedId = Array.isArray(rows) ? (rows[0] as any)?.id : null;
-    if (typeof insertedId !== "string" || !insertedId) {
-      throw new Error("contact_create_failed");
-    }
-
-    const [selected] = await db.select(returning).from(contacts).where(eq(contacts.id, insertedId)).limit(1);
-    created = selected ?? undefined;
+  if (created) {
+    return created;
   }
 
-  if (!created) {
-    throw new Error("contact_create_failed");
+  if (input.email) {
+    const existing = await findContactByEmail(db, input.email);
+    if (existing) return existing;
   }
 
-  return created;
+  if (input.phoneE164) {
+    const [existing] = await db
+      .select(returning)
+      .from(contacts)
+      .where(eq(contacts.phoneE164, input.phoneE164))
+      .limit(1);
+    if (existing) return existing;
+  }
+
+  if (input.phoneE164 && input.phone) {
+    const existing = await findContactByPhone(db, input.phoneE164, input.phone);
+    if (existing) return existing;
+  }
+
+  if (input.phone) {
+    const [existing] = await db.select(returning).from(contacts).where(eq(contacts.phone, input.phone)).limit(1);
+    if (existing) return existing;
+  }
+
+  throw new Error("contact_create_failed");
 }
 
 async function ensureContactEmail(

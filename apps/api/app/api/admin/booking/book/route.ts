@@ -1,36 +1,10 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
-import { sql } from "drizzle-orm";
 import { appointmentNotes, appointments, crmTasks, getDb, outboxEvents, properties } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function extractPgCode(error: unknown): string | null {
-  const direct = isRecord(error) ? error : null;
-  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
-  if (directCode) return directCode;
-  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
-  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
-  return causeCode;
-}
-
-function firstRowId(result: unknown): string | null {
-  if (Array.isArray(result)) {
-    const id = (result[0] as any)?.id;
-    return typeof id === "string" && id.length > 0 ? id : null;
-  }
-  if (isRecord(result) && Array.isArray((result as any).rows)) {
-    const id = (result as any).rows[0]?.id;
-    return typeof id === "string" && id.length > 0 ? id : null;
-  }
-  return null;
-}
 
 function parseDate(value: string): Date | null {
   const d = new Date(value);
@@ -150,72 +124,25 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
 
       const token = nanoid(24);
-      let appointmentId: string | null = null;
+      const [appointment] = await tx
+        .insert(appointments)
+        .values({
+          contactId,
+          propertyId: resolvedPropertyId,
+          type: "estimate",
+          startAt,
+          durationMinutes,
+          status: "confirmed",
+          rescheduleToken: token,
+          travelBufferMinutes,
+          ...(typeof quotedTotalCents === "number" && Number.isFinite(quotedTotalCents)
+            ? { quotedTotalCents: Math.trunc(quotedTotalCents) }
+            : {})
+        })
+        .returning({ id: appointments.id });
 
-      if (typeof quotedTotalCents === "number" && Number.isFinite(quotedTotalCents)) {
-        try {
-          const raw = await tx.execute(sql`
-            insert into "appointments" (
-              "contact_id",
-              "property_id",
-              "type",
-              "start_at",
-              "duration_min",
-              "status",
-              "reschedule_token",
-              "travel_buffer_min",
-              "quoted_total_cents"
-            )
-            values (
-              ${contactId},
-              ${resolvedPropertyId},
-              ${"estimate"},
-              ${startAt.toISOString()},
-              ${durationMinutes},
-              ${"confirmed"},
-              ${token},
-              ${travelBufferMinutes},
-              ${Math.trunc(quotedTotalCents)}
-            )
-            returning "id"
-          `);
-          appointmentId = firstRowId(raw);
-        } catch (error) {
-          const code = extractPgCode(error);
-          if (code !== "42703") throw error;
-        }
-      }
-
-      if (!appointmentId) {
-        const raw = await tx.execute(sql`
-          insert into "appointments" (
-            "contact_id",
-            "property_id",
-            "type",
-            "start_at",
-            "duration_min",
-            "status",
-            "reschedule_token",
-            "travel_buffer_min"
-          )
-          values (
-            ${contactId},
-            ${resolvedPropertyId},
-            ${"estimate"},
-            ${startAt.toISOString()},
-            ${durationMinutes},
-            ${"confirmed"},
-            ${token},
-            ${travelBufferMinutes}
-          )
-          returning "id"
-        `);
-        appointmentId = firstRowId(raw);
-      }
-
-      if (!appointmentId) {
-        throw new Error("appointment_create_failed");
-      }
+      const appointmentId = appointment?.id ?? null;
+      if (!appointmentId) throw new Error("appointment_create_failed");
 
        if (notes) {
          await tx.insert(appointmentNotes).values({

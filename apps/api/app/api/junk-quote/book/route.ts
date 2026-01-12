@@ -69,18 +69,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function firstRowId(result: unknown): string | null {
-  if (Array.isArray(result)) {
-    const id = (result[0] as any)?.id;
-    return typeof id === "string" && id.length > 0 ? id : null;
-  }
-  if (isRecord(result) && Array.isArray((result as any).rows)) {
-    const id = (result as any).rows[0]?.id;
-    return typeof id === "string" && id.length > 0 ? id : null;
-  }
-  return null;
-}
-
 function extractPgMeta(error: unknown): { code?: string; constraint?: string } {
   const direct = isRecord(error) ? error : null;
   const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : undefined;
@@ -690,38 +678,26 @@ export async function POST(request: NextRequest) {
         outboxType = startChanged ? "estimate.rescheduled" : null;
       } else {
         const rescheduleToken = nanoid(24);
-        const rawResult = await tx.execute(sql`
-          insert into "appointments" (
-            "contact_id",
-            "property_id",
-            "lead_id",
-            "type",
-            "start_at",
-            "duration_min",
-            "status",
-            "reschedule_token",
-            "travel_buffer_min"
-          )
-          values (
-            ${contact.id},
-            ${propertyId},
-            ${leadId},
-            ${"estimate"},
-            ${startAt.toISOString()},
-            ${durationMinutes},
-            ${"confirmed"},
-            ${rescheduleToken},
-            ${travelBufferMinutes}
-          )
-          returning "id"
-        `);
+        const [created] = await tx
+          .insert(appointments)
+          .values({
+            contactId: contact.id,
+            propertyId,
+            leadId: leadId ?? null,
+            type: "estimate",
+            startAt,
+            durationMinutes,
+            status: "confirmed",
+            rescheduleToken,
+            travelBufferMinutes
+          })
+          .returning({ id: appointments.id });
 
-        const insertedId = firstRowId(rawResult);
-        if (!insertedId) {
+        if (!created?.id) {
           throw new Error("appointment_create_failed");
         }
 
-        appointmentId = insertedId;
+        appointmentId = created.id;
         outboxType = "estimate.requested";
       }
 
