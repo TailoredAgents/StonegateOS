@@ -1,6 +1,16 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  CalendarPlus,
+  ClipboardList,
+  FileText,
+  MapPin,
+  MessageSquareText,
+  Pencil,
+  Phone,
+  Trash2
+} from "lucide-react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
@@ -8,6 +18,7 @@ import {
   badgeClassForPipelineStage,
   labelForPipelineStage
 } from "./pipeline.stages";
+import { teamButtonClass } from "./team-ui";
 import {
   addPropertyAction,
   bookAppointmentAction,
@@ -118,6 +129,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const phoneLink = normalizePhoneLink(contactState.phone);
   const callLink = phoneLink ? `tel:${phoneLink}` : null;
   const textLink = phoneLink ? teamLink("inbox", { contactId: contactState.id, channel: "sms" }) : null;
+  const disabledLinkClass = "pointer-events-none opacity-50";
   const salespersonLabel =
     contactState.salespersonMemberId && teamMembers.length
       ? teamMembers.find((m) => m.id === contactState.salespersonMemberId)?.name ?? null
@@ -508,21 +520,24 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
           <div className="flex flex-wrap gap-2 text-xs">
             <button
               type="button"
-              className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+              className={`${teamButtonClass("secondary", "sm")} gap-2`}
               onClick={() => setEditingContact((prev) => !prev)}
             >
+              <Pencil className="h-4 w-4" aria-hidden="true" />
               {editingContact ? "Close edit" : "Edit contact"}
             </button>
             <button
               type="button"
-              className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+              className={`${teamButtonClass("secondary", "sm")} gap-2`}
               onClick={() => setShowBookingForm((prev) => !prev)}
             >
+              <CalendarPlus className="h-4 w-4" aria-hidden="true" />
               {showBookingForm ? "Close booking" : "Book appointment"}
             </button>
             <form action={deleteContactAction} className="inline">
               <input type="hidden" name="contactId" value={contactState.id} />
-              <SubmitButton className="rounded-full border border-rose-200 px-4 py-2 font-medium text-rose-600 transition hover:bg-rose-50" pendingLabel="Removing...">
+              <SubmitButton className={`${teamButtonClass("danger", "sm")} gap-2`} pendingLabel="Removing...">
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
                 Delete
               </SubmitButton>
             </form>
@@ -542,47 +557,42 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             >
               <input type="hidden" name="contactId" value={contactState.id} />
               <SubmitButton
-                className={`rounded-full border px-4 py-2 font-medium ${
-                  callLink
-                    ? "border-primary-200 bg-primary-50 text-primary-800 hover:border-primary-300 hover:bg-primary-100"
-                    : "border-slate-100 text-slate-300"
-                }`}
+                className={`${teamButtonClass("primary", "sm")} gap-2`}
                 pendingLabel="Calling..."
                 disabled={!callLink}
               >
+                <Phone className="h-4 w-4" aria-hidden="true" />
                 Call
               </SubmitButton>
             </form>
             <a
-              className={`rounded-full border px-4 py-2 font-medium ${
-                textLink
-                  ? "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
-                  : "pointer-events-none border-slate-100 text-slate-300"
-              }`}
+              className={`${teamButtonClass("secondary", "sm")} gap-2 ${textLink ? "" : disabledLinkClass}`}
               href={textLink ?? "#"}
             >
+              <MessageSquareText className="h-4 w-4" aria-hidden="true" />
               Text
             </a>
             <a
-              className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+              className={`${teamButtonClass("secondary", "sm")} gap-2`}
               href={teamLink("quote-builder", { contactId: contactState.id })}
             >
+              <FileText className="h-4 w-4" aria-hidden="true" />
               Create quote
             </a>
             <a
-              className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+              className={`${teamButtonClass("secondary", "sm")} gap-2`}
               href={teamLink("myday", { contactId: contactState.id })}
             >
+              <ClipboardList className="h-4 w-4" aria-hidden="true" />
               Schedule visit
             </a>
             <a
-              className={`rounded-full border px-4 py-2 font-medium ${
-                mapsLink ? "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700" : "pointer-events-none border-slate-100 text-slate-300"
-              }`}
+              className={`${teamButtonClass("secondary", "sm")} gap-2 ${mapsLink ? "" : disabledLinkClass}`}
               href={mapsLink ?? "#"}
               target="_blank"
               rel="noreferrer"
             >
+              <MapPin className="h-4 w-4" aria-hidden="true" />
               Open in Maps
             </a>
           </div>
