@@ -12,6 +12,13 @@ const config: Config = {
     extend: {
       colors: {
         primary: {
+          50: "var(--color-primary-50)",
+          100: "var(--color-primary-100)",
+          200: "var(--color-primary-200)",
+          300: "var(--color-primary-300)",
+          400: "var(--color-primary-400)",
+          500: "var(--color-primary-500)",
+          600: "var(--color-primary-600)",
           900: "var(--color-primary-900)",
           800: "var(--color-primary-800)",
           700: "var(--color-primary-700)"
@@ -26,10 +33,14 @@ const config: Config = {
           100: "var(--color-sand-100)"
         },
         neutral: {
+          50: "var(--color-neutral-50)",
           900: "var(--color-neutral-900)",
+          800: "var(--color-neutral-800)",
           700: "var(--color-neutral-700)",
           500: "var(--color-neutral-500)",
+          400: "var(--color-neutral-400)",
           300: "var(--color-neutral-300)",
+          200: "var(--color-neutral-200)",
           100: "var(--color-neutral-100)"
         },
         success: "var(--color-success)",
