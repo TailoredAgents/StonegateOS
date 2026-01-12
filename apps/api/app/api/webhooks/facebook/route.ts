@@ -389,11 +389,14 @@ async function upsertFacebookContact(db: DbExecutor, input: {
   }
 
   let created: { id: string } | undefined;
-  const exec = (db as unknown as { execute?: (query: unknown) => Promise<unknown> }).execute;
-  const canSavepoint = typeof exec === "function";
+  const exec =
+    typeof (db as unknown as { execute?: unknown }).execute === "function"
+      ? (db as unknown as { execute: (query: unknown) => Promise<unknown> }).execute.bind(db)
+      : null;
+  const canSavepoint = Boolean(exec);
   try {
     if (canSavepoint) {
-      await exec(sql`savepoint facebook_contact_insert`);
+      await exec!(sql`savepoint facebook_contact_insert`);
     }
     const [row] = await db
       .insert(contacts)
@@ -408,13 +411,13 @@ async function upsertFacebookContact(db: DbExecutor, input: {
       .returning({ id: contacts.id });
     created = row;
     if (canSavepoint) {
-      await exec(sql`release savepoint facebook_contact_insert`);
+      await exec!(sql`release savepoint facebook_contact_insert`);
     }
   } catch (error) {
     if (canSavepoint) {
       try {
-        await exec(sql`rollback to savepoint facebook_contact_insert`);
-        await exec(sql`release savepoint facebook_contact_insert`);
+        await exec!(sql`rollback to savepoint facebook_contact_insert`);
+        await exec!(sql`release savepoint facebook_contact_insert`);
       } catch {
         // ignore
       }

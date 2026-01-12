@@ -242,11 +242,14 @@ async function createContact(input: {
   } as const;
 
   let created: ContactMatch | undefined;
-  const exec = (db as unknown as { execute?: (query: unknown) => Promise<unknown> }).execute;
-  const canSavepoint = typeof exec === "function";
+  const exec =
+    typeof (db as unknown as { execute?: unknown }).execute === "function"
+      ? (db as unknown as { execute: (query: unknown) => Promise<unknown> }).execute.bind(db)
+      : null;
+  const canSavepoint = Boolean(exec);
   try {
     if (canSavepoint) {
-      await exec(sql`savepoint inbox_contact_insert`);
+      await exec!(sql`savepoint inbox_contact_insert`);
     }
     const [row] = await db
       .insert(contacts)
@@ -261,13 +264,13 @@ async function createContact(input: {
       .returning(returning);
     created = row;
     if (canSavepoint) {
-      await exec(sql`release savepoint inbox_contact_insert`);
+      await exec!(sql`release savepoint inbox_contact_insert`);
     }
   } catch (error) {
     if (canSavepoint) {
       try {
-        await exec(sql`rollback to savepoint inbox_contact_insert`);
-        await exec(sql`release savepoint inbox_contact_insert`);
+        await exec!(sql`rollback to savepoint inbox_contact_insert`);
+        await exec!(sql`release savepoint inbox_contact_insert`);
       } catch {
         // ignore
       }

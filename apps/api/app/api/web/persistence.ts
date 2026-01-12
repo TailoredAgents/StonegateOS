@@ -108,11 +108,14 @@ export async function upsertContact(
   }
 
   let inserted: ContactRecordCompat | undefined;
-  const exec = (db as unknown as { execute?: (query: unknown) => Promise<unknown> }).execute;
-  const canSavepoint = typeof exec === "function";
+  const exec =
+    typeof (db as unknown as { execute?: unknown }).execute === "function"
+      ? (db as unknown as { execute: (query: unknown) => Promise<unknown> }).execute.bind(db)
+      : null;
+  const canSavepoint = Boolean(exec);
   try {
     if (canSavepoint) {
-      await exec(sql`savepoint upsert_contact_insert`);
+      await exec!(sql`savepoint upsert_contact_insert`);
     }
     const [row] = await db
       .insert(contacts)
@@ -127,13 +130,13 @@ export async function upsertContact(
       .returning(CONTACT_SELECT);
     inserted = row;
     if (canSavepoint) {
-      await exec(sql`release savepoint upsert_contact_insert`);
+      await exec!(sql`release savepoint upsert_contact_insert`);
     }
   } catch (error) {
     if (canSavepoint) {
       try {
-        await exec(sql`rollback to savepoint upsert_contact_insert`);
-        await exec(sql`release savepoint upsert_contact_insert`);
+        await exec!(sql`rollback to savepoint upsert_contact_insert`);
+        await exec!(sql`release savepoint upsert_contact_insert`);
       } catch {
         // If the connection doesn't support savepoints here, the original error will be thrown below.
       }
