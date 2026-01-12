@@ -6,7 +6,10 @@ export function isAdminRequest(request: NextRequest): boolean {
     return false;
   }
 
-  const headerKey = request.headers.get("x-api-key") ?? request.headers.get("authorization");
+  const headerKey =
+    request.headers.get("x-api-key") ??
+    request.headers.get("x-admin-api-key") ??
+    request.headers.get("authorization");
   if (!headerKey) {
     return false;
   }
