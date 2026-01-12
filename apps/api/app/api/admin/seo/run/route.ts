@@ -18,7 +18,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "invalid_payload", details: parsed.error.flatten() }, { status: 400 });
   }
 
-  const result = await maybeAutopublishBlogPost({ force: parsed.data.force });
+  const result = await maybeAutopublishBlogPost({ force: parsed.data.force, invokedBy: "admin" });
   return NextResponse.json({ ok: true, result });
 }
-

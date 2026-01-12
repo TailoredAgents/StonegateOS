@@ -29,6 +29,7 @@ import { AccessSection } from "./components/AccessSection";
 import { AuditLogSection } from "./components/AuditLogSection";
 import { MergeQueueSection } from "./components/MergeQueueSection";
 import { SalesScorecardSection } from "./components/SalesScorecardSection";
+import { SeoAgentSection } from "./components/SeoAgentSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
@@ -108,6 +109,7 @@ export default async function TeamPage({
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
     { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "owner" },
     { id: "commissions", label: "Commissions", href: "/team?tab=commissions", requires: "owner" },
+    { id: "seo", label: "SEO Agent", href: "/team?tab=seo", requires: "owner" },
     { id: "automation", label: "Automation", href: "/team?tab=automation", requires: "owner" },
     { id: "access", label: "Access", href: "/team?tab=access", requires: "owner" },
     { id: "audit", label: "Audit Log", href: "/team?tab=audit", requires: "owner" },
@@ -118,7 +120,7 @@ export default async function TeamPage({
     { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
     { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "pipeline", "sales-hq", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
-    { id: "control", label: "Control", itemIds: ["commissions", "policy", "automation", "access", "audit", "merge"] },
+    { id: "control", label: "Control", itemIds: ["commissions", "seo", "policy", "automation", "access", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
@@ -389,6 +391,12 @@ export default async function TeamPage({
         {tab === "commissions" && hasOwner ? (
           <React.Suspense fallback={<TeamSkeletonCard title="Loading commissions" />}>
             <CommissionsSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "seo" && hasOwner ? (
+          <React.Suspense fallback={<TeamSkeletonCard title="Loading SEO agent" />}>
+            <SeoAgentSection />
           </React.Suspense>
         ) : null}
 

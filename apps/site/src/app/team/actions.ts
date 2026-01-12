@@ -2248,3 +2248,33 @@ export async function resetSalesHqAction() {
   jar.set({ name: "myst-flash", value: "Devon HQ cleared. Only new leads will appear going forward.", path: "/" });
   revalidatePath("/team");
 }
+
+export async function runSeoAutopublishAction() {
+  const jar = await cookies();
+
+  const response = await callAdminApi("/api/admin/seo/run", {
+    method: "POST",
+    body: JSON.stringify({ force: true })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to run SEO agent");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    redirect("/team?tab=seo");
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as any;
+  const result = payload?.result;
+
+  if (result?.ok === true && result?.skipped === false && typeof result?.slug === "string") {
+    jar.set({ name: "myst-flash", value: `SEO post published: /blog/${result.slug}`, path: "/" });
+  } else if (result?.ok === true && result?.skipped === true && typeof result?.reason === "string") {
+    jar.set({ name: "myst-flash", value: `SEO run skipped: ${result.reason}`, path: "/" });
+  } else if (result?.ok === false && typeof result?.error === "string") {
+    jar.set({ name: "myst-flash-error", value: `SEO run failed: ${result.error}`, path: "/" });
+  } else {
+    jar.set({ name: "myst-flash", value: "SEO run started", path: "/" });
+  }
+
+  redirect("/team?tab=seo");
+}

@@ -31,7 +31,7 @@ async function runOnce(limit: number) {
 
 async function runSeoOnce() {
   const { maybeAutopublishBlogPost } = await import("../apps/api/src/lib/seo/agent");
-  const result = await maybeAutopublishBlogPost();
+  const result = await maybeAutopublishBlogPost({ invokedBy: "worker" });
   console.log(JSON.stringify({ ok: true, seo: result }, null, 2));
 }
 

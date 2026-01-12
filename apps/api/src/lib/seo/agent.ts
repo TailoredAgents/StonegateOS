@@ -6,6 +6,7 @@ import { SEO_TOPICS, type SeoTopic } from "./topics";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const VOICE_MODEL = "gpt-4.1-mini";
+const AUTOPUBLISH_LAST_KEY = "blog_autopublish_last";
 
 type OpenAIResponsesData = {
   output?: Array<{ content?: Array<{ text?: unknown; type?: unknown }> }>;
@@ -266,6 +267,41 @@ async function persistCursor(db: ReturnType<typeof getDb>, nextCursor: number) {
     });
 }
 
+async function tryPersistAutopublishLastRun(
+  db: ReturnType<typeof getDb>,
+  payload: {
+    attemptedAt: Date;
+    invokedBy: string;
+    disabled: boolean;
+    openaiConfigured: boolean;
+    brainModel: string | null;
+    voiceModel: string;
+    result: SeoPublishResult;
+  }
+) {
+  const value = {
+    attemptedAt: payload.attemptedAt.toISOString(),
+    invokedBy: payload.invokedBy,
+    disabled: payload.disabled,
+    openaiConfigured: payload.openaiConfigured,
+    brainModel: payload.brainModel,
+    voiceModel: payload.voiceModel,
+    result: payload.result
+  };
+
+  try {
+    await db
+      .insert(seoAgentState)
+      .values({ key: AUTOPUBLISH_LAST_KEY, value, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: seoAgentState.key,
+        set: { value, updatedAt: new Date() }
+      });
+  } catch {
+    // ignore
+  }
+}
+
 async function ensureUniqueSlug(db: ReturnType<typeof getDb>, baseSlug: string): Promise<string> {
   const normalized = baseSlug.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   const base = normalized.length ? normalized : "post";
@@ -288,23 +324,71 @@ export type SeoPublishResult =
   | { ok: true; skipped: false; postId: string; slug: string; title: string }
   | { ok: false; error: string };
 
-export async function maybeAutopublishBlogPost({ force }: { force?: boolean } = {}): Promise<SeoPublishResult> {
-  if (process.env["SEO_AUTOPUBLISH_DISABLED"] === "1") {
-    return { ok: true, skipped: true, reason: "disabled" };
+export async function maybeAutopublishBlogPost(
+  { force, invokedBy }: { force?: boolean; invokedBy?: string } = {}
+): Promise<SeoPublishResult> {
+  const attemptedAt = new Date();
+  const invoker = invokedBy && invokedBy.trim().length ? invokedBy.trim() : "unknown";
+  const disabled = process.env["SEO_AUTOPUBLISH_DISABLED"] === "1";
+
+  if (disabled) {
+    const result: SeoPublishResult = { ok: true, skipped: true, reason: "disabled" };
+    try {
+      const db = getDb();
+      await tryPersistAutopublishLastRun(db, {
+        attemptedAt,
+        invokedBy: invoker,
+        disabled: true,
+        openaiConfigured: Boolean(process.env["OPENAI_API_KEY"]),
+        brainModel: process.env["OPENAI_MODEL"]?.trim() ? process.env["OPENAI_MODEL"]!.trim() : DEFAULT_BRAIN_MODEL,
+        voiceModel: VOICE_MODEL,
+        result
+      });
+    } catch {
+      // ignore
+    }
+    return result;
   }
 
   const config = getOpenAIConfig();
   if (!config) {
-    return { ok: true, skipped: true, reason: "openai_not_configured" };
+    const result: SeoPublishResult = { ok: true, skipped: true, reason: "openai_not_configured" };
+    try {
+      const db = getDb();
+      await tryPersistAutopublishLastRun(db, {
+        attemptedAt,
+        invokedBy: invoker,
+        disabled: false,
+        openaiConfigured: false,
+        brainModel: null,
+        voiceModel: VOICE_MODEL,
+        result
+      });
+    } catch {
+      // ignore
+    }
+    return result;
   }
 
   const db = getDb();
+  const persist = (result: SeoPublishResult) =>
+    tryPersistAutopublishLastRun(db, {
+      attemptedAt,
+      invokedBy: invoker,
+      disabled: false,
+      openaiConfigured: true,
+      brainModel: config.brainModel,
+      voiceModel: VOICE_MODEL,
+      result
+    });
 
   const lockKey = 88314291;
   const lockRow = await db.execute(sql`select pg_try_advisory_lock(${lockKey}) as locked`);
   const locked = Array.isArray(lockRow) ? Boolean((lockRow[0] as any)?.locked) : false;
   if (!locked) {
-    return { ok: true, skipped: true, reason: "locked" };
+    const result: SeoPublishResult = { ok: true, skipped: true, reason: "locked" };
+    await persist(result);
+    return result;
   }
 
   try {
@@ -319,7 +403,9 @@ export async function maybeAutopublishBlogPost({ force }: { force?: boolean } = 
         .then((rows) => rows[0]);
       const count = Number(countRow?.cnt ?? 0);
       if (count >= 2) {
-        return { ok: true, skipped: true, reason: "quota_met" };
+        const result: SeoPublishResult = { ok: true, skipped: true, reason: "quota_met" };
+        await persist(result);
+        return result;
       }
 
       const latest = await db
@@ -330,14 +416,18 @@ export async function maybeAutopublishBlogPost({ force }: { force?: boolean } = 
         .limit(1);
       const lastPublishedAt = latest[0]?.publishedAt ?? null;
       if (lastPublishedAt && lastPublishedAt.getTime() > daysAgo(3).getTime()) {
-        return { ok: true, skipped: true, reason: "too_soon" };
+        const result: SeoPublishResult = { ok: true, skipped: true, reason: "too_soon" };
+        await persist(result);
+        return result;
       }
     }
 
     const { topic, nextCursor } = await pickNextTopic(db);
     const brief = await generateBrief(topic, config.apiKey, config.brainModel);
     if (!brief) {
-      return { ok: false, error: "brief_generation_failed" };
+      const result: SeoPublishResult = { ok: false, error: "brief_generation_failed" };
+      await persist(result);
+      return result;
     }
 
     const slug = await ensureUniqueSlug(db, topic.key);
@@ -353,7 +443,9 @@ export async function maybeAutopublishBlogPost({ force }: { force?: boolean } = 
     }
 
     if (!markdown) {
-      return { ok: false, error: "post_generation_failed" };
+      const result: SeoPublishResult = { ok: false, error: "post_generation_failed" };
+      await persist(result);
+      return result;
     }
 
     const title = brief.title.trim();
@@ -379,15 +471,21 @@ export async function maybeAutopublishBlogPost({ force }: { force?: boolean } = 
       .returning({ id: blogPosts.id, slug: blogPosts.slug, title: blogPosts.title });
 
     if (!inserted) {
-      return { ok: false, error: "insert_failed" };
+      const result: SeoPublishResult = { ok: false, error: "insert_failed" };
+      await persist(result);
+      return result;
     }
 
     await persistCursor(db, nextCursor);
 
-    return { ok: true, skipped: false, postId: inserted.id, slug: inserted.slug, title: inserted.title };
+    const result: SeoPublishResult = { ok: true, skipped: false, postId: inserted.id, slug: inserted.slug, title: inserted.title };
+    await persist(result);
+    return result;
   } catch (error) {
     console.error("[seo] autopublish_failed", error);
-    return { ok: false, error: "server_error" };
+    const result: SeoPublishResult = { ok: false, error: "server_error" };
+    await persist(result);
+    return result;
   } finally {
     try {
       await db.execute(sql`select pg_advisory_unlock(${lockKey})`);
