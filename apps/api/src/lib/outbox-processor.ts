@@ -1,6 +1,7 @@
-import { and, asc, desc, eq, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import crypto from "node:crypto";
 import { nanoid } from "nanoid";
+import { DateTime } from "luxon";
 import {
   getDb,
   outboxEvents,
@@ -38,6 +39,7 @@ import {
 import type { AppointmentCalendarPayload } from "@/lib/calendar";
 import { createCalendarEventWithRetry, updateCalendarEventWithRetry } from "@/lib/calendar-events";
 import { sendDmMessage, sendDmTyping, sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
+import { buildLeadTag, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 import { handleInboundAutoReply } from "@/lib/auto-replies";
 import { recordAuditEvent } from "@/lib/audit";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
@@ -342,6 +344,123 @@ async function getTeamMemberPhoneMap(db: ReturnType<typeof getDb>): Promise<Reco
     .where(eq(policySettings.key, "team_member_phones"))
     .limit(1);
   return readPhoneMapValue(row?.value);
+}
+
+function normalizeSalesDueAt(dueAt: Date, config: Awaited<ReturnType<typeof getSalesScorecardConfig>>): Date {
+  const local = DateTime.fromJSDate(dueAt, { zone: config.timezone });
+  const start = local.set({ hour: config.businessStartHour, minute: 0, second: 0, millisecond: 0 });
+  const end = local.set({ hour: config.businessEndHour, minute: 0, second: 0, millisecond: 0 });
+
+  if (local < start) return start.toUTC().toJSDate();
+  if (local > end) return start.plus({ days: 1 }).toUTC().toJSDate();
+  return dueAt;
+}
+
+async function ensureSalesFollowupsForLead(input: {
+  db: ReturnType<typeof getDb>;
+  leadId: string;
+  outboxEventId: string;
+  payload: Record<string, unknown> | null;
+}): Promise<void> {
+  const existingFlag = input.payload?.["scheduledSalesFollowups"] === true;
+  if (existingFlag) return;
+
+  const config = await getSalesScorecardConfig(input.db);
+  const [row] = await input.db
+    .select({
+      leadId: leads.id,
+      leadCreatedAt: leads.createdAt,
+      contactId: leads.contactId,
+      stage: crmPipeline.stage,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164,
+      salespersonMemberId: contacts.salespersonMemberId
+    })
+    .from(leads)
+    .innerJoin(contacts, eq(leads.contactId, contacts.id))
+    .leftJoin(crmPipeline, eq(crmPipeline.contactId, leads.contactId))
+    .where(eq(leads.id, input.leadId))
+    .limit(1);
+
+  if (!row?.leadId) return;
+  if (row.stage === "won" || row.stage === "lost") return;
+
+  const assigneeId = row.salespersonMemberId ?? config.defaultAssigneeMemberId;
+  if (!row.salespersonMemberId) {
+    await input.db
+      .update(contacts)
+      .set({ salespersonMemberId: assigneeId, updatedAt: new Date() })
+      .where(eq(contacts.id, row.contactId));
+  }
+
+  const tag = buildLeadTag(row.leadId);
+  const [existing] = await input.db
+    .select({ id: crmTasks.id })
+    .from(crmTasks)
+    .where(and(eq(crmTasks.contactId, row.contactId), isNotNull(crmTasks.notes), ilike(crmTasks.notes, `%${tag}%`)))
+    .limit(1);
+
+  if (existing?.id) {
+    await input.db
+      .update(outboxEvents)
+      .set({ payload: { ...(input.payload ?? {}), scheduledSalesFollowups: true } })
+      .where(eq(outboxEvents.id, input.outboxEventId));
+    return;
+  }
+
+  const now = new Date();
+  const clockStart = getLeadClockStart(row.leadCreatedAt, config);
+  const speedDeadline = getSpeedToLeadDeadline(row.leadCreatedAt, config);
+
+  const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
+  const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
+  const speedTitle = hasPhone ? "Auto: Call new lead (5 min SLA)" : "Auto: Message new lead (5 min SLA)";
+  tasksToCreate.push({
+    title: speedTitle,
+    dueAt: normalizeSalesDueAt(speedDeadline, config),
+    notes: `${tag}\nkind=speed_to_lead`
+  });
+
+  for (const minutes of config.followupStepsMinutes) {
+    if (minutes <= config.speedToLeadMinutes) continue;
+    const due = new Date(clockStart.getTime() + minutes * 60_000);
+    tasksToCreate.push({
+      title: "Auto: Follow up",
+      dueAt: normalizeSalesDueAt(due, config),
+      notes: `${tag}\nkind=follow_up\nstepMinutes=${minutes}`
+    });
+  }
+
+  await input.db.transaction(async (tx) => {
+    for (const task of tasksToCreate) {
+      const [created] = await tx
+        .insert(crmTasks)
+        .values({
+          contactId: row.contactId,
+          title: task.title,
+          notes: task.notes,
+          dueAt: task.dueAt,
+          assignedTo: assigneeId,
+          status: "open",
+          createdAt: now,
+          updatedAt: now
+        })
+        .returning({ id: crmTasks.id });
+
+      if (!created?.id) continue;
+
+      await tx.insert(outboxEvents).values({
+        type: "crm.reminder.sms",
+        payload: { taskId: created.id },
+        nextAttemptAt: task.dueAt
+      });
+    }
+
+    await tx
+      .update(outboxEvents)
+      .set({ payload: { ...(input.payload ?? {}), scheduledSalesFollowups: true } })
+      .where(eq(outboxEvents.id, input.outboxEventId));
+  });
 }
 
 function formatReminderDueAt(dueAt: Date, timezone: string): string {
@@ -1470,6 +1589,14 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "skipped" };
       }
 
+      await ensureSalesFollowupsForLead({
+        db: getDb(),
+        leadId,
+        outboxEventId: event.id,
+        payload
+      });
+      const payloadAfterFollowups: Record<string, unknown> = { ...(payload ?? {}), scheduledSalesFollowups: true };
+
       const recipients = parseLeadAlertRecipients(process.env["LEAD_ALERT_SMS"]);
       if (!recipients.length) {
         return { status: "processed" };
@@ -1480,8 +1607,8 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "skipped" };
       }
 
-      const sentTo = Array.isArray(payload?.["sentTo"])
-        ? payload?.["sentTo"].filter((value): value is string => typeof value === "string")
+      const sentTo = Array.isArray(payloadAfterFollowups["sentTo"])
+        ? payloadAfterFollowups["sentTo"].filter((value): value is string => typeof value === "string")
         : [];
       const sentSet = new Set(sentTo);
       const pending = recipients.filter((recipient) => !sentSet.has(recipient));
@@ -1526,7 +1653,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
 
       const updatedPayload = {
-        ...(payload ?? {}),
+        ...payloadAfterFollowups,
         sentTo: Array.from(sentSet)
       };
       await getDb()

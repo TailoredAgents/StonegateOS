@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { eq, or, sql } from "drizzle-orm";
 import { recordInboundMessage } from "@/lib/inbox";
 import { getDb, contacts, leads, outboxEvents } from "@/db";
+import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 import { normalizeName, normalizePhone } from "../../web/utils";
 import { upsertContact, upsertProperty } from "../../web/persistence";
 
@@ -318,6 +319,7 @@ async function upsertFacebookContact(db: DbExecutor, input: {
   const email = input.email?.trim().toLowerCase() ?? null;
   const phoneRaw = input.phoneRaw?.trim() ?? null;
   const phoneE164 = input.phoneE164?.trim() ?? null;
+  const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(db as any);
 
   if (phoneE164 && phoneRaw) {
     const contact = await upsertContact(db, {
@@ -334,7 +336,13 @@ async function upsertFacebookContact(db: DbExecutor, input: {
   let contact =
     email
       ? await db
-          .select({ id: contacts.id, email: contacts.email, phone: contacts.phone, phoneE164: contacts.phoneE164 })
+          .select({
+            id: contacts.id,
+            email: contacts.email,
+            phone: contacts.phone,
+            phoneE164: contacts.phoneE164,
+            salespersonMemberId: contacts.salespersonMemberId
+          })
           .from(contacts)
           .where(eq(contacts.email, email))
           .limit(1)
@@ -347,7 +355,13 @@ async function upsertFacebookContact(db: DbExecutor, input: {
       predicates.push(eq(contacts.phoneE164, phoneE164));
     }
     contact = await db
-      .select({ id: contacts.id, email: contacts.email, phone: contacts.phone, phoneE164: contacts.phoneE164 })
+      .select({
+        id: contacts.id,
+        email: contacts.email,
+        phone: contacts.phone,
+        phoneE164: contacts.phoneE164,
+        salespersonMemberId: contacts.salespersonMemberId
+      })
       .from(contacts)
       .where(or(...predicates))
       .limit(1)
@@ -370,6 +384,9 @@ async function upsertFacebookContact(db: DbExecutor, input: {
     if (phoneE164 && !contact.phoneE164) {
       updatePayload["phoneE164"] = phoneE164;
     }
+    if (!contact.salespersonMemberId) {
+      updatePayload["salespersonMemberId"] = defaultAssigneeMemberId;
+    }
 
     await db.update(contacts).set(updatePayload).where(eq(contacts.id, contact.id));
     return { id: contact.id };
@@ -383,6 +400,7 @@ async function upsertFacebookContact(db: DbExecutor, input: {
       email,
       phone: phoneRaw ?? null,
       phoneE164: phoneE164 ?? null,
+      salespersonMemberId: defaultAssigneeMemberId,
       source: "facebook_lead"
     })
     .onConflictDoNothing()

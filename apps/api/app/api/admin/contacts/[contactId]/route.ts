@@ -1,10 +1,10 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getDb, contacts, instantQuotes } from "@/db";
+import { getDb, contacts, crmTasks, instantQuotes } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { normalizePhone } from "../../../web/utils";
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, ilike, inArray, isNotNull, sql } from "drizzle-orm";
 import { setContactAssignee } from "@/lib/contact-assignees";
 
 type RouteContext = {
@@ -192,6 +192,21 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
 
   if (!updated) {
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
+  }
+
+  if (salespersonUpdateRaw !== undefined) {
+    const nextAssignee = updated.salespersonMemberId ?? null;
+    await db
+      .update(crmTasks)
+      .set({ assignedTo: nextAssignee, updatedAt: new Date() })
+      .where(
+        and(
+          eq(crmTasks.contactId, contactId),
+          eq(crmTasks.status, "open"),
+          isNotNull(crmTasks.notes),
+          ilike(crmTasks.notes, "%[auto] leadId=%")
+        )
+      );
   }
 
   const changedFields = Object.keys(updates).filter((key) => key !== "updatedAt");

@@ -14,6 +14,7 @@ import { isAdminRequest } from "../../web/admin";
 import { normalizePhone } from "../../web/utils";
 import { forwardGeocode } from "@/lib/geocode";
 import { getContactAssigneeMap, setContactAssignee } from "@/lib/contact-assignees";
+import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 import type { SQL } from "drizzle-orm";
 import { asc, desc, eq, inArray, ilike, or, sql } from "drizzle-orm";
 
@@ -505,12 +506,15 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   try {
     const result = await db.transaction(async (tx) => {
+      const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(tx as any);
       const baseValues: typeof contacts.$inferInsert = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         email: typeof email === "string" && email.trim().length ? email.trim() : null,
         phone: normalizedPhone?.raw ?? (typeof phone === "string" ? phone.trim() : null),
         phoneE164: normalizedPhone?.e164 ?? null,
+        salespersonMemberId:
+          normalizedSalespersonMemberId !== undefined ? normalizedSalespersonMemberId : defaultAssigneeMemberId,
         source: "manual",
         createdAt: new Date(),
         updatedAt: new Date()

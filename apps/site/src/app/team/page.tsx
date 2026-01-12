@@ -26,6 +26,7 @@ import { AutomationSection } from "./components/AutomationSection";
 import { AccessSection } from "./components/AccessSection";
 import { AuditLogSection } from "./components/AuditLogSection";
 import { MergeQueueSection } from "./components/MergeQueueSection";
+import { SalesScorecardSection } from "./components/SalesScorecardSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
@@ -85,6 +86,7 @@ export default async function TeamPage({
     { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "owner" },
     { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "owner" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
+    { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "owner" },
     { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
@@ -97,7 +99,7 @@ export default async function TeamPage({
   ];
   const tabGroups: TabNavGroup[] = [
     { id: "ops", label: "Ops", itemIds: ["myday", "calendar", "chat"] },
-    { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "pipeline", "contacts", "inbox", "calendar"] },
+    { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "pipeline", "sales-hq", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
     { id: "control", label: "Control", itemIds: ["policy", "automation", "access", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
@@ -332,6 +334,18 @@ export default async function TeamPage({
             }
           >
             <PipelineSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "sales-hq" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
+                Loading Sales HQ
+              </div>
+            }
+          >
+            <SalesScorecardSection />
           </React.Suspense>
         ) : null}
 

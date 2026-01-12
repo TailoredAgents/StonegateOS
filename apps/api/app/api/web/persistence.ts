@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { contacts, properties } from "@/db";
 import type { DatabaseClient } from "@/db";
 import type { InferModel } from "drizzle-orm";
+import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 
 type Database = DatabaseClient;
 type TransactionExecutor = Parameters<Database["transaction"]>[0] extends (
@@ -43,6 +44,7 @@ export async function upsertContact(
   input: UpsertContactInput
 ): Promise<ContactRecord> {
   const email = input.email?.trim().toLowerCase();
+  const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(db as any);
   let contact: ContactRecord | undefined;
 
   if (email) {
@@ -75,6 +77,9 @@ export async function upsertContact(
     if (email && !contact.email) {
       updatePayload.email = email;
     }
+    if (!contact.salespersonMemberId) {
+      updatePayload.salespersonMemberId = defaultAssigneeMemberId;
+    }
 
     const [updated] = await db
       .update(contacts)
@@ -97,6 +102,7 @@ export async function upsertContact(
       phone: input.phoneRaw,
       phoneE164: input.phoneE164,
       email: email ?? null,
+      salespersonMemberId: defaultAssigneeMemberId,
       source: input.source ?? "web"
     })
     .onConflictDoNothing()

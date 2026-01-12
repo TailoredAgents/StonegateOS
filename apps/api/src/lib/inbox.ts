@@ -13,6 +13,7 @@ import {
   outboxEvents
 } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
+import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 
 const OPEN_THREAD_STATUSES = ["open", "pending"] as const;
 
@@ -218,6 +219,7 @@ async function createContact(input: {
   source?: string;
 }): Promise<ContactMatch> {
   const db = input.db;
+  const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(db as any);
 
   const returning = {
     id: contacts.id,
@@ -236,6 +238,7 @@ async function createContact(input: {
       email: input.email ?? null,
       phone: input.phone ?? null,
       phoneE164: input.phoneE164 ?? null,
+      salespersonMemberId: defaultAssigneeMemberId,
       source: input.source ?? "inbound"
     })
     .onConflictDoNothing()

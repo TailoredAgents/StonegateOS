@@ -1,0 +1,382 @@
+import { DateTime } from "luxon";
+import { and, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import {
+  auditLogs,
+  contacts,
+  conversationMessages,
+  conversationParticipants,
+  conversationThreads,
+  crmPipeline,
+  crmTasks,
+  getDb,
+  leads,
+  policySettings
+} from "@/db";
+
+type DatabaseClient = ReturnType<typeof getDb>;
+type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
+  ? Tx
+  : never;
+type DbExecutor = DatabaseClient | TransactionExecutor;
+
+export type SalesScorecardConfig = {
+  timezone: string;
+  businessStartHour: number;
+  businessEndHour: number;
+  speedToLeadMinutes: number;
+  followupGraceMinutes: number;
+  followupStepsMinutes: number[];
+  defaultAssigneeMemberId: string;
+  weights: {
+    speedToLead: number;
+    followupCompliance: number;
+    responseTime: number;
+    conversion: number;
+  };
+};
+
+export const FALLBACK_DEVON_MEMBER_ID = "b45988bb-7417-48c5-af6d-fcdf71088282";
+export const SALES_SCORECARD_POLICY_KEY = "sales_scorecard";
+
+const DEFAULT_CONFIG: SalesScorecardConfig = {
+  timezone: "America/New_York",
+  businessStartHour: 8,
+  businessEndHour: 19,
+  speedToLeadMinutes: 5,
+  followupGraceMinutes: 10,
+  followupStepsMinutes: [15, 120, 1440, 4320],
+  defaultAssigneeMemberId: FALLBACK_DEVON_MEMBER_ID,
+  weights: {
+    speedToLead: 45,
+    followupCompliance: 35,
+    responseTime: 10,
+    conversion: 10
+  }
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function clampInt(value: unknown, fallback: number, { min, max }: { min: number; max: number }): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  const rounded = Math.round(value);
+  return Math.min(max, Math.max(min, rounded));
+}
+
+function coerceSteps(value: unknown, fallback: number[]): number[] {
+  if (!Array.isArray(value)) return fallback;
+  const steps = value
+    .filter((v): v is number => typeof v === "number" && Number.isFinite(v))
+    .map((v) => Math.round(v))
+    .filter((v) => v > 0 && v <= 60 * 24 * 30);
+  return steps.length ? steps : fallback;
+}
+
+function coerceWeights(value: unknown, fallback: SalesScorecardConfig["weights"]): SalesScorecardConfig["weights"] {
+  if (!isRecord(value)) return fallback;
+  const speedToLead = clampInt(value["speedToLead"], fallback.speedToLead, { min: 0, max: 100 });
+  const followupCompliance = clampInt(value["followupCompliance"], fallback.followupCompliance, { min: 0, max: 100 });
+  const responseTime = clampInt(value["responseTime"], fallback.responseTime, { min: 0, max: 100 });
+  const conversion = clampInt(value["conversion"], fallback.conversion, { min: 0, max: 100 });
+  return { speedToLead, followupCompliance, responseTime, conversion };
+}
+
+export async function getSalesScorecardConfig(db: DbExecutor = getDb()): Promise<SalesScorecardConfig> {
+  const [row] = await db
+    .select({ value: policySettings.value })
+    .from(policySettings)
+    .where(eq(policySettings.key, SALES_SCORECARD_POLICY_KEY))
+    .limit(1);
+
+  const envDefault = process.env["SALES_DEFAULT_ASSIGNEE_ID"] ?? process.env["REMINDERS_DEFAULT_ASSIGNEE_ID"] ?? null;
+  const base: SalesScorecardConfig = {
+    ...DEFAULT_CONFIG,
+    defaultAssigneeMemberId: envDefault && envDefault.trim().length > 0 ? envDefault.trim() : DEFAULT_CONFIG.defaultAssigneeMemberId
+  };
+
+  const stored = row?.value;
+  if (!stored || !isRecord(stored)) return base;
+
+  const timezone = typeof stored["timezone"] === "string" && stored["timezone"].trim().length > 0 ? stored["timezone"].trim() : base.timezone;
+  const businessStartHour = clampInt(stored["businessStartHour"], base.businessStartHour, { min: 0, max: 23 });
+  const businessEndHour = clampInt(stored["businessEndHour"], base.businessEndHour, { min: 0, max: 23 });
+  const speedToLeadMinutes = clampInt(stored["speedToLeadMinutes"], base.speedToLeadMinutes, { min: 1, max: 60 });
+  const followupGraceMinutes = clampInt(stored["followupGraceMinutes"], base.followupGraceMinutes, { min: 0, max: 120 });
+  const followupStepsMinutes = coerceSteps(stored["followupStepsMinutes"], base.followupStepsMinutes);
+  const defaultAssigneeMemberId =
+    typeof stored["defaultAssigneeMemberId"] === "string" && stored["defaultAssigneeMemberId"].trim().length > 0
+      ? stored["defaultAssigneeMemberId"].trim()
+      : base.defaultAssigneeMemberId;
+  const weights = coerceWeights(stored["weights"], base.weights);
+
+  return {
+    timezone,
+    businessStartHour,
+    businessEndHour,
+    speedToLeadMinutes,
+    followupGraceMinutes,
+    followupStepsMinutes,
+    defaultAssigneeMemberId,
+    weights
+  };
+}
+
+export async function getDefaultSalesAssigneeMemberId(db: DbExecutor = getDb()): Promise<string> {
+  const config = await getSalesScorecardConfig(db);
+  return config.defaultAssigneeMemberId;
+}
+
+export function getLeadClockStart(createdAt: Date, config: SalesScorecardConfig): Date {
+  const local = DateTime.fromJSDate(createdAt, { zone: config.timezone });
+  const start = local.set({ hour: config.businessStartHour, minute: 0, second: 0, millisecond: 0 });
+  const end = local.set({ hour: config.businessEndHour, minute: 0, second: 0, millisecond: 0 });
+
+  if (local >= start && local <= end) {
+    return createdAt;
+  }
+
+  if (local < start) {
+    return start.toUTC().toJSDate();
+  }
+
+  return start.plus({ days: 1 }).toUTC().toJSDate();
+}
+
+export function getSpeedToLeadDeadline(createdAt: Date, config: SalesScorecardConfig): Date {
+  const start = getLeadClockStart(createdAt, config);
+  return new Date(start.getTime() + config.speedToLeadMinutes * 60_000);
+}
+
+export function buildLeadTag(leadId: string): string {
+  return `[auto] leadId=${leadId}`;
+}
+
+export type SpeedToLeadResult = {
+  leadId: string;
+  contactId: string;
+  createdAt: string;
+  hasPhone: boolean;
+  deadlineAt: string;
+  firstCallAt: string | null;
+  firstOutboundMessageAt: string | null;
+  met: boolean;
+};
+
+export async function computeSpeedToLeadForMember(input: {
+  db?: DbExecutor;
+  memberId: string;
+  since: Date;
+  until: Date;
+}): Promise<SpeedToLeadResult[]> {
+  const db = input.db ?? getDb();
+  const config = await getSalesScorecardConfig(db);
+
+  const leadRows = await db
+    .select({
+      leadId: leads.id,
+      leadCreatedAt: leads.createdAt,
+      contactId: leads.contactId,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164
+    })
+    .from(leads)
+    .innerJoin(contacts, eq(leads.contactId, contacts.id))
+    .where(
+      and(
+        eq(contacts.salespersonMemberId, input.memberId),
+        gte(leads.createdAt, input.since),
+        lte(leads.createdAt, input.until)
+      )
+    )
+    .orderBy(desc(leads.createdAt))
+    .limit(500);
+
+  if (!leadRows.length) return [];
+
+  const contactIds = Array.from(new Set(leadRows.map((row) => row.contactId)));
+  const leadIds = Array.from(new Set(leadRows.map((row) => row.leadId)));
+
+  const firstCalls = await db
+    .select({
+      contactId: auditLogs.entityId,
+      firstCallAt: sql<Date>`min(${auditLogs.createdAt})`.as("first_call_at")
+    })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.action, "call.started"),
+        eq(auditLogs.entityType, "contact"),
+        eq(auditLogs.actorId, input.memberId),
+        isNotNull(auditLogs.entityId),
+        inArray(auditLogs.entityId, contactIds),
+        gte(auditLogs.createdAt, input.since),
+        lte(auditLogs.createdAt, input.until)
+      )
+    )
+    .groupBy(auditLogs.entityId);
+
+  const callMap = new Map<string, Date>();
+  for (const row of firstCalls) {
+    if (typeof row.contactId === "string" && row.firstCallAt instanceof Date) {
+      callMap.set(row.contactId, row.firstCallAt);
+    }
+  }
+
+  const firstOutboundMessages = await db
+    .select({
+      leadId: conversationThreads.leadId,
+      contactId: conversationThreads.contactId,
+      firstOutboundAt: sql<Date>`min(${conversationMessages.createdAt})`.as("first_outbound_at")
+    })
+    .from(conversationMessages)
+    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .innerJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
+    .where(
+      and(
+        eq(conversationMessages.direction, "outbound"),
+        eq(conversationParticipants.participantType, "team"),
+        eq(conversationParticipants.teamMemberId, input.memberId),
+        gte(conversationMessages.createdAt, input.since),
+        lte(conversationMessages.createdAt, input.until),
+        or(
+          and(isNotNull(conversationThreads.leadId), inArray(conversationThreads.leadId, leadIds)),
+          and(isNull(conversationThreads.leadId), isNotNull(conversationThreads.contactId), inArray(conversationThreads.contactId, contactIds))
+        )
+      )
+    )
+    .groupBy(conversationThreads.leadId, conversationThreads.contactId);
+
+  const outboundByLead = new Map<string, Date>();
+  const outboundByContact = new Map<string, Date>();
+  for (const row of firstOutboundMessages) {
+    if (row.firstOutboundAt instanceof Date) {
+      if (typeof row.leadId === "string" && row.leadId.length) {
+        outboundByLead.set(row.leadId, row.firstOutboundAt);
+      } else if (typeof row.contactId === "string" && row.contactId.length) {
+        const existing = outboundByContact.get(row.contactId);
+        if (!existing || row.firstOutboundAt < existing) {
+          outboundByContact.set(row.contactId, row.firstOutboundAt);
+        }
+      }
+    }
+  }
+
+  return leadRows.map((row) => {
+    const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
+    const deadline = getSpeedToLeadDeadline(row.leadCreatedAt, config);
+    const firstCallAt = callMap.get(row.contactId) ?? null;
+    const firstOutboundAt = outboundByLead.get(row.leadId) ?? outboundByContact.get(row.contactId) ?? null;
+    const met = hasPhone
+      ? Boolean(firstCallAt && firstCallAt.getTime() <= deadline.getTime())
+      : Boolean(firstOutboundAt && firstOutboundAt.getTime() <= deadline.getTime());
+
+    return {
+      leadId: row.leadId,
+      contactId: row.contactId,
+      createdAt: row.leadCreatedAt.toISOString(),
+      hasPhone,
+      deadlineAt: deadline.toISOString(),
+      firstCallAt: firstCallAt ? firstCallAt.toISOString() : null,
+      firstOutboundMessageAt: firstOutboundAt ? firstOutboundAt.toISOString() : null,
+      met
+    };
+  });
+}
+
+export type FollowupComplianceResult = {
+  totalDue: number;
+  completedOnTime: number;
+  completedLate: number;
+  stillOpen: number;
+};
+
+export async function computeFollowupComplianceForMember(input: {
+  db?: DbExecutor;
+  memberId: string;
+  since: Date;
+  until: Date;
+  graceMinutes: number;
+}): Promise<FollowupComplianceResult> {
+  const db = input.db ?? getDb();
+  const graceMs = input.graceMinutes * 60_000;
+
+  const rows = await db
+    .select({
+      dueAt: crmTasks.dueAt,
+      status: crmTasks.status,
+      updatedAt: crmTasks.updatedAt,
+      notes: crmTasks.notes
+    })
+    .from(crmTasks)
+    .where(
+      and(
+        eq(crmTasks.assignedTo, input.memberId),
+        isNotNull(crmTasks.dueAt),
+        gte(crmTasks.dueAt, input.since),
+        lte(crmTasks.dueAt, input.until),
+        isNotNull(crmTasks.notes),
+        ilike(crmTasks.notes, "%[auto] leadId=%")
+      )
+    )
+    .limit(2000);
+
+  let totalDue = 0;
+  let completedOnTime = 0;
+  let completedLate = 0;
+  let stillOpen = 0;
+
+  for (const row of rows) {
+    if (!(row.dueAt instanceof Date)) continue;
+    totalDue += 1;
+    if (row.status === "completed") {
+      const updatedAt = row.updatedAt instanceof Date ? row.updatedAt : null;
+      if (updatedAt && updatedAt.getTime() <= row.dueAt.getTime() + graceMs) {
+        completedOnTime += 1;
+      } else {
+        completedLate += 1;
+      }
+    } else {
+      stillOpen += 1;
+    }
+  }
+
+  return { totalDue, completedOnTime, completedLate, stillOpen };
+}
+
+export async function computeConversionForMember(input: {
+  db?: DbExecutor;
+  memberId: string;
+  since: Date;
+  until: Date;
+}): Promise<{ totalLeads: number; booked: number; won: number }> {
+  const db = input.db ?? getDb();
+
+  const rows = await db
+    .select({
+      leadId: leads.id,
+      contactId: leads.contactId,
+      stage: crmPipeline.stage
+    })
+    .from(leads)
+    .innerJoin(contacts, eq(leads.contactId, contacts.id))
+    .leftJoin(crmPipeline, eq(crmPipeline.contactId, leads.contactId))
+    .where(
+      and(
+        eq(contacts.salespersonMemberId, input.memberId),
+        gte(leads.createdAt, input.since),
+        lte(leads.createdAt, input.until)
+      )
+    )
+    .limit(2000);
+
+  const totalLeads = rows.length;
+  let booked = 0;
+  let won = 0;
+  for (const row of rows) {
+    const stage = row.stage ?? null;
+    if (stage === "qualified" || stage === "won") booked += 1;
+    if (stage === "won") won += 1;
+  }
+  return { totalLeads, booked, won };
+}
