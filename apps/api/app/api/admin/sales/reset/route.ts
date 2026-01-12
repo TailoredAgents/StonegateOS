@@ -15,7 +15,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "policy.write");
+  const permissionError = await requirePermission(request, "sales.reset");
   if (permissionError) return permissionError;
 
   const db = getDb();
@@ -60,4 +60,3 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   return NextResponse.json({ ok: true, trackingStartAt: nowIso });
 }
-
