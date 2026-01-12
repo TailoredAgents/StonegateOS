@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { SubmitButton } from "@/components/SubmitButton";
+import { ArrowRight, FileText, Save } from "lucide-react";
 import { updatePipelineStageAction } from "../actions";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import type { PipelineContact, PipelineLane } from "./pipeline.types";
 import { labelForPipelineStage, themeForPipelineStage } from "./pipeline.stages";
+import { TEAM_SELECT, teamButtonClass } from "./team-ui";
 
 function sortContacts(contacts: PipelineContact[]): PipelineContact[] {
   return [...contacts].sort((a, b) => {
@@ -221,15 +223,17 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                         ) : null}
                         <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
                           <a
-                            className="rounded-full border border-slate-200 px-3 py-1.5 text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                            className={`${teamButtonClass("secondary", "sm")} gap-2`}
                             href={`/team?tab=contacts&q=${encodeURIComponent(`${contact.firstName} ${contact.lastName}`.trim())}`}
                           >
+                            <ArrowRight className="h-4 w-4" aria-hidden="true" />
                             View contact
                           </a>
                           <a
-                            className="rounded-full border border-slate-200 px-3 py-1.5 text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                            className={`${teamButtonClass("secondary", "sm")} gap-2`}
                             href={`/team?tab=quote-builder&contactId=${encodeURIComponent(contact.id)}`}
                           >
+                            <FileText className="h-4 w-4" aria-hidden="true" />
                             Create quote
                           </a>
                         </div>
@@ -244,7 +248,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                             <select
                               name="stage"
                               defaultValue={contact.pipeline.stage}
-                              className="rounded-full border border-slate-200 px-3 py-1.5 text-slate-600 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
+                              className={TEAM_SELECT}
                               onClick={(event) => event.stopPropagation()}
                             >
                               {stages.map((option) => (
@@ -255,9 +259,10 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                             </select>
                           </label>
                           <SubmitButton
-                            className="rounded-full border border-slate-200 px-3 py-1.5 text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                            className={`${teamButtonClass("secondary", "sm")} gap-2`}
                             pendingLabel="Saving..."
                           >
+                            <Save className="h-4 w-4" aria-hidden="true" />
                             Update
                           </SubmitButton>
                         </form>
