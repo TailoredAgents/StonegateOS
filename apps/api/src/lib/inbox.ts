@@ -112,14 +112,38 @@ function extractPhoneFromText(body: string): { raw: string; e164: string } | nul
 }
 
 function extractNameFromText(body: string): string | null {
-  const normalized = body.replace(/\s+/g, " ").trim();
+  const normalized = body.replace(/\r\n/g, "\n").trim();
   if (!normalized) return null;
-  const match = normalized.match(/\b(?:my name is|this is|i am|i'm)\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,2})\b/i);
-  if (!match) return null;
-  const name = match[1]?.trim() ?? "";
-  if (!name) return null;
-  if (name.toLowerCase().includes("stonegate")) return null;
-  return name;
+
+  const patterns: RegExp[] = [
+    /\b(?:full\s+name|name)\s*[:=-]\s*([A-Za-z][A-Za-z'’-]*(?:\s+[A-Za-z][A-Za-z'’-]*){1,3})\b/i,
+    /\b(?:my name is|this is|i am|i'm)\s+([A-Za-z][A-Za-z'’-]*(?:\s+[A-Za-z][A-Za-z'’-]*){0,2})\b/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    const candidate = match?.[1]?.trim() ?? "";
+    if (!candidate) continue;
+    if (candidate.toLowerCase().includes("stonegate")) continue;
+    return candidate;
+  }
+
+  const firstLine = normalized.split("\n")[0]?.trim() ?? "";
+  const firstLineCandidate = firstLine
+    .replace(/[^\w\s'’-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const parts = firstLineCandidate.split(" ").filter(Boolean);
+  if (parts.length < 2 || parts.length > 4) return null;
+  if (firstLineCandidate.toLowerCase().includes("stonegate")) return null;
+  if (firstLineCandidate.toLowerCase().includes("junk")) return null;
+
+  const looksLikeName = parts.every((part) => /^[A-Za-z][A-Za-z'’-]{0,25}$/.test(part));
+  if (!looksLikeName) return null;
+
+  const joined = parts.join(" ").trim();
+  return joined.length > 1 ? joined : null;
 }
 
 function isMessengerFallbackName(value: string): boolean {
