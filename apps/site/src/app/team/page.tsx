@@ -9,7 +9,9 @@ import {
   saveCallAgentPhoneAction,
   clearCallAgentPhoneAction,
   setCallAgentChoiceAction,
-  updatePipelineStageAction
+  updatePipelineStageAction,
+  setActingMemberAction,
+  clearActingMemberAction
 } from "./actions";
 import { MyDaySection } from "./components/MyDaySection";
 import { QuotesSection } from "./components/QuotesSection";
@@ -33,6 +35,9 @@ import { FlashClearer } from "./components/FlashClearer";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
+const TEAM_ACTOR_ID_COOKIE = "myst-team-actor-id";
+const TEAM_ACTOR_LABEL_COOKIE = "myst-team-actor-label";
+const FALLBACK_DEVON_MEMBER_ID = "b45988bb-7417-48c5-af6d-fcdf71088282";
 
 export const metadata = { title: "Stonegate Team Console" };
 
@@ -64,6 +69,8 @@ export default async function TeamPage({
   const devonCallPhone = cookieStore.get("myst-call-agent-devon-phone")?.value ?? "";
   const austinCallPhone = cookieStore.get("myst-call-agent-owner-phone")?.value ?? "";
   const callAgentChoice = cookieStore.get("myst-call-agent-choice")?.value ?? "devon";
+  const actingMemberIdCookie = cookieStore.get(TEAM_ACTOR_ID_COOKIE)?.value ?? "";
+  const actingMemberLabelCookie = cookieStore.get(TEAM_ACTOR_LABEL_COOKIE)?.value ?? "";
 
   const requestedTab = params?.tab;
   const tab =
@@ -88,6 +95,23 @@ export default async function TeamPage({
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
   const dismissedNewLeadId = cookieStore.get("myst-new-lead-dismissed")?.value ?? null;
+
+  type ActingMember = { id: string; name: string; active: boolean | null };
+  let actingMembers: ActingMember[] = [];
+  let actingMembersError: string | null = null;
+  if (tab === "settings" && hasOwner) {
+    try {
+      const res = await callAdminApi("/api/admin/team/members");
+      if (!res.ok) {
+        actingMembersError = `Failed to load team members (HTTP ${res.status})`;
+      } else {
+        const payload = (await res.json()) as { members?: ActingMember[] };
+        actingMembers = payload.members ?? [];
+      }
+    } catch (error) {
+      actingMembersError = `Failed to load team members: ${(error as Error).message}`;
+    }
+  }
   const tabs: TabNavItem[] = [
     { id: "myday", label: "My Day", href: "/team?tab=myday", requires: "crew" },
     { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "owner" },
@@ -445,6 +469,66 @@ export default async function TeamPage({
         {tab === "settings" ? (
           <section className="space-y-4 rounded-2xl border border-slate-200 bg-white/80 p-6 text-sm text-slate-600 shadow-lg shadow-slate-200/60">
             <div className="space-y-4">
+              <h2 className="text-base font-semibold text-slate-900">Acting as</h2>
+              <p className="text-xs text-slate-500">
+                This controls which team member the CRM records when you click <span className="font-semibold">Call</span> or send a message.
+                Devon HQ uses it to measure Devon vs Austin. Commissions are still controlled by the contact{" "}
+                <span className="font-semibold">Assigned to</span> field.
+              </p>
+              {!hasOwner ? (
+                <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 text-xs text-slate-500">
+                  Owner login is required to change the acting member.
+                </div>
+              ) : actingMembersError ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-xs text-amber-700">
+                  {actingMembersError}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm font-semibold text-slate-800">
+                    Current:{" "}
+                    <span className="text-primary-700">
+                      {(() => {
+                        const label = actingMemberLabelCookie.trim();
+                        if (label.length > 0) return label;
+                        const selectedId = actingMemberIdCookie.trim();
+                        const match = selectedId ? actingMembers.find((m) => m.id === selectedId) : null;
+                        if (match?.name) return match.name;
+                        return "Devon (default)";
+                      })()}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <form action={setActingMemberAction} className="flex flex-wrap items-center gap-2">
+                      <select
+                        name="member"
+                        defaultValue={(() => {
+                          const selectedId =
+                            actingMemberIdCookie.trim().length > 0 ? actingMemberIdCookie.trim() : FALLBACK_DEVON_MEMBER_ID;
+                          const selected = actingMembers.find((m) => m.id === selectedId) ?? actingMembers[0] ?? null;
+                          return selected ? JSON.stringify({ id: selected.id, name: selected.name }) : "";
+                        })()}
+                        className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                      >
+                        {actingMembers.map((member) => (
+                          <option key={member.id} value={JSON.stringify({ id: member.id, name: member.name })}>
+                            {member.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button className="rounded-xl bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-primary-700">
+                        Save
+                      </button>
+                    </form>
+                    <form action={clearActingMemberAction}>
+                      <button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700">
+                        Reset
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
+
               <h2 className="text-base font-semibold text-slate-900">Calling</h2>
               <p className="text-xs text-slate-500">
                 Choose who should be rung when you click <span className="font-semibold">Call (Stonegate #)</span> on a contact.

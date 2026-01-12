@@ -11,6 +11,73 @@ const CALL_AGENT_OWNER_PHONE_COOKIE = "myst-call-agent-owner-phone";
 const CALL_AGENT_CHOICE_COOKIE = "myst-call-agent-choice";
 type CallAgentChoice = "devon" | "owner";
 
+const TEAM_ACTOR_ID_COOKIE = "myst-team-actor-id";
+const TEAM_ACTOR_LABEL_COOKIE = "myst-team-actor-label";
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+export async function setActingMemberAction(formData: FormData) {
+  const jar = await cookies();
+  const memberRaw = formData.get("member");
+  if (typeof memberRaw !== "string" || memberRaw.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Pick a team member first", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  let parsed: { id?: unknown; name?: unknown } | null = null;
+  try {
+    parsed = JSON.parse(memberRaw) as { id?: unknown; name?: unknown };
+  } catch {
+    parsed = null;
+  }
+
+  const memberId = parsed && typeof parsed.id === "string" ? parsed.id.trim() : "";
+  const memberName = parsed && typeof parsed.name === "string" ? parsed.name.trim() : "";
+
+  if (!memberId || !isUuid(memberId)) {
+    jar.set({ name: "myst-flash-error", value: "Invalid member selection", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({
+    name: TEAM_ACTOR_ID_COOKIE,
+    value: memberId,
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365
+  });
+
+  if (memberName) {
+    jar.set({
+      name: TEAM_ACTOR_LABEL_COOKIE,
+      value: memberName,
+      path: "/",
+      maxAge: 60 * 60 * 24 * 365
+    });
+  } else {
+    jar.set({ name: TEAM_ACTOR_LABEL_COOKIE, value: "", path: "/", maxAge: 0 });
+  }
+
+  jar.set({
+    name: "myst-flash",
+    value: memberName ? `Acting as ${memberName}` : "Acting member updated",
+    path: "/"
+  });
+
+  revalidatePath("/team");
+}
+
+export async function clearActingMemberAction() {
+  const jar = await cookies();
+  jar.set({ name: TEAM_ACTOR_ID_COOKIE, value: "", path: "/", maxAge: 0 });
+  jar.set({ name: TEAM_ACTOR_LABEL_COOKIE, value: "", path: "/", maxAge: 0 });
+  jar.set({ name: "myst-flash", value: "Reset acting member to default (Devon)", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function updateApptStatus(formData: FormData) {
   const id = formData.get("appointmentId");
   const status = formData.get("status");
