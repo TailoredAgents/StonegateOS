@@ -69,6 +69,43 @@ function normalizeName(fullName: string): { firstName: string; lastName: string 
   return { firstName, lastName };
 }
 
+const NAME_FIELD_STOPWORDS = new Set([
+  "phone",
+  "number",
+  "email",
+  "zip",
+  "code",
+  "address",
+  "city",
+  "state"
+]);
+
+function sanitizeNameCandidate(value: string): string | null {
+  const cleaned = value
+    .replace(/\r\n/g, "\n")
+    .replace(/[^\w\s'ƒ?T-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) return null;
+  const lowered = cleaned.toLowerCase();
+  if (lowered.includes("stonegate")) return null;
+  if (lowered.includes("@")) return null;
+
+  const tokens = cleaned.split(" ").filter(Boolean);
+  while (tokens.length > 0 && NAME_FIELD_STOPWORDS.has(tokens[tokens.length - 1]!.toLowerCase())) {
+    tokens.pop();
+  }
+  if (tokens.length === 0) return null;
+
+  if (tokens.length > 4) return null;
+  const looksLikeName = tokens.every((part) => /^[A-Za-z][A-Za-z'ƒ?T-]{0,25}$/.test(part));
+  if (!looksLikeName) return null;
+
+  const normalized = tokens.join(" ").trim();
+  return normalized.length > 1 ? normalized : null;
+}
+
 function normalizePhone(input: string): { raw: string; e164: string } {
   const phone = parsePhoneNumberFromString(input, "US");
   if (!phone) {
@@ -82,7 +119,12 @@ function normalizePhone(input: string): { raw: string; e164: string } {
 
 function resolveContactName(fallbackName: string | null | undefined): { firstName: string; lastName: string } {
   const cleaned = typeof fallbackName === "string" && fallbackName.trim().length > 0 ? fallbackName.trim() : "Unknown Contact";
-  return normalizeName(cleaned);
+  const sanitized = sanitizeNameCandidate(cleaned) ?? cleaned;
+  const parts = sanitized.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1 && parts[0]!.toLowerCase() !== "unknown") {
+    return { firstName: parts[0]!, lastName: "" };
+  }
+  return normalizeName(sanitized);
 }
 
 function extractEmailFromText(body: string): string | null {
@@ -115,6 +157,32 @@ function extractNameFromText(body: string): string | null {
   const normalized = body.replace(/\r\n/g, "\n").trim();
   if (!normalized) return null;
 
+  const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
+  const kv: Record<string, string> = {};
+  for (const line of lines) {
+    const idx = line.indexOf(":");
+    if (idx <= 0) continue;
+    const rawKey = line.slice(0, idx).trim().toLowerCase();
+    const key = rawKey.replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+    const value = line.slice(idx + 1).trim();
+    if (!key || !value) continue;
+    kv[key] = value;
+  }
+
+  const fullNameField = kv["full name"] ?? kv["name"] ?? null;
+  const firstNameField = kv["first name"] ?? kv["firstname"] ?? null;
+  const lastNameField = kv["last name"] ?? kv["lastname"] ?? null;
+
+  if (typeof fullNameField === "string") {
+    const candidate = sanitizeNameCandidate(fullNameField);
+    if (candidate) return candidate;
+  }
+  if (typeof firstNameField === "string" || typeof lastNameField === "string") {
+    const joined = [firstNameField ?? "", lastNameField ?? ""].join(" ").trim();
+    const candidate = sanitizeNameCandidate(joined);
+    if (candidate) return candidate;
+  }
+
   const patterns: RegExp[] = [
     /\b(?:full\s+name|name)\s*[:=-]\s*([A-Za-z][A-Za-z'’-]*(?:\s+[A-Za-z][A-Za-z'’-]*){1,3})\b/i,
     /\b(?:my name is|this is|i am|i'm)\s+([A-Za-z][A-Za-z'’-]*(?:\s+[A-Za-z][A-Za-z'’-]*){0,2})\b/i
@@ -124,8 +192,9 @@ function extractNameFromText(body: string): string | null {
     const match = normalized.match(pattern);
     const candidate = match?.[1]?.trim() ?? "";
     if (!candidate) continue;
-    if (candidate.toLowerCase().includes("stonegate")) continue;
-    return candidate;
+    const sanitized = sanitizeNameCandidate(candidate);
+    if (!sanitized) continue;
+    return sanitized;
   }
 
   const firstLine = normalized.split("\n")[0]?.trim() ?? "";
@@ -159,6 +228,8 @@ function isMeaningfulName(value: string): boolean {
   const lowered = trimmed.toLowerCase();
   if (lowered === "unknown contact") return false;
   if (isMessengerFallbackName(trimmed)) return false;
+  if (lowered.includes("phone number")) return false;
+  if (lowered.includes("zip code")) return false;
   return true;
 }
 
