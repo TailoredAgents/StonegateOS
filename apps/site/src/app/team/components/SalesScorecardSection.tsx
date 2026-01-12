@@ -7,6 +7,14 @@ type ScorecardPayload = {
   ok: true;
   memberId: string;
   rangeDays: number;
+  config?: {
+    weights?: {
+      speedToLead?: number;
+      followupCompliance?: number;
+      conversion?: number;
+      responseTime?: number;
+    };
+  };
   score: {
     total: number;
     speedToLead: number;
@@ -94,6 +102,16 @@ function ScoreRing({ value }: { value: number }) {
   );
 }
 
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function normalizeScore(score: number, weight: number): number {
+  if (!weight || !Number.isFinite(weight) || weight <= 0) return 0;
+  return clampPercent((score / weight) * 100);
+}
+
 export async function SalesScorecardSection(): Promise<React.ReactElement> {
   const rangeDays = 7;
   let scorecard: ScorecardPayload | null = null;
@@ -116,6 +134,20 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
   }
 
   const score = scorecard?.score.total ?? 0;
+  const weights = {
+    speedToLead: scorecard?.config?.weights?.speedToLead ?? 45,
+    followupCompliance: scorecard?.config?.weights?.followupCompliance ?? 35,
+    conversion: scorecard?.config?.weights?.conversion ?? 10,
+    responseTime: scorecard?.config?.weights?.responseTime ?? 10
+  };
+
+  const subScores = {
+    speedToLead: normalizeScore(scorecard?.score.speedToLead ?? 0, weights.speedToLead),
+    followups: normalizeScore(scorecard?.score.followupCompliance ?? 0, weights.followupCompliance),
+    conversion: normalizeScore(scorecard?.score.conversion ?? 0, weights.conversion),
+    response: normalizeScore(scorecard?.score.responseTime ?? 0, weights.responseTime)
+  };
+
   const speed = scorecard?.metrics.speedToLead;
   const followups = scorecard?.metrics.followups;
 
@@ -137,19 +169,19 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
           <div className="space-y-2 text-sm">
             <div className="flex items-center justify-between gap-6">
               <span className="text-slate-600">Speed-to-lead</span>
-              <span className="font-semibold text-slate-900">{scorecard?.score.speedToLead ?? 0}</span>
+              <span className="font-semibold text-slate-900">{subScores.speedToLead}</span>
             </div>
             <div className="flex items-center justify-between gap-6">
               <span className="text-slate-600">Follow-ups</span>
-              <span className="font-semibold text-slate-900">{scorecard?.score.followupCompliance ?? 0}</span>
+              <span className="font-semibold text-slate-900">{subScores.followups}</span>
             </div>
             <div className="flex items-center justify-between gap-6">
               <span className="text-slate-600">Conversion</span>
-              <span className="font-semibold text-slate-900">{scorecard?.score.conversion ?? 0}</span>
+              <span className="font-semibold text-slate-900">{subScores.conversion}</span>
             </div>
             <div className="flex items-center justify-between gap-6">
               <span className="text-slate-600">Response</span>
-              <span className="font-semibold text-slate-900">{scorecard?.score.responseTime ?? 0}</span>
+              <span className="font-semibold text-slate-900">{subScores.response}</span>
             </div>
           </div>
         </div>
