@@ -127,8 +127,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const primaryProperty = contactState.properties[0];
   const mapsLink = mapsUrl(primaryProperty);
   const phoneLink = normalizePhoneLink(contactState.phone);
-  const callLink = phoneLink ? `tel:${phoneLink}` : null;
-  const textLink = phoneLink ? teamLink("inbox", { contactId: contactState.id, channel: "sms" }) : null;
+  const canCall = Boolean(phoneLink);
+  const inboxLink = teamLink("inbox", { contactId: contactState.id });
   const disabledLinkClass = "pointer-events-none opacity-50";
   const salespersonLabel =
     contactState.salespersonMemberId && teamMembers.length
@@ -545,7 +545,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               action={startContactCallAction}
               className="inline"
               onSubmit={(event) => {
-                if (!callLink) {
+                if (!canCall) {
                   event.preventDefault();
                   return;
                 }
@@ -559,18 +559,18 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               <SubmitButton
                 className={`${teamButtonClass("primary", "sm")} gap-2`}
                 pendingLabel="Calling..."
-                disabled={!callLink}
+                disabled={!canCall}
               >
                 <Phone className="h-4 w-4" aria-hidden="true" />
                 Call
               </SubmitButton>
             </form>
             <a
-              className={`${teamButtonClass("secondary", "sm")} gap-2 ${textLink ? "" : disabledLinkClass}`}
-              href={textLink ?? "#"}
+              className={`${teamButtonClass("secondary", "sm")} gap-2`}
+              href={inboxLink}
             >
               <MessageSquareText className="h-4 w-4" aria-hidden="true" />
-              Text
+              Message
             </a>
             <a
               className={`${teamButtonClass("secondary", "sm")} gap-2`}

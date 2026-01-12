@@ -60,8 +60,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const until = now;
 
   const speed = await computeSpeedToLeadForMember({ db, memberId, since, until });
-  const speedTotal = speed.length;
-  const speedMet = speed.filter((row) => row.met).length;
+  const speedCountable = speed.filter((row) => row.hasPhone);
+  const speedTotal = speedCountable.length;
+  const speedMet = speedCountable.filter((row) => row.met).length;
   const speedRatio = speedTotal > 0 ? speedMet / speedTotal : 1;
   const speedScore = Math.round(config.weights.speedToLead * speedRatio);
 
@@ -139,4 +140,3 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
   });
 }
-

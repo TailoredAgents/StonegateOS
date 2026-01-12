@@ -5,7 +5,8 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
   createQuoteAction,
-  rescheduleAppointmentAction
+  rescheduleAppointmentAction,
+  startContactCallAction
 } from "../actions";
 import { callAdminApi, fmtTime } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
@@ -325,14 +326,22 @@ export async function MyDaySection(): Promise<ReactElement> {
 
             <div className="mt-2 text-xs text-neutral-600">
               {a.contact.phone ? (
-                <>
-                  <a href={`tel:${a.contact.phone}`} className="underline-offset-2 hover:underline">
-                    Call {a.contact.phone}
-                  </a>
-                  <span className="ml-2 inline-block align-middle">
+                <div className="flex flex-wrap items-center gap-2">
+                  <form action={startContactCallAction}>
+                    <input type="hidden" name="contactId" value={a.contact.id ?? ""} />
+                    <SubmitButton
+                      className={`${teamButtonClass("secondary", "sm")} px-3 py-1`}
+                      pendingLabel="Calling..."
+                      disabled={!a.contact.id}
+                    >
+                      Call
+                    </SubmitButton>
+                  </form>
+                  <span className="text-xs text-neutral-600">{a.contact.phone}</span>
+                  <span className="inline-block align-middle">
                     <CopyButton value={a.contact.phone} label="Copy" />
                   </span>
-                </>
+                </div>
               ) : null}
             </div>
             {a.notes.length ? (

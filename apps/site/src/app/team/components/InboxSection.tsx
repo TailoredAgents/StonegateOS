@@ -12,7 +12,8 @@ import {
   sendThreadMessageAction,
   deleteMessageAction,
   suggestThreadReplyAction,
-  updateThreadAction
+  updateThreadAction,
+  startContactCallAction
 } from "../actions";
 
 type ThreadSummary = {
@@ -370,8 +371,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
   const selectedThreadState = (selectedThread as { state?: string | null } | null)?.state ?? "new";
   const allowedStates = selectedThread ? getAllowedStates(selectedThreadState) : [...THREAD_STATES];
   const activePhone = normalizePhoneLink(activeContact?.phone);
-  const callLink = activePhone ? `tel:${activePhone}` : null;
-  const textLink = activePhone ? `sms:${activePhone}` : null;
+  const canCall = Boolean(activeContactId && activePhone);
 
   return (
     <section className="space-y-6">
@@ -693,26 +693,20 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     </div>
                   ) : null}
                   <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <a
-                      className={`rounded-full border px-3 py-2 text-xs font-semibold ${
-                        callLink
-                          ? "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
-                          : "pointer-events-none border-slate-100 text-slate-300"
-                      }`}
-                      href={callLink ?? "#"}
-                    >
-                      Call
-                    </a>
-                    <a
-                      className={`rounded-full border px-3 py-2 text-xs font-semibold ${
-                        textLink
-                          ? "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
-                          : "pointer-events-none border-slate-100 text-slate-300"
-                      }`}
-                      href={textLink ?? "#"}
-                    >
-                      Text
-                    </a>
+                    <form action={startContactCallAction} className="inline">
+                      <input type="hidden" name="contactId" value={activeContactId ?? ""} />
+                      <SubmitButton
+                        className={`rounded-full border px-3 py-2 text-xs font-semibold ${
+                          canCall
+                            ? "border-slate-200 text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                            : "pointer-events-none border-slate-100 text-slate-300"
+                        }`}
+                        disabled={!canCall}
+                        pendingLabel="Calling..."
+                      >
+                        Call
+                      </SubmitButton>
+                    </form>
                   </div>
                   {selectedThreadId ? (
                     <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
