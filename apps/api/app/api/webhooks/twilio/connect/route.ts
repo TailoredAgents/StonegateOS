@@ -23,13 +23,14 @@ function resolveDialTarget(request: NextRequest): string | null {
   }
 }
 
-function buildTwiML(input: { to: string; callerId: string; statusCallbackUrl: string }): string {
+function buildTwiML(input: { to: string; callerId: string; statusCallbackUrl: string; dialActionUrl: string }): string {
   const to = escapeXml(input.to);
   const callerId = escapeXml(input.callerId);
   const statusCallbackUrl = escapeXml(input.statusCallbackUrl);
+  const dialActionUrl = escapeXml(input.dialActionUrl);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Dial callerId="${callerId}">
+  <Dial callerId="${callerId}" action="${dialActionUrl}" method="POST" answerOnBridge="true">
     <Number statusCallbackEvent="initiated ringing answered completed" statusCallback="${statusCallbackUrl}" statusCallbackMethod="POST">${to}</Number>
   </Dial>
 </Response>`;
@@ -64,8 +65,17 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const statusCallbackUrl = new URL("/api/webhooks/twilio/call-status", request.nextUrl.origin);
   statusCallbackUrl.searchParams.set("leg", "customer");
+  const dialActionUrl = new URL("/api/webhooks/twilio/dial-action", request.nextUrl.origin);
+  dialActionUrl.searchParams.set("leg", "customer");
 
-  return twimlResponse(buildTwiML({ to, callerId, statusCallbackUrl: statusCallbackUrl.toString() }));
+  return twimlResponse(
+    buildTwiML({
+      to,
+      callerId,
+      statusCallbackUrl: statusCallbackUrl.toString(),
+      dialActionUrl: dialActionUrl.toString()
+    })
+  );
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
