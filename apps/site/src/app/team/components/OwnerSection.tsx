@@ -79,6 +79,11 @@ function fmtDay(iso: string): string {
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(d);
 }
 
+function fmtPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  return `${value.toFixed(0)}%`;
+}
+
 export async function OwnerSection(): Promise<React.ReactElement> {
   let revenue: RevenuePayload | null = null;
   let revenueError: string | null = null;
@@ -225,7 +230,10 @@ export async function OwnerSection(): Promise<React.ReactElement> {
                   { label: "Year to date", window: expensesSummary.windows.yearToDate }
                 ] as Array<{ label: string; window: ExpenseSummaryWindow }>
               ).map(({ label, window }) => (
-                <li key={label} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <li
+                  key={label}
+                  className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                >
                   <div>
                     <div className="font-semibold text-slate-900">{label}</div>
                     <div className="text-xs text-slate-600">{window.count} expenses</div>
@@ -242,7 +250,10 @@ export async function OwnerSection(): Promise<React.ReactElement> {
           {recentExpenses.length ? (
             <div className="mt-4 space-y-2">
               {recentExpenses.map((expense) => (
-                <div key={expense.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                <div
+                  key={expense.id}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold text-slate-900">{fmtDay(expense.paidAt)}</span>
@@ -253,7 +264,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
                       ) : null}
                     </div>
                     <div className="truncate text-xs text-slate-600">
-                      {[expense.vendor, expense.memo].filter(Boolean).join(" — ") || "No details"}
+                      {[expense.vendor, expense.memo].filter(Boolean).join(" • ") || "No details"}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -279,7 +290,9 @@ export async function OwnerSection(): Promise<React.ReactElement> {
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">Commissions</h3>
-              <p className="mt-1 text-sm text-slate-600">Weekly payout totals (settings + payouts live in Control → Commissions).</p>
+              <p className="mt-1 text-sm text-slate-600">
+                Weekly payout totals (settings + payouts live in Control → Commissions).
+              </p>
             </div>
             <a href="/team?tab=commissions" className={teamButtonClass("secondary", "sm")}>
               Open
@@ -293,9 +306,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      This week (pay period)
-                    </div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">This week (pay period)</div>
                     <div className="mt-1 text-sm font-semibold text-slate-900">
                       Total: {fmtMoney(commissionSummary.totalsCents.total, "USD")}
                     </div>
@@ -325,9 +336,57 @@ export async function OwnerSection(): Promise<React.ReactElement> {
       <div className={TEAM_CARD_PADDED}>
         <h3 className="text-lg font-semibold text-slate-900">P&amp;L</h3>
         <p className="mt-1 text-sm text-slate-600">
-          Monthly and yearly P&amp;L will appear once we wire in categories and basic reporting.
+          Revenue (completed jobs) minus expenses (including commission payouts once marked paid).
         </p>
+
+        {revenue?.ok && expensesSummary?.ok ? (
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            {(
+              [
+                { key: "last30Days", label: "Last 30 days" },
+                { key: "monthToDate", label: "Month to date" },
+                { key: "yearToDate", label: "Year to date" }
+              ] as const
+            ).map(({ key, label }) => {
+              const rev = revenue.windows[key].totalCents ?? 0;
+              const exp = expensesSummary.windows[key].totalCents ?? 0;
+              const profit = rev - exp;
+              const margin = rev > 0 ? (profit / rev) * 100 : 0;
+
+              return (
+                <div key={key} className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
+                  <div className="mt-2 space-y-1 text-sm text-slate-700">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Revenue</span>
+                      <span className="font-semibold text-slate-900">{fmtMoney(rev, "USD")}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-600">Expenses</span>
+                      <span className="font-semibold text-slate-900">{fmtMoney(exp, "USD")}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 border-t border-slate-200 pt-2">
+                      <span className="text-slate-600">Profit</span>
+                      <span className={`font-semibold ${profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                        {fmtMoney(profit, "USD")}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
+                      <span>Margin</span>
+                      <span>{fmtPercent(margin)}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-slate-600">
+            {revenueError || expensesSummaryError || "P&L unavailable right now."}
+          </p>
+        )}
       </div>
     </section>
   );
 }
+
