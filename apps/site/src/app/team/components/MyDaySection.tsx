@@ -10,6 +10,7 @@ import {
 import { callAdminApi, fmtTime } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { labelForPipelineStage } from "./pipeline.stages";
+import { TEAM_EMPTY_STATE, teamButtonClass } from "./team-ui";
 
 type AppointmentStatus = "requested" | "confirmed" | "completed" | "no_show" | "canceled";
 
@@ -91,7 +92,7 @@ export async function MyDaySection(): Promise<ReactElement> {
         <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{loadError}</p>
       ) : null}
       {appts.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-4 text-sm text-neutral-500">
+        <p className={TEAM_EMPTY_STATE}>
           No confirmed visits.
         </p>
       ) : (
@@ -207,20 +208,20 @@ export async function MyDaySection(): Promise<ReactElement> {
                     </div>
                   </div>
                 </details>
-                <SubmitButton className="rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white hover:bg-primary-700" pendingLabel="Saving...">
+                <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
                   Mark complete
                 </SubmitButton>
               </form>
               <form action="/api/team/appointments/status" method="post">
                 <input type="hidden" name="appointmentId" value={a.id} />
                 <input type="hidden" name="status" value="no_show" />
-                <SubmitButton className="rounded-md border border-warning px-3 py-1 text-xs text-warning" pendingLabel="Saving...">
+                <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
                   No-show
                 </SubmitButton>
               </form>
               <a
                 href={`/schedule?appointmentId=${encodeURIComponent(a.id)}&token=${encodeURIComponent(a.rescheduleToken)}`}
-                className="rounded-md border border-accent-400 bg-accent-50 px-3 py-1 text-xs font-medium text-accent-700 hover:bg-accent-100"
+                className={teamButtonClass("secondary", "sm")}
               >
                 Reschedule link
               </a>
@@ -253,7 +254,7 @@ export async function MyDaySection(): Promise<ReactElement> {
                     ))}
                   </select>
                 </label>
-                <SubmitButton className="self-start rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white" pendingLabel="Saving...">
+                <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
                   Save new time
                 </SubmitButton>
               </form>

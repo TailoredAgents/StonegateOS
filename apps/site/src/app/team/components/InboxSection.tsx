@@ -1,9 +1,10 @@
-﻿import React from "react";
+import React from "react";
 import { redirect } from "next/navigation";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { InboxMediaGallery } from "./InboxMediaGallery";
+import { TEAM_EMPTY_STATE, TEAM_INPUT_COMPACT, TEAM_SELECT, teamButtonClass } from "./team-ui";
 import {
   createThreadAction,
   retryFailedMessageAction,
@@ -428,7 +429,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
         </select>
         <button
           type="submit"
-          className="inline-flex items-center rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+          className={teamButtonClass("secondary")}
         >
           Filter
         </button>
@@ -444,7 +445,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
           </div>
 
           {threads.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-sm text-slate-500">
+            <div className={TEAM_EMPTY_STATE}>
               No threads yet. Create a new conversation below.
             </div>
           ) : (
@@ -514,7 +515,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 <input
                   name="contactId"
                   placeholder="Contact UUID"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  className={TEAM_INPUT_COMPACT}
                 />
               </label>
               <label className="flex flex-col gap-1 text-xs text-slate-600">
@@ -522,7 +523,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 <select
                   name="channel"
                   defaultValue="sms"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  className={TEAM_SELECT}
                 >
                   {["sms", "email", "dm", "call", "web"].map((value) => (
                     <option key={value} value={value}>
@@ -536,11 +537,11 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 <input
                   name="subject"
                   placeholder="Short summary"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  className={TEAM_INPUT_COMPACT}
                 />
               </label>
               <SubmitButton
-                className="inline-flex items-center rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className={teamButtonClass("primary", "sm")}
                 pendingLabel="Creating..."
               >
                 Create thread
@@ -769,7 +770,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                                 title="Delete message"
                                 aria-label="Delete message"
                               >
-                                ðŸ—‘
+                                X
                               </button>
                             </form>
                           </div>
@@ -810,7 +811,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 <form action={suggestThreadReplyAction} className="flex justify-end">
                   <input type="hidden" name="threadId" value={activeThread.id} />
                   <SubmitButton
-                    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-primary-300 hover:text-primary-700"
+                    className={teamButtonClass("secondary", "sm")}
                     pendingLabel="Thinking..."
                   >
                     AI Suggest
@@ -826,7 +827,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     <input
                       name="subject"
                       defaultValue={activeThread.subject ?? ""}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                      className={TEAM_INPUT_COMPACT}
                     />
                   </label>
                 ) : null}
@@ -836,11 +837,11 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     name="body"
                     rows={3}
                     required
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                    className={TEAM_INPUT_COMPACT}
                   />
                 </label>
                 <SubmitButton
-                  className="inline-flex items-center rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                  className={teamButtonClass("primary", "sm")}
                   pendingLabel="Sending..."
                 >
                   Send message
@@ -848,7 +849,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
               </form>
             </div>
           ) : (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-6 text-sm text-slate-500">
+            <div className={TEAM_EMPTY_STATE}>
               Select a thread to view the conversation.
             </div>
           )}

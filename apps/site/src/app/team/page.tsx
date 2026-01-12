@@ -32,6 +32,8 @@ import { SalesScorecardSection } from "./components/SalesScorecardSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
+import { TeamSkeletonCard } from "./components/TeamSkeleton";
+import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE, teamButtonClass } from "./components/team-ui";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
@@ -286,9 +288,7 @@ export default async function TeamPage({
         {tab === "myday" && (hasCrew || hasOwner) ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading My Day
-              </div>
+              <TeamSkeletonCard title="Loading My Day" />
             }
           >
             <MyDaySection />
@@ -298,9 +298,7 @@ export default async function TeamPage({
         {tab === "quote-builder" && (hasCrew || hasOwner) ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading Quote Builder
-              </div>
+              <TeamSkeletonCard title="Loading Quote Builder" />
             }
           >
             <QuoteBuilderSection initialContactId={contactIdParam} />
@@ -310,9 +308,7 @@ export default async function TeamPage({
         {tab === "chat" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading chat
-              </div>
+              <TeamSkeletonCard title="Loading chat" />
             }
           >
             <ChatSection />
@@ -322,9 +318,7 @@ export default async function TeamPage({
         {tab === "inbox" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading inbox
-              </div>
+              <TeamSkeletonCard title="Loading inbox" />
             }
           >
             <InboxSection threadId={inboxThreadId} status={inboxStatus} contactId={contactIdParam} channel={inboxChannel} />
@@ -334,9 +328,7 @@ export default async function TeamPage({
         {tab === "calendar" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading calendar
-              </div>
+              <TeamSkeletonCard title="Loading calendar" />
             }
           >
             <CalendarSection searchParams={params as any} />
@@ -346,9 +338,7 @@ export default async function TeamPage({
         {tab === "quotes" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading Quotes
-              </div>
+              <TeamSkeletonCard title="Loading Quotes" />
             }
           >
             <div className="space-y-4">
@@ -361,9 +351,7 @@ export default async function TeamPage({
         {tab === "pipeline" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading pipeline
-              </div>
+              <TeamSkeletonCard title="Loading pipeline" />
             }
           >
             <PipelineSection />
@@ -373,9 +361,7 @@ export default async function TeamPage({
         {tab === "sales-hq" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading Sales HQ
-              </div>
+              <TeamSkeletonCard title="Loading Devon HQ" />
             }
           >
             <SalesScorecardSection />
@@ -385,9 +371,7 @@ export default async function TeamPage({
         {tab === "contacts" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading contacts
-              </div>
+              <TeamSkeletonCard title="Loading contacts" />
             }
           >
             <ContactsSection search={contactsQuery} offset={contactsOffset} contactId={contactIdParam} />
@@ -397,9 +381,7 @@ export default async function TeamPage({
         {tab === "owner" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading owner tools
-              </div>
+              <TeamSkeletonCard title="Loading owner tools" />
             }
           >
             <OwnerSection />
@@ -409,9 +391,7 @@ export default async function TeamPage({
         {tab === "policy" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading policy center
-              </div>
+              <TeamSkeletonCard title="Loading policy center" />
             }
           >
             <PolicyCenterSection />
@@ -421,9 +401,7 @@ export default async function TeamPage({
         {tab === "automation" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading automation
-              </div>
+              <TeamSkeletonCard title="Loading automation" />
             }
           >
             <AutomationSection />
@@ -433,9 +411,7 @@ export default async function TeamPage({
         {tab === "access" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading access controls
-              </div>
+              <TeamSkeletonCard title="Loading access controls" />
             }
           >
             <AccessSection />
@@ -445,9 +421,7 @@ export default async function TeamPage({
         {tab === "audit" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading audit log
-              </div>
+              <TeamSkeletonCard title="Loading audit log" />
             }
           >
             <AuditLogSection />
@@ -457,9 +431,7 @@ export default async function TeamPage({
         {tab === "merge" && hasOwner ? (
           <React.Suspense
             fallback={
-              <div className="rounded-2xl border border-slate-200 bg-white/80 p-8 text-sm text-slate-500 shadow-lg shadow-slate-200/50">
-                Loading merge queue
-              </div>
+              <TeamSkeletonCard title="Loading merge queue" />
             }
           >
             <MergeQueueSection />
@@ -467,10 +439,10 @@ export default async function TeamPage({
         ) : null}
 
         {tab === "settings" ? (
-          <section className="space-y-4 rounded-2xl border border-slate-200 bg-white/80 p-6 text-sm text-slate-600 shadow-lg shadow-slate-200/60">
+          <section className={`space-y-4 ${TEAM_CARD_PADDED}`}>
             <div className="space-y-4">
-              <h2 className="text-base font-semibold text-slate-900">Acting as</h2>
-              <p className="text-xs text-slate-500">
+              <h2 className={TEAM_SECTION_TITLE}>Acting as</h2>
+              <p className={TEAM_SECTION_SUBTITLE}>
                 This controls which team member the CRM records when you click <span className="font-semibold">Call</span> or send a message.
                 Devon HQ uses it to measure Devon vs Austin. Commissions are still controlled by the contact{" "}
                 <span className="font-semibold">Assigned to</span> field.
@@ -516,12 +488,12 @@ export default async function TeamPage({
                           </option>
                         ))}
                       </select>
-                      <button className="rounded-xl bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-primary-700">
+                      <button className={teamButtonClass("primary", "sm")}>
                         Save
                       </button>
                     </form>
                     <form action={clearActingMemberAction}>
-                      <button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700">
+                      <button className={teamButtonClass("secondary", "sm")}>
                         Reset
                       </button>
                     </form>
@@ -529,8 +501,8 @@ export default async function TeamPage({
                 </div>
               )}
 
-              <h2 className="text-base font-semibold text-slate-900">Calling</h2>
-              <p className="text-xs text-slate-500">
+              <h2 className={TEAM_SECTION_TITLE}>Calling</h2>
+              <p className={TEAM_SECTION_SUBTITLE}>
                 Choose who should be rung when you click <span className="font-semibold">Call (Stonegate #)</span> on a contact.
                 When answered, the system connects to the customer and shows the Stonegate number as caller ID.
               </p>
@@ -542,7 +514,7 @@ export default async function TeamPage({
                 </div>
                 <form action={setCallAgentChoiceAction} className="flex items-center gap-2">
                   <input type="hidden" name="choice" value={callAgentChoice === "owner" ? "devon" : "owner"} />
-                  <button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700">
+                  <button className={teamButtonClass("secondary", "sm")}>
                     Switch to {callAgentChoice === "owner" ? "Devon" : "Austin"}
                   </button>
                 </form>
@@ -567,7 +539,7 @@ export default async function TeamPage({
                     </form>
                     <form action={clearCallAgentPhoneAction}>
                       <input type="hidden" name="who" value="devon" />
-                      <button className="w-full rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-slate-300 hover:text-slate-800">
+                      <button className="w-full rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-primary-300 hover:text-primary-700">
                         Clear Devon phone
                       </button>
                     </form>
@@ -592,7 +564,7 @@ export default async function TeamPage({
                     </form>
                     <form action={clearCallAgentPhoneAction}>
                       <input type="hidden" name="who" value="owner" />
-                      <button className="w-full rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-slate-300 hover:text-slate-800">
+                      <button className="w-full rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-primary-300 hover:text-primary-700">
                         Clear Austin phone
                       </button>
                     </form>
