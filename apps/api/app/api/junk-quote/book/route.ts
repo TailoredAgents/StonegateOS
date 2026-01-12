@@ -707,7 +707,7 @@ export async function POST(request: NextRequest) {
             ${propertyId},
             ${leadId},
             ${"estimate"},
-            ${startAt},
+            ${startAt.toISOString()},
             ${durationMinutes},
             ${"confirmed"},
             ${rescheduleToken},

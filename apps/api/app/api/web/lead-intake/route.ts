@@ -323,7 +323,7 @@ export async function POST(request: NextRequest) {
           ${property.id},
           ${lead.id},
           ${"estimate"},
-          ${timing.startAt},
+          ${timing.startAt ? timing.startAt.toISOString() : null},
           ${timing.durationMinutes},
           ${"requested"},
           ${token},
