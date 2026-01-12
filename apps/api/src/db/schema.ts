@@ -1062,6 +1062,11 @@ export const expenses = pgTable(
     method: text("method"),
     source: text("source").default("manual").notNull(),
     paidAt: timestamp("paid_at", { withTimezone: true }).defaultNow().notNull(),
+    coverageStartAt: timestamp("coverage_start_at", { withTimezone: true }),
+    coverageEndAt: timestamp("coverage_end_at", { withTimezone: true }),
+    receiptFilename: text("receipt_filename"),
+    receiptUrl: text("receipt_url"),
+    receiptContentType: text("receipt_content_type"),
     bankTransactionId: uuid("bank_transaction_id").references(() => plaidTransactions.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })

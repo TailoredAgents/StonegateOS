@@ -24,9 +24,11 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "automation.write",
     "audit.read",
     "appointments.read",
-    "appointments.update"
+    "appointments.update",
+    "expenses.read",
+    "expenses.write"
   ],
-  crew: ["messages.read", "appointments.read", "appointments.update"],
+  crew: ["messages.read", "appointments.read", "appointments.update", "expenses.read", "expenses.write"],
   read_only: ["read"]
 };
 

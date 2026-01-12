@@ -23,6 +23,8 @@ import { ChatSection } from "./components/ChatSection";
 import { CalendarSection } from "./components/CalendarSection";
 import { OwnerSection } from "./components/OwnerSection";
 import { InboxSection } from "./components/InboxSection";
+import { ExpensesSection } from "./components/ExpensesSection";
+import { CommissionsSection } from "./components/CommissionsSection";
 import { PolicyCenterSection } from "./components/PolicyCenterSection";
 import { AutomationSection } from "./components/AutomationSection";
 import { AccessSection } from "./components/AccessSection";
@@ -116,6 +118,7 @@ export default async function TeamPage({
   }
   const tabs: TabNavItem[] = [
     { id: "myday", label: "My Day", href: "/team?tab=myday", requires: "crew" },
+    { id: "expenses", label: "Expenses", href: "/team?tab=expenses", requires: "crew" },
     { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "owner" },
     { id: "quote-builder", label: "Quote Builder", href: "/team?tab=quote-builder", requires: "crew" },
     { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "owner" },
@@ -126,6 +129,7 @@ export default async function TeamPage({
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
     { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "owner" },
+    { id: "commissions", label: "Commissions", href: "/team?tab=commissions", requires: "owner" },
     { id: "automation", label: "Automation", href: "/team?tab=automation", requires: "owner" },
     { id: "access", label: "Access", href: "/team?tab=access", requires: "owner" },
     { id: "audit", label: "Audit Log", href: "/team?tab=audit", requires: "owner" },
@@ -133,10 +137,10 @@ export default async function TeamPage({
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
   ];
   const tabGroups: TabNavGroup[] = [
-    { id: "ops", label: "Ops", itemIds: ["myday", "calendar", "chat"] },
+    { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
     { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "pipeline", "sales-hq", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
-    { id: "control", label: "Control", itemIds: ["policy", "automation", "access", "audit", "merge"] },
+    { id: "control", label: "Control", itemIds: ["commissions", "policy", "automation", "access", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
@@ -295,6 +299,12 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
+        {tab === "expenses" && (hasCrew || hasOwner) ? (
+          <React.Suspense fallback={<TeamSkeletonCard title="Loading expenses" />}>
+            <ExpensesSection />
+          </React.Suspense>
+        ) : null}
+
         {tab === "quote-builder" && (hasCrew || hasOwner) ? (
           <React.Suspense
             fallback={
@@ -395,6 +405,12 @@ export default async function TeamPage({
             }
           >
             <PolicyCenterSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "commissions" && hasOwner ? (
+          <React.Suspense fallback={<TeamSkeletonCard title="Loading commissions" />}>
+            <CommissionsSection />
           </React.Suspense>
         ) : null}
 

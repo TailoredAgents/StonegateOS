@@ -25,13 +25,15 @@ const DEFAULT_ROLES = [
       "automation.write",
       "audit.read",
       "appointments.read",
-      "appointments.update"
+      "appointments.update",
+      "expenses.read",
+      "expenses.write"
     ]
   },
   {
     name: "Crew",
     slug: "crew",
-    permissions: ["messages.read", "appointments.read", "appointments.update"]
+    permissions: ["messages.read", "appointments.read", "appointments.update", "expenses.read", "expenses.write"]
   },
   {
     name: "Read-only",

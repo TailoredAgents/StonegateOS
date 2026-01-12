@@ -59,10 +59,16 @@ export async function callAdminApi(path: string, init?: RequestInit): Promise<Re
   const actorRole = await resolveActorRole();
   const { actorId, actorLabel } = await resolveActorIdentity();
   const base = API_BASE_URL.replace(/\/$/, "");
+  const isFormDataBody =
+    typeof FormData !== "undefined" && init?.body instanceof FormData;
+
+  const defaultHeaders: Record<string, string> = isFormDataBody
+    ? {}
+    : { "Content-Type": "application/json" };
   return fetch(`${base}${path}`, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      ...defaultHeaders,
       "x-api-key": ADMIN_API_KEY,
       "x-actor-type": "human",
       ...(actorId ? { "x-actor-id": actorId } : {}),
