@@ -59,13 +59,24 @@ async function createTwilioCall(input: { agentPhone: string; toPhone: string; re
   const callbackUrl = new URL(`${resolveApiBaseUrl(input.request)}/api/webhooks/twilio/connect`);
   callbackUrl.searchParams.set("to", input.toPhone);
 
+  const statusCallbackUrl = new URL(`${resolveApiBaseUrl(input.request)}/api/webhooks/twilio/call-status`);
+  statusCallbackUrl.searchParams.set("leg", "agent");
+
   const auth = Buffer.from(`${sid}:${token}`).toString("base64");
-  const form = new URLSearchParams({
+  const formParams = new URLSearchParams({
     To: input.agentPhone,
     From: from,
     Url: callbackUrl.toString(),
-    Method: "POST"
-  }).toString();
+    Method: "POST",
+    StatusCallback: statusCallbackUrl.toString(),
+    StatusCallbackMethod: "POST"
+  });
+
+  for (const event of ["initiated", "ringing", "answered", "completed"]) {
+    formParams.append("StatusCallbackEvent", event);
+  }
+
+  const form = formParams.toString();
 
   const response = await fetch(`${baseUrl}/2010-04-01/Accounts/${sid}/Calls.json`, {
     method: "POST",
