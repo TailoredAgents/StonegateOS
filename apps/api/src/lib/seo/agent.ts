@@ -17,6 +17,52 @@ async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function extractTextFromContentChunk(chunk: any): string | null {
+  if (!chunk) return null;
+
+  const type = typeof chunk.type === "string" ? chunk.type : null;
+
+  if (type === "output_text") {
+    const text = chunk.text;
+    if (typeof text === "string" && text.trim()) return text.trim();
+    if (text && typeof text === "object" && typeof text.value === "string" && text.value.trim()) return text.value.trim();
+  }
+
+  if (type === "refusal") {
+    const refusal = chunk.refusal;
+    if (typeof refusal === "string" && refusal.trim()) return refusal.trim();
+  }
+
+  if (type === "output_json") {
+    if (chunk.json && typeof chunk.json === "object") {
+      try {
+        return JSON.stringify(chunk.json);
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  const text = chunk.text;
+  if (typeof text === "string" && text.trim()) return text.trim();
+  if (text && typeof text === "object") {
+    if (typeof text.value === "string" && text.value.trim()) return text.value.trim();
+    if (typeof (text as any).text === "string" && (text as any).text.trim()) return (text as any).text.trim();
+  }
+
+  if (typeof chunk.refusal === "string" && chunk.refusal.trim()) return chunk.refusal.trim();
+
+  if (chunk.json && typeof chunk.json === "object") {
+    try {
+      return JSON.stringify(chunk.json);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 function extractOpenAIResponseText(data: OpenAIResponsesData): string {
   if (typeof data.output_text === "string" && data.output_text.trim()) {
     return data.output_text.trim();
@@ -27,10 +73,8 @@ function extractOpenAIResponseText(data: OpenAIResponsesData): string {
   for (const item of outputItems) {
     const content = Array.isArray(item?.content) ? item.content : [];
     for (const chunk of content) {
-      if (!chunk) continue;
-      const text = (chunk as any)?.text;
-      const value = typeof text === "string" ? text : typeof text?.value === "string" ? text.value : null;
-      if (value && value.trim()) parts.push(value.trim());
+      const value = extractTextFromContentChunk(chunk);
+      if (value) parts.push(value);
     }
   }
   return parts.join("\n").trim();
@@ -76,7 +120,13 @@ async function fetchOpenAIText(apiKey: string, payload: Record<string, unknown>,
     const text = extractOpenAIResponseText(data);
     if (!text) {
       const hasOutput = Array.isArray(data.output) ? data.output.length : 0;
-      console.warn("[seo] openai.empty_output", { model: modelLabel, hasOutput, attempt });
+      const contentTypes =
+        Array.isArray(data.output) && data.output.length && Array.isArray((data.output as any)[0]?.content)
+          ? ((data.output as any)[0].content as any[])
+              .map((c) => (c && typeof c.type === "string" ? c.type : typeof c))
+              .slice(0, 6)
+          : [];
+      console.warn("[seo] openai.empty_output", { model: modelLabel, hasOutput, contentTypes, attempt });
       if (attempt < maxAttempts) {
         await sleep(250 * attempt * attempt);
         continue;
@@ -422,103 +472,101 @@ export async function maybeAutopublishBlogPost(
     });
 
   const lockKey = 88314291;
-  const lockRow = await db.execute(sql`select pg_try_advisory_lock(${lockKey}) as locked`);
-  const locked = Array.isArray(lockRow) ? Boolean((lockRow[0] as any)?.locked) : false;
-  if (!locked) {
-    const result: SeoPublishResult = { ok: true, skipped: true, reason: "locked" };
-    await persist(result);
-    return result;
-  }
 
   try {
-    const now = new Date();
-
-    if (!force) {
-      const since = daysAgo(7);
-      const countRow = await db
-        .select({ cnt: sql<number>`count(*)` })
-        .from(blogPosts)
-        .where(and(isNotNull(blogPosts.publishedAt), gte(blogPosts.publishedAt, since)))
-        .then((rows) => rows[0]);
-      const count = Number(countRow?.cnt ?? 0);
-      if (count >= 2) {
-        const result: SeoPublishResult = { ok: true, skipped: true, reason: "quota_met" };
-        await persist(result);
-        return result;
+    const result = await db.transaction(async (tx) => {
+      const lockRow = await tx.execute(sql`select pg_try_advisory_xact_lock(${lockKey}) as locked`);
+      const locked = Array.isArray(lockRow) ? Boolean((lockRow[0] as any)?.locked) : false;
+      if (!locked) {
+        return { ok: true, skipped: true, reason: "locked" } satisfies SeoPublishResult;
       }
 
-      const latest = await db
-        .select({ publishedAt: blogPosts.publishedAt })
-        .from(blogPosts)
-        .where(and(isNotNull(blogPosts.publishedAt), lte(blogPosts.publishedAt, now)))
-        .orderBy(desc(blogPosts.publishedAt))
-        .limit(1);
-      const lastPublishedAt = latest[0]?.publishedAt ?? null;
-      if (lastPublishedAt && lastPublishedAt.getTime() > daysAgo(3).getTime()) {
-        const result: SeoPublishResult = { ok: true, skipped: true, reason: "too_soon" };
-        await persist(result);
-        return result;
+      const now = new Date();
+
+      if (!force) {
+        const since = daysAgo(7);
+        const countRow = await tx
+          .select({ cnt: sql<number>`count(*)` })
+          .from(blogPosts)
+          .where(and(isNotNull(blogPosts.publishedAt), gte(blogPosts.publishedAt, since)))
+          .then((rows) => rows[0]);
+        const count = Number(countRow?.cnt ?? 0);
+        if (count >= 2) {
+          return { ok: true, skipped: true, reason: "quota_met" } satisfies SeoPublishResult;
+        }
+
+        const latest = await tx
+          .select({ publishedAt: blogPosts.publishedAt })
+          .from(blogPosts)
+          .where(and(isNotNull(blogPosts.publishedAt), lte(blogPosts.publishedAt, now)))
+          .orderBy(desc(blogPosts.publishedAt))
+          .limit(1);
+        const lastPublishedAt = latest[0]?.publishedAt ?? null;
+        if (lastPublishedAt && lastPublishedAt.getTime() > daysAgo(3).getTime()) {
+          return { ok: true, skipped: true, reason: "too_soon" } satisfies SeoPublishResult;
+        }
       }
-    }
 
-    const { topic, nextCursor } = await pickNextTopic(db);
-    const briefRes = await generateBrief(topic, config.apiKey, config.brainModel);
-    if (!briefRes.ok) {
-      const result: SeoPublishResult = { ok: false, error: `brief_generation_failed:${briefRes.error}` };
-      await persist(result);
-      return result;
-    }
-    const brief = briefRes.brief;
+      const { topic, nextCursor } = await pickNextTopic(tx as any);
+      const briefRes = await generateBrief(topic, config.apiKey, config.brainModel);
+      if (!briefRes.ok) {
+        return { ok: false, error: `brief_generation_failed:${briefRes.error}` } satisfies SeoPublishResult;
+      }
+      const brief = briefRes.brief;
 
-    const slug = await ensureUniqueSlug(db, topic.key);
+      const slug = await ensureUniqueSlug(tx as any, topic.key);
 
-    let markdown: string | null = null;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const drafted = await writePostMarkdown(topic, brief, config.apiKey);
-      if (!drafted) continue;
-      if (hasDollarAmounts(drafted)) continue;
-      if (includesBannedGeo(drafted)) continue;
-      markdown = drafted;
-      break;
-    }
+      let markdown: string | null = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const drafted = await writePostMarkdown(topic, brief, config.apiKey);
+        if (!drafted) continue;
+        if (hasDollarAmounts(drafted)) continue;
+        if (includesBannedGeo(drafted)) continue;
+        markdown = drafted;
+        break;
+      }
 
-    if (!markdown) {
-      const result: SeoPublishResult = { ok: false, error: "post_generation_failed" };
-      await persist(result);
-      return result;
-    }
+      if (!markdown) {
+        return { ok: false, error: "post_generation_failed" } satisfies SeoPublishResult;
+      }
 
-    const title = brief.title.trim();
-    const metaTitle = title.length <= 70 ? title : title.slice(0, 70).trim();
-    const metaDescription = brief.metaDescription.trim().slice(0, 170);
-    const excerpt = brief.excerpt.trim().slice(0, 240);
+      const title = brief.title.trim();
+      const metaTitle = title.length <= 70 ? title : title.slice(0, 70).trim();
+      const metaDescription = brief.metaDescription.trim().slice(0, 170);
+      const excerpt = brief.excerpt.trim().slice(0, 240);
 
-    const publishedAt = new Date();
-    const [inserted] = await db
-      .insert(blogPosts)
-      .values({
-        slug,
-        title,
-        excerpt,
-        contentMarkdown: markdown,
-        metaTitle,
-        metaDescription,
-        topicKey: topic.key,
-        publishedAt,
-        createdAt: publishedAt,
-        updatedAt: publishedAt
-      })
-      .returning({ id: blogPosts.id, slug: blogPosts.slug, title: blogPosts.title });
+      const publishedAt = new Date();
+      const [inserted] = await (tx as any)
+        .insert(blogPosts)
+        .values({
+          slug,
+          title,
+          excerpt,
+          contentMarkdown: markdown,
+          metaTitle,
+          metaDescription,
+          topicKey: topic.key,
+          publishedAt,
+          createdAt: publishedAt,
+          updatedAt: publishedAt
+        })
+        .returning({ id: blogPosts.id, slug: blogPosts.slug, title: blogPosts.title });
 
-    if (!inserted) {
-      const result: SeoPublishResult = { ok: false, error: "insert_failed" };
-      await persist(result);
-      return result;
-    }
+      if (!inserted) {
+        return { ok: false, error: "insert_failed" } satisfies SeoPublishResult;
+      }
 
-    await persistCursor(db, nextCursor);
+      await persistCursor(tx as any, nextCursor);
 
-    const result: SeoPublishResult = { ok: true, skipped: false, postId: inserted.id, slug: inserted.slug, title: inserted.title };
+      return {
+        ok: true,
+        skipped: false,
+        postId: inserted.id,
+        slug: inserted.slug,
+        title: inserted.title
+      } satisfies SeoPublishResult;
+    });
+
     await persist(result);
     return result;
   } catch (error) {
@@ -526,11 +574,5 @@ export async function maybeAutopublishBlogPost(
     const result: SeoPublishResult = { ok: false, error: "server_error" };
     await persist(result);
     return result;
-  } finally {
-    try {
-      await db.execute(sql`select pg_advisory_unlock(${lockKey})`);
-    } catch {
-      // ignore
-    }
   }
 }
