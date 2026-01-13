@@ -86,6 +86,7 @@ const BriefSchema = z.object({
 });
 
 type PostBrief = z.infer<typeof BriefSchema>;
+type BriefGenResult = { ok: true; brief: PostBrief } | { ok: false; error: string };
 
 function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string }> {
   const links: Array<{ label: string; url: string }> = [
@@ -111,7 +112,7 @@ function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string
   return links;
 }
 
-async function generateBrief(topic: SeoTopic, apiKey: string, brainModel: string): Promise<PostBrief | null> {
+async function generateBrief(topic: SeoTopic, apiKey: string, brainModel: string): Promise<BriefGenResult> {
   const systemPrompt = `You are an SEO content strategist for Stonegate Junk Removal (North Metro Atlanta).
 Hard rules:
 - Do NOT include any dollar amounts.
@@ -135,9 +136,7 @@ metaDescription must be <= 155 characters when possible.`.trim();
         })
       }
     ],
-    reasoning: { effort: "low" as const },
     text: {
-      verbosity: "low" as const,
       format: {
         type: "json_schema" as const,
         name: "blog_brief",
@@ -159,18 +158,18 @@ metaDescription must be <= 155 characters when possible.`.trim();
   };
 
   const res = await fetchOpenAIText(apiKey, payload, brainModel);
-  if (!res.ok) return null;
+  if (!res.ok) return { ok: false, error: `openai_${res.status}` };
 
   try {
     const parsed = BriefSchema.safeParse(JSON.parse(res.text));
     if (!parsed.success) {
       console.warn("[seo] brief.parse_failed", parsed.error.issues);
-      return null;
+      return { ok: false, error: "schema_parse_failed" };
     }
-    return parsed.data;
+    return { ok: true, brief: parsed.data };
   } catch (error) {
     console.warn("[seo] brief.json_failed", String(error));
-    return null;
+    return { ok: false, error: "json_parse_failed" };
   }
 }
 
@@ -208,7 +207,6 @@ Rules:
         })
       }
     ],
-    reasoning: { effort: "low" as const },
     text: { verbosity: "medium" as const },
     max_output_tokens: 1400
   };
@@ -423,12 +421,13 @@ export async function maybeAutopublishBlogPost(
     }
 
     const { topic, nextCursor } = await pickNextTopic(db);
-    const brief = await generateBrief(topic, config.apiKey, config.brainModel);
-    if (!brief) {
-      const result: SeoPublishResult = { ok: false, error: "brief_generation_failed" };
+    const briefRes = await generateBrief(topic, config.apiKey, config.brainModel);
+    if (!briefRes.ok) {
+      const result: SeoPublishResult = { ok: false, error: `brief_generation_failed:${briefRes.error}` };
       await persist(result);
       return result;
     }
+    const brief = briefRes.brief;
 
     const slug = await ensureUniqueSlug(db, topic.key);
 
