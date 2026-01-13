@@ -29,7 +29,7 @@ async function fetchPost(slug: string) {
   if (!base) return null;
 
   const res = await fetch(`${base}/api/public/blog/${encodeURIComponent(slug)}`, {
-    next: { revalidate: 300 }
+    next: { revalidate: 60 }
   });
   if (!res.ok) return null;
   const data = (await res.json().catch(() => ({}))) as BlogPostResponse;
@@ -127,4 +127,3 @@ export default async function Page(props: { params: Promise<{ slug: string }> })
     </Section>
   );
 }
-

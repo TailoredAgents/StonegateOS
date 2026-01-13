@@ -24,7 +24,7 @@ async function fetchPosts() {
   if (!base) return [];
 
   const res = await fetch(`${base}/api/public/blog?limit=50`, {
-    next: { revalidate: 300 }
+    next: { revalidate: 60 }
   });
   if (!res.ok) return [];
   const data = (await res.json().catch(() => ({}))) as BlogListResponse;
@@ -103,4 +103,3 @@ export default async function Page() {
     </Section>
   );
 }
-

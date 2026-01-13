@@ -43,7 +43,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = API_BASE_URL.replace(/\/$/, "");
   if (base) {
     try {
-      const res = await fetch(`${base}/api/public/blog?limit=1000`, { next: { revalidate: 300 } });
+      const res = await fetch(`${base}/api/public/blog?limit=1000`, { next: { revalidate: 60 } });
       if (res.ok) {
         const data = (await res.json().catch(() => ({}))) as BlogListResponse;
         const posts = Array.isArray(data.posts) ? data.posts : [];
