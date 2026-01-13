@@ -75,6 +75,12 @@ async function fetchOpenAIText(apiKey: string, payload: Record<string, unknown>,
     const data = (await res.json().catch(() => ({}))) as OpenAIResponsesData;
     const text = extractOpenAIResponseText(data);
     if (!text) {
+      const hasOutput = Array.isArray(data.output) ? data.output.length : 0;
+      console.warn("[seo] openai.empty_output", { model: modelLabel, hasOutput, attempt });
+      if (attempt < maxAttempts) {
+        await sleep(250 * attempt * attempt);
+        continue;
+      }
       return { ok: false as const, status: 502, error: "openai_empty" };
     }
     return { ok: true as const, text };
