@@ -11,6 +11,7 @@ type SeoStatusPayload = {
     lastAttemptAt: string | null;
     lastResult: unknown;
     invokedBy: string | null;
+    codeVersion: string | null;
     disabled: boolean | null;
     openaiConfigured: boolean | null;
     brainModel: string | null;
@@ -129,6 +130,7 @@ export async function SeoAgentSection(): Promise<React.ReactElement> {
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <Pill tone={resultMeta.tone}>{resultMeta.text}</Pill>
                   {status?.invokedBy ? <Pill tone="neutral">by {status.invokedBy}</Pill> : null}
+                  {status?.codeVersion ? <Pill tone="neutral">v {status.codeVersion}</Pill> : null}
                 </div>
               </div>
               <form action={runSeoAutopublishAction}>
@@ -243,4 +245,3 @@ export async function SeoAgentSection(): Promise<React.ReactElement> {
     </section>
   );
 }
-

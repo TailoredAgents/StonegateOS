@@ -62,6 +62,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const lastAttemptAt = asDate(lastRunRaw?.["attemptedAt"]) ?? null;
   const lastResult = lastRunRaw?.["result"] ?? null;
   const invokedBy = typeof lastRunRaw?.["invokedBy"] === "string" ? (lastRunRaw["invokedBy"] as string) : null;
+  const codeVersion = typeof lastRunRaw?.["codeVersion"] === "string" ? (lastRunRaw["codeVersion"] as string) : null;
   const disabled = typeof lastRunRaw?.["disabled"] === "boolean" ? (lastRunRaw["disabled"] as boolean) : null;
   const openaiConfigured =
     typeof lastRunRaw?.["openaiConfigured"] === "boolean" ? (lastRunRaw["openaiConfigured"] as boolean) : null;
@@ -86,6 +87,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     lastAttemptAt: lastAttemptAt ? lastAttemptAt.toISOString() : null,
     lastResult,
     invokedBy,
+    codeVersion,
     disabled,
     openaiConfigured,
     brainModel,

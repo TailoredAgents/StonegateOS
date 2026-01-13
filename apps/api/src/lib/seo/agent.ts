@@ -26,6 +26,14 @@ function extractTextFromContentChunk(chunk: any): string | null {
     const text = chunk.text;
     if (typeof text === "string" && text.trim()) return text.trim();
     if (text && typeof text === "object" && typeof text.value === "string" && text.value.trim()) return text.value.trim();
+    if (text && typeof text === "object") {
+      try {
+        const serialized = JSON.stringify(text);
+        if (serialized && serialized !== "{}") return serialized;
+      } catch {
+        // ignore
+      }
+    }
   }
 
   if (type === "refusal") {
@@ -48,6 +56,12 @@ function extractTextFromContentChunk(chunk: any): string | null {
   if (text && typeof text === "object") {
     if (typeof text.value === "string" && text.value.trim()) return text.value.trim();
     if (typeof (text as any).text === "string" && (text as any).text.trim()) return (text as any).text.trim();
+    try {
+      const serialized = JSON.stringify(text);
+      if (serialized && serialized !== "{}") return serialized;
+    } catch {
+      // ignore
+    }
   }
 
   if (typeof chunk.refusal === "string" && chunk.refusal.trim()) return chunk.refusal.trim();
@@ -66,6 +80,14 @@ function extractTextFromContentChunk(chunk: any): string | null {
 function extractOpenAIResponseText(data: OpenAIResponsesData): string {
   if (typeof data.output_text === "string" && data.output_text.trim()) {
     return data.output_text.trim();
+  }
+  if (data.output_text && typeof data.output_text === "object") {
+    try {
+      const serialized = JSON.stringify(data.output_text);
+      if (serialized && serialized !== "{}") return serialized;
+    } catch {
+      // ignore
+    }
   }
 
   const outputItems = Array.isArray(data.output) ? data.output : [];
@@ -177,6 +199,19 @@ function summarizeOpenAiError(error: string): string {
     .trim();
   if (!compact) return "unknown";
   return compact.slice(0, 180);
+}
+
+function getCodeVersion(): string | null {
+  const commit =
+    process.env["RENDER_GIT_COMMIT"] ??
+    process.env["RENDER_COMMIT"] ??
+    process.env["GIT_COMMIT"] ??
+    process.env["COMMIT_SHA"] ??
+    null;
+  if (!commit) return null;
+  const trimmed = commit.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, 12);
 }
 
 function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string }> {
@@ -371,6 +406,7 @@ async function tryPersistAutopublishLastRun(
   const value = {
     attemptedAt: payload.attemptedAt.toISOString(),
     invokedBy: payload.invokedBy,
+    codeVersion: getCodeVersion(),
     disabled: payload.disabled,
     openaiConfigured: payload.openaiConfigured,
     brainModel: payload.brainModel,
