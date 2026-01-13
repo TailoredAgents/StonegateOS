@@ -67,6 +67,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   const openaiConfigured =
     typeof lastRunRaw?.["openaiConfigured"] === "boolean" ? (lastRunRaw["openaiConfigured"] as boolean) : null;
   const brainModel = typeof lastRunRaw?.["brainModel"] === "string" ? (lastRunRaw["brainModel"] as string) : null;
+  const brainModelUsed =
+    typeof lastRunRaw?.["brainModelUsed"] === "string" ? (lastRunRaw["brainModelUsed"] as string) : null;
   const voiceModel = typeof lastRunRaw?.["voiceModel"] === "string" ? (lastRunRaw["voiceModel"] as string) : null;
 
   const published7d = recentPublishedRows.map((r) => r.publishedAt).filter(Boolean) as Date[];
@@ -91,6 +93,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     disabled,
     openaiConfigured,
     brainModel,
+    brainModelUsed,
     voiceModel,
     lastPublishedAt: lastPublishedAt ? lastPublishedAt.toISOString() : null,
     publishedLast7Days,

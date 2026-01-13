@@ -7,6 +7,7 @@ const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const VOICE_MODEL = "gpt-4.1-mini";
 const AUTOPUBLISH_LAST_KEY = "blog_autopublish_last";
+const BRIEF_FALLBACK_MODEL = "gpt-4.1-mini";
 
 type OpenAIResponsesData = {
   output?: Array<{ content?: Array<{ text?: unknown; type?: unknown }> }>;
@@ -228,7 +229,9 @@ const BriefSchema = z.object({
 });
 
 type PostBrief = z.infer<typeof BriefSchema>;
-type BriefGenResult = { ok: true; brief: PostBrief } | { ok: false; error: string };
+type BriefGenResult =
+  | { ok: true; brief: PostBrief; modelUsed: string }
+  | { ok: false; error: string; modelUsed: string };
 
 function summarizeOpenAiError(error: string): string {
   const compact = String(error ?? "")
@@ -320,19 +323,37 @@ metaDescription must be <= 155 characters when possible.`.trim();
     max_output_tokens: 280
   };
 
-  const res = await fetchOpenAIText(apiKey, payload, brainModel);
-  if (!res.ok) return { ok: false, error: `openai_${res.status}:${summarizeOpenAiError(res.error)}` };
+  const tryOnce = async (model: string) => {
+    const res = await fetchOpenAIText(apiKey, { ...payload, model }, model);
+    return { res, model };
+  };
+
+  let attempt = await tryOnce(brainModel);
+  if (!attempt.res.ok && attempt.res.status === 502) {
+    const fallback = BRIEF_FALLBACK_MODEL;
+    if (fallback !== brainModel) {
+      attempt = await tryOnce(fallback);
+    }
+  }
+
+  if (!attempt.res.ok) {
+    return {
+      ok: false,
+      modelUsed: attempt.model,
+      error: `openai_${attempt.res.status}:${summarizeOpenAiError(attempt.res.error)}`
+    };
+  }
 
   try {
-    const parsed = BriefSchema.safeParse(JSON.parse(res.text));
+    const parsed = BriefSchema.safeParse(JSON.parse(attempt.res.text));
     if (!parsed.success) {
       console.warn("[seo] brief.parse_failed", parsed.error.issues);
-      return { ok: false, error: "schema_parse_failed" };
+      return { ok: false, modelUsed: attempt.model, error: "schema_parse_failed" };
     }
-    return { ok: true, brief: parsed.data };
+    return { ok: true, modelUsed: attempt.model, brief: parsed.data };
   } catch (error) {
     console.warn("[seo] brief.json_failed", String(error));
-    return { ok: false, error: "json_parse_failed" };
+    return { ok: false, modelUsed: attempt.model, error: "json_parse_failed" };
   }
 }
 
@@ -436,6 +457,7 @@ async function tryPersistAutopublishLastRun(
     disabled: boolean;
     openaiConfigured: boolean;
     brainModel: string | null;
+    brainModelUsed?: string | null;
     voiceModel: string;
     result: SeoPublishResult;
   }
@@ -447,6 +469,7 @@ async function tryPersistAutopublishLastRun(
     disabled: payload.disabled,
     openaiConfigured: payload.openaiConfigured,
     brainModel: payload.brainModel,
+    brainModelUsed: payload.brainModelUsed ?? payload.brainModel ?? null,
     voiceModel: payload.voiceModel,
     result: payload.result
   };
@@ -533,6 +556,7 @@ export async function maybeAutopublishBlogPost(
   }
 
   const db = getDb();
+  let brainModelUsed: string | null = config.brainModel;
   const persist = (result: SeoPublishResult) =>
     tryPersistAutopublishLastRun(db, {
       attemptedAt,
@@ -540,6 +564,7 @@ export async function maybeAutopublishBlogPost(
       disabled: false,
       openaiConfigured: true,
       brainModel: config.brainModel,
+      brainModelUsed,
       voiceModel: VOICE_MODEL,
       result
     });
@@ -583,9 +608,11 @@ export async function maybeAutopublishBlogPost(
       const { topic, nextCursor } = await pickNextTopic(tx as any);
       const briefRes = await generateBrief(topic, config.apiKey, config.brainModel);
       if (!briefRes.ok) {
+        brainModelUsed = briefRes.modelUsed;
         return { ok: false, error: `brief_generation_failed:${briefRes.error}` } satisfies SeoPublishResult;
       }
       const brief = briefRes.brief;
+      brainModelUsed = briefRes.modelUsed;
 
       const slug = await ensureUniqueSlug(tx as any, topic.key);
 

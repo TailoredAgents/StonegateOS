@@ -15,6 +15,7 @@ type SeoStatusPayload = {
     disabled: boolean | null;
     openaiConfigured: boolean | null;
     brainModel: string | null;
+    brainModelUsed: string | null;
     voiceModel: string | null;
     lastPublishedAt: string | null;
     publishedLast7Days: number;
@@ -177,6 +178,11 @@ export async function SeoAgentSection(): Promise<React.ReactElement> {
               <div>
                 Brain: <span className="font-semibold">{status?.brainModel ?? "—"}</span>
               </div>
+              {status?.brainModelUsed && status?.brainModelUsed !== status?.brainModel ? (
+                <div className="mt-1">
+                  Brain used: <span className="font-semibold">{status.brainModelUsed}</span>
+                </div>
+              ) : null}
               <div className="mt-1">
                 Writer: <span className="font-semibold">{status?.voiceModel ?? "—"}</span>
               </div>
