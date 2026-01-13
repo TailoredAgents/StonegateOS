@@ -22,6 +22,15 @@ function extractTextFromContentChunk(chunk: any): string | null {
 
   const type = typeof chunk.type === "string" ? chunk.type : null;
 
+  if (type === "message" && Array.isArray(chunk.content)) {
+    const parts: string[] = [];
+    for (const sub of chunk.content) {
+      const value = extractTextFromContentChunk(sub);
+      if (value) parts.push(value);
+    }
+    if (parts.length) return parts.join("\n").trim();
+  }
+
   if (type === "output_text") {
     const text = chunk.text;
     if (typeof text === "string" && text.trim()) return text.trim();
@@ -34,6 +43,12 @@ function extractTextFromContentChunk(chunk: any): string | null {
         // ignore
       }
     }
+  }
+
+  if (type === "text") {
+    const text = chunk.text;
+    if (typeof text === "string" && text.trim()) return text.trim();
+    if (text && typeof text === "object" && typeof text.value === "string" && text.value.trim()) return text.value.trim();
   }
 
   if (type === "refusal") {
@@ -49,6 +64,15 @@ function extractTextFromContentChunk(chunk: any): string | null {
         return null;
       }
     }
+  }
+
+  if (chunk && Array.isArray(chunk.content)) {
+    const parts: string[] = [];
+    for (const sub of chunk.content) {
+      const value = extractTextFromContentChunk(sub);
+      if (value) parts.push(value);
+    }
+    if (parts.length) return parts.join("\n").trim();
   }
 
   const text = chunk.text;
@@ -138,7 +162,20 @@ async function fetchOpenAIText(apiKey: string, payload: Record<string, unknown>,
       return { ok: false as const, status: res.status, error: bodyText || `http_${res.status}` };
     }
 
-    const data = (await res.json().catch(() => ({}))) as OpenAIResponsesData;
+    let parsedOk = true;
+    const data = (await res.json().catch(() => {
+      parsedOk = false;
+      return {};
+    })) as OpenAIResponsesData;
+    if (!parsedOk) {
+      console.warn("[seo] openai.invalid_json", { model: modelLabel, attempt });
+      if (attempt < maxAttempts) {
+        await sleep(250 * attempt * attempt);
+        continue;
+      }
+      return { ok: false as const, status: 502, error: "openai_invalid_json" };
+    }
+
     const text = extractOpenAIResponseText(data);
     if (!text) {
       const hasOutput = Array.isArray(data.output) ? data.output.length : 0;
