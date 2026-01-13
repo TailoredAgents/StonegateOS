@@ -13,6 +13,10 @@ type OpenAIResponsesData = {
   output_text?: unknown;
 };
 
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function extractOpenAIResponseText(data: OpenAIResponsesData): string {
   if (typeof data.output_text === "string" && data.output_text.trim()) {
     return data.output_text.trim();
@@ -33,27 +37,50 @@ function extractOpenAIResponseText(data: OpenAIResponsesData): string {
 }
 
 async function fetchOpenAIText(apiKey: string, payload: Record<string, unknown>, modelLabel: string) {
-  const res = await fetch(OPENAI_RESPONSES_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(payload)
-  });
+  const maxAttempts = 3;
 
-  if (!res.ok) {
-    const bodyText = await res.text().catch(() => "");
-    console.warn("[seo] openai.request_failed", { model: modelLabel, status: res.status, body: bodyText.slice(0, 220) });
-    return { ok: false as const, status: res.status, error: bodyText };
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let res: Response;
+    try {
+      res = await fetch(OPENAI_RESPONSES_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      console.warn("[seo] openai.request_failed", { model: modelLabel, status: "fetch_error", error: String(error) });
+      if (attempt < maxAttempts) {
+        await sleep(250 * attempt * attempt);
+        continue;
+      }
+      return { ok: false as const, status: 502, error: "openai_fetch_error" };
+    }
+
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      console.warn("[seo] openai.request_failed", { model: modelLabel, status: res.status, body: bodyText.slice(0, 220) });
+
+      const retryable = res.status === 429 || (res.status >= 500 && res.status <= 599);
+      if (retryable && attempt < maxAttempts) {
+        await sleep(250 * attempt * attempt);
+        continue;
+      }
+
+      return { ok: false as const, status: res.status, error: bodyText || `http_${res.status}` };
+    }
+
+    const data = (await res.json().catch(() => ({}))) as OpenAIResponsesData;
+    const text = extractOpenAIResponseText(data);
+    if (!text) {
+      return { ok: false as const, status: 502, error: "openai_empty" };
+    }
+    return { ok: true as const, text };
   }
 
-  const data = (await res.json().catch(() => ({}))) as OpenAIResponsesData;
-  const text = extractOpenAIResponseText(data);
-  if (!text) {
-    return { ok: false as const, status: 502, error: "openai_empty" };
-  }
-  return { ok: true as const, text };
+  return { ok: false as const, status: 502, error: "openai_retry_exhausted" };
 }
 
 function getOpenAIConfig(): { apiKey: string; brainModel: string } | null {
@@ -87,6 +114,14 @@ const BriefSchema = z.object({
 
 type PostBrief = z.infer<typeof BriefSchema>;
 type BriefGenResult = { ok: true; brief: PostBrief } | { ok: false; error: string };
+
+function summarizeOpenAiError(error: string): string {
+  const compact = String(error ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!compact) return "unknown";
+  return compact.slice(0, 180);
+}
 
 function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string }> {
   const links: Array<{ label: string; url: string }> = [
@@ -158,7 +193,7 @@ metaDescription must be <= 155 characters when possible.`.trim();
   };
 
   const res = await fetchOpenAIText(apiKey, payload, brainModel);
-  if (!res.ok) return { ok: false, error: `openai_${res.status}` };
+  if (!res.ok) return { ok: false, error: `openai_${res.status}:${summarizeOpenAiError(res.error)}` };
 
   try {
     const parsed = BriefSchema.safeParse(JSON.parse(res.text));
