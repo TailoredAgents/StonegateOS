@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lte, notInArray, or } from "drizzle-orm";
-import { contacts, crmPipeline, crmTasks, getDb } from "@/db";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, notInArray, or } from "drizzle-orm";
+import { auditLogs, contacts, conversationMessages, conversationParticipants, conversationThreads, crmPipeline, crmTasks, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
@@ -145,7 +145,79 @@ export async function GET(request: NextRequest): Promise<Response> {
     .orderBy(desc(contacts.createdAt))
     .limit(25);
 
+  const missingContactIds = missingRows.map((row) => row.id).filter((id): id is string => typeof id === "string" && id.length > 0);
+  const missingHasSalesTasks = new Set<string>();
+  const missingHasTouch = new Set<string>();
+
+  if (missingContactIds.length) {
+    const salesTaskRows = await db
+      .select({ contactId: crmTasks.contactId })
+      .from(crmTasks)
+      .where(
+        and(
+          inArray(crmTasks.contactId, missingContactIds.slice(0, 250)),
+          isNotNull(crmTasks.notes),
+          or(ilike(crmTasks.notes, "%kind=speed_to_lead%"), ilike(crmTasks.notes, "%kind=follow_up%"))
+        )
+      )
+      .limit(1000);
+
+    for (const task of salesTaskRows) {
+      if (typeof task.contactId === "string" && task.contactId.length > 0) {
+        missingHasSalesTasks.add(task.contactId);
+      }
+    }
+
+    const callTouchRows = await db
+      .select({ contactId: auditLogs.entityId })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.action, "call.started"),
+          eq(auditLogs.entityType, "contact"),
+          eq(auditLogs.actorId, memberId),
+          isNotNull(auditLogs.entityId),
+          inArray(auditLogs.entityId, missingContactIds.slice(0, 250)),
+          gte(auditLogs.createdAt, recentSince),
+          lte(auditLogs.createdAt, now)
+        )
+      )
+      .limit(250);
+
+    for (const row of callTouchRows) {
+      if (typeof row.contactId === "string" && row.contactId.length > 0) {
+        missingHasTouch.add(row.contactId);
+      }
+    }
+
+    const outboundTouchRows = await db
+      .select({ contactId: conversationThreads.contactId })
+      .from(conversationMessages)
+      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+      .innerJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
+      .where(
+        and(
+          eq(conversationMessages.direction, "outbound"),
+          eq(conversationParticipants.participantType, "team"),
+          eq(conversationParticipants.teamMemberId, memberId),
+          isNotNull(conversationThreads.contactId),
+          inArray(conversationThreads.contactId, missingContactIds.slice(0, 250)),
+          gte(conversationMessages.createdAt, recentSince),
+          lte(conversationMessages.createdAt, now)
+        )
+      )
+      .limit(250);
+
+    for (const row of outboundTouchRows) {
+      if (typeof row.contactId === "string" && row.contactId.length > 0) {
+        missingHasTouch.add(row.contactId);
+      }
+    }
+  }
+
   for (const row of missingRows) {
+    if (missingHasSalesTasks.has(row.id)) continue;
+    if (missingHasTouch.has(row.id)) continue;
     const deadline = getSpeedToLeadDeadline(row.createdAt, config);
     const dueMs = deadline.getTime();
     const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
