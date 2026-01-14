@@ -132,14 +132,16 @@ export const DEFAULT_QUIET_HOURS_POLICY: QuietHoursPolicy = {
 export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
   businessName: "Stonegate Junk Removal",
   primaryPhone: "(404) 777-2631",
-  serviceAreaSummary: "North Metro Atlanta within about 50 miles of Woodstock, Georgia (ZIP allowlist).",
+  serviceAreaSummary:
+    "We mostly serve within about 50 miles of Woodstock, Georgia. If you are outside the usual area, share your zip code and we will confirm availability.",
   trailerAndPricingSummary:
-    "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume in quarter trailer increments. Photos help us estimate quickly.",
+    "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume. A quarter trailer is 150 dollars after our current discount. Photos help us estimate quickly.",
   whatWeDo: "Junk removal and hauling for household and light commercial items.",
-  whatWeDontDo: "We do not service out of area locations. We do not take hazmat, oils, or paints. Ask if unsure.",
+  whatWeDontDo: "We do not take hazmat, oils, or paints. Ask if unsure.",
   bookingStyle:
-    "Offer 2 concrete options and move to booking. Ask for ZIP, item details, and preferred timing. If photos are available, request them.",
-  agentNotes: "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links."
+    "Offer 2 concrete options and move to booking. Ask for zip code first, then items and timing. If photos are available, request them. If we have enough info, propose a time and book it.",
+  agentNotes:
+    "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If zip is outside the usual area, do not reject. Confirm location and proceed if reasonable."
 };
 
 export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
@@ -500,7 +502,10 @@ export const DEFAULT_STANDARD_JOB_POLICY: StandardJobPolicy = {
 
 export const DEFAULT_ITEM_POLICIES: ItemPoliciesPolicy = {
   declined: ["hazmat", "paint", "oil"],
-  extraFees: [{ item: "mattress", fee: 25 }]
+  extraFees: [
+    { item: "mattress", fee: 40 },
+    { item: "box spring", fee: 40 }
+  ]
 };
 
 export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
@@ -525,9 +530,10 @@ export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
     email: "We appreciate your business. If you have a moment, please share a review."
   },
   out_of_area: {
-    sms: "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock. If you are just outside, call (404) 777-2631 and we will try to help.",
-    email: "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock. If you are just outside our zone, call (404) 777-2631 and we will try to help.",
-    web: "Thanks for reaching out! We currently serve areas within 50 miles of Woodstock. If you are just outside our zone, call (404) 777-2631 and we will try to help."
+    sms: "Thanks for reaching out. We mostly serve within about 50 miles of Woodstock. If you are outside that area, reply with your zip code and what you need removed and we will confirm availability.",
+    email:
+      "Thanks for reaching out. We mostly serve within about 50 miles of Woodstock. If you are outside that area, reply with your zip code and a quick description of what you need removed and we will confirm availability.",
+    web: "We mostly serve within about 50 miles of Woodstock. Share your zip code and what you need removed and we will confirm availability."
   }
 };
 

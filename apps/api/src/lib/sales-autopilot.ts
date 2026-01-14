@@ -516,7 +516,7 @@ Rules:
 - Do NOT use bullet points, numbered lists, or hyphen/dash characters of any kind.
 - Do NOT include any links, URLs, domains, or paths (including "/book").
 - Ask only for what you still need to move forward: items, timing, ZIP/address, and photos when helpful.
-- If the customer is outside the service area, politely say we do not service that area.
+- If the ZIP is outside the usual service area, do not reject. Confirm location and ask if they are nearby, then proceed if reasonable.
 - Do NOT mention that you are an AI or reference internal systems.
 - Output ONLY JSON matching the schema.
 
@@ -536,7 +536,11 @@ Notes: ${companyProfile.agentNotes}
     `Thread state: ${threadContext.state}`,
     `Customer name: ${threadContext.contactName ?? "Unknown"}`,
     normalizedPostal ? `ZIP: ${normalizedPostal}` : null,
-    outOfArea === true ? `Service area: OUT OF AREA` : outOfArea === false ? `Service area: OK` : `Service area: unknown (ask for ZIP)`,
+    outOfArea === true
+      ? `Service area: outside usual area (confirm)`
+      : outOfArea === false
+        ? `Service area: OK`
+        : `Service area: unknown (ask for ZIP)`,
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
     followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,

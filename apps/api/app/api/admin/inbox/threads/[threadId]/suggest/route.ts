@@ -461,7 +461,7 @@ export async function POST(
  - Be concise and specific; avoid filler.
  - No bullet points, no numbered lists, no hyphens/dashes (do not use "-" "–" "—" anywhere in the customer message).
  - Ask for only the missing info needed to book: address (or ZIP), item details, and preferred timing.
- - If the customer is out of the service area, politely explain service area limits and offer a phone call.
+ - If the ZIP is outside the usual service area, do not reject. Confirm location and proceed if reasonable.
  - Do NOT mention internal systems, databases, webhooks, or that you're an AI.
  - Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
 
@@ -487,7 +487,11 @@ export async function POST(
     threadContext.contactEmail ? `Customer email: ${threadContext.contactEmail}` : null,
     threadContext.propertyAddressLine1 ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}` : null,
     normalizedPostal ? `ZIP: ${normalizedPostal}` : null,
-    outOfArea === true ? `Service area: OUT OF AREA` : outOfArea === false ? `Service area: OK` : `Service area: unknown (ask for ZIP)`,
+    outOfArea === true
+      ? `Service area: outside usual area (confirm)`
+      : outOfArea === false
+        ? `Service area: OK`
+        : `Service area: unknown (ask for ZIP)`,
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
     followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,
