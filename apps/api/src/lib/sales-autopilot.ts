@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { and, desc, eq, gte, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNotNull, or, sql } from "drizzle-orm";
 import {
   auditLogs,
   contacts,
@@ -312,6 +312,26 @@ function normalizeReplyCandidate(candidate: DraftCandidate): DraftCandidate {
   };
 }
 
+function normalizeForCompare(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^\p{L}\p{N} ]/gu, "")
+    .trim();
+}
+
+function clampReplyBody(body: string, channel: ReplyChannel): string {
+  const trimmed = body.trim();
+  const maxChars = channel === "email" ? 900 : 320;
+  if (trimmed.length <= maxChars) return trimmed;
+  const slice = trimmed.slice(0, maxChars);
+  const lastPunctuation = Math.max(slice.lastIndexOf("."), slice.lastIndexOf("!"), slice.lastIndexOf("?"));
+  if (lastPunctuation >= 120) {
+    return slice.slice(0, lastPunctuation + 1).trim();
+  }
+  return slice.trim();
+}
+
 async function ensureAutopilotParticipant(tx: Tx, threadId: string, now: Date, displayName: string) {
   const [existing] = await tx
     .select({ id: conversationParticipants.id })
@@ -500,6 +520,7 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
   const outsideUsualArea =
     normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
+  let autoSendEligible = true;
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, { inboundChannel: replyChannel, replyChannel });
   const followUpExample = resolveTemplateForChannel(templates.follow_up, { inboundChannel: replyChannel, replyChannel });
@@ -518,6 +539,8 @@ Rules:
 - Do NOT use bullet points, numbered lists, or hyphen/dash characters of any kind.
 - Do NOT include any links, URLs, domains, or paths (including "/book").
 - Ask only for what you still need to move forward: items, timing, ZIP/address, and photos when helpful.
+- Do NOT include a checklist in the message body. Put missing items in "missing_info" only.
+- Keep the reply concise. For SMS or DM, aim for 1 to 2 short sentences.
 - If the ZIP is outside Georgia, politely say we currently serve Georgia only.
 - If the ZIP is in Georgia but outside the usual service area, do not reject. Confirm location and proceed if reasonable.
 - Do NOT mention that you are an AI or reference internal systems.
@@ -552,7 +575,7 @@ Notes: ${companyProfile.agentNotes}
     `Transcript:\n${buildTranscript(messages)}`
   ].filter((line): line is string => Boolean(line));
 
-  const baseUserPrompt = `Write a Devon-style reply and include a short missing-info checklist.\n${contextLines.join("\n")}`;
+  const baseUserPrompt = `Write a Devon-style reply.\n${contextLines.join("\n")}`;
 
   let plan: ReplyPlan | null = null;
   if (config.thinkModel) {
@@ -602,11 +625,28 @@ Do not write the customer message. Output ONLY JSON matching the schema.
   const alternatives = draftResult.value.alternatives.map(normalizeReplyCandidate).filter((c) => c.body.length > 0).slice(0, 2);
   const missingInfo = draftResult.value.missing_info.map((item) => item.trim()).filter(Boolean).slice(0, 8);
 
-  if (!best.body) {
+  const bestBody = clampReplyBody(best.body, replyChannel);
+  const bestSubject = replyChannel === "email" ? best.subject.trim() : "";
+  if (!bestBody) {
     return { status: "retry", error: "openai_empty_response" };
   }
 
   const now = new Date();
+  if (inGeorgia === false) {
+    const [priorOutOfStateReply] = await db
+      .select({ id: conversationMessages.id })
+      .from(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.threadId, threadId),
+          eq(conversationMessages.direction, "outbound"),
+          sql`${conversationMessages.metadata} ->> 'salesAutopilot' = 'true'`,
+          or(eq(conversationMessages.deliveryStatus, "sent"), eq(conversationMessages.deliveryStatus, "delivered"))
+        )
+      )
+      .limit(1);
+    autoSendEligible = !priorOutOfStateReply?.id;
+  }
   const draftId = await db.transaction(async (tx) => {
     const participantId = await ensureAutopilotParticipant(tx, threadId, now, policy.agentDisplayName);
     const [message] = await tx
@@ -616,8 +656,8 @@ Do not write the customer message. Output ONLY JSON matching the schema.
         participantId,
         direction: "outbound",
         channel: replyChannel,
-        subject: replyChannel === "email" ? (best.subject.trim().length ? best.subject.trim() : "") : null,
-        body: best.body,
+        subject: replyChannel === "email" ? (bestSubject.length ? bestSubject : "") : null,
+        body: bestBody,
         toAddress,
         deliveryStatus: "queued",
         metadata: {
@@ -625,6 +665,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           draft: true,
           salesAutopilot: true,
           salesAutopilotForMessageId: messageId,
+          salesAutopilotNoAutosend: autoSendEligible ? undefined : true,
           aiModel: config.writeModel,
           missingInfo,
           alternatives
@@ -637,12 +678,14 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       throw new Error("draft_create_failed");
     }
 
-    await tx.insert(outboxEvents).values({
-      type: "sales.autopilot.autosend",
-      payload: { draftMessageId: message.id, inboundMessageId: messageId },
-      nextAttemptAt: DateTime.fromJSDate(now).plus({ minutes: policy.autoSendAfterMinutes }).toJSDate(),
-      createdAt: now
-    });
+    if (autoSendEligible) {
+      await tx.insert(outboxEvents).values({
+        type: "sales.autopilot.autosend",
+        payload: { draftMessageId: message.id, inboundMessageId: messageId },
+        nextAttemptAt: DateTime.fromJSDate(now).plus({ minutes: policy.autoSendAfterMinutes }).toJSDate(),
+        createdAt: now
+      });
+    }
 
     return message.id;
   });
@@ -731,6 +774,7 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       id: conversationMessages.id,
       threadId: conversationMessages.threadId,
       createdAt: conversationMessages.createdAt,
+      body: conversationMessages.body,
       metadata: conversationMessages.metadata,
       deliveryStatus: conversationMessages.deliveryStatus,
       channel: conversationMessages.channel,
@@ -747,6 +791,16 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
 
   const meta = isRecord(row.metadata) ? (row.metadata as Record<string, unknown>) : null;
   if (!isDraftMessage(meta) || meta?.["salesAutopilot"] !== true) {
+    return { status: "processed" };
+  }
+  if (meta?.["salesAutopilotNoAutosend"] === true) {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: { reason: "autosend_disabled" }
+    });
     return { status: "processed" };
   }
 
@@ -769,6 +823,71 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     if (inbound?.createdAt) {
       since = inbound.createdAt;
     }
+  }
+
+  const [newerInbound] = await db
+    .select({ id: conversationMessages.id })
+    .from(conversationMessages)
+    .where(and(eq(conversationMessages.threadId, row.threadId), eq(conversationMessages.direction, "inbound"), gt(conversationMessages.createdAt, since)))
+    .limit(1);
+  if (newerInbound?.id) {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: { reason: "stale_inbound", inboundId }
+    });
+    return { status: "processed" };
+  }
+
+  const [latestDraftForContact] = await db
+    .select({ id: conversationMessages.id })
+    .from(conversationMessages)
+    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .where(
+      and(
+        eq(conversationThreads.contactId, contactId),
+        eq(conversationMessages.direction, "outbound"),
+        sql`${conversationMessages.metadata} ->> 'salesAutopilot' = 'true'`,
+        sql`${conversationMessages.metadata} ->> 'draft' = 'true'`
+      )
+    )
+    .orderBy(desc(conversationMessages.createdAt))
+    .limit(1);
+  if (latestDraftForContact?.id && latestDraftForContact.id !== row.id) {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: { reason: "stale_draft" }
+    });
+    return { status: "processed" };
+  }
+
+  const [priorSent] = await db
+    .select({ body: conversationMessages.body })
+    .from(conversationMessages)
+    .where(
+      and(
+        eq(conversationMessages.threadId, row.threadId),
+        eq(conversationMessages.direction, "outbound"),
+        sql`${conversationMessages.metadata} ->> 'salesAutopilot' = 'true'`,
+        or(eq(conversationMessages.deliveryStatus, "sent"), eq(conversationMessages.deliveryStatus, "delivered"))
+      )
+    )
+    .orderBy(desc(conversationMessages.createdAt))
+    .limit(1);
+  if (typeof priorSent?.body === "string" && normalizeForCompare(priorSent.body) === normalizeForCompare(row.body)) {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: { reason: "duplicate_body" }
+    });
+    return { status: "processed" };
   }
 
   if (await hasHumanTouchSince(db, contactId, since)) {
