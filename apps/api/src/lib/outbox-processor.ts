@@ -688,10 +688,23 @@ async function ensureSalesFollowupsForLead(input: {
         nextAttemptAt: task.dueAt
       });
 
+      if (task.notes.includes("kind=speed_to_lead")) {
+        await tx.insert(outboxEvents).values({
+          type: "sales.queue.nudge.sms",
+          payload: { taskId: created.id },
+          nextAttemptAt: now
+        });
+      }
+
       if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
-          payload: { taskId: created.id },
+          payload: { taskId: created.id, mode: "instant" },
+          nextAttemptAt: now
+        });
+        await tx.insert(outboxEvents).values({
+          type: "sales.escalation.call",
+          payload: { taskId: created.id, mode: "due" },
           nextAttemptAt: task.dueAt
         });
       }
@@ -819,10 +832,23 @@ async function ensureSalesFollowupsForContact(input: {
         nextAttemptAt: task.dueAt
       });
 
+      if (task.notes.includes("kind=speed_to_lead")) {
+        await tx.insert(outboxEvents).values({
+          type: "sales.queue.nudge.sms",
+          payload: { taskId: created.id },
+          nextAttemptAt: now
+        });
+      }
+
       if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
-          payload: { taskId: created.id },
+          payload: { taskId: created.id, mode: "instant" },
+          nextAttemptAt: now
+        });
+        await tx.insert(outboxEvents).values({
+          type: "sales.escalation.call",
+          payload: { taskId: created.id, mode: "due" },
           nextAttemptAt: task.dueAt
         });
       }
@@ -2298,6 +2324,8 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
 
       const payload = isRecord(event.payload) ? event.payload : null;
       const taskId = typeof payload?.["taskId"] === "string" ? payload["taskId"].trim() : "";
+      const mode = typeof payload?.["mode"] === "string" ? payload["mode"].trim() : "";
+      const isInstant = mode === "instant";
       if (!taskId) {
         console.warn("[outbox] sales.escalation.missing_task_id", { id: event.id });
         return { status: "skipped" };
@@ -2352,12 +2380,27 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "retry", error: "outside_sales_hours", nextAttemptAt: windowStart };
       }
 
-      if (row.taskDueAt.getTime() > now.getTime()) {
+      if (!isInstant && row.taskDueAt.getTime() > now.getTime()) {
         return { status: "retry", error: "not_due_yet", nextAttemptAt: row.taskDueAt };
       }
 
       const customerPhone = normalizePhoneE164(row.phoneE164 ?? row.phone ?? "");
       if (!customerPhone) {
+        return { status: "processed" };
+      }
+
+      const [priorEscalation] = await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.action, "sales.escalation.call.started"),
+            eq(auditLogs.entityType, "crm_task"),
+            eq(auditLogs.entityId, taskId)
+          )
+        )
+        .limit(1);
+      if (priorEscalation?.id) {
         return { status: "processed" };
       }
 
@@ -2468,6 +2511,114 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       });
 
       return { status: "processed" };
+    }
+
+    case "sales.queue.nudge.sms": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const taskId = typeof payload?.["taskId"] === "string" ? payload["taskId"].trim() : "";
+      if (!taskId) {
+        console.warn("[outbox] sales.queue_nudge.missing_task_id", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const db = getDb();
+      const [row] = await db
+        .select({
+          id: crmTasks.id,
+          contactId: crmTasks.contactId,
+          title: crmTasks.title,
+          notes: crmTasks.notes,
+          dueAt: crmTasks.dueAt,
+          assignedTo: crmTasks.assignedTo,
+          status: crmTasks.status,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          phone: contacts.phone,
+          phoneE164: contacts.phoneE164
+        })
+        .from(crmTasks)
+        .leftJoin(contacts, eq(crmTasks.contactId, contacts.id))
+        .where(eq(crmTasks.id, taskId))
+        .limit(1);
+
+      if (!row?.id) {
+        return { status: "processed" };
+      }
+
+      if (row.status !== "open" || !(row.dueAt instanceof Date)) {
+        return { status: "processed" };
+      }
+
+      const notes = typeof row.notes === "string" ? row.notes : "";
+      if (!notes.includes("kind=speed_to_lead")) {
+        return { status: "processed" };
+      }
+
+      const now = new Date();
+      const windowStart = nextSalesWindowStart(now);
+      if (windowStart) {
+        return { status: "retry", error: "outside_sales_hours", nextAttemptAt: windowStart };
+      }
+
+      const [existingSent] = await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(and(eq(auditLogs.action, "sales.queue_nudge.sent"), eq(auditLogs.entityType, "crm_task"), eq(auditLogs.entityId, row.id)))
+        .limit(1);
+      if (existingSent?.id) {
+        return { status: "processed" };
+      }
+
+      const phoneMap = await getTeamMemberPhoneMap(db);
+      const recipient = row.assignedTo ? phoneMap[row.assignedTo] ?? null : null;
+      if (!recipient) {
+        console.warn("[outbox] sales.queue_nudge.missing_recipient", {
+          id: event.id,
+          taskId: row.id,
+          assignedTo: row.assignedTo ?? null,
+          phoneMapCount: Object.keys(phoneMap).length
+        });
+        await recordProviderFailureSafe("sms", "missing_recipient");
+        return { status: "processed", error: "missing_recipient" };
+      }
+
+      const business = await getBusinessHoursPolicy(db);
+      const contactName = `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || "New lead";
+      const contactPhone = row.phoneE164 ?? row.phone ?? null;
+      const dueLabel = formatReminderDueAt(row.dueAt, business.timezone);
+      const contactLine = contactPhone ? ` (${contactPhone})` : "";
+
+      const message = `New lead assigned: ${contactName}${contactLine}\n${row.title}\nDue: ${dueLabel}`;
+
+      const result = await sendSmsMessage(recipient, message);
+      if (result.ok) {
+        await recordProviderSuccessSafe("sms");
+        await recordAuditEvent({
+          actor: { type: "worker", label: "outbox" },
+          action: "sales.queue_nudge.sent",
+          entityType: "crm_task",
+          entityId: row.id,
+          meta: { recipient, contactId: row.contactId, provider: result.provider ?? null }
+        });
+        return { status: "processed" };
+      }
+
+      const detail = result.detail ?? "nudge_send_failed";
+      const retryable = isRetryableSendFailure(detail);
+      await recordAuditEvent({
+        actor: { type: "worker", label: "outbox" },
+        action: "sales.queue_nudge.failed",
+        entityType: "crm_task",
+        entityId: row.id,
+        meta: { recipient, contactId: row.contactId, provider: result.provider ?? null, detail }
+      });
+
+      if (retryable) {
+        return { status: "retry", error: detail };
+      }
+
+      await recordProviderFailureSafe("sms", detail);
+      return { status: "processed", error: detail };
     }
 
     case "crm.reminder.sms": {

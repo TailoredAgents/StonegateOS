@@ -1008,7 +1008,7 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
   return {
     enabled: stored["enabled"] !== false,
     autoSendAfterMinutes: coerceInt(stored["autoSendAfterMinutes"], DEFAULT_SALES_AUTOPILOT_POLICY.autoSendAfterMinutes, {
-      min: 1,
+      min: 15,
       max: 120
     }),
     activityWindowMinutes: coerceInt(

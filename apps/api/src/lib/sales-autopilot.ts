@@ -326,9 +326,21 @@ function isMessengerLeadCard(body: string): boolean {
   return hitCount >= 3;
 }
 
+function stripAutopilotFooter(body: string): string {
+  const lower = body.toLowerCase();
+  const markers = ["missing info", "missing information", "info checklist", "checklist:"];
+  const idx = markers
+    .map((marker) => lower.indexOf(marker))
+    .filter((pos) => pos >= 0)
+    .reduce((min, pos) => Math.min(min, pos), Number.POSITIVE_INFINITY);
+  if (!Number.isFinite(idx)) return body;
+  return body.slice(0, idx).trim();
+}
+
 function normalizeReplyCandidate(candidate: DraftCandidate): DraftCandidate {
+  const cleanedBody = stripAutopilotFooter(stripLinks(stripDashLikeChars(candidate.body)));
   return {
-    body: stripLinks(stripDashLikeChars(candidate.body)),
+    body: cleanedBody,
     subject: stripLinks(stripDashLikeChars(candidate.subject))
   };
 }
@@ -343,11 +355,23 @@ function normalizeForCompare(text: string): string {
 
 function clampReplyBody(body: string, channel: ReplyChannel): string {
   const trimmed = body.trim();
-  const maxChars = channel === "email" ? 900 : 320;
-  if (trimmed.length <= maxChars) return trimmed;
-  const slice = trimmed.slice(0, maxChars);
+  const maxChars = channel === "email" ? 900 : 240;
+  const withoutFooter = stripAutopilotFooter(trimmed);
+
+  if (channel !== "email") {
+    const sentences = withoutFooter
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (sentences.length >= 3) {
+      return sentences.slice(0, 2).join(" ").slice(0, maxChars).trim();
+    }
+  }
+
+  if (withoutFooter.length <= maxChars) return withoutFooter;
+  const slice = withoutFooter.slice(0, maxChars);
   const lastPunctuation = Math.max(slice.lastIndexOf("."), slice.lastIndexOf("!"), slice.lastIndexOf("?"));
-  if (lastPunctuation >= 120) {
+  if (lastPunctuation >= 80) {
     return slice.slice(0, lastPunctuation + 1).trim();
   }
   return slice.trim();
@@ -537,7 +561,8 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const companyProfile = await getCompanyProfilePolicy(db);
   const zipFromThread = normalizePostalCode(threadContext.propertyPostalCode ?? null);
   const zipFromBody = normalizePostalCode(extractZipFromText(inbound.body) ?? null);
-  const normalizedPostal = zipFromThread ?? zipFromBody;
+  const zipFromTranscript = normalizePostalCode(extractZipFromText(messages.map((m) => m.body).join("\n")) ?? null);
+  const normalizedPostal = zipFromThread ?? zipFromBody ?? zipFromTranscript;
   const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
   const outsideUsualArea =
     normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
@@ -836,6 +861,26 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
   const contactId = row.threadContactId ?? null;
   if (!contactId) {
     return { status: "processed" };
+  }
+
+  if (input.inboundMessageId) {
+    const [latestInbound] = await db
+      .select({ id: conversationMessages.id })
+      .from(conversationMessages)
+      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+      .where(and(eq(conversationThreads.contactId, contactId), eq(conversationMessages.direction, "inbound")))
+      .orderBy(desc(conversationMessages.createdAt))
+      .limit(1);
+    if (latestInbound?.id && latestInbound.id !== input.inboundMessageId) {
+      await recordAuditEvent({
+        actor: { type: "ai", label: "sales-autopilot" },
+        action: "sales.autopilot.autosend_skipped",
+        entityType: "conversation_message",
+        entityId: row.id,
+        meta: { reason: "newer_inbound", inboundMessageId: input.inboundMessageId, latestInboundMessageId: latestInbound.id }
+      });
+      return { status: "processed" };
+    }
   }
 
   const [pipeline] = await db
