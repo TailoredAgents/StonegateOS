@@ -14,6 +14,7 @@ import {
   properties,
   quotes,
   crmPipeline,
+  auditLogs,
   conversationParticipants,
   conversationMessages,
   conversationThreads,
@@ -25,7 +26,10 @@ import {
   getConfirmationLoopPolicy,
   getFollowUpSequencePolicy,
   getQuietHoursPolicy,
+  getServiceAreaPolicy,
   getTemplatesPolicy,
+  isPostalCodeAllowed,
+  normalizePostalCode,
   nextQuietHoursEnd,
   resolveTemplateForChannel
 } from "@/lib/policy";
@@ -74,6 +78,8 @@ const MAX_MESSAGE_SEND_ATTEMPTS = 3;
 const MESSAGE_SEND_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 const HUMANISTIC_DELAY_MIN_MS = 10_000;
 const HUMANISTIC_DELAY_MAX_MS = 30_000;
+const AUTO_FIRST_TOUCH_SMS_ENABLED = process.env["SALES_AUTO_FIRST_TOUCH_SMS_ENABLED"] !== "0";
+const SALES_ESCALATION_CALL_ENABLED = process.env["SALES_ESCALATION_CALL_ENABLED"] !== "0";
 
 const APPOINTMENT_STATUS_VALUES = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
 type AppointmentStatus = (typeof APPOINTMENT_STATUS_VALUES)[number];
@@ -308,6 +314,106 @@ function resolvePublicSiteBaseUrl(): string | null {
   }
 }
 
+function resolvePublicApiBaseUrl(): string | null {
+  const raw = (process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"] ?? "").trim();
+  if (!raw) {
+    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
+  }
+  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(withScheme);
+    const lowered = url.hostname.toLowerCase();
+    const isLocalhost =
+      lowered === "localhost" ||
+      lowered === "0.0.0.0" ||
+      lowered === "127.0.0.1" ||
+      lowered.endsWith(".internal");
+    if (process.env["NODE_ENV"] === "production" && isLocalhost) {
+      return null;
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
+  }
+}
+
+function normalizePhoneE164(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const digits = trimmed.replace(/[^\d]/g, "");
+  if (!digits) return null;
+
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+  if (trimmed.startsWith("+") && digits.length >= 11 && digits.length <= 15) {
+    return `+${digits}`;
+  }
+
+  return null;
+}
+
+function nextSalesWindowStart(now: Date): Date | null {
+  const local = DateTime.fromJSDate(now, { zone: "America/New_York" });
+  const start = local.set({ hour: 8, minute: 0, second: 0, millisecond: 0 });
+  const end = local.set({ hour: 19, minute: 0, second: 0, millisecond: 0 });
+
+  if (local < start) return start.toUTC().toJSDate();
+  if (local >= end) return start.plus({ days: 1 }).toUTC().toJSDate();
+  return null;
+}
+
+async function createTwilioCall(input: {
+  agentPhone: string;
+  requestUrl: string;
+  statusCallbackUrl: string;
+}): Promise<{ ok: true; callSid: string | null } | { ok: false; detail: string }> {
+  const sid = process.env["TWILIO_ACCOUNT_SID"];
+  const token = process.env["TWILIO_AUTH_TOKEN"];
+  const from = process.env["TWILIO_FROM"];
+  const baseUrl = (process.env["TWILIO_API_BASE_URL"] ?? "https://api.twilio.com").replace(/\/$/, "");
+
+  if (!sid || !token || !from) {
+    return { ok: false, detail: "twilio_not_configured" };
+  }
+
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const formParams = new URLSearchParams({
+    To: input.agentPhone,
+    From: from,
+    Url: input.requestUrl,
+    Method: "POST",
+    StatusCallback: input.statusCallbackUrl,
+    StatusCallbackMethod: "POST"
+  });
+
+  for (const event of ["initiated", "ringing", "answered", "completed"]) {
+    formParams.append("StatusCallbackEvent", event);
+  }
+
+  const response = await fetch(`${baseUrl}/2010-04-01/Accounts/${sid}/Calls.json`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${auth}`
+    },
+    body: formParams.toString()
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const detail = text.trim().length ? text.trim() : `twilio_call_failed_${response.status}`;
+    return { ok: false, detail };
+  }
+
+  const payload = (await response.json().catch(() => null)) as { sid?: string } | null;
+  return { ok: true, callSid: payload?.sid ?? null };
+}
+
 function buildQuoteShareUrl(token: string): string {
   const base = resolvePublicSiteBaseUrl() ?? "http://localhost:3000";
   return `${base.replace(/\/$/, "")}/quote/${token}`;
@@ -428,19 +534,6 @@ async function ensureSalesFollowupsForLead(input: {
 
   const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
   const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
-  if (!hasPhone) {
-    await input.db
-      .update(outboxEvents)
-      .set({
-        payload: {
-          ...(input.payload ?? {}),
-          scheduledSalesFollowups: true,
-          skippedSalesFollowups: "missing_phone"
-        }
-      })
-      .where(eq(outboxEvents.id, input.outboxEventId));
-    return;
-  }
   const speedTitle = hasPhone ? "Auto: Call new lead (5 min SLA)" : "Auto: Message new lead (5 min SLA)";
   tasksToCreate.push({
     title: speedTitle,
@@ -481,6 +574,14 @@ async function ensureSalesFollowupsForLead(input: {
         payload: { taskId: created.id },
         nextAttemptAt: task.dueAt
       });
+
+      if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
+        await tx.insert(outboxEvents).values({
+          type: "sales.escalation.call",
+          payload: { taskId: created.id },
+          nextAttemptAt: task.dueAt
+        });
+      }
     }
 
     await tx
@@ -562,19 +663,6 @@ async function ensureSalesFollowupsForContact(input: {
 
   const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
   const hasPhone = Boolean((contactRow.phoneE164 ?? contactRow.phone ?? "").trim().length);
-  if (!hasPhone) {
-    await input.db
-      .update(outboxEvents)
-      .set({
-        payload: {
-          ...(input.payload ?? {}),
-          scheduledSalesFollowups: true,
-          skippedSalesFollowups: "missing_phone"
-        }
-      })
-      .where(eq(outboxEvents.id, input.outboxEventId));
-    return;
-  }
   const speedTitle = hasPhone ? "Auto: Call new lead (5 min SLA)" : "Auto: Message new lead (5 min SLA)";
 
   const tagBlock = leadTag ? `${contactTag}\n${leadTag}` : contactTag;
@@ -617,6 +705,14 @@ async function ensureSalesFollowupsForContact(input: {
         payload: { taskId: created.id },
         nextAttemptAt: task.dueAt
       });
+
+      if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
+        await tx.insert(outboxEvents).values({
+          type: "sales.escalation.call",
+          payload: { taskId: created.id },
+          nextAttemptAt: task.dueAt
+        });
+      }
     }
 
     await tx
@@ -1234,6 +1330,48 @@ async function ensureThreadForLead(
   return created?.id ?? null;
 }
 
+async function ensureThreadForContactChannel(
+  db: ReturnType<typeof getDb>,
+  input: { contactId: string; channel: FollowUpChannel }
+): Promise<string | null> {
+  const [existing] = await db
+    .select({ id: conversationThreads.id })
+    .from(conversationThreads)
+    .where(and(eq(conversationThreads.contactId, input.contactId), eq(conversationThreads.channel, input.channel)))
+    .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
+    .limit(1);
+
+  if (existing?.id) {
+    return existing.id;
+  }
+
+  const [latestLead] = await db
+    .select({ leadId: leads.id, propertyId: leads.propertyId })
+    .from(leads)
+    .where(eq(leads.contactId, input.contactId))
+    .orderBy(desc(leads.createdAt), desc(leads.updatedAt))
+    .limit(1);
+
+  const now = new Date();
+  const [created] = await db
+    .insert(conversationThreads)
+    .values({
+      contactId: input.contactId,
+      leadId: latestLead?.leadId ?? null,
+      propertyId: latestLead?.propertyId ?? null,
+      status: "open",
+      channel: input.channel,
+      subject: input.channel === "email" ? "Stonegate follow-up" : null,
+      lastMessagePreview: "Follow-up scheduled",
+      lastMessageAt: now,
+      createdAt: now,
+      updatedAt: now
+    })
+    .returning({ id: conversationThreads.id });
+
+  return created?.id ?? null;
+}
+
 async function queueOutboundMessage(input: {
   db: ReturnType<typeof getDb>;
   threadId: string;
@@ -1242,6 +1380,7 @@ async function queueOutboundMessage(input: {
   toAddress: string;
   subject?: string | null;
   metadata?: Record<string, unknown> | null;
+  nextAttemptAt?: Date | null;
 }): Promise<string | null> {
   const now = new Date();
   const [existingParticipant] = await input.db
@@ -1302,10 +1441,116 @@ async function queueOutboundMessage(input: {
   await input.db.insert(outboxEvents).values({
     type: "message.send",
     payload: { messageId: message.id },
-    createdAt: now
+    createdAt: now,
+    nextAttemptAt: input.nextAttemptAt ?? null
   });
 
   return message.id;
+}
+
+async function hasAnyOutboundForContact(db: ReturnType<typeof getDb>, contactId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: conversationMessages.id })
+    .from(conversationMessages)
+    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .where(and(eq(conversationThreads.contactId, contactId), eq(conversationMessages.direction, "outbound")))
+    .limit(1);
+  return Boolean(row?.id);
+}
+
+async function hasAutoFirstTouchForContact(db: ReturnType<typeof getDb>, contactId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: conversationMessages.id })
+    .from(conversationMessages)
+    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .where(
+      and(
+        eq(conversationThreads.contactId, contactId),
+        eq(conversationMessages.direction, "outbound"),
+        sql`${conversationMessages.metadata} ->> 'autoFirstTouch' = 'true'`
+      )
+    )
+    .limit(1);
+  return Boolean(row?.id);
+}
+
+async function resolveContactZipFromPipeline(db: ReturnType<typeof getDb>, contactId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ notes: crmPipeline.notes })
+    .from(crmPipeline)
+    .where(eq(crmPipeline.contactId, contactId))
+    .limit(1);
+  const notes = typeof row?.notes === "string" ? row.notes : "";
+  if (!notes) return null;
+  const match = notes.match(/\b\d{5}\b/);
+  return match ? match[0] : null;
+}
+
+async function queueAutoFirstTouchSms(input: {
+  db: ReturnType<typeof getDb>;
+  contactId: string;
+  leadId?: string | null;
+  leadPropertyId?: string | null;
+  propertyPostalCode?: string | null;
+}): Promise<void> {
+  if (!AUTO_FIRST_TOUCH_SMS_ENABLED) return;
+
+  const [contact] = await input.db
+    .select({
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164
+    })
+    .from(contacts)
+    .where(eq(contacts.id, input.contactId))
+    .limit(1);
+
+  if (!contact) return;
+  const toAddress = (contact.phoneE164 ?? contact.phone ?? "").trim();
+  if (!toAddress) return;
+
+  if (await hasAutoFirstTouchForContact(input.db, input.contactId)) return;
+  if (await hasAnyOutboundForContact(input.db, input.contactId)) return;
+
+  const templatesPolicy = await getTemplatesPolicy(input.db);
+  const serviceArea = await getServiceAreaPolicy(input.db);
+  const pipelineZip = input.propertyPostalCode ? null : await resolveContactZipFromPipeline(input.db, input.contactId);
+  const normalizedPostalCode = normalizePostalCode(input.propertyPostalCode ?? pipelineZip);
+  const isOutOfArea =
+    normalizedPostalCode !== null && !isPostalCodeAllowed(normalizedPostalCode, serviceArea);
+  const templateGroup = isOutOfArea ? templatesPolicy.out_of_area : templatesPolicy.first_touch;
+  const body =
+    resolveTemplateForChannel(templateGroup, { replyChannel: "sms" }) ??
+    "Thanks for reaching out to Stonegate Junk Removal. We can help. What items are you needing removed and what timeframe?";
+
+  const threadId = input.leadId
+    ? await ensureThreadForLead(input.db, {
+        leadId: input.leadId,
+        contactId: input.contactId,
+        propertyId: input.leadPropertyId ?? null,
+        channel: "sms"
+      })
+    : await ensureThreadForContactChannel(input.db, { contactId: input.contactId, channel: "sms" });
+
+  if (!threadId) return;
+
+  const delayMs = randomHumanisticDelayMs();
+  const now = new Date();
+  const nextAttemptAt = new Date(now.getTime() + delayMs);
+
+  await queueOutboundMessage({
+    db: input.db,
+    threadId,
+    channel: "sms",
+    body,
+    toAddress,
+    metadata: {
+      automation: true,
+      autoFirstTouch: true,
+      autoFirstTouchDelayMs: delayMs,
+      outOfArea: isOutOfArea || undefined
+    },
+    nextAttemptAt
+  });
 }
 
 async function scheduleLeadFollowups(leadId: string, contactId: string): Promise<void> {
@@ -1752,13 +1997,38 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "skipped" };
       }
 
+      const db = getDb();
       await ensureSalesFollowupsForLead({
-        db: getDb(),
+        db,
         leadId,
         outboxEventId: event.id,
         payload
       });
       const payloadAfterFollowups: Record<string, unknown> = { ...(payload ?? {}), scheduledSalesFollowups: true };
+
+      try {
+        const [leadRow] = await db
+          .select({
+            contactId: leads.contactId,
+            propertyId: leads.propertyId,
+            postalCode: properties.postalCode
+          })
+          .from(leads)
+          .leftJoin(properties, eq(leads.propertyId, properties.id))
+          .where(eq(leads.id, leadId))
+          .limit(1);
+        if (leadRow?.contactId) {
+          await queueAutoFirstTouchSms({
+            db,
+            contactId: leadRow.contactId,
+            leadId,
+            leadPropertyId: leadRow.propertyId ?? null,
+            propertyPostalCode: leadRow.postalCode ?? null
+          });
+        }
+      } catch (error) {
+        console.warn("[outbox] lead.alert.first_touch_failed", { leadId, error: String(error) });
+      }
 
       const recipients = parseLeadAlertRecipients(process.env["LEAD_ALERT_SMS"]);
       if (!recipients.length) {
@@ -1839,11 +2109,191 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "skipped" };
       }
 
+      const db = getDb();
       await ensureSalesFollowupsForContact({
-        db: getDb(),
+        db,
         contactId,
         outboxEventId: event.id,
         payload
+      });
+
+      try {
+        await queueAutoFirstTouchSms({ db, contactId });
+      } catch (error) {
+        console.warn("[outbox] contact.alert.first_touch_failed", { contactId, error: String(error) });
+      }
+
+      return { status: "processed" };
+    }
+
+    case "sales.escalation.call": {
+      if (!SALES_ESCALATION_CALL_ENABLED) {
+        return { status: "processed" };
+      }
+
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const taskId = typeof payload?.["taskId"] === "string" ? payload["taskId"].trim() : "";
+      if (!taskId) {
+        console.warn("[outbox] sales.escalation.missing_task_id", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const db = getDb();
+      const [row] = await db
+        .select({
+          taskId: crmTasks.id,
+          taskStatus: crmTasks.status,
+          taskNotes: crmTasks.notes,
+          taskDueAt: crmTasks.dueAt,
+          taskCreatedAt: crmTasks.createdAt,
+          contactId: crmTasks.contactId,
+          assignedTo: crmTasks.assignedTo,
+          phone: contacts.phone,
+          phoneE164: contacts.phoneE164
+        })
+        .from(crmTasks)
+        .leftJoin(contacts, eq(crmTasks.contactId, contacts.id))
+        .where(eq(crmTasks.id, taskId))
+        .limit(1);
+
+      if (!row?.taskId) {
+        return { status: "processed" };
+      }
+
+      if (row.taskStatus !== "open" || !(row.taskDueAt instanceof Date)) {
+        return { status: "processed" };
+      }
+
+      const contactId = typeof row.contactId === "string" ? row.contactId : null;
+      if (!contactId) {
+        return { status: "processed" };
+      }
+
+      const notes = typeof row.taskNotes === "string" ? row.taskNotes : "";
+      if (!notes.includes("kind=speed_to_lead")) {
+        return { status: "processed" };
+      }
+
+      const memberId = typeof row.assignedTo === "string" ? row.assignedTo : null;
+      if (!memberId) {
+        return { status: "processed" };
+      }
+
+      const now = new Date();
+      const windowStart = nextSalesWindowStart(now);
+      if (windowStart) {
+        return { status: "retry", error: "outside_sales_hours", nextAttemptAt: windowStart };
+      }
+
+      if (row.taskDueAt.getTime() > now.getTime()) {
+        return { status: "retry", error: "not_due_yet", nextAttemptAt: row.taskDueAt };
+      }
+
+      const customerPhone = normalizePhoneE164(row.phoneE164 ?? row.phone ?? "");
+      if (!customerPhone) {
+        return { status: "processed" };
+      }
+
+      const [callTouch] = await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.action, "call.started"),
+            eq(auditLogs.entityType, "contact"),
+            eq(auditLogs.entityId, contactId),
+            eq(auditLogs.actorId, memberId)
+          )
+        )
+        .limit(1);
+
+      if (callTouch?.id) {
+        return { status: "processed" };
+      }
+
+      const [messageTouch] = await db
+        .select({ id: conversationMessages.id })
+        .from(conversationMessages)
+        .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+        .innerJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
+        .where(
+          and(
+            eq(conversationThreads.contactId, contactId),
+            eq(conversationMessages.direction, "outbound"),
+            eq(conversationParticipants.participantType, "team"),
+            eq(conversationParticipants.teamMemberId, memberId)
+          )
+        )
+        .limit(1);
+
+      if (messageTouch?.id) {
+        return { status: "processed" };
+      }
+
+      const taskCreatedAt = row.taskCreatedAt instanceof Date ? row.taskCreatedAt : null;
+      if (taskCreatedAt) {
+        const [inboundDm] = await db
+          .select({ count: sql<number>`count(*)::int`.as("count") })
+          .from(conversationMessages)
+          .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+          .where(
+            and(
+              eq(conversationThreads.contactId, contactId),
+              eq(conversationMessages.direction, "inbound"),
+              eq(conversationMessages.channel, "dm"),
+              gte(conversationMessages.createdAt, taskCreatedAt)
+            )
+          );
+        if ((inboundDm?.count ?? 0) >= 2) {
+          return { status: "processed" };
+        }
+      }
+
+      const phoneMap = await getTeamMemberPhoneMap(db);
+      const agentPhone = normalizePhoneE164(phoneMap[memberId] ?? "");
+      if (!agentPhone) {
+        console.warn("[outbox] sales.escalation.missing_agent_phone", { taskId, memberId });
+        return { status: "processed" };
+      }
+
+      const apiBaseUrl = resolvePublicApiBaseUrl();
+      if (!apiBaseUrl) {
+        console.warn("[outbox] sales.escalation.missing_api_base_url", { taskId });
+        return { status: "processed" };
+      }
+
+      const callbackUrl = new URL("/api/webhooks/twilio/escalate", apiBaseUrl);
+      callbackUrl.searchParams.set("to", customerPhone);
+      callbackUrl.searchParams.set("taskId", taskId);
+      callbackUrl.searchParams.set("contactId", contactId);
+
+      const statusCallbackUrl = new URL("/api/webhooks/twilio/call-status", apiBaseUrl);
+      statusCallbackUrl.searchParams.set("leg", "agent");
+      statusCallbackUrl.searchParams.set("mode", "sales_escalation");
+
+      const result = await createTwilioCall({
+        agentPhone,
+        requestUrl: callbackUrl.toString(),
+        statusCallbackUrl: statusCallbackUrl.toString()
+      });
+
+      if (!result.ok) {
+        console.warn("[outbox] sales.escalation.call_failed", { taskId, detail: result.detail });
+        return { status: "retry", error: result.detail };
+      }
+
+      await recordAuditEvent({
+        actor: { type: "worker", label: "outbox" },
+        action: "sales.escalation.call.started",
+        entityType: "crm_task",
+        entityId: taskId,
+        meta: {
+          contactId,
+          assignedTo: memberId,
+          agentPhone,
+          customerPhone,
+          callSid: result.callSid
+        }
       });
 
       return { status: "processed" };
@@ -2415,8 +2865,12 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         metadata?.["autoReply"] === true ||
         metadata?.["followup"] === true ||
         metadata?.["confirmationLoop"] === true ||
-        metadata?.["automation"] === true;
-      const bypassQuietHours = metadata?.["autoReply"] === true || metadata?.["confirmationLoop"] === true;
+        metadata?.["automation"] === true ||
+        metadata?.["autoFirstTouch"] === true;
+      const bypassQuietHours =
+        metadata?.["autoReply"] === true ||
+        metadata?.["confirmationLoop"] === true ||
+        metadata?.["autoFirstTouch"] === true;
 
       if (isAutomated && !bypassQuietHours) {
         const quietHours = await getQuietHoursPolicy(db);
