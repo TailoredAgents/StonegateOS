@@ -96,7 +96,7 @@ async function callOpenAI({
                 email_body: { type: "string" },
                 sms_body: { type: "string" }
               },
-              required: []
+              required: ["email_subject", "email_body", "sms_body"]
             }
           }
         }
