@@ -1,5 +1,6 @@
 import { DateTime } from "luxon";
 import { and, desc, eq, gt, gte, isNotNull, or, sql } from "drizzle-orm";
+import { parsePhoneNumberFromString } from "libphonenumber-js";
 import {
   auditLogs,
   contacts,
@@ -305,6 +306,17 @@ function extractZipFromText(text: string): string | null {
   return match ? match[0] : null;
 }
 
+function extractPhoneFromText(text: string): { raw: string; e164: string } | null {
+  const candidates = text.match(/\+?\d[\d(). \-]{7,}\d/g) ?? [];
+  for (const candidate of candidates) {
+    const phone = parsePhoneNumberFromString(candidate, "US");
+    if (phone?.isValid()) {
+      return { raw: candidate.trim(), e164: phone.number };
+    }
+  }
+  return null;
+}
+
 function normalizeReplyCandidate(candidate: DraftCandidate): DraftCandidate {
   return {
     body: stripLinks(stripDashLikeChars(candidate.body)),
@@ -520,7 +532,8 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
   const outsideUsualArea =
     normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
-  let autoSendEligible = true;
+  const autoSendEligible = inGeorgia !== false;
+  const extractedPhone = extractPhoneFromText(messages.map((m) => m.body).join("\n"));
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, { inboundChannel: replyChannel, replyChannel });
   const followUpExample = resolveTemplateForChannel(templates.follow_up, { inboundChannel: replyChannel, replyChannel });
@@ -632,21 +645,6 @@ Do not write the customer message. Output ONLY JSON matching the schema.
   }
 
   const now = new Date();
-  if (inGeorgia === false) {
-    const [priorOutOfStateReply] = await db
-      .select({ id: conversationMessages.id })
-      .from(conversationMessages)
-      .where(
-        and(
-          eq(conversationMessages.threadId, threadId),
-          eq(conversationMessages.direction, "outbound"),
-          sql`${conversationMessages.metadata} ->> 'salesAutopilot' = 'true'`,
-          or(eq(conversationMessages.deliveryStatus, "sent"), eq(conversationMessages.deliveryStatus, "delivered"))
-        )
-      )
-      .limit(1);
-    autoSendEligible = !priorOutOfStateReply?.id;
-  }
   const draftId = await db.transaction(async (tx) => {
     const participantId = await ensureAutopilotParticipant(tx, threadId, now, policy.agentDisplayName);
     const [message] = await tx
@@ -668,7 +666,8 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           salesAutopilotNoAutosend: autoSendEligible ? undefined : true,
           aiModel: config.writeModel,
           missingInfo,
-          alternatives
+          alternatives,
+          extractedPhoneE164: extractedPhone?.e164 ?? undefined
         },
         createdAt: now
       })
@@ -908,16 +907,92 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     return { status: "retry", error: "recent_activity", nextAttemptAt };
   }
 
-  const sendAt =
-    row.channel === "dm"
-      ? now
-      : DateTime.fromJSDate(now).plus({ milliseconds: randomHumanisticDelayMs() }).toJSDate();
+  const wantsSmsFallback = row.channel === "dm";
+  let smsToAddress: string | null = null;
+  if (wantsSmsFallback) {
+    const [contact] = await db
+      .select({ phone: contacts.phone, phoneE164: contacts.phoneE164 })
+      .from(contacts)
+      .where(eq(contacts.id, contactId))
+      .limit(1);
+
+    const extracted = typeof meta?.["extractedPhoneE164"] === "string" ? (meta["extractedPhoneE164"] as string) : null;
+    smsToAddress = (contact?.phoneE164 ?? contact?.phone ?? extracted ?? "").trim() || null;
+    if (smsToAddress) {
+      const parsed = parsePhoneNumberFromString(smsToAddress, "US");
+      smsToAddress = parsed?.isValid() ? parsed.number : null;
+    }
+  }
+
+  const sendAt = DateTime.fromJSDate(now).plus({ milliseconds: randomHumanisticDelayMs() }).toJSDate();
+
+  if (wantsSmsFallback && smsToAddress) {
+    const smsBody = clampReplyBody(row.body ?? "", "sms");
+    if (!smsBody) {
+      return { status: "processed" };
+    }
+
+    await db.transaction(async (tx) => {
+      const participantId = await ensureAutopilotParticipant(tx, row.threadId, now, policy.agentDisplayName);
+      const [message] = await tx
+        .insert(conversationMessages)
+        .values({
+          threadId: row.threadId,
+          participantId,
+          direction: "outbound",
+          channel: "sms",
+          subject: null,
+          body: smsBody,
+          toAddress: smsToAddress,
+          deliveryStatus: "queued",
+          metadata: {
+            salesAutopilot: true,
+            salesAutopilotDerivedFromDraftId: row.id,
+            salesAutopilotDerivedFromInboundId: inboundId ?? undefined
+          },
+          createdAt: now
+        })
+        .returning({ id: conversationMessages.id });
+
+      if (!message?.id) {
+        throw new Error("autosend_sms_create_failed");
+      }
+
+      await tx
+        .update(conversationThreads)
+        .set({
+          lastMessagePreview: smsBody.slice(0, 140),
+          lastMessageAt: now,
+          updatedAt: now
+        })
+        .where(eq(conversationThreads.id, row.threadId));
+
+      await tx.insert(outboxEvents).values({
+        type: "message.send",
+        payload: { messageId: message.id },
+        nextAttemptAt: sendAt,
+        createdAt: now
+      });
+    });
+
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosent",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: { contactId, via: "sms_fallback" }
+    });
+
+    return { status: "processed" };
+  }
 
   await db.transaction(async (tx) => {
     const existingSend = await tx
       .select({ id: outboxEvents.id })
       .from(outboxEvents)
-      .where(and(eq(outboxEvents.type, "message.send"), sql`payload->>'messageId' = ${row.id}`, sql`${outboxEvents.processedAt} is null`))
+      .where(
+        and(eq(outboxEvents.type, "message.send"), sql`payload->>'messageId' = ${row.id}`, sql`${outboxEvents.processedAt} is null`)
+      )
       .limit(1);
 
     await tx
@@ -928,16 +1003,25 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       })
       .where(eq(conversationMessages.id, row.id));
 
+    await tx
+      .update(conversationThreads)
+      .set({
+        lastMessagePreview: (row.body ?? "").slice(0, 140),
+        lastMessageAt: now,
+        updatedAt: now
+      })
+      .where(eq(conversationThreads.id, row.threadId));
+
     if (existingSend[0]?.id) {
       await tx
         .update(outboxEvents)
-        .set({ attempts: 0, nextAttemptAt: sendAt, lastError: null })
+        .set({ attempts: 0, nextAttemptAt: row.channel === "dm" ? now : sendAt, lastError: null })
         .where(eq(outboxEvents.id, existingSend[0].id));
     } else {
       await tx.insert(outboxEvents).values({
         type: "message.send",
         payload: { messageId: row.id },
-        nextAttemptAt: sendAt,
+        nextAttemptAt: row.channel === "dm" ? now : sendAt,
         createdAt: now
       });
     }
