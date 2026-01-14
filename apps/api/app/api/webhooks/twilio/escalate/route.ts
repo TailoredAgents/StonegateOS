@@ -166,6 +166,9 @@ export async function POST(request: NextRequest): Promise<Response> {
       const context = await resolveTaskContext(taskId);
       if (context) {
         const resolvedContactId = contactIdFromQuery && contactIdFromQuery.length > 0 ? contactIdFromQuery : context.contactId;
+        const now = new Date();
+        const db = getDb();
+        await db.update(crmTasks).set({ status: "completed", updatedAt: now }).where(eq(crmTasks.id, taskId));
         await recordAuditEvent({
           actor: { type: "system", id: context.assignedTo, label: "sales_escalation" },
           action: "call.started",

@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { asc, eq } from "drizzle-orm";
-import { getDb, contacts, policySettings, teamMembers } from "@/db";
+import { and, asc, eq, ilike, isNotNull } from "drizzle-orm";
+import { getDb, contacts, crmTasks, policySettings, teamMembers } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { normalizePhone } from "../../../web/utils";
@@ -242,7 +242,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       return NextResponse.json(
         {
           error: "missing_agent_phone",
-          message: "No phone is configured for the assigned salesperson. Set it in Team Console → Access."
+          message: "No phone is configured for the assigned salesperson. Set it in Team Console: Access."
         },
         { status: 400 }
       );
@@ -285,6 +285,27 @@ export async function POST(request: NextRequest): Promise<Response> {
       callSid: result.callSid
     }
   });
+
+  const contactEntityId = resolvedContactId ?? contactId ?? null;
+  if (contactEntityId && actor.id) {
+    try {
+      const now = new Date();
+      await db
+        .update(crmTasks)
+        .set({ status: "completed", updatedAt: now })
+        .where(
+          and(
+            eq(crmTasks.contactId, contactEntityId),
+            eq(crmTasks.assignedTo, actor.id),
+            eq(crmTasks.status, "open"),
+            isNotNull(crmTasks.notes),
+            ilike(crmTasks.notes, "%kind=speed_to_lead%")
+          )
+        );
+    } catch (error) {
+      console.warn("[calls.start] task_touch_update_failed", { contactId: contactEntityId, actorId: actor.id, error: String(error) });
+    }
+  }
 
   return NextResponse.json({ ok: true, callSid: result.callSid });
 }
