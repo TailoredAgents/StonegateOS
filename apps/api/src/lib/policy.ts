@@ -465,14 +465,15 @@ export const DEFAULT_ITEM_POLICIES: ItemPoliciesPolicy = {
 
 export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
   first_touch: {
-    sms: "Thanks for reaching out! We can help. What items and timeframe are you thinking?",
-    email: "Thanks for contacting Stonegate. Share a few details about your items and timing, and we will follow up.",
-    dm: "Thanks for reaching out! Share your address and a few item details and we can help.",
-    call: "Sorry we missed your call! Reply with your address and what you need hauled and we will get you scheduled.",
-    web: "Thanks for reaching out! Share your address and a few item details and we can help."
+    sms: "Hey this is Stonegate Junk Removal. What all do you need removed and when would you like us to come out? If you can, send a couple photos and your zip code.",
+    email:
+      "Thanks for contacting Stonegate Junk Removal. What items do you need removed and what timeframe are you aiming for? If you have photos and your zip code, include those and we will follow up.",
+    dm: "Hey this is Stonegate Junk Removal. What all do you need removed and what zip code? Photos help too.",
+    call: "Sorry we missed you. Text back what you need removed, your zip code, and photos if you have them. We will get you scheduled.",
+    web: "Hey this is Stonegate Junk Removal. What all do you need removed and what zip code? Photos help too."
   },
   follow_up: {
-    sms: "Just checking in - do you want to lock in a time for your junk removal?",
+    sms: "Just checking in. Do you want to lock in a time for your junk removal?",
     email: "Following up on your quote request. Let us know if you want to schedule."
   },
   confirmations: {

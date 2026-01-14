@@ -458,6 +458,116 @@ async function getTeamMemberPhoneMap(db: ReturnType<typeof getDb>): Promise<Reco
   return readPhoneMapValue(row?.value);
 }
 
+function buildInboundSmsAlertText(input: {
+  contactName: string | null;
+  contactPhone: string | null;
+  body: string;
+}): string {
+  const name = input.contactName?.trim().length ? input.contactName.trim() : null;
+  const phone = input.contactPhone?.trim().length ? input.contactPhone.trim() : null;
+  const header = name ? `New text from ${name}` : phone ? `New text from ${phone}` : "New text in inbox";
+  const rawBody = input.body.trim().replace(/\s+/g, " ");
+  const snippet = rawBody.length > 220 ? `${rawBody.slice(0, 217)}...` : rawBody;
+  const phoneLine = name && phone ? ` (${phone})` : "";
+  return `${header}${phoneLine}: ${snippet}`;
+}
+
+async function maybeNotifyAssigneeForInboundSmsMessage(input: {
+  db: ReturnType<typeof getDb>;
+  messageId: string;
+}): Promise<void> {
+  const [message] = await input.db
+    .select({
+      id: conversationMessages.id,
+      direction: conversationMessages.direction,
+      channel: conversationMessages.channel,
+      body: conversationMessages.body,
+      createdAt: conversationMessages.createdAt,
+      threadId: conversationMessages.threadId,
+      contactId: conversationThreads.contactId,
+      contactFirstName: contacts.firstName,
+      contactLastName: contacts.lastName,
+      contactPhone: contacts.phone,
+      contactPhoneE164: contacts.phoneE164,
+      assignedTo: contacts.salespersonMemberId
+    })
+    .from(conversationMessages)
+    .leftJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .where(eq(conversationMessages.id, input.messageId))
+    .limit(1);
+
+  if (!message?.id) return;
+  if (message.direction !== "inbound") return;
+  if (message.channel !== "sms") return;
+
+  const [alreadySent] = await input.db
+    .select({ id: auditLogs.id })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.action, "inbox.alert.sms.sent"),
+        eq(auditLogs.entityType, "conversation_message"),
+        eq(auditLogs.entityId, input.messageId)
+      )
+    )
+    .limit(1);
+
+  if (alreadySent?.id) return;
+
+  const contactId = typeof message.contactId === "string" ? message.contactId : null;
+  if (!contactId) return;
+
+  const config = await getSalesScorecardConfig(input.db);
+  const assignedTo = message.assignedTo ?? config.defaultAssigneeMemberId;
+  if (!assignedTo) return;
+
+  const phoneMap = await getTeamMemberPhoneMap(input.db);
+  const recipientPhone = normalizePhoneE164(phoneMap[assignedTo] ?? "");
+  if (!recipientPhone) return;
+
+  const contactName = [message.contactFirstName, message.contactLastName].filter(Boolean).join(" ").trim() || null;
+  const contactPhone = (message.contactPhoneE164 ?? message.contactPhone ?? "").trim() || null;
+  const text = buildInboundSmsAlertText({
+    contactName,
+    contactPhone,
+    body: message.body ?? ""
+  });
+
+  const result = await sendSmsMessage(recipientPhone, text);
+  if (result.ok) {
+    await recordProviderSuccessSafe("sms");
+    await recordAuditEvent({
+      actor: { type: "worker", label: "outbox" },
+      action: "inbox.alert.sms.sent",
+      entityType: "conversation_message",
+      entityId: input.messageId,
+      meta: {
+        to: recipientPhone,
+        contactId,
+        assignedTo,
+        provider: result.provider ?? null
+      }
+    });
+    return;
+  }
+
+  await recordProviderFailureSafe("sms", result.detail ?? null);
+  await recordAuditEvent({
+    actor: { type: "worker", label: "outbox" },
+    action: "inbox.alert.sms.failed",
+    entityType: "conversation_message",
+    entityId: input.messageId,
+    meta: {
+      to: recipientPhone,
+      contactId,
+      assignedTo,
+      provider: result.provider ?? null,
+      detail: result.detail ?? null
+    }
+  });
+}
+
 function normalizeSalesDueAt(dueAt: Date, config: Awaited<ReturnType<typeof getSalesScorecardConfig>>): Date {
   const local = DateTime.fromJSDate(dueAt, { zone: config.timezone });
   const start = local.set({ hour: config.businessStartHour, minute: 0, second: 0, millisecond: 0 });
@@ -2792,6 +2902,12 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       if (!messageId) {
         console.warn("[outbox] message.received.missing_id", { id: event.id });
         return { status: "skipped" };
+      }
+
+      try {
+        await maybeNotifyAssigneeForInboundSmsMessage({ db: getDb(), messageId });
+      } catch (error) {
+        console.warn("[outbox] inbox.alert.failed", { messageId, error: String(error) });
       }
 
       return await handleInboundAutoReply(messageId);
