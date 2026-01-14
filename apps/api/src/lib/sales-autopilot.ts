@@ -317,6 +317,13 @@ function extractPhoneFromText(text: string): { raw: string; e164: string } | nul
   return null;
 }
 
+function isMessengerLeadCard(body: string): boolean {
+  const text = body.toLowerCase();
+  const markers = ["phone number:", "email:", "zip code:", "first name:", "when do you want it gone?:"];
+  const hitCount = markers.reduce((count, marker) => (text.includes(marker) ? count + 1 : count), 0);
+  return hitCount >= 3;
+}
+
 function normalizeReplyCandidate(candidate: DraftCandidate): DraftCandidate {
   return {
     body: stripLinks(stripDashLikeChars(candidate.body)),
@@ -806,6 +813,32 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
   const contactId = row.threadContactId ?? null;
   if (!contactId) {
     return { status: "processed" };
+  }
+
+  if (row.channel === "dm") {
+    const [latestInboundForContact] = await db
+      .select({ body: conversationMessages.body, channel: conversationMessages.channel })
+      .from(conversationMessages)
+      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+      .where(and(eq(conversationThreads.contactId, contactId), eq(conversationMessages.direction, "inbound")))
+      .orderBy(desc(conversationMessages.createdAt))
+      .limit(1);
+
+    if (
+      latestInboundForContact?.channel === "dm" &&
+      typeof latestInboundForContact.body === "string" &&
+      latestInboundForContact.body.trim().length > 0 &&
+      !isMessengerLeadCard(latestInboundForContact.body)
+    ) {
+      await recordAuditEvent({
+        actor: { type: "ai", label: "sales-autopilot" },
+        action: "sales.autopilot.autosend_skipped",
+        entityType: "conversation_message",
+        entityId: row.id,
+        meta: { reason: "dm_recent_message_unknown_outbound" }
+      });
+      return { status: "processed" };
+    }
   }
 
   const inboundId =
