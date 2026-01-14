@@ -1,10 +1,11 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { getDb, contacts } from "@/db";
+import { asc, eq } from "drizzle-orm";
+import { getDb, contacts, policySettings, teamMembers } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { normalizePhone } from "../../../web/utils";
+import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
 
 type StartCallPayload = {
   contactId?: string;
@@ -16,6 +17,38 @@ function readString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readPhoneMap(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const phonesRaw = value["phones"];
+  if (!isRecord(phonesRaw)) return {};
+  const phones: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(phonesRaw)) {
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      phones[key] = raw.trim();
+    }
+  }
+  return phones;
+}
+
+async function resolveFallbackDefaultAssigneeMemberId(): Promise<string | null> {
+  try {
+    const config = await getSalesScorecardConfig();
+    return config.defaultAssigneeMemberId ?? null;
+  } catch {
+    const db = getDb();
+    const [member] = await db
+      .select({ id: teamMembers.id })
+      .from(teamMembers)
+      .orderBy(asc(teamMembers.createdAt))
+      .limit(1);
+    return member?.id ?? null;
+  }
 }
 
 function resolveApiBaseUrl(request: NextRequest): string {
@@ -135,21 +168,11 @@ export async function POST(request: NextRequest): Promise<Response> {
   const agentPhoneRaw = readString(json.agentPhone);
   const toPhoneRaw = readString(json.toPhone);
 
-  if (!agentPhoneRaw) {
-    return NextResponse.json({ error: "missing_agent_phone" }, { status: 400 });
-  }
-
-  let agentPhone: string;
-  try {
-    agentPhone = normalizePhone(agentPhoneRaw).e164;
-  } catch {
-    return NextResponse.json({ error: "invalid_agent_phone" }, { status: 400 });
-  }
-
   const db = getDb();
 
   let toPhone: string | null = null;
   let resolvedContactId: string | null = null;
+  let resolvedAssigneeMemberId: string | null = null;
   if (toPhoneRaw) {
     try {
       toPhone = normalizePhone(toPhoneRaw).e164;
@@ -161,7 +184,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       .select({
         id: contacts.id,
         phone: contacts.phone,
-        phoneE164: contacts.phoneE164
+        phoneE164: contacts.phoneE164,
+        salespersonMemberId: contacts.salespersonMemberId
       })
       .from(contacts)
       .where(eq(contacts.id, contactId))
@@ -172,6 +196,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     resolvedContactId = row.id;
+    resolvedAssigneeMemberId = row.salespersonMemberId ?? null;
     const phoneCandidate = row.phoneE164 ?? row.phone ?? null;
     if (!phoneCandidate) {
       return NextResponse.json({ error: "contact_missing_phone" }, { status: 400 });
@@ -188,6 +213,54 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "missing_to_phone" }, { status: 400 });
   }
 
+  let agentPhone: string;
+  let auditActorOverride: ReturnType<typeof getAuditActorFromRequest> | null = null;
+
+  if (agentPhoneRaw) {
+    try {
+      agentPhone = normalizePhone(agentPhoneRaw).e164;
+    } catch {
+      return NextResponse.json({ error: "invalid_agent_phone" }, { status: 400 });
+    }
+  } else {
+    const assigneeMemberId =
+      resolvedAssigneeMemberId ??
+      (await resolveFallbackDefaultAssigneeMemberId());
+
+    if (!assigneeMemberId) {
+      return NextResponse.json({ error: "missing_agent_phone", message: "No default salesperson is configured." }, { status: 400 });
+    }
+
+    const [phoneSetting] = await db
+      .select({ value: policySettings.value })
+      .from(policySettings)
+      .where(eq(policySettings.key, "team_member_phones"))
+      .limit(1);
+    const phoneMap = readPhoneMap(phoneSetting?.value);
+    const phoneCandidate = phoneMap[assigneeMemberId] ?? null;
+    if (!phoneCandidate) {
+      return NextResponse.json(
+        {
+          error: "missing_agent_phone",
+          message: "No phone is configured for the assigned salesperson. Set it in Team Console → Access."
+        },
+        { status: 400 }
+      );
+    }
+
+    try {
+      agentPhone = normalizePhone(phoneCandidate).e164;
+    } catch {
+      return NextResponse.json({ error: "invalid_agent_phone", message: "Assigned salesperson phone is invalid." }, { status: 400 });
+    }
+
+    auditActorOverride = {
+      type: "system",
+      id: assigneeMemberId,
+      label: "assigned_salesperson"
+    };
+  }
+
   const result = await createTwilioCall({ agentPhone, toPhone, request });
   if (!result.ok) {
     console.warn("[calls.start] twilio_call_failed", {
@@ -200,7 +273,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: result.error, message: result.message }, { status: 502 });
   }
 
-  const actor = getAuditActorFromRequest(request);
+  const actor = auditActorOverride ?? getAuditActorFromRequest(request);
   await recordAuditEvent({
     actor,
     action: "call.started",

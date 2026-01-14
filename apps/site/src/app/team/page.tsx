@@ -6,9 +6,6 @@ import {
   logoutCrew,
   logoutOwner,
   dismissNewLeadAction,
-  saveCallAgentPhoneAction,
-  clearCallAgentPhoneAction,
-  setCallAgentChoiceAction,
   updatePipelineStageAction
 } from "./actions";
 import { MyDaySection } from "./components/MyDaySection";
@@ -66,9 +63,6 @@ export default async function TeamPage({
   const cookieStore = await cookies();
   const hasOwner = cookieStore.get(ADMIN_COOKIE)?.value ? true : false;
   const hasCrew = cookieStore.get(CREW_COOKIE)?.value ? true : false;
-  const devonCallPhone = cookieStore.get("myst-call-agent-devon-phone")?.value ?? "";
-  const austinCallPhone = cookieStore.get("myst-call-agent-owner-phone")?.value ?? "";
-  const callAgentChoice = cookieStore.get("myst-call-agent-choice")?.value ?? "devon";
 
   const requestedTab = params?.tab;
   const tab =
@@ -452,74 +446,9 @@ export default async function TeamPage({
 
               <h2 className={TEAM_SECTION_TITLE}>Calling</h2>
               <p className={TEAM_SECTION_SUBTITLE}>
-                Choose who should be rung when you click <span className="font-semibold">Call (Stonegate #)</span> on a contact.
-                When answered, the system connects to the customer and shows the Stonegate number as caller ID.
+                Outbound calls always ring the <span className="font-semibold">Assigned to</span> salesperson on the contact (lead routing).
+                Set each salesperson’s phone in <span className="font-semibold">Access</span> so the system knows who to ring.
               </p>
-
-              <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm font-semibold text-slate-800">
-                  Default caller:{" "}
-                  <span className="text-primary-700">{callAgentChoice === "owner" ? "Austin" : "Devon"}</span>
-                </div>
-                <form action={setCallAgentChoiceAction} className="flex items-center gap-2">
-                  <input type="hidden" name="choice" value={callAgentChoice === "owner" ? "devon" : "owner"} />
-                  <button className={teamButtonClass("secondary", "sm")}>
-                    Switch to {callAgentChoice === "owner" ? "Devon" : "Austin"}
-                  </button>
-                </form>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
-                  <h3 className="text-sm font-semibold text-slate-800">Devon phone</h3>
-                  <p className="mt-1 text-xs text-slate-500">Rings Devon for outbound calls.</p>
-                  <div className="mt-3 flex flex-col gap-2">
-                    <form action={saveCallAgentPhoneAction} className="space-y-2">
-                      <input type="hidden" name="who" value="devon" />
-                      <input
-                        name="agentPhone"
-                        defaultValue={devonCallPhone}
-                        placeholder="e.g. +16785258427"
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm shadow-slate-200/40 outline-none focus:border-primary-300 focus:ring-2 focus:ring-primary-200"
-                      />
-                      <button className="w-full rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-700">
-                        Save Devon phone
-                      </button>
-                    </form>
-                    <form action={clearCallAgentPhoneAction}>
-                      <input type="hidden" name="who" value="devon" />
-                      <button className="w-full rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-primary-300 hover:text-primary-700">
-                        Clear Devon phone
-                      </button>
-                    </form>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
-                  <h3 className="text-sm font-semibold text-slate-800">Austin phone</h3>
-                  <p className="mt-1 text-xs text-slate-500">Rings Austin when Devon is unavailable.</p>
-                  <div className="mt-3 flex flex-col gap-2">
-                    <form action={saveCallAgentPhoneAction} className="space-y-2">
-                      <input type="hidden" name="who" value="owner" />
-                      <input
-                        name="agentPhone"
-                        defaultValue={austinCallPhone}
-                        placeholder="e.g. +15617015127"
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm shadow-slate-200/40 outline-none focus:border-primary-300 focus:ring-2 focus:ring-primary-200"
-                      />
-                      <button className="w-full rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-700">
-                        Save Austin phone
-                      </button>
-                    </form>
-                    <form action={clearCallAgentPhoneAction}>
-                      <input type="hidden" name="who" value="owner" />
-                      <button className="w-full rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-primary-300 hover:text-primary-700">
-                        Clear Austin phone
-                      </button>
-                    </form>
-                  </div>
-                </div>
-              </div>
             </div>
 
             <div className="space-y-4">
