@@ -2,7 +2,7 @@ import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { CopyButton } from "@/components/CopyButton";
 import { callAdminApi } from "../lib/api";
-import { createRoleAction, createTeamMemberAction, updateTeamMemberAction } from "../actions";
+import { createRoleAction, createTeamMemberAction, updateDefaultSalesAssigneeAction, updateTeamMemberAction } from "../actions";
 
 type Role = {
   id: string;
@@ -29,11 +29,13 @@ export async function AccessSection(): Promise<React.ReactElement> {
   let roles: Role[] = [];
   let members: TeamMember[] = [];
   let loadError: string | null = null;
+  let defaultAssigneeMemberId: string | null = null;
 
   try {
-    const [rolesRes, membersRes] = await Promise.all([
+    const [rolesRes, membersRes, settingsRes] = await Promise.all([
       callAdminApi("/api/admin/roles"),
-      callAdminApi("/api/admin/team/members")
+      callAdminApi("/api/admin/team/members"),
+      callAdminApi("/api/admin/sales/settings")
     ]);
 
     if (!rolesRes.ok) {
@@ -48,6 +50,14 @@ export async function AccessSection(): Promise<React.ReactElement> {
     } else {
       const membersPayload = (await membersRes.json()) as { members?: TeamMember[] };
       members = membersPayload.members ?? [];
+    }
+
+    if (settingsRes.ok) {
+      const settingsPayload = (await settingsRes.json()) as { defaultAssigneeMemberId?: string | null };
+      defaultAssigneeMemberId =
+        typeof settingsPayload.defaultAssigneeMemberId === "string" && settingsPayload.defaultAssigneeMemberId.trim().length > 0
+          ? settingsPayload.defaultAssigneeMemberId.trim()
+          : null;
     }
   } catch (error) {
     loadError = `Failed to load access control: ${(error as Error).message}`;
@@ -64,6 +74,33 @@ export async function AccessSection(): Promise<React.ReactElement> {
       </header>
 
       <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <h3 className="text-base font-semibold text-slate-900">Lead routing</h3>
+          <p className="text-xs text-slate-500">Choose who new leads are assigned to by default.</p>
+          <form action={updateDefaultSalesAssigneeAction} className="mt-4 flex flex-wrap items-center gap-3">
+            <select
+              name="defaultAssigneeMemberId"
+              defaultValue={defaultAssigneeMemberId ?? ""}
+              className="min-w-[240px] rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+            >
+              <option value="">Auto (first active team member)</option>
+              {members
+                .filter((member) => member.active)
+                .map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+            </select>
+            <SubmitButton
+              className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+              pendingLabel="Saving..."
+            >
+              Save default
+            </SubmitButton>
+          </form>
+        </div>
+
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
           <h3 className="text-base font-semibold text-slate-900">Roles</h3>
           <p className="text-xs text-slate-500">Define what each role can do in the console.</p>

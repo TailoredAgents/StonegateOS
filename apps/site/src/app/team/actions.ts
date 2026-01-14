@@ -2269,6 +2269,36 @@ export async function dismissNewLeadAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function updateDefaultSalesAssigneeAction(formData: FormData) {
+  const jar = await cookies();
+  const memberIdRaw = formData.get("defaultAssigneeMemberId");
+
+  if (memberIdRaw !== null && typeof memberIdRaw !== "string") {
+    jar.set({ name: "myst-flash-error", value: "Invalid selection", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const memberId = typeof memberIdRaw === "string" ? memberIdRaw.trim() : "";
+
+  const response = await callAdminApi("/api/admin/sales/settings", {
+    method: "PATCH",
+    body: JSON.stringify({
+      defaultAssigneeMemberId: memberId.length ? memberId : null
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update default salesperson");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Default salesperson updated", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function resetSalesHqAction() {
   const jar = await cookies();
 
