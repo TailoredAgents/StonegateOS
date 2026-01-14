@@ -5,7 +5,6 @@ import { TEAM_TIME_ZONE } from "./timezone";
 
 const TEAM_ACTOR_ID_COOKIE = "myst-team-actor-id";
 const TEAM_ACTOR_LABEL_COOKIE = "myst-team-actor-label";
-const FALLBACK_DEVON_MEMBER_ID = "b45988bb-7417-48c5-af6d-fcdf71088282";
 
 const API_BASE_URL =
   process.env["API_BASE_URL"] ??
@@ -15,7 +14,7 @@ const ADMIN_API_KEY = process.env["ADMIN_API_KEY"];
 const DEFAULT_ACTOR_ID =
   process.env["TEAM_DEFAULT_ACTOR_ID"] ??
   process.env["SALES_DEFAULT_ASSIGNEE_ID"] ??
-  FALLBACK_DEVON_MEMBER_ID;
+  null;
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -33,8 +32,8 @@ async function resolveActorRole(): Promise<string | null> {
 }
 
 async function resolveActorIdentity(): Promise<{ actorId: string | null; actorLabel: string | null }> {
-  // Shared "master login" mode: always attribute actions to the default actor (Devon)
-  // so Devon HQ metrics are consistent and not affected by per-browser cookie state.
+  // Shared "master login" mode: always attribute actions to the default actor
+  // so sales metrics are consistent and not affected by per-browser cookie state.
   return { actorId: DEFAULT_ACTOR_ID, actorLabel: null };
 }
 

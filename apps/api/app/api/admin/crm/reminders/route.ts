@@ -1,9 +1,10 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, eq, ilike } from "drizzle-orm";
-import { contacts, crmTasks, getDb, outboxEvents, teamMembers } from "@/db";
+import { eq } from "drizzle-orm";
+import { contacts, crmTasks, getDb, outboxEvents } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
@@ -64,12 +65,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   if (!assignedTo) {
-    const [defaultMember] = await db
-      .select({ id: teamMembers.id })
-      .from(teamMembers)
-      .where(and(ilike(teamMembers.name, "Devon%"), eq(teamMembers.active, true)))
-      .limit(1);
-    assignedTo = defaultMember?.id ?? null;
+    assignedTo = await getDefaultSalesAssigneeMemberId(db as any);
   }
 
   const actor = getAuditActorFromRequest(request);

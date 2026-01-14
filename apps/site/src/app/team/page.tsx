@@ -38,7 +38,6 @@ import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE, teamButton
 
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
-const FALLBACK_DEVON_MEMBER_ID = "b45988bb-7417-48c5-af6d-fcdf71088282";
 
 export const metadata = { title: "Stonegate Team Console" };
 
@@ -103,7 +102,7 @@ export default async function TeamPage({
     { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "owner" },
     { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "owner" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
-    { id: "sales-hq", label: "Devon HQ", href: "/team?tab=sales-hq", requires: "owner" },
+    { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "owner" },
     { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
@@ -351,7 +350,7 @@ export default async function TeamPage({
         {tab === "sales-hq" && hasOwner ? (
           <React.Suspense
             fallback={
-              <TeamSkeletonCard title="Loading Devon HQ" />
+              <TeamSkeletonCard title="Loading Sales HQ" />
             }
           >
             <SalesScorecardSection />
@@ -445,11 +444,10 @@ export default async function TeamPage({
             <div className="space-y-4">
               <h2 className={TEAM_SECTION_TITLE}>Acting as</h2>
               <p className={TEAM_SECTION_SUBTITLE}>
-                CRM actions are currently locked to <span className="font-semibold">Devon</span> (shared master login mode),
-                so Devon HQ metrics are consistent and not affected by per-browser settings.
+                CRM actions are currently attributed to the default actor (shared master login mode), so Sales HQ metrics are consistent.
               </p>
               <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 text-sm font-semibold text-slate-800 shadow-sm shadow-slate-200/40">
-                Current: <span className="text-primary-700">Devon</span>
+                Current: <span className="text-primary-700">default actor</span>
               </div>
 
               <h2 className={TEAM_SECTION_TITLE}>Calling</h2>

@@ -597,7 +597,7 @@ Notes: ${companyProfile.agentNotes}
     `Transcript:\n${buildTranscript(messages)}`
   ].filter((line): line is string => Boolean(line));
 
-  const baseUserPrompt = `Write a Devon-style reply.\n${contextLines.join("\n")}`;
+  const baseUserPrompt = `Write a reply in the voice of ${policy.agentDisplayName}.\n${contextLines.join("\n")}`;
 
   let plan: ReplyPlan | null = null;
   if (config.thinkModel) {

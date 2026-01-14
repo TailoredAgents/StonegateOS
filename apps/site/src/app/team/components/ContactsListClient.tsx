@@ -1018,7 +1018,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                       value={reminderNotesDraft}
                       onChange={(event) => setReminderNotesDraft(event.target.value)}
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                      placeholder="Any context Devon should see in the SMS"
+                      placeholder="Any context the salesperson should see in the SMS"
                     />
                   </label>
                   <div className="flex gap-2">

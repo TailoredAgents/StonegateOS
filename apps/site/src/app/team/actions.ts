@@ -74,7 +74,7 @@ export async function clearActingMemberAction() {
   const jar = await cookies();
   jar.set({ name: TEAM_ACTOR_ID_COOKIE, value: "", path: "/", maxAge: 0 });
   jar.set({ name: TEAM_ACTOR_LABEL_COOKIE, value: "", path: "/", maxAge: 0 });
-  jar.set({ name: "myst-flash", value: "Reset acting member to default (Devon)", path: "/" });
+  jar.set({ name: "myst-flash", value: "Reset acting member to default", path: "/" });
   revalidatePath("/team");
 }
 
@@ -692,7 +692,7 @@ export async function startContactCallAction(formData: FormData) {
   if (!agentPhone) {
     jar.set({
       name: "myst-flash-error",
-      value: "Set Devon/Your call phone in Settings before using Call",
+      value: "Set your call phone in Settings before using Call",
       path: "/"
     });
     revalidatePath("/team");
@@ -716,7 +716,7 @@ export async function startContactCallAction(formData: FormData) {
     value:
       choice === "owner"
         ? `Ringing Austin at ${agentPhone} now... answer to connect`
-        : `Ringing Devon at ${agentPhone} now... answer to connect`,
+        : `Ringing agent at ${agentPhone} now... answer to connect`,
     path: "/"
   });
   revalidatePath("/team");
@@ -2278,13 +2278,13 @@ export async function resetSalesHqAction() {
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to reset Devon HQ");
+    const message = await readErrorMessage(response, "Unable to reset Sales HQ");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "Devon HQ cleared. Only new leads will appear going forward.", path: "/" });
+  jar.set({ name: "myst-flash", value: "Sales HQ cleared. Only new leads will appear going forward.", path: "/" });
   revalidatePath("/team");
 }
 

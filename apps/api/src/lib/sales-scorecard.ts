@@ -10,8 +10,10 @@ import {
   crmTasks,
   getDb,
   leads,
-  policySettings
+  policySettings,
+  teamMembers
 } from "@/db";
+import { asc } from "drizzle-orm";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
@@ -36,7 +38,6 @@ export type SalesScorecardConfig = {
   };
 };
 
-export const FALLBACK_DEVON_MEMBER_ID = "b45988bb-7417-48c5-af6d-fcdf71088282";
 export const SALES_SCORECARD_POLICY_KEY = "sales_scorecard";
 
 const DEFAULT_CONFIG: SalesScorecardConfig = {
@@ -46,7 +47,7 @@ const DEFAULT_CONFIG: SalesScorecardConfig = {
   speedToLeadMinutes: 5,
   followupGraceMinutes: 10,
   followupStepsMinutes: [15, 120, 1440, 4320],
-  defaultAssigneeMemberId: FALLBACK_DEVON_MEMBER_ID,
+  defaultAssigneeMemberId: "",
   trackingStartAt: null,
   weights: {
     speedToLead: 45,
@@ -84,6 +85,16 @@ function coerceWeights(value: unknown, fallback: SalesScorecardConfig["weights"]
   return { speedToLead, followupCompliance, responseTime, conversion };
 }
 
+async function resolveFallbackDefaultAssigneeMemberId(db: DbExecutor): Promise<string> {
+  const [member] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(eq(teamMembers.active, true))
+    .orderBy(asc(teamMembers.name), asc(teamMembers.createdAt))
+    .limit(1);
+  return member?.id ?? "";
+}
+
 export async function getSalesScorecardConfig(db: DbExecutor = getDb()): Promise<SalesScorecardConfig> {
   const [row] = await db
     .select({ value: policySettings.value })
@@ -92,9 +103,10 @@ export async function getSalesScorecardConfig(db: DbExecutor = getDb()): Promise
     .limit(1);
 
   const envDefault = process.env["SALES_DEFAULT_ASSIGNEE_ID"] ?? process.env["REMINDERS_DEFAULT_ASSIGNEE_ID"] ?? null;
+  const fallbackDefault = envDefault && envDefault.trim().length > 0 ? envDefault.trim() : await resolveFallbackDefaultAssigneeMemberId(db);
   const base: SalesScorecardConfig = {
     ...DEFAULT_CONFIG,
-    defaultAssigneeMemberId: envDefault && envDefault.trim().length > 0 ? envDefault.trim() : DEFAULT_CONFIG.defaultAssigneeMemberId
+    defaultAssigneeMemberId: fallbackDefault
   };
 
   const stored = row?.value;

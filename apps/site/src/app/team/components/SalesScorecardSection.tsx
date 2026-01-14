@@ -5,8 +5,6 @@ import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 import { callAdminApi } from "../lib/api";
 import { resetSalesHqAction, updatePipelineStageAction } from "../actions";
 
-const DEVON_MEMBER_ID = "b45988bb-7417-48c5-af6d-fcdf71088282";
-
 type ScorecardPayload = {
   ok: true;
   memberId: string;
@@ -127,8 +125,8 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
 
   try {
     const [scoreRes, queueRes] = await Promise.all([
-      callAdminApi(`/api/admin/sales/scorecard?memberId=${encodeURIComponent(DEVON_MEMBER_ID)}&rangeDays=${rangeDays}`),
-      callAdminApi(`/api/admin/sales/queue?memberId=${encodeURIComponent(DEVON_MEMBER_ID)}`)
+      callAdminApi(`/api/admin/sales/scorecard?rangeDays=${rangeDays}`),
+      callAdminApi(`/api/admin/sales/queue`)
     ]);
 
     if (scoreRes.ok) scorecard = (await scoreRes.json()) as ScorecardPayload;
@@ -165,7 +163,7 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
     <section className="rounded-3xl border border-white/70 bg-white/80 p-6 shadow-xl shadow-slate-200/60 backdrop-blur sm:p-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Devon HQ</h2>
+          <h2 className="text-lg font-semibold text-slate-900">Sales HQ</h2>
           <p className="mt-1 text-sm text-slate-600">
             7-day snapshot: speed-to-lead + follow-ups (call-first when a phone exists).
           </p>
@@ -241,7 +239,7 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                 className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:border-slate-300"
                 pendingLabel="Clearing..."
               >
-                Clear Devon HQ
+                Clear Sales HQ
               </SubmitButton>
             </form>
           ) : null}
