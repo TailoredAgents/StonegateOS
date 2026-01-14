@@ -1,12 +1,14 @@
 import { DateTime } from "luxon";
-import { and, desc, eq, gt, gte, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNotNull, ne, or, sql } from "drizzle-orm";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import {
   auditLogs,
+  appointments,
   contacts,
   conversationMessages,
   conversationParticipants,
   conversationThreads,
+  crmPipeline,
   getDb,
   outboxEvents,
   properties
@@ -817,12 +819,42 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
 
   if (row.channel === "dm") {
     const [latestInboundForContact] = await db
-      .select({ body: conversationMessages.body, channel: conversationMessages.channel })
+      .select({
+        body: conversationMessages.body,
+        channel: conversationMessages.channel,
+        createdAt: conversationMessages.createdAt
+      })
       .from(conversationMessages)
       .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
       .where(and(eq(conversationThreads.contactId, contactId), eq(conversationMessages.direction, "inbound")))
       .orderBy(desc(conversationMessages.createdAt))
       .limit(1);
+
+    const [pipeline] = await db
+      .select({ stage: crmPipeline.stage })
+      .from(crmPipeline)
+      .where(eq(crmPipeline.contactId, contactId))
+      .limit(1);
+    const stage = typeof pipeline?.stage === "string" ? pipeline.stage : "new";
+    const isContactedInPipeline = stage !== "new";
+
+    const [appointment] = await db
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(and(eq(appointments.contactId, contactId), ne(appointments.status, "canceled")))
+      .limit(1);
+    const isBooked = Boolean(appointment?.id);
+
+    if (isContactedInPipeline || isBooked) {
+      await recordAuditEvent({
+        actor: { type: "ai", label: "sales-autopilot" },
+        action: "sales.autopilot.autosend_skipped",
+        entityType: "conversation_message",
+        entityId: row.id,
+        meta: { reason: "handled", stage, booked: isBooked }
+      });
+      return { status: "processed" };
+    }
 
     if (
       latestInboundForContact?.channel === "dm" &&
@@ -830,14 +862,20 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       latestInboundForContact.body.trim().length > 0 &&
       !isMessengerLeadCard(latestInboundForContact.body)
     ) {
-      await recordAuditEvent({
-        actor: { type: "ai", label: "sales-autopilot" },
-        action: "sales.autopilot.autosend_skipped",
-        entityType: "conversation_message",
-        entityId: row.id,
-        meta: { reason: "dm_recent_message_unknown_outbound" }
-      });
-      return { status: "processed" };
+      const now = new Date();
+      const fallbackAt = DateTime.fromJSDate(latestInboundForContact.createdAt)
+        .plus({ minutes: policy.dmSmsFallbackAfterMinutes })
+        .toJSDate();
+      if (now < fallbackAt) {
+        return { status: "retry", error: "dm_cooldown", nextAttemptAt: fallbackAt };
+      }
+
+      const silenceUntil = DateTime.fromJSDate(latestInboundForContact.createdAt)
+        .plus({ minutes: policy.dmMinSilenceBeforeSmsMinutes })
+        .toJSDate();
+      if (now < silenceUntil) {
+        return { status: "retry", error: "dm_recent_inbound", nextAttemptAt: silenceUntil };
+      }
     }
   }
 
@@ -1016,6 +1054,17 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       meta: { contactId, via: "sms_fallback" }
     });
 
+    return { status: "processed" };
+  }
+
+  if (wantsSmsFallback && !smsToAddress) {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: { reason: "no_sms_recipient" }
+    });
     return { status: "processed" };
   }
 

@@ -93,6 +93,8 @@ export type SalesAutopilotPolicy = {
   autoSendAfterMinutes: number;
   activityWindowMinutes: number;
   retryDelayMinutes: number;
+  dmSmsFallbackAfterMinutes: number;
+  dmMinSilenceBeforeSmsMinutes: number;
   agentDisplayName: string;
 };
 
@@ -149,6 +151,8 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   autoSendAfterMinutes: 15,
   activityWindowMinutes: 14,
   retryDelayMinutes: 2,
+  dmSmsFallbackAfterMinutes: 120,
+  dmMinSilenceBeforeSmsMinutes: 45,
   agentDisplayName: "Devon"
 };
 
@@ -1016,6 +1020,16 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
       min: 1,
       max: 60
     }),
+    dmSmsFallbackAfterMinutes: coerceInt(
+      stored["dmSmsFallbackAfterMinutes"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.dmSmsFallbackAfterMinutes,
+      { min: 15, max: 24 * 60 }
+    ),
+    dmMinSilenceBeforeSmsMinutes: coerceInt(
+      stored["dmMinSilenceBeforeSmsMinutes"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.dmMinSilenceBeforeSmsMinutes,
+      { min: 5, max: 12 * 60 }
+    ),
     agentDisplayName: coerceString(stored["agentDisplayName"], DEFAULT_SALES_AUTOPILOT_POLICY.agentDisplayName)
   };
 }
