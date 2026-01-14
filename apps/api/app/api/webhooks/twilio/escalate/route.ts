@@ -1,5 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { getDb, crmTasks } from "@/db";
+import { recordAuditEvent } from "@/lib/audit";
+import { eq } from "drizzle-orm";
 import { normalizePhone } from "../../../web/utils";
 
 export const dynamic = "force-dynamic";
@@ -93,6 +96,23 @@ function buildConnectTwiML(input: { to: string; callerId: string; statusCallback
 </Response>`;
 }
 
+async function resolveTaskContext(taskId: string): Promise<{ contactId: string; assignedTo: string } | null> {
+  const db = getDb();
+  const [row] = await db
+    .select({
+      contactId: crmTasks.contactId,
+      assignedTo: crmTasks.assignedTo,
+      status: crmTasks.status
+    })
+    .from(crmTasks)
+    .where(eq(crmTasks.id, taskId))
+    .limit(1);
+
+  if (!row?.contactId || !row.assignedTo) return null;
+  if (row.status !== "open") return null;
+  return { contactId: row.contactId, assignedTo: row.assignedTo };
+}
+
 async function readDigits(request: NextRequest): Promise<string | null> {
   try {
     const formData = await request.formData();
@@ -139,12 +159,43 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
+  const taskId = request.nextUrl.searchParams.get("taskId")?.trim() || null;
+  const contactIdFromQuery = request.nextUrl.searchParams.get("contactId")?.trim() || null;
+  if (taskId) {
+    try {
+      const context = await resolveTaskContext(taskId);
+      if (context) {
+        const resolvedContactId = contactIdFromQuery && contactIdFromQuery.length > 0 ? contactIdFromQuery : context.contactId;
+        await recordAuditEvent({
+          actor: { type: "system", id: context.assignedTo, label: "sales_escalation" },
+          action: "call.started",
+          entityType: "contact",
+          entityId: resolvedContactId,
+          meta: {
+            via: "sales_escalation",
+            taskId
+          }
+        });
+      }
+    } catch (error) {
+      console.warn("[twilio.escalate] touch_record_failed", { taskId, error: String(error) });
+    }
+  }
+
   const statusCallbackUrl = new URL("/api/webhooks/twilio/call-status", publicApiBaseUrl);
   statusCallbackUrl.searchParams.set("leg", "customer");
   statusCallbackUrl.searchParams.set("mode", "sales_escalation");
   const dialActionUrl = new URL("/api/webhooks/twilio/dial-action", publicApiBaseUrl);
   dialActionUrl.searchParams.set("leg", "customer");
   dialActionUrl.searchParams.set("mode", "sales_escalation");
+  if (taskId) {
+    statusCallbackUrl.searchParams.set("taskId", taskId);
+    dialActionUrl.searchParams.set("taskId", taskId);
+  }
+  if (contactIdFromQuery) {
+    statusCallbackUrl.searchParams.set("contactId", contactIdFromQuery);
+    dialActionUrl.searchParams.set("contactId", contactIdFromQuery);
+  }
 
   return twimlResponse(
     buildConnectTwiML({

@@ -1,5 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { and, eq, ilike, isNotNull, or } from "drizzle-orm";
+import { getDb, crmTasks } from "@/db";
+import { recordAuditEvent } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +26,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const leg = request.nextUrl.searchParams.get("leg")?.trim() || "unknown";
+  const mode = request.nextUrl.searchParams.get("mode")?.trim() || null;
+  const taskId = request.nextUrl.searchParams.get("taskId")?.trim() || null;
 
   const payload = {
     leg,
@@ -42,6 +47,54 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   console.info("[twilio.dial_action]", payload);
 
+  if (mode === "sales_escalation" && taskId && leg === "customer") {
+    try {
+      const duration = payload.dialCallDuration ?? 0;
+      const status = payload.dialCallStatus ?? null;
+      const answered = duration > 0 && (status === null || status === "completed");
+      if (answered) {
+        const db = getDb();
+        const [row] = await db
+          .select({
+            contactId: crmTasks.contactId,
+            assignedTo: crmTasks.assignedTo
+          })
+          .from(crmTasks)
+          .where(eq(crmTasks.id, taskId))
+          .limit(1);
+
+        if (row?.contactId && row.assignedTo) {
+          const now = new Date();
+          await db
+            .update(crmTasks)
+            .set({ status: "completed", updatedAt: now })
+            .where(
+              and(
+                eq(crmTasks.contactId, row.contactId),
+                eq(crmTasks.assignedTo, row.assignedTo),
+                eq(crmTasks.status, "open"),
+                isNotNull(crmTasks.notes),
+                or(ilike(crmTasks.notes, "%kind=speed_to_lead%"), ilike(crmTasks.notes, "%kind=follow_up%"))
+              )
+            );
+
+          await recordAuditEvent({
+            actor: { type: "system", id: row.assignedTo, label: "sales_escalation" },
+            action: "sales.escalation.call.connected",
+            entityType: "crm_task",
+            entityId: taskId,
+            meta: {
+              contactId: row.contactId,
+              dialCallDuration: duration,
+              dialCallStatus: status
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.warn("[twilio.dial_action] sales_escalation_update_failed", { taskId, error: String(error) });
+    }
+  }
+
   return new NextResponse("ok", { status: 200 });
 }
-
