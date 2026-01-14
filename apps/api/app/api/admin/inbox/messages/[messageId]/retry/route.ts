@@ -6,6 +6,18 @@ import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function clearDraftFlag(metadata: unknown): Record<string, unknown> | null {
+  if (!isRecord(metadata)) return null;
+  if (metadata["draft"] !== true) return metadata;
+  const copy = { ...metadata };
+  delete copy["draft"];
+  return copy;
+}
+
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ messageId: string }> }
@@ -27,7 +39,8 @@ export async function POST(
       id: conversationMessages.id,
       deliveryStatus: conversationMessages.deliveryStatus,
       direction: conversationMessages.direction,
-      threadId: conversationMessages.threadId
+      threadId: conversationMessages.threadId,
+      metadata: conversationMessages.metadata
     })
     .from(conversationMessages)
     .where(eq(conversationMessages.id, messageId))
@@ -83,7 +96,8 @@ export async function POST(
         deliveryStatus: "queued",
         provider: null,
         providerMessageId: null,
-        sentAt: null
+        sentAt: null,
+        metadata: clearDraftFlag(message.metadata)
       })
       .where(eq(conversationMessages.id, messageId));
 

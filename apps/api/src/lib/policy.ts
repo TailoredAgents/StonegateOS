@@ -77,6 +77,14 @@ export type FollowUpSequencePolicy = {
   stepsMinutes: number[];
 };
 
+export type SalesAutopilotPolicy = {
+  enabled: boolean;
+  autoSendAfterMinutes: number;
+  activityWindowMinutes: number;
+  retryDelayMinutes: number;
+  agentDisplayName: string;
+};
+
 const DEFAULT_POLICY_TIMEZONE = process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
 
 const WEEKDAY_KEYS: WeekdayKey[] = [
@@ -108,6 +116,14 @@ export const DEFAULT_QUIET_HOURS_POLICY: QuietHoursPolicy = {
     email: { start: "19:00", end: "07:00" },
     dm: { start: "20:00", end: "08:00" }
   }
+};
+
+export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
+  enabled: true,
+  autoSendAfterMinutes: 15,
+  activityWindowMinutes: 14,
+  retryDelayMinutes: 2,
+  agentDisplayName: "Devon"
 };
 
 export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
@@ -901,5 +917,43 @@ export async function getFollowUpSequencePolicy(db: DbExecutor = getDb()): Promi
   return {
     enabled,
     stepsMinutes: stepsMinutes.length ? stepsMinutes : DEFAULT_FOLLOW_UP_SEQUENCE_POLICY.stepsMinutes
+  };
+}
+
+function coerceInt(value: unknown, fallback: number, { min, max }: { min: number; max: number }): number {
+  const num = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(num)) return fallback;
+  const rounded = Math.round(num);
+  return Math.min(max, Math.max(min, rounded));
+}
+
+function coerceString(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : fallback;
+}
+
+export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise<SalesAutopilotPolicy> {
+  const stored = await getPolicySetting(db, "sales_autopilot");
+  if (!stored) {
+    return DEFAULT_SALES_AUTOPILOT_POLICY;
+  }
+
+  return {
+    enabled: stored["enabled"] !== false,
+    autoSendAfterMinutes: coerceInt(stored["autoSendAfterMinutes"], DEFAULT_SALES_AUTOPILOT_POLICY.autoSendAfterMinutes, {
+      min: 1,
+      max: 120
+    }),
+    activityWindowMinutes: coerceInt(
+      stored["activityWindowMinutes"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.activityWindowMinutes,
+      { min: 1, max: 120 }
+    ),
+    retryDelayMinutes: coerceInt(stored["retryDelayMinutes"], DEFAULT_SALES_AUTOPILOT_POLICY.retryDelayMinutes, {
+      min: 1,
+      max: 60
+    }),
+    agentDisplayName: coerceString(stored["agentDisplayName"], DEFAULT_SALES_AUTOPILOT_POLICY.agentDisplayName)
   };
 }

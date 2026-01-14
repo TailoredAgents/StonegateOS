@@ -1,7 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
-import { appointmentNotes, appointments, crmTasks, getDb, outboxEvents, properties } from "@/db";
+import { sql } from "drizzle-orm";
+import { appointmentNotes, appointments, crmTasks, getDb, outboxEvents, properties, teamMembers } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
@@ -20,6 +21,9 @@ type BookRequest = {
   services?: string[];
   quotedTotalCents?: number;
   notes?: string;
+  soldByMemberId?: string | null;
+  marketingMemberId?: string | null;
+  source?: string;
 };
 
 const PLACEHOLDER_CITY = "Unknown";
@@ -75,6 +79,11 @@ export async function POST(request: NextRequest): Promise<Response> {
       ? payload.quotedTotalCents
       : null;
   const notes = typeof payload.notes === "string" && payload.notes.trim().length > 0 ? payload.notes.trim() : null;
+  const soldByMemberId =
+    typeof payload.soldByMemberId === "string" && payload.soldByMemberId.trim().length > 0 ? payload.soldByMemberId.trim() : null;
+  const marketingMemberId =
+    typeof payload.marketingMemberId === "string" && payload.marketingMemberId.trim().length > 0 ? payload.marketingMemberId.trim() : null;
+  const source = typeof payload.source === "string" && payload.source.trim().length > 0 ? payload.source.trim() : "manual_booking";
 
   if (!contactId || !startAtIso) {
     return NextResponse.json({ error: "contact_and_start_required" }, { status: 400 });
@@ -98,6 +107,20 @@ export async function POST(request: NextRequest): Promise<Response> {
     const result = await db.transaction(async (tx) => {
       let resolvedPropertyId = propertyId;
       let createdPropertyId: string | null = null;
+      let resolvedSoldByMemberId = soldByMemberId;
+
+      if (!resolvedSoldByMemberId && source === "sales_autopilot") {
+        try {
+          const [austin] = await tx
+            .select({ id: teamMembers.id })
+            .from(teamMembers)
+            .where(sql`lower(${teamMembers.name}) like ${"austin%"}`)
+            .limit(1);
+          resolvedSoldByMemberId = austin?.id ?? null;
+        } catch {
+          resolvedSoldByMemberId = null;
+        }
+      }
 
       if (!resolvedPropertyId) {
         const short = contactId.split("-")[0] ?? contactId.slice(0, 8);
@@ -135,6 +158,8 @@ export async function POST(request: NextRequest): Promise<Response> {
           status: "confirmed",
           rescheduleToken: token,
           travelBufferMinutes,
+          ...(resolvedSoldByMemberId ? { soldByMemberId: resolvedSoldByMemberId } : {}),
+          ...(marketingMemberId ? { marketingMemberId } : {}),
           ...(typeof quotedTotalCents === "number" && Number.isFinite(quotedTotalCents)
             ? { quotedTotalCents: Math.trunc(quotedTotalCents) }
             : {})
@@ -144,33 +169,40 @@ export async function POST(request: NextRequest): Promise<Response> {
       const appointmentId = appointment?.id ?? null;
       if (!appointmentId) throw new Error("appointment_create_failed");
 
-       if (notes) {
-         await tx.insert(appointmentNotes).values({
-           appointmentId,
-           body: notes,
-           createdAt: now
-         });
-         await tx.insert(crmTasks).values({
-           contactId,
-           title: "Note",
-           status: "completed",
-           notes,
-           dueAt: null,
-           assignedTo: null,
-           createdAt: now,
-           updatedAt: now
-         });
-       }
+      if (notes) {
+        await tx.insert(appointmentNotes).values({
+          appointmentId,
+          body: notes,
+          createdAt: now
+        });
+        await tx.insert(crmTasks).values({
+          contactId,
+          title: "Note",
+          status: "completed",
+          notes,
+          dueAt: null,
+          assignedTo: null,
+          createdAt: now,
+          updatedAt: now
+        });
+      }
 
-       await tx.insert(outboxEvents).values({
-         type: "estimate.requested",
-         payload: {
-           appointmentId,
-           services
-         }
-       });
+      await tx.insert(outboxEvents).values({
+        type: "estimate.requested",
+        payload: {
+          appointmentId,
+          services
+        }
+      });
 
-      return { appointmentId, createdPropertyId, propertyId: resolvedPropertyId };
+      return {
+        appointmentId,
+        createdPropertyId,
+        propertyId: resolvedPropertyId,
+        soldByMemberId: resolvedSoldByMemberId,
+        marketingMemberId,
+        source
+      };
     });
 
     if (result.createdPropertyId) {
@@ -179,27 +211,29 @@ export async function POST(request: NextRequest): Promise<Response> {
         action: "property.created",
         entityType: "property",
         entityId: result.createdPropertyId,
-        meta: { contactId, placeholder: true, source: "manual_booking" }
+        meta: { contactId, placeholder: true, source: result.source }
       });
     }
 
-      await recordAuditEvent({
-        actor,
-        action: "appointment.booked",
-        entityType: "appointment",
-        entityId: result.appointmentId,
-        meta: {
-          contactId,
-          propertyId: result.propertyId,
-          startAt: startAt.toISOString(),
-          durationMinutes,
-          travelBufferMinutes,
-          services,
-          quotedTotalCents,
-          notesProvided: Boolean(notes),
-          source: "manual_booking"
-        }
-      });
+    await recordAuditEvent({
+      actor,
+      action: "appointment.booked",
+      entityType: "appointment",
+      entityId: result.appointmentId,
+      meta: {
+        contactId,
+        propertyId: result.propertyId,
+        startAt: startAt.toISOString(),
+        durationMinutes,
+        travelBufferMinutes,
+        services,
+        quotedTotalCents,
+        notesProvided: Boolean(notes),
+        source: result.source,
+        soldByMemberId: result.soldByMemberId ?? null,
+        marketingMemberId: result.marketingMemberId ?? null
+      }
+    });
 
     return NextResponse.json({
       ok: true,
@@ -212,6 +246,4 @@ export async function POST(request: NextRequest): Promise<Response> {
     const message = error instanceof Error ? error.message : "booking_failed";
     return NextResponse.json({ error: message }, { status: 500 });
   }
-
-
 }

@@ -51,6 +51,7 @@ import {
   getSpeedToLeadDeadline
 } from "@/lib/sales-scorecard";
 import { handleInboundAutoReply } from "@/lib/auto-replies";
+import { handleInboundSalesAutopilot, handleSalesAutopilotAutosend } from "@/lib/sales-autopilot";
 import { recordAuditEvent } from "@/lib/audit";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import { MetaGraphApiError, syncMetaAdsInsightsDaily } from "@/lib/meta-ads-insights";
@@ -2910,7 +2911,24 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         console.warn("[outbox] inbox.alert.failed", { messageId, error: String(error) });
       }
 
-      return await handleInboundAutoReply(messageId);
+      await handleInboundAutoReply(messageId);
+      const autopilotOutcome = await handleInboundSalesAutopilot(messageId);
+      if (autopilotOutcome.status === "retry") {
+        return autopilotOutcome;
+      }
+      return { status: "processed" };
+    }
+
+    case "sales.autopilot.autosend": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const draftMessageId = typeof payload?.["draftMessageId"] === "string" ? payload["draftMessageId"] : null;
+      const inboundMessageId = typeof payload?.["inboundMessageId"] === "string" ? payload["inboundMessageId"] : null;
+      if (!draftMessageId) {
+        console.warn("[outbox] sales.autopilot.autosend.missing_id", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      return await handleSalesAutopilotAutosend({ draftMessageId, inboundMessageId });
     }
 
     case "message.send": {
@@ -2982,11 +3000,13 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         metadata?.["followup"] === true ||
         metadata?.["confirmationLoop"] === true ||
         metadata?.["automation"] === true ||
-        metadata?.["autoFirstTouch"] === true;
+        metadata?.["autoFirstTouch"] === true ||
+        metadata?.["salesAutopilot"] === true;
       const bypassQuietHours =
         metadata?.["autoReply"] === true ||
         metadata?.["confirmationLoop"] === true ||
-        metadata?.["autoFirstTouch"] === true;
+        metadata?.["autoFirstTouch"] === true ||
+        metadata?.["salesAutopilot"] === true;
 
       if (isAutomated && !bypassQuietHours) {
         const quietHours = await getQuietHoursPolicy(db);

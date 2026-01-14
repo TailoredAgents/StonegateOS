@@ -18,6 +18,7 @@ import { recordAuditEvent } from "@/lib/audit";
 import {
   getConfirmationLoopPolicy,
   getServiceAreaPolicy,
+  getSalesAutopilotPolicy,
   getTemplatesPolicy,
   isPostalCodeAllowed,
   normalizePostalCode,
@@ -590,6 +591,18 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
     contactPhoneE164: row.contactPhoneE164 ?? null
   });
   if (confirmationHandled) {
+    return { status: "processed" };
+  }
+
+  const salesAutopilot = await getSalesAutopilotPolicy(db);
+  if (salesAutopilot.enabled) {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "auto-reply" },
+      action: "auto_reply.skipped",
+      entityType: "conversation_message",
+      entityId: row.messageId,
+      meta: { reason: "sales_autopilot_enabled", inboundChannel }
+    });
     return { status: "processed" };
   }
 
