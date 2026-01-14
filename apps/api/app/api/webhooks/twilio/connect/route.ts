@@ -4,6 +4,41 @@ import { normalizePhone } from "../../../web/utils";
 
 export const dynamic = "force-dynamic";
 
+function resolveFallbackOrigin(request: NextRequest): string {
+  const proto = (request.headers.get("x-forwarded-proto") ?? "https").split(",")[0]?.trim() || "https";
+  const host = (request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "")
+    .split(",")[0]
+    ?.trim();
+  if (host) {
+    return `${proto}://${host}`;
+  }
+  return request.nextUrl.origin;
+}
+
+function resolvePublicApiBaseUrl(fallbackOrigin: string): string {
+  const raw = (process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"] ?? "").trim();
+  if (raw) {
+    const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    try {
+      const url = new URL(withScheme);
+      const lowered = url.hostname.toLowerCase();
+      const isLocalhost =
+        lowered === "localhost" ||
+        lowered === "0.0.0.0" ||
+        lowered === "127.0.0.1" ||
+        lowered.endsWith(".internal");
+      if (process.env["NODE_ENV"] === "production" && isLocalhost) {
+        return fallbackOrigin;
+      }
+      return url.toString().replace(/\/$/, "");
+    } catch {
+      return fallbackOrigin;
+    }
+  }
+
+  return fallbackOrigin;
+}
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -46,6 +81,7 @@ function twimlResponse(xml: string, status = 200): Response {
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
+  const publicApiBaseUrl = resolvePublicApiBaseUrl(resolveFallbackOrigin(request));
   const to = resolveDialTarget(request);
   const callerId = process.env["TWILIO_FROM"] ?? null;
   if (!to || !callerId) {
@@ -63,9 +99,9 @@ export async function GET(request: NextRequest): Promise<Response> {
     );
   }
 
-  const statusCallbackUrl = new URL("/api/webhooks/twilio/call-status", request.nextUrl.origin);
+  const statusCallbackUrl = new URL("/api/webhooks/twilio/call-status", publicApiBaseUrl);
   statusCallbackUrl.searchParams.set("leg", "customer");
-  const dialActionUrl = new URL("/api/webhooks/twilio/dial-action", request.nextUrl.origin);
+  const dialActionUrl = new URL("/api/webhooks/twilio/dial-action", publicApiBaseUrl);
   dialActionUrl.searchParams.set("leg", "customer");
 
   return twimlResponse(
