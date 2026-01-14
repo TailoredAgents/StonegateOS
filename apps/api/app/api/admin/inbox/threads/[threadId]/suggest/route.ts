@@ -10,7 +10,7 @@ import {
   properties
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
-import { getBusinessHoursPolicy, getServiceAreaPolicy, getTemplatesPolicy, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
+import { getBusinessHoursPolicy, getCompanyProfilePolicy, getServiceAreaPolicy, getTemplatesPolicy, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -428,10 +428,11 @@ export async function POST(
     propertyState: thread.propertyState ?? null
   };
 
-  const [templates, serviceArea, businessHours] = await Promise.all([
+  const [templates, serviceArea, businessHours, companyProfile] = await Promise.all([
     getTemplatesPolicy(db),
     getServiceAreaPolicy(db),
-    getBusinessHoursPolicy(db)
+    getBusinessHoursPolicy(db),
+    getCompanyProfilePolicy(db)
   ]);
 
   const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
@@ -466,6 +467,16 @@ export async function POST(
 
  Business hours policy timezone: ${businessHours.timezone}
  Company notes: We can message any time, and we typically schedule jobs during business hours.
+
+ Company profile facts (use as truth):
+ Business: ${companyProfile.businessName}
+ Phone: ${companyProfile.primaryPhone}
+ Service area: ${companyProfile.serviceAreaSummary}
+ Trailer/pricing: ${companyProfile.trailerAndPricingSummary}
+ What we do: ${companyProfile.whatWeDo}
+ What we do not do: ${companyProfile.whatWeDontDo}
+ Booking style: ${companyProfile.bookingStyle}
+ Notes: ${companyProfile.agentNotes}
   `.trim();
 
   const contextLines = [

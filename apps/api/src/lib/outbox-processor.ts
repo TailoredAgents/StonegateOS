@@ -2259,6 +2259,8 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           taskCreatedAt: crmTasks.createdAt,
           contactId: crmTasks.contactId,
           assignedTo: crmTasks.assignedTo,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
           phone: contacts.phone,
           phoneE164: contacts.phoneE164
         })
@@ -2377,6 +2379,10 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       callbackUrl.searchParams.set("to", customerPhone);
       callbackUrl.searchParams.set("taskId", taskId);
       callbackUrl.searchParams.set("contactId", contactId);
+      const leadName = `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim().replace(/\s+/g, " ");
+      if (leadName.length > 0) {
+        callbackUrl.searchParams.set("name", leadName.slice(0, 80));
+      }
 
       const statusCallbackUrl = new URL("/api/webhooks/twilio/call-status", apiBaseUrl);
       statusCallbackUrl.searchParams.set("leg", "agent");

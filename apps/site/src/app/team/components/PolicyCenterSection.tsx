@@ -5,6 +5,7 @@ import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   updateBookingRulesPolicyAction,
   updateBusinessHoursPolicyAction,
+  updateCompanyProfilePolicyAction,
   updateConfirmationLoopPolicyAction,
   updateFollowUpSequencePolicyAction,
   updateItemPoliciesAction,
@@ -25,6 +26,7 @@ type PolicyKey =
   | "business_hours"
   | "quiet_hours"
   | "service_area"
+  | "company_profile"
   | "booking_rules"
   | "confirmation_loop"
   | "follow_up_sequence"
@@ -44,6 +46,10 @@ const POLICY_LABELS: Record<PolicyKey, { title: string; description: string }> =
   service_area: {
     title: "Service area",
     description: "Define ZIP codes and boundaries for service coverage."
+  },
+  company_profile: {
+    title: "Company profile",
+    description: "Editable facts and sales playbook used by Inbox AI."
   },
   booking_rules: {
     title: "Booking rules",
@@ -197,6 +203,41 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
   const zipAllowlist = Array.isArray(serviceValue["zipAllowlist"])
     ? serviceValue["zipAllowlist"].filter((zip): zip is string => typeof zip === "string")
     : [];
+
+  const companySetting = settingsByKey.get("company_profile");
+  const companyValue = isRecord(companySetting?.value) ? companySetting!.value : {};
+  const companyBusinessName =
+    typeof companyValue["businessName"] === "string" && companyValue["businessName"].trim().length > 0
+      ? companyValue["businessName"]
+      : "Stonegate Junk Removal";
+  const companyPrimaryPhone =
+    typeof companyValue["primaryPhone"] === "string" && companyValue["primaryPhone"].trim().length > 0
+      ? companyValue["primaryPhone"]
+      : "(404) 777-2631";
+  const companyServiceAreaSummary =
+    typeof companyValue["serviceAreaSummary"] === "string" && companyValue["serviceAreaSummary"].trim().length > 0
+      ? companyValue["serviceAreaSummary"]
+      : "North Metro Atlanta within about 50 miles of Woodstock, Georgia (ZIP allowlist).";
+  const companyTrailerAndPricingSummary =
+    typeof companyValue["trailerAndPricingSummary"] === "string" && companyValue["trailerAndPricingSummary"].trim().length > 0
+      ? companyValue["trailerAndPricingSummary"]
+      : "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume in quarter trailer increments. Photos help us estimate quickly.";
+  const companyWhatWeDo =
+    typeof companyValue["whatWeDo"] === "string" && companyValue["whatWeDo"].trim().length > 0
+      ? companyValue["whatWeDo"]
+      : "Junk removal and hauling for household and light commercial items.";
+  const companyWhatWeDontDo =
+    typeof companyValue["whatWeDontDo"] === "string" && companyValue["whatWeDontDo"].trim().length > 0
+      ? companyValue["whatWeDontDo"]
+      : "We do not service out of area locations. We do not take hazmat, oils, or paints. Ask if unsure.";
+  const companyBookingStyle =
+    typeof companyValue["bookingStyle"] === "string" && companyValue["bookingStyle"].trim().length > 0
+      ? companyValue["bookingStyle"]
+      : "Offer 2 concrete options and move to booking. Ask for ZIP, item details, and preferred timing. If photos are available, request them.";
+  const companyAgentNotes =
+    typeof companyValue["agentNotes"] === "string" && companyValue["agentNotes"].trim().length > 0
+      ? companyValue["agentNotes"]
+      : "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links.";
 
   const bookingSetting = settingsByKey.get("booking_rules");
   const bookingValue = isRecord(bookingSetting?.value) ? bookingSetting!.value : {};
@@ -396,6 +437,75 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
             </div>
           </form>
           <AdvancedJsonEditor setting={serviceSetting} />
+        </div>
+        <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold text-slate-900">{POLICY_LABELS.company_profile.title}</h3>
+            <p className="text-xs text-slate-500">{POLICY_LABELS.company_profile.description}</p>
+          </div>
+          <form action={updateCompanyProfilePolicyAction} className="mt-4 space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className={LABEL_CLASS}>Business name</label>
+                <input name="businessName" defaultValue={companyBusinessName} className={INPUT_CLASS} required />
+              </div>
+              <div>
+                <label className={LABEL_CLASS}>Primary phone</label>
+                <input name="primaryPhone" defaultValue={companyPrimaryPhone} className={INPUT_CLASS} />
+              </div>
+            </div>
+            <div>
+              <label className={LABEL_CLASS}>Service area summary</label>
+              <textarea
+                name="serviceAreaSummary"
+                rows={3}
+                defaultValue={companyServiceAreaSummary}
+                className={TEXTAREA_CLASS}
+              />
+            </div>
+            <div>
+              <label className={LABEL_CLASS}>Trailer and pricing summary</label>
+              <textarea
+                name="trailerAndPricingSummary"
+                rows={3}
+                defaultValue={companyTrailerAndPricingSummary}
+                className={TEXTAREA_CLASS}
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className={LABEL_CLASS}>What we do</label>
+                <textarea name="whatWeDo" rows={4} defaultValue={companyWhatWeDo} className={TEXTAREA_CLASS} />
+              </div>
+              <div>
+                <label className={LABEL_CLASS}>What we do not do</label>
+                <textarea
+                  name="whatWeDontDo"
+                  rows={4}
+                  defaultValue={companyWhatWeDontDo}
+                  className={TEXTAREA_CLASS}
+                />
+              </div>
+            </div>
+            <div>
+              <label className={LABEL_CLASS}>Booking style</label>
+              <textarea name="bookingStyle" rows={3} defaultValue={companyBookingStyle} className={TEXTAREA_CLASS} />
+            </div>
+            <div>
+              <label className={LABEL_CLASS}>Agent notes</label>
+              <textarea name="agentNotes" rows={3} defaultValue={companyAgentNotes} className={TEXTAREA_CLASS} />
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-500">
+              <span>Last updated {formatUpdatedAt(companySetting?.updatedAt ?? null)}</span>
+              <SubmitButton
+                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                pendingLabel="Saving..."
+              >
+                Save company profile
+              </SubmitButton>
+            </div>
+          </form>
+          <AdvancedJsonEditor setting={companySetting} />
         </div>
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
           <div className="flex flex-col gap-1">

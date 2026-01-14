@@ -12,6 +12,7 @@ import {
 } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
 import {
+  getCompanyProfilePolicy,
   getSalesAutopilotPolicy,
   getServiceAreaPolicy,
   getTemplatesPolicy,
@@ -491,6 +492,7 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
 
   const templates = await getTemplatesPolicy(db);
   const serviceArea = await getServiceAreaPolicy(db);
+  const companyProfile = await getCompanyProfilePolicy(db);
   const zipFromThread = normalizePostalCode(threadContext.propertyPostalCode ?? null);
   const zipFromBody = normalizePostalCode(extractZipFromText(inbound.body) ?? null);
   const normalizedPostal = zipFromThread ?? zipFromBody;
@@ -506,7 +508,7 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
 
   const agentName = policy.agentDisplayName;
   const systemPrompt = `
-You are ${agentName}, a real human salesperson for Stonegate Junk Removal in North Metro Atlanta.
+You are ${agentName}, a real human salesperson for ${companyProfile.businessName} in North Metro Atlanta.
 Write the next reply the customer will receive.
 
 Rules:
@@ -517,6 +519,16 @@ Rules:
 - If the customer is outside the service area, politely say we do not service that area.
 - Do NOT mention that you are an AI or reference internal systems.
 - Output ONLY JSON matching the schema.
+
+Company profile (use as truth):
+Business: ${companyProfile.businessName}
+Phone: ${companyProfile.primaryPhone}
+Service area: ${companyProfile.serviceAreaSummary}
+Trailer/pricing: ${companyProfile.trailerAndPricingSummary}
+What we do: ${companyProfile.whatWeDo}
+What we do not do: ${companyProfile.whatWeDontDo}
+Booking style: ${companyProfile.bookingStyle}
+Notes: ${companyProfile.agentNotes}
   `.trim();
 
   const contextLines = [

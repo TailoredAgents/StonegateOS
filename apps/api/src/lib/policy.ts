@@ -48,6 +48,17 @@ export type TemplatesPolicy = {
   out_of_area: TemplateGroup;
 };
 
+export type CompanyProfilePolicy = {
+  businessName: string;
+  primaryPhone: string;
+  serviceAreaSummary: string;
+  trailerAndPricingSummary: string;
+  whatWeDo: string;
+  whatWeDontDo: string;
+  bookingStyle: string;
+  agentNotes: string;
+};
+
 export type BookingRulesPolicy = {
   bookingWindowDays: number;
   bufferMinutes: number;
@@ -116,6 +127,19 @@ export const DEFAULT_QUIET_HOURS_POLICY: QuietHoursPolicy = {
     email: { start: "19:00", end: "07:00" },
     dm: { start: "20:00", end: "08:00" }
   }
+};
+
+export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
+  businessName: "Stonegate Junk Removal",
+  primaryPhone: "(404) 777-2631",
+  serviceAreaSummary: "North Metro Atlanta within about 50 miles of Woodstock, Georgia (ZIP allowlist).",
+  trailerAndPricingSummary:
+    "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume in quarter trailer increments. Photos help us estimate quickly.",
+  whatWeDo: "Junk removal and hauling for household and light commercial items.",
+  whatWeDontDo: "We do not service out of area locations. We do not take hazmat, oils, or paints. Ask if unsure.",
+  bookingStyle:
+    "Offer 2 concrete options and move to booking. Ask for ZIP, item details, and preferred timing. If photos are available, request them.",
+  agentNotes: "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links."
 };
 
 export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
@@ -931,6 +955,30 @@ function coerceString(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
   return trimmed.length ? trimmed : fallback;
+}
+
+export async function getCompanyProfilePolicy(db: DbExecutor = getDb()): Promise<CompanyProfilePolicy> {
+  const stored = await getPolicySetting(db, "company_profile");
+  if (!stored) {
+    return DEFAULT_COMPANY_PROFILE_POLICY;
+  }
+
+  return {
+    businessName: coerceString(stored["businessName"], DEFAULT_COMPANY_PROFILE_POLICY.businessName),
+    primaryPhone: coerceString(stored["primaryPhone"], DEFAULT_COMPANY_PROFILE_POLICY.primaryPhone),
+    serviceAreaSummary: coerceString(
+      stored["serviceAreaSummary"],
+      DEFAULT_COMPANY_PROFILE_POLICY.serviceAreaSummary
+    ),
+    trailerAndPricingSummary: coerceString(
+      stored["trailerAndPricingSummary"],
+      DEFAULT_COMPANY_PROFILE_POLICY.trailerAndPricingSummary
+    ),
+    whatWeDo: coerceString(stored["whatWeDo"], DEFAULT_COMPANY_PROFILE_POLICY.whatWeDo),
+    whatWeDontDo: coerceString(stored["whatWeDontDo"], DEFAULT_COMPANY_PROFILE_POLICY.whatWeDontDo),
+    bookingStyle: coerceString(stored["bookingStyle"], DEFAULT_COMPANY_PROFILE_POLICY.bookingStyle),
+    agentNotes: coerceString(stored["agentNotes"], DEFAULT_COMPANY_PROFILE_POLICY.agentNotes)
+  };
 }
 
 export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise<SalesAutopilotPolicy> {

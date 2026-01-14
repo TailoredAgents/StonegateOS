@@ -32,12 +32,14 @@ function twimlResponse(xml: string, status = 200): Response {
   });
 }
 
-function buildGatherTwiML(input: { actionUrl: string }): string {
+function buildGatherTwiML(input: { actionUrl: string; leadName: string | null }): string {
   const actionUrl = escapeXml(input.actionUrl);
+  const leadName = typeof input.leadName === "string" && input.leadName.trim().length > 0 ? escapeXml(input.leadName.trim()) : null;
+  const intro = leadName ? `New lead: ${leadName}.` : "New lead waiting.";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Gather numDigits="1" timeout="8" action="${actionUrl}" method="POST">
-    <Say>New lead waiting. Press 1 to connect.</Say>
+    <Say>${intro} Press 1 to connect.</Say>
   </Gather>
   <Say>No input received. Goodbye.</Say>
 </Response>`;
@@ -86,7 +88,8 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const digits = await readDigits(request);
   if (!digits) {
-    return twimlResponse(buildGatherTwiML({ actionUrl: request.nextUrl.toString() }));
+    const leadName = request.nextUrl.searchParams.get("name");
+    return twimlResponse(buildGatherTwiML({ actionUrl: request.nextUrl.toString(), leadName }));
   }
 
   if (digits !== "1") {
@@ -117,6 +120,6 @@ export async function POST(request: NextRequest): Promise<Response> {
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
-  return twimlResponse(buildGatherTwiML({ actionUrl: request.nextUrl.toString() }));
+  const leadName = request.nextUrl.searchParams.get("name");
+  return twimlResponse(buildGatherTwiML({ actionUrl: request.nextUrl.toString(), leadName }));
 }
-

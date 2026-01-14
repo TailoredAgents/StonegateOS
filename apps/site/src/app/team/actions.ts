@@ -1491,6 +1491,45 @@ export async function updateItemPoliciesAction(formData: FormData) {
   );
 }
 
+export async function updateCompanyProfilePolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const readText = (key: string) => {
+    const value = formData.get(key);
+    return typeof value === "string" ? value.trim() : "";
+  };
+
+  const businessName = readText("businessName");
+  const primaryPhone = readText("primaryPhone");
+  const serviceAreaSummary = readText("serviceAreaSummary");
+  const trailerAndPricingSummary = readText("trailerAndPricingSummary");
+  const whatWeDo = readText("whatWeDo");
+  const whatWeDontDo = readText("whatWeDontDo");
+  const bookingStyle = readText("bookingStyle");
+  const agentNotes = readText("agentNotes");
+
+  if (!businessName) {
+    jar.set({ name: "myst-flash-error", value: "Business name is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  await submitPolicyUpdate(
+    jar,
+    "company_profile",
+    {
+      businessName,
+      primaryPhone: primaryPhone.length > 0 ? primaryPhone : undefined,
+      serviceAreaSummary: serviceAreaSummary.length > 0 ? serviceAreaSummary : undefined,
+      trailerAndPricingSummary: trailerAndPricingSummary.length > 0 ? trailerAndPricingSummary : undefined,
+      whatWeDo: whatWeDo.length > 0 ? whatWeDo : undefined,
+      whatWeDontDo: whatWeDontDo.length > 0 ? whatWeDontDo : undefined,
+      bookingStyle: bookingStyle.length > 0 ? bookingStyle : undefined,
+      agentNotes: agentNotes.length > 0 ? agentNotes : undefined
+    },
+    "Company profile updated"
+  );
+}
+
 export async function updateTemplatesPolicyAction(formData: FormData) {
   const jar = await cookies();
   const firstTouch: Record<string, string> = {};
