@@ -133,7 +133,7 @@ export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
   businessName: "Stonegate Junk Removal",
   primaryPhone: "(404) 777-2631",
   serviceAreaSummary:
-    "We mostly serve within about 50 miles of Woodstock, Georgia. If you are outside the usual area, share your zip code and we will confirm availability.",
+    "We serve Georgia only. We mostly serve within about 50 miles of Woodstock. If you are outside the usual area, share your zip code and we will confirm availability.",
   trailerAndPricingSummary:
     "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume. A quarter trailer is 150 dollars after our current discount. Photos help us estimate quickly.",
   whatWeDo: "Junk removal and hauling for household and light commercial items.",
@@ -530,10 +530,10 @@ export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
     email: "We appreciate your business. If you have a moment, please share a review."
   },
   out_of_area: {
-    sms: "Thanks for reaching out. We mostly serve within about 50 miles of Woodstock. If you are outside that area, reply with your zip code and what you need removed and we will confirm availability.",
+    sms: "Thanks for reaching out. We serve Georgia only. If you are outside our usual area, reply with your zip code and what you need removed and we will confirm availability.",
     email:
-      "Thanks for reaching out. We mostly serve within about 50 miles of Woodstock. If you are outside that area, reply with your zip code and a quick description of what you need removed and we will confirm availability.",
-    web: "We mostly serve within about 50 miles of Woodstock. Share your zip code and what you need removed and we will confirm availability."
+      "Thanks for reaching out. We serve Georgia only. If you are outside our usual area, reply with your zip code and a quick description of what you need removed and we will confirm availability.",
+    web: "We serve Georgia only. Share your zip code and what you need removed and we will confirm availability."
   }
 };
 
@@ -603,6 +603,14 @@ export function isPostalCodeAllowed(postalCode: string, policy: ServiceAreaPolic
   const list = Array.isArray(policy.zipAllowlist) ? policy.zipAllowlist : [];
   if (list.length === 0) return true;
   return list.includes(normalized);
+}
+
+export function isGeorgiaPostalCode(postalCode: string): boolean {
+  const normalized = normalizePostalCode(postalCode);
+  if (!normalized) return false;
+  const numeric = Number(normalized);
+  if (!Number.isFinite(numeric)) return false;
+  return (numeric >= 30000 && numeric <= 31999) || (numeric >= 39800 && numeric <= 39999);
 }
 
 export function resolveTemplateForChannel(

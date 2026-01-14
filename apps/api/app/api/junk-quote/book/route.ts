@@ -10,10 +10,7 @@ import {
   getBusinessHoursPolicy,
   getBookingRulesPolicy,
   getItemPoliciesPolicy,
-  getOutOfAreaMessage,
-  getServiceAreaPolicy,
   getStandardJobPolicy,
-  isPostalCodeAllowed,
   normalizePostalCode
 } from "@/lib/policy";
 import { buildStandardJobMessage, evaluateStandardJob } from "@/lib/standard-job";
@@ -144,17 +141,19 @@ export async function POST(request: NextRequest) {
     }
     const body = parsed.data;
     const holdId = typeof body.holdId === "string" && body.holdId.length ? body.holdId : null;
-    const normalizedPostalCode = normalizePostalCode(body.postalCode);
-    const serviceArea = await getServiceAreaPolicy();
-    if (normalizedPostalCode && !isPostalCodeAllowed(normalizedPostalCode, serviceArea)) {
+    const normalizedState = body.state.trim().toUpperCase();
+    if (normalizedState !== "GA") {
       return corsJson(
         {
-          error: await getOutOfAreaMessage("web")
+          error: "out_of_area",
+          message: "Thanks for reaching out. We currently serve Georgia only."
         },
         requestOrigin,
         { status: 400 }
       );
     }
+    const normalizedPostalCode = normalizePostalCode(body.postalCode);
+    void normalizedPostalCode;
     const db = getDb();
     const bookingRules = await getBookingRulesPolicy(db);
     const businessHours = await getBusinessHoursPolicy(db);

@@ -10,7 +10,7 @@ import {
   properties
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
-import { getBusinessHoursPolicy, getCompanyProfilePolicy, getServiceAreaPolicy, getTemplatesPolicy, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
+import { getBusinessHoursPolicy, getCompanyProfilePolicy, getServiceAreaPolicy, getTemplatesPolicy, isGeorgiaPostalCode, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -436,8 +436,9 @@ export async function POST(
   ]);
 
   const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
-  const outOfArea =
-    normalizedPostal !== null ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
+  const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
+  const outsideUsualArea =
+    normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, {
     inboundChannel: replyChannel,
@@ -461,7 +462,8 @@ export async function POST(
  - Be concise and specific; avoid filler.
  - No bullet points, no numbered lists, no hyphens/dashes (do not use "-" "–" "—" anywhere in the customer message).
  - Ask for only the missing info needed to book: address (or ZIP), item details, and preferred timing.
- - If the ZIP is outside the usual service area, do not reject. Confirm location and proceed if reasonable.
+ - If the ZIP is outside Georgia, politely say we currently serve Georgia only.
+ - If the ZIP is in Georgia but outside the usual service area, do not reject. Confirm location and proceed if reasonable.
  - Do NOT mention internal systems, databases, webhooks, or that you're an AI.
  - Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
 
@@ -487,11 +489,13 @@ export async function POST(
     threadContext.contactEmail ? `Customer email: ${threadContext.contactEmail}` : null,
     threadContext.propertyAddressLine1 ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}` : null,
     normalizedPostal ? `ZIP: ${normalizedPostal}` : null,
-    outOfArea === true
-      ? `Service area: outside usual area (confirm)`
-      : outOfArea === false
-        ? `Service area: OK`
-        : `Service area: unknown (ask for ZIP)`,
+    inGeorgia === false
+      ? `Location: OUT OF STATE (Georgia only)`
+      : outsideUsualArea === true
+        ? `Location: outside usual area (confirm)`
+        : outsideUsualArea === false
+          ? `Location: OK`
+          : `Location: unknown (ask for ZIP)`,
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
     followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,
@@ -605,7 +609,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           draft: true,
           aiSuggested: true,
           aiModel: config.writeModel,
-          outOfArea: outOfArea === true ? true : undefined
+          outOfArea: inGeorgia === false || outsideUsualArea === true ? true : undefined
         },
         createdAt: now
       })

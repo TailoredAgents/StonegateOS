@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
-import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import { isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
 import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
 import { normalizeName, normalizePhone } from "../web/utils";
 
-const DISCOUNT = Number(process.env["INSTANT_QUOTE_DISCOUNT"] ?? 0);
+const DISCOUNT = Number(process.env["INSTANT_QUOTE_DISCOUNT"] ?? 0.25);
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
 
@@ -344,15 +344,13 @@ export async function POST(request: NextRequest) {
       const body = parsed.data;
 
       const normalizedPostalCode = normalizePostalCode(body.job.zip);
-      const serviceArea = await getServiceAreaPolicy();
-      if (normalizedPostalCode && !isPostalCodeAllowed(normalizedPostalCode, serviceArea)) {
+      if (normalizedPostalCode && !isGeorgiaPostalCode(normalizedPostalCode)) {
         return corsJson({
           ok: false,
           error: "out_of_area",
-          message: await getOutOfAreaMessage("web")
+          message: "Thanks for reaching out. We currently serve Georgia only."
         }, requestOrigin);
       }
-
       const bounds = getQuoteBounds(body.job);
     const fallback = getFallbackQuote(body.job, bounds);
     const aiResult = await getQuoteFromAi(body, bounds).catch((err) => {

@@ -5,8 +5,7 @@ import { z } from "zod";
 import { nanoid } from "nanoid";
 import { crmPipeline, getDb, leads, outboxEvents, appointments } from "@/db";
 import { sendConversion } from "@/lib/ga";
-import { getBookingRulesPolicy } from "@/lib/policy";
-import { getOutOfAreaMessage, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import { getBookingRulesPolicy, normalizePostalCode } from "@/lib/policy";
 import { normalizeName, normalizePhone, resolveClientIp } from "../utils";
 import { upsertContact, upsertProperty } from "../persistence";
 import { DEFAULT_TRAVEL_BUFFER_MIN, resolveAppointmentTiming } from "../scheduling";
@@ -192,17 +191,17 @@ export async function POST(request: NextRequest) {
   const postalCode = payload.postalCode.trim();
   const normalizedPostalCode = normalizePostalCode(postalCode);
 
-  const serviceArea = await getServiceAreaPolicy();
-  if (normalizedPostalCode && !isPostalCodeAllowed(normalizedPostalCode, serviceArea)) {
+  if (normalizedState !== "GA") {
     return corsJson(
       {
         ok: false,
         error: "out_of_area",
-        message: await getOutOfAreaMessage("web")
+        message: "Thanks for reaching out. We currently serve Georgia only."
       },
       { status: 200 }
     );
   }
+  void normalizedPostalCode;
 
   const leadResult = await db.transaction(async (tx) => {
     const contact = await upsertContact(tx, {
