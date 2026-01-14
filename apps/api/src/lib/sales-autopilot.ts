@@ -770,13 +770,27 @@ function stripDraftFlag(metadata: Record<string, unknown> | null): Record<string
   return copy;
 }
 
+async function getLastSalespersonAssignmentChangeAt(db: DatabaseClient, contactId: string, sinceExclusive: Date): Promise<Date | null> {
+  const [row] = await db
+    .select({
+      at: sql<Date | null>`max(${auditLogs.createdAt})`
+    })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.action, "contact.updated"),
+        eq(auditLogs.entityType, "contact"),
+        eq(auditLogs.entityId, contactId),
+        gt(auditLogs.createdAt, sinceExclusive),
+        sql`${auditLogs.meta} -> 'fields' ? 'salespersonMemberId'`
+      )
+    )
+    .limit(1);
+  return row?.at ?? null;
+}
+
 export async function handleSalesAutopilotAutosend(input: { draftMessageId: string; inboundMessageId?: string | null }): Promise<OutboxOutcome> {
   const db = getDb();
-  const policy = await getSalesAutopilotPolicy(db);
-  if (!policy.enabled) {
-    return { status: "processed" };
-  }
-
   const [row] = await db
     .select({
       id: conversationMessages.id,
@@ -798,6 +812,13 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
   }
 
   const meta = isRecord(row.metadata) ? (row.metadata as Record<string, unknown>) : null;
+  const isAutoFirstTouch = meta?.["autoFirstTouch"] === true;
+
+  const policy = await getSalesAutopilotPolicy(db);
+  if (!policy.enabled && !isAutoFirstTouch) {
+    return { status: "processed" };
+  }
+
   if (!isDraftMessage(meta) || meta?.["salesAutopilot"] !== true) {
     return { status: "processed" };
   }
@@ -817,6 +838,31 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     return { status: "processed" };
   }
 
+  const [pipeline] = await db
+    .select({ stage: crmPipeline.stage })
+    .from(crmPipeline)
+    .where(eq(crmPipeline.contactId, contactId))
+    .limit(1);
+  const stage = typeof pipeline?.stage === "string" ? pipeline.stage : "new";
+
+  const [appointment] = await db
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(and(eq(appointments.contactId, contactId), ne(appointments.status, "canceled")))
+    .limit(1);
+  const isBooked = Boolean(appointment?.id);
+
+  if (stage !== "new" || isBooked) {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: { reason: "handled", stage, booked: isBooked }
+    });
+    return { status: "processed" };
+  }
+
   if (row.channel === "dm") {
     const [latestInboundForContact] = await db
       .select({
@@ -829,32 +875,6 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       .where(and(eq(conversationThreads.contactId, contactId), eq(conversationMessages.direction, "inbound")))
       .orderBy(desc(conversationMessages.createdAt))
       .limit(1);
-
-    const [pipeline] = await db
-      .select({ stage: crmPipeline.stage })
-      .from(crmPipeline)
-      .where(eq(crmPipeline.contactId, contactId))
-      .limit(1);
-    const stage = typeof pipeline?.stage === "string" ? pipeline.stage : "new";
-    const isContactedInPipeline = stage !== "new";
-
-    const [appointment] = await db
-      .select({ id: appointments.id })
-      .from(appointments)
-      .where(and(eq(appointments.contactId, contactId), ne(appointments.status, "canceled")))
-      .limit(1);
-    const isBooked = Boolean(appointment?.id);
-
-    if (isContactedInPipeline || isBooked) {
-      await recordAuditEvent({
-        actor: { type: "ai", label: "sales-autopilot" },
-        action: "sales.autopilot.autosend_skipped",
-        entityType: "conversation_message",
-        entityId: row.id,
-        meta: { reason: "handled", stage, booked: isBooked }
-      });
-      return { status: "processed" };
-    }
 
     if (
       latestInboundForContact?.channel === "dm" &&
@@ -893,6 +913,17 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     if (inbound?.createdAt) {
       since = inbound.createdAt;
     }
+  }
+
+  const now = new Date();
+
+  const assignmentChangedAt = await getLastSalespersonAssignmentChangeAt(db, contactId, since);
+  if (assignmentChangedAt) {
+    const assignmentGate = DateTime.fromJSDate(assignmentChangedAt).plus({ minutes: policy.autoSendAfterMinutes }).toJSDate();
+    if (now < assignmentGate) {
+      return { status: "retry", error: "assignee_changed", nextAttemptAt: assignmentGate };
+    }
+    since = assignmentChangedAt;
   }
 
   const [newerInbound] = await db
@@ -971,11 +1002,45 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     return { status: "processed" };
   }
 
-  const now = new Date();
   const activitySince = DateTime.fromJSDate(now).minus({ minutes: policy.activityWindowMinutes }).toJSDate();
   if (await hasRecentActivityAcrossChannels(db, contactId, activitySince)) {
     const nextAttemptAt = DateTime.fromJSDate(now).plus({ minutes: policy.retryDelayMinutes }).toJSDate();
     return { status: "retry", error: "recent_activity", nextAttemptAt };
+  }
+
+  if (row.channel === "sms") {
+    const [latestInboundForContact] = await db
+      .select({
+        body: conversationMessages.body,
+        channel: conversationMessages.channel,
+        createdAt: conversationMessages.createdAt
+      })
+      .from(conversationMessages)
+      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+      .where(and(eq(conversationThreads.contactId, contactId), eq(conversationMessages.direction, "inbound")))
+      .orderBy(desc(conversationMessages.createdAt))
+      .limit(1);
+
+    if (
+      latestInboundForContact?.channel === "dm" &&
+      typeof latestInboundForContact.body === "string" &&
+      latestInboundForContact.body.trim().length > 0 &&
+      !isMessengerLeadCard(latestInboundForContact.body)
+    ) {
+      const fallbackAt = DateTime.fromJSDate(latestInboundForContact.createdAt)
+        .plus({ minutes: policy.dmSmsFallbackAfterMinutes })
+        .toJSDate();
+      if (now < fallbackAt) {
+        return { status: "retry", error: "dm_cooldown", nextAttemptAt: fallbackAt };
+      }
+
+      const silenceUntil = DateTime.fromJSDate(latestInboundForContact.createdAt)
+        .plus({ minutes: policy.dmMinSilenceBeforeSmsMinutes })
+        .toJSDate();
+      if (now < silenceUntil) {
+        return { status: "retry", error: "dm_recent_inbound", nextAttemptAt: silenceUntil };
+      }
+    }
   }
 
   const wantsSmsFallback = row.channel === "dm";

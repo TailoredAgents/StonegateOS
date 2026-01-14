@@ -26,8 +26,10 @@ import {
   getConfirmationLoopPolicy,
   getFollowUpSequencePolicy,
   getQuietHoursPolicy,
+  getSalesAutopilotPolicy,
   getServiceAreaPolicy,
   getTemplatesPolicy,
+  isGeorgiaPostalCode,
   isPostalCodeAllowed,
   normalizePostalCode,
   nextQuietHoursEnd,
@@ -1623,11 +1625,11 @@ async function queueAutoFirstTouchSms(input: {
   if (await hasAnyOutboundForContact(input.db, input.contactId)) return;
 
   const templatesPolicy = await getTemplatesPolicy(input.db);
-  const serviceArea = await getServiceAreaPolicy(input.db);
   const pipelineZip = input.propertyPostalCode ? null : await resolveContactZipFromPipeline(input.db, input.contactId);
   const normalizedPostalCode = normalizePostalCode(input.propertyPostalCode ?? pipelineZip);
-  const isOutOfArea =
-    normalizedPostalCode !== null && !isPostalCodeAllowed(normalizedPostalCode, serviceArea);
+  const inGeorgia = normalizedPostalCode !== null ? isGeorgiaPostalCode(normalizedPostalCode) : null;
+  const isOutOfArea = inGeorgia === false;
+  const autoSendEligible = inGeorgia !== false;
   const templateGroup = isOutOfArea ? templatesPolicy.out_of_area : templatesPolicy.first_touch;
   const body =
     resolveTemplateForChannel(templateGroup, { replyChannel: "sms" }) ??
@@ -1644,23 +1646,75 @@ async function queueAutoFirstTouchSms(input: {
 
   if (!threadId) return;
 
-  const delayMs = randomHumanisticDelayMs();
   const now = new Date();
-  const nextAttemptAt = new Date(now.getTime() + delayMs);
+  const autopilotPolicy = await getSalesAutopilotPolicy(input.db);
 
-  await queueOutboundMessage({
-    db: input.db,
-    threadId,
-    channel: "sms",
-    body,
-    toAddress,
-    metadata: {
-      automation: true,
-      autoFirstTouch: true,
-      autoFirstTouchDelayMs: delayMs,
-      outOfArea: isOutOfArea || undefined
-    },
-    nextAttemptAt
+  await input.db.transaction(async (tx) => {
+    const [existingParticipant] = await tx
+      .select({ id: conversationParticipants.id })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.threadId, threadId),
+          eq(conversationParticipants.participantType, "team"),
+          eq(conversationParticipants.displayName, autopilotPolicy.agentDisplayName),
+          sql`${conversationParticipants.teamMemberId} is null`
+        )
+      )
+      .limit(1);
+
+    const participantId =
+      existingParticipant?.id ??
+      (
+        await tx
+          .insert(conversationParticipants)
+          .values({
+            threadId,
+            participantType: "team",
+            teamMemberId: null,
+            displayName: autopilotPolicy.agentDisplayName,
+            createdAt: now
+          })
+          .returning({ id: conversationParticipants.id })
+      )[0]?.id ??
+      null;
+
+    if (!participantId) return;
+
+    const [message] = await tx
+      .insert(conversationMessages)
+      .values({
+        threadId,
+        participantId,
+        direction: "outbound",
+        channel: "sms",
+        subject: null,
+        body,
+        toAddress,
+        deliveryStatus: "queued",
+        metadata: {
+          draft: true,
+          automation: true,
+          salesAutopilot: true,
+          autoFirstTouch: true,
+          salesAutopilotNoAutosend: autoSendEligible ? undefined : true,
+          outOfArea: isOutOfArea || undefined,
+          leadId: input.leadId ?? undefined
+        },
+        createdAt: now
+      })
+      .returning({ id: conversationMessages.id });
+
+    if (!message?.id) return;
+
+    if (autoSendEligible) {
+      await tx.insert(outboxEvents).values({
+        type: "sales.autopilot.autosend",
+        payload: { draftMessageId: message.id, inboundMessageId: null },
+        nextAttemptAt: DateTime.fromJSDate(now).plus({ minutes: autopilotPolicy.autoSendAfterMinutes }).toJSDate(),
+        createdAt: now
+      });
+    }
   });
 }
 
