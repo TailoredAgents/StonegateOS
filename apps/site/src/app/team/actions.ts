@@ -1265,6 +1265,8 @@ export async function updateQuietHoursPolicyAction(formData: FormData) {
 
 export async function updateServiceAreaPolicyAction(formData: FormData) {
   const jar = await cookies();
+  const modeRaw = formData.get("mode");
+  const mode = modeRaw === "ga_only" ? "ga_only" : "zip_allowlist";
   const homeBaseRaw = formData.get("homeBase");
   const homeBase = typeof homeBaseRaw === "string" ? homeBaseRaw.trim() : "";
   const radiusMiles = parseNumberField(formData.get("radiusMiles"), 0);
@@ -1273,7 +1275,7 @@ export async function updateServiceAreaPolicyAction(formData: FormData) {
     revalidatePath("/team");
     return;
   }
-  const zipAllowlist = parseZipListField(formData.get("zipAllowlist"));
+  const zipAllowlist = mode === "ga_only" ? [] : parseZipListField(formData.get("zipAllowlist"));
   const notesRaw = formData.get("notes");
   const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
 
@@ -1281,7 +1283,7 @@ export async function updateServiceAreaPolicyAction(formData: FormData) {
     jar,
     "service_area",
     {
-      mode: "zip_allowlist",
+      mode,
       homeBase: homeBase.length > 0 ? homeBase : undefined,
       radiusMiles,
       zipAllowlist,

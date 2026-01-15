@@ -9,7 +9,7 @@ type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends 
 type DbExecutor = DatabaseClient | TransactionExecutor;
 
 export type ServiceAreaPolicy = {
-  mode: "zip_allowlist";
+  mode: "zip_allowlist" | "ga_only";
   homeBase?: string;
   radiusMiles?: number;
   zipAllowlist: string[];
@@ -157,7 +157,7 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
 };
 
 export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
-  mode: "zip_allowlist",
+  mode: "ga_only",
   homeBase: "Woodstock, GA",
   radiusMiles: 50,
   zipAllowlist: [
@@ -602,6 +602,9 @@ export function normalizePostalCode(input: string | null | undefined): string | 
 }
 
 export function isPostalCodeAllowed(postalCode: string, policy: ServiceAreaPolicy): boolean {
+  if (policy.mode === "ga_only") {
+    return isGeorgiaPostalCode(postalCode);
+  }
   const normalized = normalizePostalCode(postalCode);
   if (!normalized) return false;
   const list = Array.isArray(policy.zipAllowlist) ? policy.zipAllowlist : [];
@@ -649,13 +652,14 @@ export async function getServiceAreaPolicy(db: DbExecutor = getDb()): Promise<Se
     return DEFAULT_SERVICE_AREA_POLICY;
   }
 
+  const mode = stored["mode"] === "ga_only" ? "ga_only" : "zip_allowlist";
   const zipAllowlistRaw = stored["zipAllowlist"];
   const zipAllowlist = Array.isArray(zipAllowlistRaw)
     ? zipAllowlistRaw.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     : DEFAULT_SERVICE_AREA_POLICY.zipAllowlist;
 
   return {
-    mode: "zip_allowlist",
+    mode,
     homeBase: typeof stored["homeBase"] === "string" ? stored["homeBase"] : DEFAULT_SERVICE_AREA_POLICY.homeBase,
     radiusMiles:
       typeof stored["radiusMiles"] === "number" && Number.isFinite(stored["radiusMiles"])

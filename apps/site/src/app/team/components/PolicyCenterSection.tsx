@@ -200,6 +200,7 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
 
   const serviceSetting = settingsByKey.get("service_area");
   const serviceValue = isRecord(serviceSetting?.value) ? serviceSetting!.value : {};
+  const serviceMode = serviceValue["mode"] === "ga_only" ? "ga_only" : "zip_allowlist";
   const zipAllowlist = Array.isArray(serviceValue["zipAllowlist"])
     ? serviceValue["zipAllowlist"].filter((zip): zip is string => typeof zip === "string")
     : [];
@@ -394,6 +395,17 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
             <p className="text-xs text-slate-500">{POLICY_LABELS.service_area.description}</p>
           </div>
           <form action={updateServiceAreaPolicyAction} className="mt-4 space-y-4">
+            <div>
+              <label className={LABEL_CLASS}>Coverage</label>
+              <select
+                name="mode"
+                defaultValue={serviceMode}
+                className={INPUT_CLASS}
+              >
+                <option value="ga_only">Georgia only (all GA ZIPs)</option>
+                <option value="zip_allowlist">ZIP allowlist (advanced)</option>
+              </select>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <label className={LABEL_CLASS}>Home base</label>
@@ -416,8 +428,22 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
             </div>
             <div>
               <label className={LABEL_CLASS}>ZIP allowlist</label>
-              <textarea name="zipAllowlist" rows={4} defaultValue={zipAllowlist.join(", ")} className={TEXTAREA_CLASS} />
+              <textarea
+                name="zipAllowlist"
+                rows={4}
+                defaultValue={zipAllowlist.join(", ")}
+                className={TEXTAREA_CLASS}
+                disabled={serviceMode === "ga_only"}
+              />
+              <p className="mt-2 text-[11px] text-slate-500">
+                When Coverage is set to Georgia only, this list is ignored.
+              </p>
             </div>
+            {serviceMode === "ga_only" ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                Any Georgia ZIP code is allowed. Out-of-state ZIP codes are treated as out of area.
+              </div>
+            ) : null}
             <div>
               <label className={LABEL_CLASS}>Notes</label>
               <input
