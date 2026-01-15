@@ -315,6 +315,33 @@ export async function computeSpeedToLeadForMember(input: {
   const contactIds = Array.from(new Set(withinHours.map((row) => row.contactId)));
   const disqualified = await getDisqualifiedContactIds({ db, contactIds });
 
+  const completedSpeedTasks = await db
+    .select({
+      contactId: crmTasks.contactId,
+      touchedAt: sql<Date>`min(${crmTasks.updatedAt})`.as("touched_at")
+    })
+    .from(crmTasks)
+    .where(
+      and(
+        eq(crmTasks.assignedTo, input.memberId),
+        eq(crmTasks.status, "completed"),
+        isNotNull(crmTasks.contactId),
+        inArray(crmTasks.contactId, contactIds),
+        isNotNull(crmTasks.notes),
+        ilike(crmTasks.notes, "%kind=speed_to_lead%"),
+        gte(crmTasks.updatedAt, input.since),
+        lte(crmTasks.updatedAt, input.until)
+      )
+    )
+    .groupBy(crmTasks.contactId);
+
+  const speedTaskTouchMap = new Map<string, Date>();
+  for (const row of completedSpeedTasks) {
+    if (typeof row.contactId === "string" && row.touchedAt instanceof Date) {
+      speedTaskTouchMap.set(row.contactId, row.touchedAt);
+    }
+  }
+
   const firstCalls = await db
     .select({
       contactId: auditLogs.entityId,
@@ -376,7 +403,7 @@ export async function computeSpeedToLeadForMember(input: {
     .map((row) => {
     const hasPhone = true;
     const deadline = getSpeedToLeadDeadline(row.contactCreatedAt, config);
-    const firstCallAt = callMap.get(row.contactId) ?? null;
+    const firstCallAt = callMap.get(row.contactId) ?? speedTaskTouchMap.get(row.contactId) ?? null;
     const firstOutboundAt = outboundByContact.get(row.contactId) ?? null;
     const met = hasPhone
       ? Boolean(firstCallAt && firstCallAt.getTime() <= deadline.getTime())
@@ -438,7 +465,8 @@ export async function computeFollowupComplianceForMember(input: {
         lte(crmTasks.dueAt, input.until),
         gte(crmTasks.createdAt, effectiveSince),
         isNotNull(crmTasks.notes),
-        or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%"))
+        or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%")),
+        ilike(crmTasks.notes, "%kind=follow_up%")
       )
     )
     .limit(2000);
