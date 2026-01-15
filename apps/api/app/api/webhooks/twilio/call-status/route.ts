@@ -48,7 +48,12 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   console.info("[twilio.call_status]", payload);
 
-  if (mode === "sales_escalation" && leg === "agent" && payload.callSid && payload.callStatus === "in-progress") {
+  if (
+    mode === "sales_escalation" &&
+    leg === "agent" &&
+    payload.callSid &&
+    (payload.callStatus === "in-progress" || payload.callStatus === "answered")
+  ) {
     try {
       const db = getDb();
 

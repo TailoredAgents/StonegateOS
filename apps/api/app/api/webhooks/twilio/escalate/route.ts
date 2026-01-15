@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, crmTasks } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { normalizePhone } from "../../../web/utils";
 
 export const dynamic = "force-dynamic";
@@ -109,7 +109,6 @@ async function resolveTaskContext(taskId: string): Promise<{ contactId: string; 
     .limit(1);
 
   if (!row?.contactId || !row.assignedTo) return null;
-  if (row.status !== "open") return null;
   return { contactId: row.contactId, assignedTo: row.assignedTo };
 }
 
@@ -168,7 +167,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         const resolvedContactId = contactIdFromQuery && contactIdFromQuery.length > 0 ? contactIdFromQuery : context.contactId;
         const now = new Date();
         const db = getDb();
-        await db.update(crmTasks).set({ status: "completed", updatedAt: now }).where(eq(crmTasks.id, taskId));
+        await db
+          .update(crmTasks)
+          .set({ status: "completed", updatedAt: now })
+          .where(and(eq(crmTasks.id, taskId), eq(crmTasks.status, "open")));
         await recordAuditEvent({
           actor: { type: "system", id: context.assignedTo, label: "sales_escalation" },
           action: "call.started",
