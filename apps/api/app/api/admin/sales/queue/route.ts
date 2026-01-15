@@ -4,7 +4,7 @@ import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, notInA
 import { auditLogs, contacts, conversationMessages, conversationParticipants, conversationThreads, crmPipeline, crmTasks, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
-import { getDisqualifiedContactIds, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
+import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -49,6 +49,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       dueAt: crmTasks.dueAt,
       status: crmTasks.status,
       notes: crmTasks.notes,
+      contactCreatedAt: contacts.createdAt,
       contactFirst: contacts.firstName,
       contactLast: contacts.lastName,
       phone: contacts.phone,
@@ -99,10 +100,25 @@ export async function GET(request: NextRequest): Promise<Response> {
     kind: "speed_to_lead" | "follow_up";
   }> = [];
   for (const row of dedupedRows) {
-    const dueAtIso = row.dueAt ? row.dueAt.toISOString() : null;
-    const dueMs = row.dueAt ? row.dueAt.getTime() : null;
+    const rawKind = parseTaskKind(row.notes ?? null, row.title);
+    let kind: "speed_to_lead" | "follow_up" = rawKind;
+    let title = row.title;
+    let effectiveDueAt = row.dueAt instanceof Date ? row.dueAt : null;
+    if (rawKind === "speed_to_lead" && row.contactCreatedAt instanceof Date) {
+      const clockStart = getLeadClockStart(row.contactCreatedAt, config);
+      const withinHours = clockStart.getTime() === row.contactCreatedAt.getTime();
+      if (!withinHours) {
+        kind = "follow_up";
+        title = "Auto: Call overnight lead (at open)";
+        effectiveDueAt = clockStart;
+      }
+    }
+
+    const dueAtIso = effectiveDueAt ? effectiveDueAt.toISOString() : null;
+    const dueMs = effectiveDueAt ? effectiveDueAt.getTime() : null;
     const isOverdue = typeof dueMs === "number" ? dueMs < now.getTime() : false;
     const minutesUntilDue = typeof dueMs === "number" ? Math.round((dueMs - now.getTime()) / 60_000) : null;
+
     items.push({
       id: row.id,
       leadId: parseLeadId(row.notes ?? null),
@@ -111,11 +127,11 @@ export async function GET(request: NextRequest): Promise<Response> {
         name: `${row.contactFirst ?? ""} ${row.contactLast ?? ""}`.trim() || "Contact",
         phone: row.phoneE164 ?? row.phone ?? null
       },
-      title: row.title,
+      title,
       dueAt: dueAtIso,
       overdue: isOverdue,
       minutesUntilDue,
-      kind: parseTaskKind(row.notes ?? null, row.title)
+      kind
     });
   }
 
@@ -223,10 +239,33 @@ export async function GET(request: NextRequest): Promise<Response> {
   for (const row of missingRows) {
     if (missingHasSalesTasks.has(row.id)) continue;
     if (missingHasTouch.has(row.id)) continue;
+
+    const clockStart = getLeadClockStart(row.createdAt, config);
+    const withinHours = clockStart.getTime() === row.createdAt.getTime();
     const deadline = getSpeedToLeadDeadline(row.createdAt, config);
-    const dueMs = deadline.getTime();
     const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
     if (!hasPhone) continue;
+
+    if (!withinHours) {
+      const dueMs = clockStart.getTime();
+      items.push({
+        id: `contact:${row.id}`,
+        leadId: null,
+        contact: {
+          id: row.id,
+          name: `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || "Contact",
+          phone: row.phoneE164 ?? row.phone ?? null
+        },
+        title: "Auto: Call overnight lead (at open)",
+        dueAt: clockStart.toISOString(),
+        overdue: dueMs < now.getTime(),
+        minutesUntilDue: Math.round((dueMs - now.getTime()) / 60_000),
+        kind: "follow_up"
+      });
+      continue;
+    }
+
+    const dueMs = deadline.getTime();
     items.push({
       id: `contact:${row.id}`,
       leadId: null,

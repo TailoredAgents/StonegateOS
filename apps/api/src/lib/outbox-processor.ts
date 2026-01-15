@@ -669,6 +669,7 @@ async function ensureSalesFollowupsForLead(input: {
   const now = new Date();
   const clockStart = getLeadClockStart(row.contactCreatedAt ?? row.leadCreatedAt, config);
   const speedDeadline = getSpeedToLeadDeadline(row.contactCreatedAt ?? row.leadCreatedAt, config);
+  const isWithinBusinessHours = clockStart.getTime() === (row.contactCreatedAt ?? row.leadCreatedAt).getTime();
 
   const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
   const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
@@ -749,7 +750,7 @@ async function ensureSalesFollowupsForLead(input: {
         await tx.insert(outboxEvents).values({
           type: "sales.queue.nudge.sms",
           payload: { taskId: created.id },
-          nextAttemptAt: now
+          nextAttemptAt: isWithinBusinessHours ? now : clockStart
         });
       }
 
@@ -757,7 +758,7 @@ async function ensureSalesFollowupsForLead(input: {
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
           payload: { taskId: created.id, mode: "instant" },
-          nextAttemptAt: now
+          nextAttemptAt: isWithinBusinessHours ? now : clockStart
         });
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
@@ -843,6 +844,7 @@ async function ensureSalesFollowupsForContact(input: {
   const now = new Date();
   const clockStart = getLeadClockStart(contactRow.createdAt, config);
   const speedDeadline = getSpeedToLeadDeadline(contactRow.createdAt, config);
+  const isWithinBusinessHours = clockStart.getTime() === contactRow.createdAt.getTime();
 
   const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
   const hasPhone = Boolean((contactRow.phoneE164 ?? contactRow.phone ?? "").trim().length);
@@ -925,7 +927,7 @@ async function ensureSalesFollowupsForContact(input: {
         await tx.insert(outboxEvents).values({
           type: "sales.queue.nudge.sms",
           payload: { taskId: created.id },
-          nextAttemptAt: now
+          nextAttemptAt: isWithinBusinessHours ? now : clockStart
         });
       }
 
@@ -933,7 +935,7 @@ async function ensureSalesFollowupsForContact(input: {
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
           payload: { taskId: created.id, mode: "instant" },
-          nextAttemptAt: now
+          nextAttemptAt: isWithinBusinessHours ? now : clockStart
         });
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",

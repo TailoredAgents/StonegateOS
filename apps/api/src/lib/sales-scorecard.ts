@@ -204,6 +204,13 @@ export async function getDefaultSalesAssigneeMemberId(db: DbExecutor = getDb()):
   return config.defaultAssigneeMemberId;
 }
 
+export function isWithinBusinessHours(createdAt: Date, config: SalesScorecardConfig): boolean {
+  const local = DateTime.fromJSDate(createdAt, { zone: config.timezone });
+  const start = local.set({ hour: config.businessStartHour, minute: 0, second: 0, millisecond: 0 });
+  const end = local.set({ hour: config.businessEndHour, minute: 0, second: 0, millisecond: 0 });
+  return local.isValid && start.isValid && end.isValid && local >= start && local <= end;
+}
+
 export function getLeadClockStart(createdAt: Date, config: SalesScorecardConfig): Date {
   const local = DateTime.fromJSDate(createdAt, { zone: config.timezone });
   const start = local.set({ hour: config.businessStartHour, minute: 0, second: 0, millisecond: 0 });
@@ -302,7 +309,10 @@ export async function computeSpeedToLeadForMember(input: {
   const scorableContactRows = contactRows.filter((row) => Boolean((row.phoneE164 ?? row.phone ?? "").trim().length));
   if (!scorableContactRows.length) return [];
 
-  const contactIds = Array.from(new Set(scorableContactRows.map((row) => row.contactId)));
+  const withinHours = scorableContactRows.filter((row) => isWithinBusinessHours(row.contactCreatedAt, config));
+  if (!withinHours.length) return [];
+
+  const contactIds = Array.from(new Set(withinHours.map((row) => row.contactId)));
   const disqualified = await getDisqualifiedContactIds({ db, contactIds });
 
   const firstCalls = await db
@@ -361,7 +371,7 @@ export async function computeSpeedToLeadForMember(input: {
     }
   }
 
-  return scorableContactRows
+  return withinHours
     .filter((row) => !disqualified.has(row.contactId))
     .map((row) => {
     const hasPhone = true;
