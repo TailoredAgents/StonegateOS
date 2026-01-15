@@ -71,15 +71,19 @@ async function callOpenAI({
     return normalized.startsWith("gpt-5") || normalized.startsWith("o");
   }
 
-  async function request(targetModel: string) {
+  async function request(targetModel: string, options?: { useJsonSchema?: boolean }) {
+    const useJsonSchema = options?.useJsonSchema ?? true;
     const payload: Record<string, unknown> = {
       model: targetModel,
       input: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
       ],
-      max_output_tokens: 600,
-      text: {
+      max_output_tokens: 600
+    };
+
+    if (useJsonSchema) {
+      payload["text"] = {
         verbosity: "medium",
         format: {
           type: "json_schema",
@@ -96,8 +100,10 @@ async function callOpenAI({
             required: ["email_subject", "email_body", "sms_body"]
           }
         }
-      }
-    };
+      };
+    } else {
+      payload["text"] = { verbosity: "medium" };
+    }
 
     if (supportsReasoningEffort(targetModel)) {
       payload["reasoning"] = { effort: "low" };
@@ -113,14 +119,26 @@ async function callOpenAI({
     });
   }
 
-  let response = await request(model);
+  let response = await request(model, { useJsonSchema: true });
 
   if (!response.ok) {
     const status = response.status;
     const bodyText = await response.text().catch(() => "");
+    const isSchemaRejected =
+      status === 400 &&
+      /invalid_json_schema|text\.format\.schema|Invalid schema for response_format/i.test(bodyText);
     const isDev = process.env["NODE_ENV"] !== "production";
+
+    if (isSchemaRejected) {
+      response = await request(model, { useJsonSchema: false });
+      if (!response.ok) {
+        const fallbackText = await response.text().catch(() => "");
+        console.warn("[ai] openai.schema_fallback_failed", { model, status: response.status, bodyText: fallbackText });
+        return null;
+      }
+    } else
     if (isDev && (status === 400 || status === 404) && model !== "gpt-5") {
-      response = await request("gpt-5");
+      response = await request("gpt-5", { useJsonSchema: true });
       if (!response.ok) {
         console.warn("[ai] openai.fallback_failed", { model, status, bodyText });
         return null;
