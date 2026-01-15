@@ -62,6 +62,14 @@ function normalizePhoneLink(phone: string | null | undefined): string | null {
   return cleaned.length ? cleaned : null;
 }
 
+function toLocalDateTimeInputValue(iso: string | null): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function teamLink(tab: string, params?: Record<string, string | null | undefined>): string {
   const query = new URLSearchParams();
   query.set("tab", tab);
@@ -94,6 +102,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [noteError, setNoteError] = useState<string | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
   const [noteDeletingId, setNoteDeletingId] = useState<string | null>(null);
+  const [noteEditingId, setNoteEditingId] = useState<string | null>(null);
+  const [noteEditDraft, setNoteEditDraft] = useState("");
+  const [noteEditSavingId, setNoteEditSavingId] = useState<string | null>(null);
   const [showReminderForm, setShowReminderForm] = useState(false);
   const [reminderTitleDraft, setReminderTitleDraft] = useState("Call back");
   const [reminderDueDraft, setReminderDueDraft] = useState("");
@@ -101,6 +112,11 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [reminderError, setReminderError] = useState<string | null>(null);
   const [reminderSaving, setReminderSaving] = useState(false);
   const [reminderCompletingId, setReminderCompletingId] = useState<string | null>(null);
+  const [reminderEditingId, setReminderEditingId] = useState<string | null>(null);
+  const [reminderEditTitleDraft, setReminderEditTitleDraft] = useState("");
+  const [reminderEditDueDraft, setReminderEditDueDraft] = useState("");
+  const [reminderEditNotesDraft, setReminderEditNotesDraft] = useState("");
+  const [reminderEditSavingId, setReminderEditSavingId] = useState<string | null>(null);
   const contactIdRef = useRef(contact.id);
 
   useEffect(() => {
@@ -114,6 +130,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       setNoteError(null);
       setNoteSaving(false);
       setNoteDeletingId(null);
+      setNoteEditingId(null);
+      setNoteEditDraft("");
+      setNoteEditSavingId(null);
       setShowReminderForm(false);
       setReminderTitleDraft("Call back");
       setReminderDueDraft("");
@@ -121,6 +140,11 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       setReminderError(null);
       setReminderSaving(false);
       setReminderCompletingId(null);
+      setReminderEditingId(null);
+      setReminderEditTitleDraft("");
+      setReminderEditDueDraft("");
+      setReminderEditNotesDraft("");
+      setReminderEditSavingId(null);
     }
   }, [contact]);
 
@@ -298,6 +322,162 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       });
     } finally {
       setNoteDeletingId(null);
+    }
+  }
+
+  function startEditNote(note: ContactNoteSummary) {
+    setNoteEditingId(note.id);
+    setNoteEditDraft(note.body);
+    setNoteError(null);
+  }
+
+  async function saveEditedNote(noteId: string) {
+    if (noteEditSavingId) return;
+    const body = noteEditDraft.trim();
+    if (!body) {
+      setNoteError("Please type a note first.");
+      return;
+    }
+
+    setNoteEditSavingId(noteId);
+    setNoteError(null);
+
+    try {
+      const response = await fetch(`/api/team/contacts/notes/${noteId}`, {
+        method: "PATCH",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ body })
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as unknown;
+        const message =
+          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+            ? String((data as Record<string, unknown>)["message"])
+            : "Unable to update note. Please try again.";
+        setNoteError(message);
+        return;
+      }
+
+      const data = (await response.json().catch(() => null)) as unknown;
+      const note = data && typeof data === "object" ? (data as Record<string, unknown>)["note"] : null;
+      const noteRecord = note && typeof note === "object" ? (note as Record<string, unknown>) : null;
+      const updatedAt = typeof noteRecord?.["updatedAt"] === "string" ? noteRecord["updatedAt"] : null;
+
+      setContactState((prev) => ({
+        ...prev,
+        notes: (prev.notes ?? []).map((existing) =>
+          existing.id === noteId
+            ? {
+                ...existing,
+                body,
+                updatedAt: updatedAt ?? existing.updatedAt
+              }
+            : existing
+        )
+      }));
+
+      setNoteEditingId(null);
+      setNoteEditDraft("");
+    } finally {
+      setNoteEditSavingId(null);
+    }
+  }
+
+  function isSystemReminder(reminder: ContactReminderSummary): boolean {
+    const title = reminder.title.toLowerCase();
+    if (title.startsWith("auto:")) return true;
+    const notes = (reminder.notes ?? "").toLowerCase();
+    return notes.includes("kind=speed_to_lead") || notes.includes("kind=follow_up") || notes.includes("[auto]");
+  }
+
+  function startEditReminder(reminder: ContactReminderSummary) {
+    if (isSystemReminder(reminder)) return;
+    setReminderEditingId(reminder.id);
+    setReminderEditTitleDraft(reminder.title);
+    setReminderEditDueDraft(toLocalDateTimeInputValue(reminder.dueAt));
+    setReminderEditNotesDraft(reminder.notes ?? "");
+    setReminderError(null);
+  }
+
+  async function saveEditedReminder(taskId: string) {
+    if (reminderEditSavingId) return;
+
+    const title = reminderEditTitleDraft.trim().length ? reminderEditTitleDraft.trim() : "Call back";
+    const dueRaw = reminderEditDueDraft.trim();
+    if (!dueRaw) {
+      setReminderError("Pick a date/time for the reminder.");
+      return;
+    }
+
+    const dueDate = new Date(dueRaw);
+    if (Number.isNaN(dueDate.getTime())) {
+      setReminderError("Invalid reminder time.");
+      return;
+    }
+
+    const dueAt = dueDate.toISOString();
+    const notes = reminderEditNotesDraft.trim();
+
+    setReminderEditSavingId(taskId);
+    setReminderError(null);
+
+    try {
+      const response = await fetch(`/api/team/contacts/reminders/${taskId}`, {
+        method: "PATCH",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          title,
+          dueAt,
+          notes
+        })
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as unknown;
+        const message =
+          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+            ? String((data as Record<string, unknown>)["message"])
+            : "Unable to update reminder. Please try again.";
+        setReminderError(message);
+        return;
+      }
+
+      const data = (await response.json().catch(() => null)) as unknown;
+      const reminder =
+        data && typeof data === "object" ? (data as Record<string, unknown>)["reminder"] : null;
+      const reminderRecord = reminder && typeof reminder === "object" ? (reminder as Record<string, unknown>) : null;
+      const updatedAt = typeof reminderRecord?.["updatedAt"] === "string" ? reminderRecord["updatedAt"] : null;
+      const serverDueAt = typeof reminderRecord?.["dueAt"] === "string" ? reminderRecord["dueAt"] : dueAt;
+      const serverNotes = typeof reminderRecord?.["notes"] === "string" ? reminderRecord["notes"] : null;
+
+      setContactState((prev) => ({
+        ...prev,
+        reminders: (prev.reminders ?? []).map((existing) =>
+          existing.id === taskId
+            ? {
+                ...existing,
+                title,
+                dueAt: serverDueAt,
+                notes: serverNotes ?? (notes.length ? notes : null),
+                updatedAt: updatedAt ?? existing.updatedAt
+              }
+            : existing
+        )
+      }));
+
+      setReminderEditingId(null);
+      setReminderEditTitleDraft("");
+      setReminderEditDueDraft("");
+      setReminderEditNotesDraft("");
+    } finally {
+      setReminderEditSavingId(null);
     }
   }
 
@@ -969,15 +1149,89 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                             <p className="whitespace-pre-wrap text-[11px] text-slate-600">{reminder.notes}</p>
                           ) : null}
                         </div>
-                        <button
-                          type="button"
-                          disabled={reminderCompletingId === reminder.id}
-                          className="rounded-full border border-emerald-200 px-3 py-1.5 font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-70"
-                          onClick={() => completeReminder(reminder.id)}
-                        >
-                          {reminderCompletingId === reminder.id ? "Saving..." : "Mark done"}
-                        </button>
+                        <div className="flex flex-wrap gap-2 sm:flex-col sm:items-end">
+                          {!isSystemReminder(reminder) ? (
+                            <button
+                              type="button"
+                              disabled={reminderEditSavingId === reminder.id}
+                              className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
+                              onClick={() => startEditReminder(reminder)}
+                            >
+                              Edit
+                            </button>
+                          ) : (
+                            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-semibold text-slate-500">
+                              System task
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            disabled={reminderCompletingId === reminder.id}
+                            className="rounded-full border border-emerald-200 px-3 py-1.5 font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-70"
+                            onClick={() => completeReminder(reminder.id)}
+                          >
+                            {reminderCompletingId === reminder.id ? "Saving..." : "Mark done"}
+                          </button>
+                        </div>
                       </div>
+
+                      {reminderEditingId === reminder.id ? (
+                        <form
+                          className="mt-3 grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-white/70 p-3 text-xs text-slate-600 sm:grid-cols-2"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void saveEditedReminder(reminder.id);
+                          }}
+                        >
+                          <label className="flex flex-col gap-1">
+                            <span>When</span>
+                            <input
+                              type="datetime-local"
+                              value={reminderEditDueDraft}
+                              onChange={(event) => setReminderEditDueDraft(event.target.value)}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                              required
+                            />
+                          </label>
+                          <label className="flex flex-col gap-1">
+                            <span>What</span>
+                            <input
+                              value={reminderEditTitleDraft}
+                              onChange={(event) => setReminderEditTitleDraft(event.target.value)}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                              required
+                            />
+                          </label>
+                          <label className="flex flex-col gap-1 sm:col-span-2">
+                            <span>Details (optional)</span>
+                            <textarea
+                              rows={2}
+                              value={reminderEditNotesDraft}
+                              onChange={(event) => setReminderEditNotesDraft(event.target.value)}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                            />
+                          </label>
+                          <div className="flex gap-2 sm:col-span-2">
+                            <button
+                              type="submit"
+                              disabled={reminderEditSavingId === reminder.id}
+                              className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-70"
+                            >
+                              {reminderEditSavingId === reminder.id ? "Saving..." : "Save changes"}
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800"
+                              onClick={() => {
+                                setReminderEditingId(null);
+                                setReminderError(null);
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      ) : null}
                     </div>
                   ))
                 )}
@@ -1069,7 +1323,18 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                       key={note.id}
                       note={note}
                       deleting={noteDeletingId === note.id}
+                      editing={noteEditingId === note.id}
+                      saving={noteEditSavingId === note.id}
+                      editDraft={noteEditingId === note.id ? noteEditDraft : ""}
+                      onChangeDraft={setNoteEditDraft}
                       onDelete={deleteNote}
+                      onStartEdit={() => startEditNote(note)}
+                      onCancelEdit={() => {
+                        setNoteEditingId(null);
+                        setNoteEditDraft("");
+                        setNoteError(null);
+                      }}
+                      onSaveEdit={() => void saveEditedNote(note.id)}
                     />
                   ))
                 )}
@@ -1131,27 +1396,83 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
 function NoteRow({
   note,
   deleting,
+  editing,
+  saving,
+  editDraft,
+  onChangeDraft,
   onDelete
+  ,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit
 }: {
   note: ContactNoteSummary;
   deleting: boolean;
+  editing: boolean;
+  saving: boolean;
+  editDraft: string;
+  onChangeDraft: (value: string) => void;
   onDelete: (noteId: string) => void;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSaveEdit: () => void;
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-xs text-slate-700 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
           <p className="text-[11px] text-slate-500">Added {formatDateTime(note.createdAt)}</p>
-          <p className="whitespace-pre-wrap text-sm font-semibold text-slate-800">{note.body}</p>
+          {editing ? (
+            <textarea
+              rows={3}
+              value={editDraft}
+              onChange={(event) => onChangeDraft(event.target.value)}
+              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800"
+            />
+          ) : (
+            <p className="whitespace-pre-wrap text-sm font-semibold text-slate-800">{note.body}</p>
+          )}
         </div>
-        <button
-          type="button"
-          disabled={deleting}
-          className="rounded-full border border-rose-200 px-3 py-1.5 font-medium text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-70"
-          onClick={() => onDelete(note.id)}
-        >
-          {deleting ? "Removing..." : "Delete"}
-        </button>
+        <div className="flex flex-wrap gap-2 sm:flex-col sm:items-end sm:justify-start">
+          {editing ? (
+            <>
+              <button
+                type="button"
+                disabled={saving}
+                className="rounded-full bg-primary-600 px-3 py-1.5 font-medium text-white shadow hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-70"
+                onClick={onSaveEdit}
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800"
+                onClick={onCancelEdit}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={deleting}
+                className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70"
+                onClick={onStartEdit}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                className="rounded-full border border-rose-200 px-3 py-1.5 font-medium text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-70"
+                onClick={() => onDelete(note.id)}
+              >
+                {deleting ? "Removing..." : "Delete"}
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
