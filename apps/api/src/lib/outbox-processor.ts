@@ -634,7 +634,7 @@ async function ensureSalesFollowupsForLead(input: {
     .limit(1);
 
   if (!row?.leadId) return;
-  if (row.stage === "won" || row.stage === "lost") return;
+  if (row.stage === "won" || row.stage === "lost" || row.stage === "quoted") return;
 
   const assigneeId = row.salespersonMemberId ?? config.defaultAssigneeMemberId;
   if (!row.salespersonMemberId) {
@@ -800,7 +800,7 @@ async function ensureSalesFollowupsForContact(input: {
     .limit(1);
 
   if (!contactRow?.contactId) return;
-  if (contactRow.stage === "won" || contactRow.stage === "lost") return;
+  if (contactRow.stage === "won" || contactRow.stage === "lost" || contactRow.stage === "quoted") return;
 
   const assigneeId = contactRow.salespersonMemberId ?? config.defaultAssigneeMemberId;
   if (!contactRow.salespersonMemberId) {

@@ -100,8 +100,9 @@ export async function PATCH(request: NextRequest, context: RouteContext): Promis
     });
   }
 
-  if (targetStage === "lost" || targetStage === "won") {
-    // Stop sales reminders / Devon HQ tasks when a lead is closed.
+  if (targetStage === "lost" || targetStage === "won" || targetStage === "quoted") {
+    // Stop Sales HQ auto tasks once a lead has been quoted (salesperson will manage follow-ups manually),
+    // and also when a lead is closed (won/lost).
     await db
       .update(crmTasks)
       .set({ status: "completed", updatedAt: now })

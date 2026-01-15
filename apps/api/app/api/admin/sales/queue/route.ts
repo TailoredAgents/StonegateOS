@@ -69,7 +69,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         isNotNull(crmTasks.notes),
         ...(effectiveSince ? [gte(crmTasks.createdAt, effectiveSince)] : []),
         or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%")),
-        or(isNull(crmPipeline.stage), notInArray(crmPipeline.stage, ["won", "lost"]))
+        or(isNull(crmPipeline.stage), notInArray(crmPipeline.stage, ["won", "lost", "quoted"]))
       )
     )
     .orderBy(asc(crmTasks.dueAt), asc(crmTasks.createdAt))
@@ -193,7 +193,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     eq(contacts.salespersonMemberId, memberId),
     gte(contacts.createdAt, recentSince),
     lte(contacts.createdAt, now),
-    or(isNull(crmPipeline.stage), notInArray(crmPipeline.stage, ["won", "lost"]))
+    or(isNull(crmPipeline.stage), notInArray(crmPipeline.stage, ["won", "lost", "quoted"]))
   ];
   if (seenContactIds.length) {
     missingFilters.push(notInArray(contacts.id, seenContactIds.slice(0, 500)));
