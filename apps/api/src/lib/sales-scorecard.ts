@@ -46,7 +46,7 @@ const DEFAULT_CONFIG: SalesScorecardConfig = {
   businessEndHour: 19,
   speedToLeadMinutes: 5,
   followupGraceMinutes: 10,
-  followupStepsMinutes: [15, 120, 1440, 4320],
+  followupStepsMinutes: [30, 120, 480, 1440, 2880, 10080, 20160],
   defaultAssigneeMemberId: "",
   trackingStartAt: null,
   weights: {
@@ -57,8 +57,18 @@ const DEFAULT_CONFIG: SalesScorecardConfig = {
   }
 };
 
+const LEGACY_FOLLOWUP_STEPS_MINUTES_V1 = [15, 120, 1440, 4320];
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function stepsEqual(a: number[], b: number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 function clampInt(value: unknown, fallback: number, { min, max }: { min: number; max: number }): number {
@@ -117,7 +127,11 @@ export async function getSalesScorecardConfig(db: DbExecutor = getDb()): Promise
   const businessEndHour = clampInt(stored["businessEndHour"], base.businessEndHour, { min: 0, max: 23 });
   const speedToLeadMinutes = clampInt(stored["speedToLeadMinutes"], base.speedToLeadMinutes, { min: 1, max: 60 });
   const followupGraceMinutes = clampInt(stored["followupGraceMinutes"], base.followupGraceMinutes, { min: 0, max: 120 });
-  const followupStepsMinutes = coerceSteps(stored["followupStepsMinutes"], base.followupStepsMinutes);
+  const rawSteps = stored["followupStepsMinutes"];
+  let followupStepsMinutes = coerceSteps(rawSteps, base.followupStepsMinutes);
+  if (Array.isArray(rawSteps) && stepsEqual(followupStepsMinutes, LEGACY_FOLLOWUP_STEPS_MINUTES_V1)) {
+    followupStepsMinutes = base.followupStepsMinutes;
+  }
   const defaultAssigneeMemberId =
     typeof stored["defaultAssigneeMemberId"] === "string" && stored["defaultAssigneeMemberId"].trim().length > 0
       ? stored["defaultAssigneeMemberId"].trim()

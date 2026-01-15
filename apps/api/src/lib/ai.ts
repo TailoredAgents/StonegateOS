@@ -66,41 +66,50 @@ async function callOpenAI({
   systemPrompt: string;
   userPrompt: string;
 }): Promise<NotificationCopy | null> {
+  function supportsReasoningEffort(targetModel: string): boolean {
+    const normalized = targetModel.trim().toLowerCase();
+    return normalized.startsWith("gpt-5") || normalized.startsWith("o");
+  }
+
   async function request(targetModel: string) {
+    const payload: Record<string, unknown> = {
+      model: targetModel,
+      input: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      max_output_tokens: 600,
+      text: {
+        verbosity: "medium",
+        format: {
+          type: "json_schema",
+          name: "notification_copy",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              email_subject: { type: "string" },
+              email_body: { type: "string" },
+              sms_body: { type: "string" }
+            },
+            required: ["email_subject", "email_body", "sms_body"]
+          }
+        }
+      }
+    };
+
+    if (supportsReasoningEffort(targetModel)) {
+      payload["reasoning"] = { effort: "low" };
+    }
+
     return fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        model: targetModel,
-        input: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        temperature: 0.3,
-        max_output_tokens: 600,
-        reasoning: { effort: "low" },
-        text: {
-          verbosity: "medium",
-          format: {
-            type: "json_schema",
-            name: "notification_copy",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                email_subject: { type: "string" },
-                email_body: { type: "string" },
-                sms_body: { type: "string" }
-              },
-              required: ["email_subject", "email_body", "sms_body"]
-            }
-          }
-        }
-      })
+      body: JSON.stringify(payload)
     });
   }
 

@@ -17,6 +17,13 @@ function isSpeedTask(title: string): boolean {
   return t.includes("5 min sla") || t.includes("sla");
 }
 
+function parseTaskKind(notes: string | null, title: string): "speed_to_lead" | "follow_up" {
+  const raw = typeof notes === "string" ? notes : "";
+  if (/\bkind=speed_to_lead\b/i.test(raw)) return "speed_to_lead";
+  if (/\bkind=follow_up\b/i.test(raw)) return "follow_up";
+  return isSpeedTask(title) ? "speed_to_lead" : "follow_up";
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -74,7 +81,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const seenTaskKeys = new Set<string>();
   for (const row of rows) {
     if (disqualified.has(row.contactId)) continue;
-    const kind = isSpeedTask(row.title) ? "speed_to_lead" : "follow_up";
+    const kind = parseTaskKind(row.notes ?? null, row.title);
     const key = `${row.contactId}:${kind}`;
     if (seenTaskKeys.has(key)) continue;
     seenTaskKeys.add(key);
@@ -92,8 +99,6 @@ export async function GET(request: NextRequest): Promise<Response> {
     kind: "speed_to_lead" | "follow_up";
   }> = [];
   for (const row of dedupedRows) {
-    const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
-    if (!hasPhone) continue;
     const dueAtIso = row.dueAt ? row.dueAt.toISOString() : null;
     const dueMs = row.dueAt ? row.dueAt.getTime() : null;
     const isOverdue = typeof dueMs === "number" ? dueMs < now.getTime() : false;
@@ -110,7 +115,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       dueAt: dueAtIso,
       overdue: isOverdue,
       minutesUntilDue,
-      kind: isSpeedTask(row.title) ? "speed_to_lead" : "follow_up"
+      kind: parseTaskKind(row.notes ?? null, row.title)
     });
   }
 

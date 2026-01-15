@@ -773,20 +773,19 @@ async function hasHumanTouchSince(db: DatabaseClient, contactId: string, since: 
     .limit(1);
   if (outboundTeam?.id) return true;
 
-  const [call] = await db
+  const [connectedForContact] = await db
     .select({ id: auditLogs.id })
     .from(auditLogs)
     .where(
       and(
-        eq(auditLogs.action, "call.started"),
-        eq(auditLogs.entityType, "contact"),
-        eq(auditLogs.entityId, contactId),
-        gte(auditLogs.createdAt, since)
+        eq(auditLogs.action, "sales.escalation.call.connected"),
+        gte(auditLogs.createdAt, since),
+        sql`${auditLogs.meta} ->> 'contactId' = ${contactId}`
       )
     )
     .limit(1);
 
-  return Boolean(call?.id);
+  return Boolean(connectedForContact?.id);
 }
 
 function stripDraftFlag(metadata: Record<string, unknown> | null): Record<string, unknown> | null {
