@@ -1554,6 +1554,54 @@ export async function updateAutomationModeAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function updateSalesAutopilotPolicyAction(formData: FormData) {
+  const jar = await cookies();
+
+  const enabled = formData.get("autopilot_enabled") === "on";
+  const autoSendAfterMinutes = formData.get("autoSendAfterMinutes");
+  const activityWindowMinutes = formData.get("activityWindowMinutes");
+  const retryDelayMinutes = formData.get("retryDelayMinutes");
+  const dmSmsFallbackAfterMinutes = formData.get("dmSmsFallbackAfterMinutes");
+  const dmMinSilenceBeforeSmsMinutes = formData.get("dmMinSilenceBeforeSmsMinutes");
+  const agentDisplayName = formData.get("agentDisplayName");
+
+  const payload: Record<string, unknown> = { enabled };
+
+  for (const [key, value] of [
+    ["autoSendAfterMinutes", autoSendAfterMinutes],
+    ["activityWindowMinutes", activityWindowMinutes],
+    ["retryDelayMinutes", retryDelayMinutes],
+    ["dmSmsFallbackAfterMinutes", dmSmsFallbackAfterMinutes],
+    ["dmMinSilenceBeforeSmsMinutes", dmMinSilenceBeforeSmsMinutes]
+  ] as const) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      const num = Number(value);
+      if (!Number.isNaN(num)) {
+        payload[key] = num;
+      }
+    }
+  }
+
+  if (typeof agentDisplayName === "string" && agentDisplayName.trim().length > 0) {
+    payload["agentDisplayName"] = agentDisplayName.trim();
+  }
+
+  const response = await callAdminApi("/api/admin/sales/autopilot", {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update Sales Autopilot");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Sales Autopilot updated", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function updateLeadAutomationAction(formData: FormData) {
   const jar = await cookies();
   const leadId = formData.get("leadId");

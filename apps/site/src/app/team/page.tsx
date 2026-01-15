@@ -103,7 +103,7 @@ export default async function TeamPage({
     { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "owner" },
     { id: "commissions", label: "Commissions", href: "/team?tab=commissions", requires: "owner" },
     { id: "seo", label: "SEO Agent", href: "/team?tab=seo", requires: "owner" },
-    { id: "automation", label: "Automation", href: "/team?tab=automation", requires: "owner" },
+    { id: "automation", label: "Messaging Automation", href: "/team?tab=automation", requires: "owner" },
     { id: "access", label: "Access", href: "/team?tab=access", requires: "owner" },
     { id: "audit", label: "Audit Log", href: "/team?tab=audit", requires: "owner" },
     { id: "merge", label: "Merge Queue", href: "/team?tab=merge", requires: "owner" },
