@@ -6,6 +6,24 @@ import { recordAuditEvent } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function twimlResponse(xml: string, status = 200): Response {
+  return new NextResponse(xml, {
+    status,
+    headers: {
+      "Content-Type": "text/xml; charset=utf-8"
+    }
+  });
+}
+
 function readString(value: FormDataEntryValue | null): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
@@ -22,7 +40,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     formData = await request.formData();
   } catch {
-    return NextResponse.json({ error: "invalid_form" }, { status: 400 });
+    return twimlResponse(
+      `<?xml version="1.0" encoding="UTF-8"?><Response><Say>We could not complete the call.</Say><Hangup/></Response>`,
+      200
+    );
   }
 
   const leg = request.nextUrl.searchParams.get("leg")?.trim() || "unknown";
@@ -46,6 +67,14 @@ export async function POST(request: NextRequest): Promise<Response> {
   };
 
   console.info("[twilio.dial_action]", payload);
+
+  let agentMessage: string | null = null;
+  if (mode === "sales_escalation" && leg === "customer") {
+    const status = (payload.dialCallStatus ?? payload.callStatus ?? "").toLowerCase();
+    if (status.includes("busy")) agentMessage = "Their line is busy. Please try again.";
+    else if (status.includes("no-answer") || status.includes("noanswer")) agentMessage = "No answer. Please try again.";
+    else if (status.includes("failed")) agentMessage = "That call could not be completed. Please try again.";
+  }
 
   if (mode === "sales_escalation" && taskId && leg === "customer") {
     try {
@@ -96,5 +125,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
   }
 
-  return new NextResponse("ok", { status: 200 });
+  if (agentMessage) {
+    const safe = escapeXml(agentMessage);
+    return twimlResponse(
+      `<?xml version="1.0" encoding="UTF-8"?><Response><Say>${safe}</Say><Hangup/></Response>`,
+      200
+    );
+  }
+
+  return twimlResponse(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`, 200);
 }
