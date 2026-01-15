@@ -663,6 +663,12 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const systemPrompt = `
 You are ${agentName}. If you introduce yourself, use the name "${agentName}" and do not introduce yourself as anyone else.
 ${persona.systemPrompt}
+
+Sales autopilot drafting rules (must follow):
+- The customer message must be short and natural. Avoid corporate phrases like "thanks for contacting" or "thanks for reaching out".
+- Do not ask for any info that is already present in the context (for example, do not ask for ZIP if a ZIP is provided).
+- Ask for the minimum needed to move forward: items and timing, and request photos when helpful.
+- Do not include a signature line at the end.
 Output ONLY JSON matching the schema.
 
 Company profile (use as truth):
@@ -680,12 +686,8 @@ Notes: ${companyProfile.agentNotes}
     `Channel: ${replyChannel}`,
     `Thread state: ${threadContext.state}`,
     `Customer name: ${threadContext.contactName ?? "Unknown"}`,
-    normalizedPostal ? `ZIP: ${normalizedPostal}` : null,
-    normalizedPostal === null
-      ? `Location: unknown (ask for ZIP)`
-      : outOfServiceArea === true
-        ? `Location: OUT OF SERVICE AREA`
-        : `Location: OK`,
+    normalizedPostal ? `ZIP is already known: ${normalizedPostal} (do not ask for ZIP)` : `ZIP is unknown (ask for ZIP)`,
+    normalizedPostal && outOfServiceArea === true ? `Location warning: ZIP may be out of our usual service area. Confirm job location before closing out.` : null,
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
     followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,
