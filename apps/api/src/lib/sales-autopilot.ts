@@ -572,9 +572,8 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const zipFromTranscript = normalizePostalCode(extractZipFromText(messages.map((m) => m.body).join("\n")) ?? null);
   const normalizedPostal = zipFromThread ?? zipFromBody ?? zipFromTranscript;
   const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
-  const outsideUsualArea =
-    normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
-  const autoSendEligible = inGeorgia !== false;
+  const outOfServiceArea = normalizedPostal !== null ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
+  const autoSendEligible = true;
   const extractedPhone = extractPhoneFromText(messages.map((m) => m.body).join("\n"));
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, { inboundChannel: replyChannel, replyChannel });
@@ -597,8 +596,7 @@ Rules:
 - Ask only for what you still need to move forward: items, timing, ZIP/address, and photos when helpful.
 - Do NOT include a checklist in the message body. Put missing items in "missing_info" only.
 - Keep the reply concise. For SMS or DM, aim for 1 to 2 short sentences.
-- If the ZIP is outside Georgia, politely say we currently serve Georgia only.
-- If the ZIP is in Georgia but outside the usual service area, do not reject. Confirm location and proceed if reasonable.
+- If the ZIP is outside our service area, politely say we can't serve that area. Use "Service area:" below as truth.
 - Do NOT mention that you are an AI or reference internal systems.
 - Output ONLY JSON matching the schema.
 
@@ -618,13 +616,11 @@ Notes: ${companyProfile.agentNotes}
     `Thread state: ${threadContext.state}`,
     `Customer name: ${threadContext.contactName ?? "Unknown"}`,
     normalizedPostal ? `ZIP: ${normalizedPostal}` : null,
-    inGeorgia === false
-      ? `Location: OUT OF STATE (Georgia only)`
-      : outsideUsualArea === true
-        ? `Location: outside usual area (confirm)`
-        : outsideUsualArea === false
-          ? `Location: OK`
-          : `Location: unknown (ask for ZIP)`,
+    normalizedPostal === null
+      ? `Location: unknown (ask for ZIP)`
+      : outOfServiceArea === true
+        ? `Location: OUT OF SERVICE AREA`
+        : `Location: OK`,
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
     followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,

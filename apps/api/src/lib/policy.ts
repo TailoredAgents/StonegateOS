@@ -9,7 +9,7 @@ type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends 
 type DbExecutor = DatabaseClient | TransactionExecutor;
 
 export type ServiceAreaPolicy = {
-  mode: "zip_allowlist" | "ga_only";
+  mode: "zip_allowlist" | "ga_only" | "ga_above_macon";
   homeBase?: string;
   radiusMiles?: number;
   zipAllowlist: string[];
@@ -135,7 +135,7 @@ export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
   businessName: "Stonegate Junk Removal",
   primaryPhone: "(404) 777-2631",
   serviceAreaSummary:
-    "We serve Georgia only. We mostly serve within about 50 miles of Woodstock. If you are outside the usual area, share your zip code and we will confirm availability.",
+    "We serve Georgia above Macon. Share your ZIP code and we will confirm availability.",
   trailerAndPricingSummary:
     "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume. A quarter trailer is 150 dollars after our current discount. Photos help us estimate quickly.",
   whatWeDo: "Junk removal and hauling for household and light commercial items.",
@@ -143,7 +143,7 @@ export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
   bookingStyle:
     "Offer 2 concrete options and move to booking. Ask for zip code first, then items and timing. If photos are available, request them. If we have enough info, propose a time and book it.",
   agentNotes:
-    "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If zip is outside the usual area, do not reject. Confirm location and proceed if reasonable."
+    "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If ZIP is outside our service area, politely say we can't serve that area."
 };
 
 export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
@@ -157,7 +157,7 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
 };
 
 export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
-  mode: "ga_only",
+  mode: "ga_above_macon",
   homeBase: "Woodstock, GA",
   radiusMiles: 50,
   zipAllowlist: [
@@ -477,7 +477,7 @@ export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
     "31198",
     "31199"
   ],
-  notes: "Allowlist by ZIP (50 miles from Woodstock)."
+  notes: "Georgia above Macon (approx. ZIPs < 31200)."
 };
 
 export const DEFAULT_BOOKING_RULES_POLICY: BookingRulesPolicy = {
@@ -534,10 +534,10 @@ export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
     email: "We appreciate your business. If you have a moment, please share a review."
   },
   out_of_area: {
-    sms: "Thanks for reaching out. We serve Georgia only. If you are outside our usual area, reply with your zip code and what you need removed and we will confirm availability.",
+    sms: "Thanks for reaching out. We serve Georgia above Macon. Reply with your ZIP code and what you need removed and we will confirm availability.",
     email:
-      "Thanks for reaching out. We serve Georgia only. If you are outside our usual area, reply with your zip code and a quick description of what you need removed and we will confirm availability.",
-    web: "We serve Georgia only. Share your zip code and what you need removed and we will confirm availability."
+      "Thanks for reaching out. We serve Georgia above Macon. Reply with your ZIP code and a quick description of what you need removed and we will confirm availability.",
+    web: "We serve Georgia above Macon. Share your ZIP code and what you need removed and we will confirm availability."
   }
 };
 
@@ -605,6 +605,9 @@ export function isPostalCodeAllowed(postalCode: string, policy: ServiceAreaPolic
   if (policy.mode === "ga_only") {
     return isGeorgiaPostalCode(postalCode);
   }
+  if (policy.mode === "ga_above_macon") {
+    return isGeorgiaAboveMaconPostalCode(postalCode);
+  }
   const normalized = normalizePostalCode(postalCode);
   if (!normalized) return false;
   const list = Array.isArray(policy.zipAllowlist) ? policy.zipAllowlist : [];
@@ -618,6 +621,15 @@ export function isGeorgiaPostalCode(postalCode: string): boolean {
   const numeric = Number(normalized);
   if (!Number.isFinite(numeric)) return false;
   return (numeric >= 30000 && numeric <= 31999) || (numeric >= 39800 && numeric <= 39999);
+}
+
+export function isGeorgiaAboveMaconPostalCode(postalCode: string): boolean {
+  const normalized = normalizePostalCode(postalCode);
+  if (!normalized) return false;
+  const numeric = Number(normalized);
+  if (!Number.isFinite(numeric)) return false;
+  // Macon is primarily 312xx. "Above Macon" is approximated as GA ZIPs < 31200.
+  return numeric >= 30000 && numeric < 31200;
 }
 
 export function resolveTemplateForChannel(
@@ -652,7 +664,12 @@ export async function getServiceAreaPolicy(db: DbExecutor = getDb()): Promise<Se
     return DEFAULT_SERVICE_AREA_POLICY;
   }
 
-  const mode = stored["mode"] === "ga_only" ? "ga_only" : "zip_allowlist";
+  const mode =
+    stored["mode"] === "ga_only"
+      ? "ga_only"
+      : stored["mode"] === "ga_above_macon"
+        ? "ga_above_macon"
+        : "zip_allowlist";
   const zipAllowlistRaw = stored["zipAllowlist"];
   const zipAllowlist = Array.isArray(zipAllowlistRaw)
     ? zipAllowlistRaw.filter((value): value is string => typeof value === "string" && value.trim().length > 0)

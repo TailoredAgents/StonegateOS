@@ -200,7 +200,12 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
 
   const serviceSetting = settingsByKey.get("service_area");
   const serviceValue = isRecord(serviceSetting?.value) ? serviceSetting!.value : {};
-  const serviceMode = serviceValue["mode"] === "ga_only" ? "ga_only" : "zip_allowlist";
+  const serviceMode =
+    serviceValue["mode"] === "ga_only"
+      ? "ga_only"
+      : serviceValue["mode"] === "ga_above_macon"
+        ? "ga_above_macon"
+        : "zip_allowlist";
   const zipAllowlist = Array.isArray(serviceValue["zipAllowlist"])
     ? serviceValue["zipAllowlist"].filter((zip): zip is string => typeof zip === "string")
     : [];
@@ -402,6 +407,7 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
                 defaultValue={serviceMode}
                 className={INPUT_CLASS}
               >
+                <option value="ga_above_macon">Georgia above Macon</option>
                 <option value="ga_only">Georgia only (all GA ZIPs)</option>
                 <option value="zip_allowlist">ZIP allowlist (advanced)</option>
               </select>
@@ -433,15 +439,20 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
                 rows={4}
                 defaultValue={zipAllowlist.join(", ")}
                 className={TEXTAREA_CLASS}
-                disabled={serviceMode === "ga_only"}
+                disabled={serviceMode === "ga_only" || serviceMode === "ga_above_macon"}
               />
               <p className="mt-2 text-[11px] text-slate-500">
-                When Coverage is set to Georgia only, this list is ignored.
+                When Coverage is set to Georgia only or Georgia above Macon, this list is ignored.
               </p>
             </div>
             {serviceMode === "ga_only" ? (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
                 Any Georgia ZIP code is allowed. Out-of-state ZIP codes are treated as out of area.
+              </div>
+            ) : null}
+            {serviceMode === "ga_above_macon" ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                Georgia ZIP codes north of Macon are allowed. ZIP codes south of Macon are treated as out of area.
               </div>
             ) : null}
             <div>
