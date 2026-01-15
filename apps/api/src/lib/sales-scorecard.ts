@@ -28,6 +28,10 @@ export type SalesScorecardConfig = {
   speedToLeadMinutes: number;
   followupGraceMinutes: number;
   followupStepsMinutes: number[];
+  followupSameDayLocalTime: string;
+  followupNextDayMorningLocalTime: string;
+  followupNextDayAfternoonLocalTime: string;
+  followupReactivationDays: number[];
   defaultAssigneeMemberId: string;
   trackingStartAt: string | null;
   weights: {
@@ -46,7 +50,11 @@ const DEFAULT_CONFIG: SalesScorecardConfig = {
   businessEndHour: 19,
   speedToLeadMinutes: 5,
   followupGraceMinutes: 10,
-  followupStepsMinutes: [30, 120, 480, 1440, 2880, 10080, 20160],
+  followupStepsMinutes: [30, 120],
+  followupSameDayLocalTime: "18:30",
+  followupNextDayMorningLocalTime: "10:30",
+  followupNextDayAfternoonLocalTime: "17:30",
+  followupReactivationDays: [7, 14],
   defaultAssigneeMemberId: "",
   trackingStartAt: null,
   weights: {
@@ -58,9 +66,29 @@ const DEFAULT_CONFIG: SalesScorecardConfig = {
 };
 
 const LEGACY_FOLLOWUP_STEPS_MINUTES_V1 = [15, 120, 1440, 4320];
+const LEGACY_FOLLOWUP_STEPS_MINUTES_V2 = [30, 120, 480, 1440, 2880, 10080, 20160];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isValidTimeString(value: string): boolean {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
+function coerceTimeString(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return isValidTimeString(trimmed) ? trimmed : fallback;
+}
+
+function coerceDays(value: unknown, fallback: number[]): number[] {
+  if (!Array.isArray(value)) return fallback;
+  const days = value
+    .filter((v): v is number => typeof v === "number" && Number.isFinite(v))
+    .map((v) => Math.round(v))
+    .filter((v) => v >= 2 && v <= 60);
+  return days.length ? Array.from(new Set(days)).sort((a, b) => a - b) : fallback;
 }
 
 function stepsEqual(a: number[], b: number[]): boolean {
@@ -129,9 +157,22 @@ export async function getSalesScorecardConfig(db: DbExecutor = getDb()): Promise
   const followupGraceMinutes = clampInt(stored["followupGraceMinutes"], base.followupGraceMinutes, { min: 0, max: 120 });
   const rawSteps = stored["followupStepsMinutes"];
   let followupStepsMinutes = coerceSteps(rawSteps, base.followupStepsMinutes);
-  if (Array.isArray(rawSteps) && stepsEqual(followupStepsMinutes, LEGACY_FOLLOWUP_STEPS_MINUTES_V1)) {
+  if (
+    Array.isArray(rawSteps) &&
+    (stepsEqual(followupStepsMinutes, LEGACY_FOLLOWUP_STEPS_MINUTES_V1) || stepsEqual(followupStepsMinutes, LEGACY_FOLLOWUP_STEPS_MINUTES_V2))
+  ) {
     followupStepsMinutes = base.followupStepsMinutes;
   }
+  const followupSameDayLocalTime = coerceTimeString(stored["followupSameDayLocalTime"], base.followupSameDayLocalTime);
+  const followupNextDayMorningLocalTime = coerceTimeString(
+    stored["followupNextDayMorningLocalTime"],
+    base.followupNextDayMorningLocalTime
+  );
+  const followupNextDayAfternoonLocalTime = coerceTimeString(
+    stored["followupNextDayAfternoonLocalTime"],
+    base.followupNextDayAfternoonLocalTime
+  );
+  const followupReactivationDays = coerceDays(stored["followupReactivationDays"], base.followupReactivationDays);
   const defaultAssigneeMemberId =
     typeof stored["defaultAssigneeMemberId"] === "string" && stored["defaultAssigneeMemberId"].trim().length > 0
       ? stored["defaultAssigneeMemberId"].trim()
@@ -148,6 +189,10 @@ export async function getSalesScorecardConfig(db: DbExecutor = getDb()): Promise
     speedToLeadMinutes,
     followupGraceMinutes,
     followupStepsMinutes,
+    followupSameDayLocalTime,
+    followupNextDayMorningLocalTime,
+    followupNextDayAfternoonLocalTime,
+    followupReactivationDays,
     defaultAssigneeMemberId,
     trackingStartAt,
     weights
@@ -254,9 +299,10 @@ export async function computeSpeedToLeadForMember(input: {
     .orderBy(desc(contacts.createdAt))
     .limit(500);
 
-  if (!contactRows.length) return [];
+  const scorableContactRows = contactRows.filter((row) => Boolean((row.phoneE164 ?? row.phone ?? "").trim().length));
+  if (!scorableContactRows.length) return [];
 
-  const contactIds = Array.from(new Set(contactRows.map((row) => row.contactId)));
+  const contactIds = Array.from(new Set(scorableContactRows.map((row) => row.contactId)));
   const disqualified = await getDisqualifiedContactIds({ db, contactIds });
 
   const firstCalls = await db
@@ -315,10 +361,10 @@ export async function computeSpeedToLeadForMember(input: {
     }
   }
 
-  return contactRows
+  return scorableContactRows
     .filter((row) => !disqualified.has(row.contactId))
     .map((row) => {
-    const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
+    const hasPhone = true;
     const deadline = getSpeedToLeadDeadline(row.contactCreatedAt, config);
     const firstCallAt = callMap.get(row.contactId) ?? null;
     const firstOutboundAt = outboundByContact.get(row.contactId) ?? null;

@@ -581,6 +581,31 @@ function normalizeSalesDueAt(dueAt: Date, config: Awaited<ReturnType<typeof getS
   return dueAt;
 }
 
+function parseLocalTime(value: string): { hour: number; minute: number } | null {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return null;
+  return { hour: Number(match[1]), minute: Number(match[2]) };
+}
+
+function resolveLocalDueAt(
+  base: Date,
+  config: Awaited<ReturnType<typeof getSalesScorecardConfig>>,
+  time: string,
+  dayOffset = 0
+): Date | null {
+  const parsed = parseLocalTime(time);
+  if (!parsed) return null;
+  const local = DateTime.fromJSDate(base, { zone: config.timezone }).plus({ days: dayOffset });
+  const at = local.set({ hour: parsed.hour, minute: parsed.minute, second: 0, millisecond: 0 });
+  if (!at.isValid) return null;
+  return at.toUTC().toJSDate();
+}
+
+function minutesBetween(a: Date, b: Date): number {
+  return Math.round((b.getTime() - a.getTime()) / 60_000);
+}
+
 async function ensureSalesFollowupsForLead(input: {
   db: ReturnType<typeof getDb>;
   leadId: string;
@@ -654,13 +679,45 @@ async function ensureSalesFollowupsForLead(input: {
     notes: `${contactTag}\n${leadTag}\nkind=speed_to_lead`
   });
 
+  const followupDues: Array<{ dueAt: Date; step: string }> = [];
   for (const minutes of config.followupStepsMinutes) {
     if (minutes <= config.speedToLeadMinutes) continue;
-    const due = new Date(clockStart.getTime() + minutes * 60_000);
+    followupDues.push({ dueAt: new Date(clockStart.getTime() + minutes * 60_000), step: `relative_${minutes}` });
+  }
+
+  const SAME_DAY_MIN_LEAD_AGE_MINUTES = 180;
+  const sameDay = resolveLocalDueAt(clockStart, config, config.followupSameDayLocalTime, 0);
+  if (sameDay) {
+    const minAllowed = new Date(clockStart.getTime() + SAME_DAY_MIN_LEAD_AGE_MINUTES * 60_000);
+    if (sameDay.getTime() >= minAllowed.getTime()) {
+      followupDues.push({ dueAt: sameDay, step: "fixed_same_day" });
+    }
+  }
+
+  const nextMorning = resolveLocalDueAt(clockStart, config, config.followupNextDayMorningLocalTime, 1);
+  if (nextMorning) followupDues.push({ dueAt: nextMorning, step: "fixed_next_morning" });
+  const nextAfternoon = resolveLocalDueAt(clockStart, config, config.followupNextDayAfternoonLocalTime, 1);
+  if (nextAfternoon) followupDues.push({ dueAt: nextAfternoon, step: "fixed_next_afternoon" });
+
+  for (const days of config.followupReactivationDays) {
+    const reactivation = resolveLocalDueAt(clockStart, config, config.followupNextDayMorningLocalTime, days);
+    if (reactivation) {
+      followupDues.push({ dueAt: reactivation, step: `reactivation_day_${days}` });
+    }
+  }
+
+  const seenFollowupKeys = new Set<string>();
+  for (const entry of followupDues) {
+    const normalizedDue = normalizeSalesDueAt(entry.dueAt, config);
+    if (normalizedDue.getTime() <= speedDeadline.getTime()) continue;
+    const stepMinutes = Math.max(1, minutesBetween(clockStart, normalizedDue));
+    const key = `${normalizedDue.toISOString()}:${entry.step}`;
+    if (seenFollowupKeys.has(key)) continue;
+    seenFollowupKeys.add(key);
     tasksToCreate.push({
       title: "Auto: Follow up",
-      dueAt: normalizeSalesDueAt(due, config),
-      notes: `${contactTag}\n${leadTag}\nkind=follow_up\nstepMinutes=${minutes}`
+      dueAt: normalizedDue,
+      notes: `${contactTag}\n${leadTag}\nkind=follow_up\nstep=${entry.step}\nstepMinutes=${stepMinutes}`
     });
   }
 
@@ -798,13 +855,45 @@ async function ensureSalesFollowupsForContact(input: {
     notes: `${tagBlock}\nkind=speed_to_lead`
   });
 
+  const followupDues: Array<{ dueAt: Date; step: string }> = [];
   for (const minutes of config.followupStepsMinutes) {
     if (minutes <= config.speedToLeadMinutes) continue;
-    const due = new Date(clockStart.getTime() + minutes * 60_000);
+    followupDues.push({ dueAt: new Date(clockStart.getTime() + minutes * 60_000), step: `relative_${minutes}` });
+  }
+
+  const SAME_DAY_MIN_LEAD_AGE_MINUTES = 180;
+  const sameDay = resolveLocalDueAt(clockStart, config, config.followupSameDayLocalTime, 0);
+  if (sameDay) {
+    const minAllowed = new Date(clockStart.getTime() + SAME_DAY_MIN_LEAD_AGE_MINUTES * 60_000);
+    if (sameDay.getTime() >= minAllowed.getTime()) {
+      followupDues.push({ dueAt: sameDay, step: "fixed_same_day" });
+    }
+  }
+
+  const nextMorning = resolveLocalDueAt(clockStart, config, config.followupNextDayMorningLocalTime, 1);
+  if (nextMorning) followupDues.push({ dueAt: nextMorning, step: "fixed_next_morning" });
+  const nextAfternoon = resolveLocalDueAt(clockStart, config, config.followupNextDayAfternoonLocalTime, 1);
+  if (nextAfternoon) followupDues.push({ dueAt: nextAfternoon, step: "fixed_next_afternoon" });
+
+  for (const days of config.followupReactivationDays) {
+    const reactivation = resolveLocalDueAt(clockStart, config, config.followupNextDayMorningLocalTime, days);
+    if (reactivation) {
+      followupDues.push({ dueAt: reactivation, step: `reactivation_day_${days}` });
+    }
+  }
+
+  const seenFollowupKeys = new Set<string>();
+  for (const entry of followupDues) {
+    const normalizedDue = normalizeSalesDueAt(entry.dueAt, config);
+    if (normalizedDue.getTime() <= speedDeadline.getTime()) continue;
+    const stepMinutes = Math.max(1, minutesBetween(clockStart, normalizedDue));
+    const key = `${normalizedDue.toISOString()}:${entry.step}`;
+    if (seenFollowupKeys.has(key)) continue;
+    seenFollowupKeys.add(key);
     tasksToCreate.push({
       title: "Auto: Follow up",
-      dueAt: normalizeSalesDueAt(due, config),
-      notes: `${tagBlock}\nkind=follow_up\nstepMinutes=${minutes}`
+      dueAt: normalizedDue,
+      notes: `${tagBlock}\nkind=follow_up\nstep=${entry.step}\nstepMinutes=${stepMinutes}`
     });
   }
 

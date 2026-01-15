@@ -326,6 +326,14 @@ function isMessengerLeadCard(body: string): boolean {
   return hitCount >= 3;
 }
 
+function shouldAllowDmAutosend(messages: MessageContext[], currentInboundBody: string): boolean {
+  if (isMessengerLeadCard(currentInboundBody)) return false;
+  const nonLeadDmInbounds = messages.filter(
+    (m) => m.direction === "inbound" && m.channel === "dm" && typeof m.body === "string" && m.body.trim().length > 0 && !isMessengerLeadCard(m.body)
+  );
+  return nonLeadDmInbounds.length >= 2;
+}
+
 function stripAutopilotFooter(body: string): string {
   const lower = body.toLowerCase();
   const markers = ["missing info", "missing information", "info checklist", "checklist:"];
@@ -682,6 +690,9 @@ Do not write the customer message. Output ONLY JSON matching the schema.
   const now = new Date();
   const draftId = await db.transaction(async (tx) => {
     const participantId = await ensureAutopilotParticipant(tx, threadId, now, policy.agentDisplayName);
+    const dmAutosendAllowed =
+      replyChannel === "dm" && typeof inbound.body === "string" ? shouldAllowDmAutosend(messages, inbound.body) : true;
+    const noAutosend = !autoSendEligible || (replyChannel === "dm" && !dmAutosendAllowed);
     const [message] = await tx
       .insert(conversationMessages)
       .values({
@@ -698,7 +709,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           draft: true,
           salesAutopilot: true,
           salesAutopilotForMessageId: messageId,
-          salesAutopilotNoAutosend: autoSendEligible ? undefined : true,
+          salesAutopilotNoAutosend: noAutosend ? true : undefined,
           aiModel: config.writeModel,
           missingInfo,
           alternatives,
@@ -712,7 +723,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       throw new Error("draft_create_failed");
     }
 
-    if (autoSendEligible) {
+    if (!noAutosend) {
       await tx.insert(outboxEvents).values({
         type: "sales.autopilot.autosend",
         payload: { draftMessageId: message.id, inboundMessageId: messageId },
