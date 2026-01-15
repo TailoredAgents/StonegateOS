@@ -3,7 +3,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 import { callAdminApi } from "../lib/api";
-import { resetSalesHqAction, updatePipelineStageAction } from "../actions";
+import { resetSalesHqAction } from "../actions";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type ScorecardPayload = {
@@ -41,7 +41,13 @@ type QueuePayload = {
   items: Array<{
     id: string;
     leadId: string | null;
-    contact: { id: string; name: string; phone: string | null };
+    contact: {
+      id: string;
+      name: string;
+      phone: string | null;
+      postalCode: string | null;
+      serviceAreaStatus: "unknown" | "ok" | "potentially_out_of_area";
+    };
     title: string;
     dueAt: string | null;
     overdue: boolean;
@@ -289,6 +295,13 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                     <p className="text-sm font-semibold text-slate-900">{item.contact.name}</p>
                     <p className="mt-0.5 text-xs text-slate-500">{item.contact.phone ?? "Phone not on file yet"}</p>
                     <p className="mt-1 text-xs text-slate-600">{item.title}</p>
+                    {item.contact.serviceAreaStatus === "potentially_out_of_area" ? (
+                      <div className="mt-2">
+                        <span className="inline-flex items-center rounded-full border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-rose-700">
+                          Verify ZIP{item.contact.postalCode ? ` (${item.contact.postalCode})` : ""}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex flex-col items-end gap-2">
                     {item.minutesUntilDue !== null ? (
@@ -298,17 +311,6 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                     ) : (
                       <Pill tone="neutral">unscheduled</Pill>
                     )}
-                    <form action={updatePipelineStageAction} className="flex items-center gap-2">
-                      <input type="hidden" name="contactId" value={item.contact.id} />
-                      <input type="hidden" name="stage" value="lost" />
-                      <input type="hidden" name="notes" value="disqualify=out_of_service_area" />
-                      <SubmitButton
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-slate-300 hover:text-slate-800"
-                        pendingLabel="Saving..."
-                      >
-                        No service area
-                      </SubmitButton>
-                    </form>
                     <a
                       className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:border-slate-300"
                       href={`/team?tab=contacts&contactId=${encodeURIComponent(item.contact.id)}`}
@@ -337,6 +339,13 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                     <p className="text-sm font-semibold text-slate-900">{item.contact.name}</p>
                     <p className="mt-0.5 text-xs text-slate-500">{item.contact.phone ?? "Phone not on file yet"}</p>
                     <p className="mt-1 text-xs text-slate-600">{item.title}</p>
+                    {item.contact.serviceAreaStatus === "potentially_out_of_area" ? (
+                      <div className="mt-2">
+                        <span className="inline-flex items-center rounded-full border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-rose-700">
+                          Verify ZIP{item.contact.postalCode ? ` (${item.contact.postalCode})` : ""}
+                        </span>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="flex flex-col items-end gap-2">
                     {item.minutesUntilDue !== null ? (
@@ -346,17 +355,6 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                     ) : (
                       <Pill tone="neutral">unscheduled</Pill>
                     )}
-                    <form action={updatePipelineStageAction} className="flex items-center gap-2">
-                      <input type="hidden" name="contactId" value={item.contact.id} />
-                      <input type="hidden" name="stage" value="lost" />
-                      <input type="hidden" name="notes" value="disqualify=out_of_service_area" />
-                      <SubmitButton
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-slate-300 hover:text-slate-800"
-                        pendingLabel="Saving..."
-                      >
-                        No service area
-                      </SubmitButton>
-                    </form>
                     <a
                       className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-800 hover:border-slate-300"
                       href={`/team?tab=contacts&contactId=${encodeURIComponent(item.contact.id)}`}

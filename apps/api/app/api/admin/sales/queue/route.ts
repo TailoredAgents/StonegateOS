@@ -1,10 +1,11 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, notInArray, or } from "drizzle-orm";
-import { auditLogs, contacts, conversationMessages, conversationParticipants, conversationThreads, crmPipeline, crmTasks, getDb } from "@/db";
+import { auditLogs, contacts, conversationMessages, conversationParticipants, conversationThreads, crmPipeline, crmTasks, getDb, properties } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
+import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -33,6 +34,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const db = getDb();
   const config = await getSalesScorecardConfig(db);
+  const serviceAreaPolicy = await getServiceAreaPolicy(db);
 
   const url = new URL(request.url);
   const memberId = url.searchParams.get("memberId")?.trim() || config.defaultAssigneeMemberId;
@@ -92,13 +94,58 @@ export async function GET(request: NextRequest): Promise<Response> {
   const items: Array<{
     id: string;
     leadId: string | null;
-    contact: { id: string; name: string; phone: string | null };
+    contact: {
+      id: string;
+      name: string;
+      phone: string | null;
+      postalCode: string | null;
+      serviceAreaStatus: "unknown" | "ok" | "potentially_out_of_area";
+    };
     title: string;
     dueAt: string | null;
     overdue: boolean;
     minutesUntilDue: number | null;
     kind: "speed_to_lead" | "follow_up";
   }> = [];
+
+  const postalCodeByContactId = new Map<string, string>();
+  const contactIdsForLookup = Array.from(new Set(dedupedRows.map((row) => row.contactId))).filter(
+    (id): id is string => typeof id === "string" && id.length > 0
+  );
+
+  if (contactIdsForLookup.length) {
+    const propertyRows = await db
+      .select({
+        contactId: properties.contactId,
+        postalCode: properties.postalCode,
+        createdAt: properties.createdAt
+      })
+      .from(properties)
+      .where(inArray(properties.contactId, contactIdsForLookup.slice(0, 500)))
+      .orderBy(desc(properties.createdAt))
+      .limit(1000);
+
+    for (const row of propertyRows) {
+      if (!row.contactId || !row.postalCode) continue;
+      if (postalCodeByContactId.has(row.contactId)) continue;
+      postalCodeByContactId.set(row.contactId, row.postalCode);
+    }
+  }
+
+  function getServiceAreaStatus(postalCode: string | null): "unknown" | "ok" | "potentially_out_of_area" {
+    const normalized = postalCode ? normalizePostalCode(postalCode) : "";
+    if (!normalized || normalized === "00000") return "unknown";
+    return isPostalCodeAllowed(normalized, serviceAreaPolicy) ? "ok" : "potentially_out_of_area";
+  }
+
+  function getContactPostalCode(contactId: string): string | null {
+    const postal = postalCodeByContactId.get(contactId);
+    if (!postal) return null;
+    const normalized = normalizePostalCode(postal);
+    if (!normalized || normalized === "00000") return null;
+    return normalized;
+  }
+
   for (const row of dedupedRows) {
     const rawKind = parseTaskKind(row.notes ?? null, row.title);
     let kind: "speed_to_lead" | "follow_up" = rawKind;
@@ -119,13 +166,16 @@ export async function GET(request: NextRequest): Promise<Response> {
     const isOverdue = typeof dueMs === "number" ? dueMs < now.getTime() : false;
     const minutesUntilDue = typeof dueMs === "number" ? Math.round((dueMs - now.getTime()) / 60_000) : null;
 
+    const postalCode = getContactPostalCode(row.contactId);
     items.push({
       id: row.id,
       leadId: parseLeadId(row.notes ?? null),
       contact: {
         id: row.contactId,
         name: `${row.contactFirst ?? ""} ${row.contactLast ?? ""}`.trim() || "Contact",
-        phone: row.phoneE164 ?? row.phone ?? null
+        phone: row.phoneE164 ?? row.phone ?? null,
+        postalCode,
+        serviceAreaStatus: getServiceAreaStatus(postalCode)
       },
       title,
       dueAt: dueAtIso,
@@ -169,6 +219,26 @@ export async function GET(request: NextRequest): Promise<Response> {
   const missingContactIds = missingRows.map((row) => row.id).filter((id): id is string => typeof id === "string" && id.length > 0);
   const missingHasSalesTasks = new Set<string>();
   const missingHasTouch = new Set<string>();
+
+  const missingPropertyLookup = missingContactIds.filter((contactId) => !postalCodeByContactId.has(contactId));
+  if (missingPropertyLookup.length) {
+    const propertyRows = await db
+      .select({
+        contactId: properties.contactId,
+        postalCode: properties.postalCode,
+        createdAt: properties.createdAt
+      })
+      .from(properties)
+      .where(inArray(properties.contactId, missingPropertyLookup.slice(0, 500)))
+      .orderBy(desc(properties.createdAt))
+      .limit(1000);
+
+    for (const row of propertyRows) {
+      if (!row.contactId || !row.postalCode) continue;
+      if (postalCodeByContactId.has(row.contactId)) continue;
+      postalCodeByContactId.set(row.contactId, row.postalCode);
+    }
+  }
 
   if (missingContactIds.length) {
     const salesTaskRows = await db
@@ -248,13 +318,16 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     if (!withinHours) {
       const dueMs = clockStart.getTime();
+      const postalCode = getContactPostalCode(row.id);
       items.push({
         id: `contact:${row.id}`,
         leadId: null,
         contact: {
           id: row.id,
           name: `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || "Contact",
-          phone: row.phoneE164 ?? row.phone ?? null
+          phone: row.phoneE164 ?? row.phone ?? null,
+          postalCode,
+          serviceAreaStatus: getServiceAreaStatus(postalCode)
         },
         title: "Auto: Call overnight lead (at open)",
         dueAt: clockStart.toISOString(),
@@ -266,13 +339,16 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
 
     const dueMs = deadline.getTime();
+    const postalCode = getContactPostalCode(row.id);
     items.push({
       id: `contact:${row.id}`,
       leadId: null,
       contact: {
         id: row.id,
         name: `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || "Contact",
-        phone: row.phoneE164 ?? row.phone ?? null
+        phone: row.phoneE164 ?? row.phone ?? null,
+        postalCode,
+        serviceAreaStatus: getServiceAreaStatus(postalCode)
       },
       title: hasPhone ? "Auto: Call new lead (5 min SLA)" : "Auto: Message new lead (5 min SLA)",
       dueAt: deadline.toISOString(),
