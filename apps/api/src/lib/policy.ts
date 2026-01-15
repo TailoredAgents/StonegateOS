@@ -157,7 +157,7 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   retryDelayMinutes: 2,
   dmSmsFallbackAfterMinutes: 120,
   dmMinSilenceBeforeSmsMinutes: 45,
-  agentDisplayName: "Stonegate"
+  agentDisplayName: "Devon"
 };
 
 export const DEFAULT_CONVERSATION_PERSONA_POLICY: ConversationPersonaPolicy = {
