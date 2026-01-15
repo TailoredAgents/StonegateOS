@@ -39,6 +39,8 @@ type OutboxOutcome = {
   nextAttemptAt?: Date;
 };
 
+const INBOUND_COALESCE_MS = 25_000;
+
 type MessageContext = {
   direction: string;
   channel: string;
@@ -525,6 +527,25 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
     return { status: "skipped" };
   }
 
+  const [latestInbound] = await db
+    .select({
+      id: conversationMessages.id,
+      createdAt: conversationMessages.createdAt
+    })
+    .from(conversationMessages)
+    .where(
+      and(
+        eq(conversationMessages.threadId, threadId),
+        eq(conversationMessages.direction, "inbound")
+      )
+    )
+    .orderBy(desc(conversationMessages.createdAt), desc(conversationMessages.id))
+    .limit(1);
+
+  if (latestInbound?.id && latestInbound.id !== messageId) {
+    return { status: "processed" };
+  }
+
   const [existingDraft] = await db
     .select({ id: conversationMessages.id })
     .from(conversationMessages)
@@ -539,6 +560,34 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
 
   if (existingDraft?.id) {
     return { status: "processed" };
+  }
+
+  const contactId = inbound.contactId ?? null;
+  if (contactId) {
+    const [pipeline] = await db
+      .select({ stage: crmPipeline.stage })
+      .from(crmPipeline)
+      .where(eq(crmPipeline.contactId, contactId))
+      .limit(1);
+
+    if (pipeline?.stage && (pipeline.stage === "quoted" || pipeline.stage === "won" || pipeline.stage === "lost")) {
+      return { status: "processed" };
+    }
+
+    const [booked] = await db
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(and(eq(appointments.contactId, contactId), ne(appointments.status, "canceled")))
+      .limit(1);
+
+    if (booked?.id) {
+      return { status: "processed" };
+    }
+  }
+
+  const coalesceUntil = DateTime.fromJSDate(inbound.createdAt).plus({ milliseconds: INBOUND_COALESCE_MS }).toJSDate();
+  if (new Date() < coalesceUntil) {
+    return { status: "retry", nextAttemptAt: coalesceUntil };
   }
 
   const contactName = [inbound.contactFirstName, inbound.contactLastName].filter(Boolean).join(" ").trim();

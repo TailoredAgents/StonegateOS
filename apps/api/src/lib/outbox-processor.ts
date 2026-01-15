@@ -3216,9 +3216,27 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       await handleInboundAutoReply(messageId);
       const autopilotOutcome = await handleInboundSalesAutopilot(messageId);
       if (autopilotOutcome.status === "retry") {
-        return autopilotOutcome;
+        const now = new Date();
+        await getDb().insert(outboxEvents).values({
+          type: "sales.autopilot.draft",
+          payload: { messageId },
+          nextAttemptAt: autopilotOutcome.nextAttemptAt ?? new Date(now.getTime() + 60_000),
+          createdAt: now
+        });
+        return { status: "processed" };
       }
       return { status: "processed" };
+    }
+
+    case "sales.autopilot.draft": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const messageId = typeof payload?.["messageId"] === "string" ? payload["messageId"] : null;
+      if (!messageId) {
+        console.warn("[outbox] sales.autopilot.draft.missing_id", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      return await handleInboundSalesAutopilot(messageId);
     }
 
     case "sales.autopilot.autosend": {
