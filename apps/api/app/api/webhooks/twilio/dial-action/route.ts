@@ -103,7 +103,7 @@ export async function POST(request: NextRequest): Promise<Response> {
                 eq(crmTasks.assignedTo, row.assignedTo),
                 eq(crmTasks.status, "open"),
                 isNotNull(crmTasks.notes),
-                or(ilike(crmTasks.notes, "%kind=speed_to_lead%"), ilike(crmTasks.notes, "%kind=follow_up%"))
+                ilike(crmTasks.notes, "%kind=speed_to_lead%")
               )
             );
 
