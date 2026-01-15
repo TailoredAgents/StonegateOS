@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useFormStatus } from "react-dom";
+import { useRouter } from "next/navigation";
 
 export function SubmitButton({
   children,
@@ -16,6 +18,40 @@ export function SubmitButton({
   disabled?: boolean;
 }) {
   const { pending } = useFormStatus();
+  const router = useRouter();
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!pending) {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+      refreshTimerRef.current = null;
+      reloadTimerRef.current = null;
+      return;
+    }
+
+    if (!refreshTimerRef.current) {
+      refreshTimerRef.current = setTimeout(() => {
+        try {
+          router.refresh();
+        } catch {
+          // ignore
+        }
+      }, 25_000);
+    }
+
+    if (!reloadTimerRef.current) {
+      reloadTimerRef.current = setTimeout(() => {
+        try {
+          window.location.reload();
+        } catch {
+          // ignore
+        }
+      }, 45_000);
+    }
+  }, [pending, router]);
+
   const isDisabled = pending || disabled;
   return (
     <button type="submit" className={className} disabled={isDisabled}>

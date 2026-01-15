@@ -16,6 +16,8 @@ const DEFAULT_ACTOR_ID =
   process.env["SALES_DEFAULT_ASSIGNEE_ID"] ??
   null;
 
+type CallAdminApiInit = RequestInit & { timeoutMs?: number };
+
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
@@ -37,7 +39,7 @@ async function resolveActorIdentity(): Promise<{ actorId: string | null; actorLa
   return { actorId: DEFAULT_ACTOR_ID, actorLabel: null };
 }
 
-export async function callAdminApi(path: string, init?: RequestInit): Promise<Response> {
+export async function callAdminApi(path: string, init?: CallAdminApiInit): Promise<Response> {
   if (!ADMIN_API_KEY) {
     throw new Error("ADMIN_API_KEY must be set");
   }
@@ -45,25 +47,35 @@ export async function callAdminApi(path: string, init?: RequestInit): Promise<Re
   const actorRole = await resolveActorRole();
   const { actorId, actorLabel } = await resolveActorIdentity();
   const base = API_BASE_URL.replace(/\/$/, "");
+  const { timeoutMs = 25_000, ...requestInit } = init ?? {};
   const isFormDataBody =
-    typeof FormData !== "undefined" && init?.body instanceof FormData;
+    typeof FormData !== "undefined" && requestInit?.body instanceof FormData;
 
   const defaultHeaders: Record<string, string> = isFormDataBody
     ? {}
     : { "Content-Type": "application/json" };
-  return fetch(`${base}${path}`, {
-    ...init,
-    headers: {
-      ...defaultHeaders,
-      "x-api-key": ADMIN_API_KEY,
-      "x-actor-type": "human",
-      ...(actorId ? { "x-actor-id": actorId } : {}),
-      "x-actor-label": actorLabel ?? "team-console",
-      ...(actorRole ? { "x-actor-role": actorRole } : {}),
-      ...(init?.headers ?? {})
-    },
-    cache: "no-store"
-  });
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(`${base}${path}`, {
+      ...requestInit,
+      signal: controller.signal,
+      headers: {
+        ...defaultHeaders,
+        "x-api-key": ADMIN_API_KEY,
+        "x-actor-type": "human",
+        ...(actorId ? { "x-actor-id": actorId } : {}),
+        "x-actor-label": actorLabel ?? "team-console",
+        ...(actorRole ? { "x-actor-role": actorRole } : {}),
+        ...(requestInit?.headers ?? {})
+      },
+      cache: "no-store"
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export function fmtTime(iso: string | null): string {
