@@ -81,7 +81,9 @@ function getOpenAIConfig():
   const apiKey = process.env["OPENAI_API_KEY"];
   if (!apiKey) return null;
   const thinkModel = readEnvString("OPENAI_SALES_AUTOPILOT_THINK_MODEL") ?? "gpt-5-mini";
-  const writeModel = readEnvString("OPENAI_SALES_AUTOPILOT_WRITE_MODEL") ?? "gpt-4.1";
+  const writeModel =
+    readEnvString("OPENAI_SALES_AUTOPILOT_WRITE_MODEL") ??
+    "ft:gpt-4.1-mini-2025-04-14:tailored-agents:devon:CyO8flN3";
   return { apiKey, thinkModel, writeModel };
 }
 
@@ -128,13 +130,17 @@ function tryParseJsonObject(raw: string): unknown | null {
 async function callOpenAIJsonSchema(input: {
   apiKey: string;
   model: string;
+  fallbackModels?: string[];
   systemPrompt: string;
   userPrompt: string;
   maxOutputTokens: number;
   schemaName: string;
   schema: Record<string, unknown>;
   reasoningEffort?: ReasoningEffort;
-}): Promise<{ ok: true; value: unknown } | { ok: false; error: string; detail?: string | null }> {
+}): Promise<
+  | { ok: true; value: unknown; modelUsed: string }
+  | { ok: false; error: string; detail?: string | null; modelUsed: string }
+> {
   async function request(targetModel: string) {
     const payload: Record<string, unknown> = {
       model: targetModel,
@@ -168,31 +174,50 @@ async function callOpenAIJsonSchema(input: {
     });
   }
 
-  const response = await request(input.model);
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => "");
-    return { ok: false, error: "openai_request_failed", detail: bodyText.slice(0, 300) };
+  const modelsToTry = [input.model, ...(input.fallbackModels ?? [])].filter(
+    (model, index, list) => model.trim().length > 0 && list.indexOf(model) === index
+  );
+
+  let lastError: { error: string; detail?: string | null } = { error: "openai_request_failed" };
+
+  for (const model of modelsToTry) {
+    const response = await request(model);
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => "");
+      lastError = { error: "openai_request_failed", detail: bodyText.slice(0, 300) };
+      continue;
+    }
+
+    try {
+      const data = (await response.json()) as {
+        output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+        output_text?: string;
+      };
+      const raw =
+        (typeof data.output_text === "string" ? data.output_text : null) ??
+        data.output
+          ?.flatMap((item) => item.content ?? [])
+          .find((chunk) => typeof chunk.text === "string")
+          ?.text ??
+        null;
+      if (!raw) {
+        lastError = { error: "openai_empty_response" };
+        continue;
+      }
+      const parsed = tryParseJsonObject(raw);
+      if (!parsed) {
+        lastError = { error: "openai_parse_failed" };
+        continue;
+      }
+      return { ok: true, value: parsed, modelUsed: model };
+    } catch (error) {
+      lastError = { error: "openai_parse_failed", detail: String(error) };
+      continue;
+    }
   }
 
-  try {
-    const data = (await response.json()) as {
-      output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
-      output_text?: string;
-    };
-    const raw =
-      (typeof data.output_text === "string" ? data.output_text : null) ??
-      data.output
-        ?.flatMap((item) => item.content ?? [])
-        .find((chunk) => typeof chunk.text === "string")
-        ?.text ??
-      null;
-    if (!raw) return { ok: false, error: "openai_empty_response" };
-    const parsed = tryParseJsonObject(raw);
-    if (!parsed) return { ok: false, error: "openai_parse_failed" };
-    return { ok: true, value: parsed };
-  } catch (error) {
-    return { ok: false, error: "openai_parse_failed", detail: String(error) };
-  }
+  const modelUsed = modelsToTry[modelsToTry.length - 1] ?? input.model;
+  return { ok: false, modelUsed, error: lastError.error, detail: lastError.detail ?? null };
 }
 
 type ReplyPlan = {
@@ -657,6 +682,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
   const draftResult = await callOpenAIJsonSchema({
     apiKey: config.apiKey,
     model: config.writeModel,
+    fallbackModels: ["gpt-4.1"],
     systemPrompt,
     userPrompt,
     maxOutputTokens: 900,
@@ -665,7 +691,12 @@ Do not write the customer message. Output ONLY JSON matching the schema.
   });
 
   if (!draftResult.ok) {
-    console.warn("[sales.autopilot] openai_failed", { messageId, error: draftResult.error, detail: draftResult.detail ?? null });
+    console.warn("[sales.autopilot] openai_failed", {
+      messageId,
+      model: draftResult.modelUsed,
+      error: draftResult.error,
+      detail: draftResult.detail ?? null
+    });
     return { status: "retry", error: draftResult.error };
   }
 
@@ -706,7 +737,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           salesAutopilot: true,
           salesAutopilotForMessageId: messageId,
           salesAutopilotNoAutosend: noAutosend ? true : undefined,
-          aiModel: config.writeModel,
+          aiModel: draftResult.modelUsed,
           missingInfo,
           alternatives,
           extractedPhoneE164: extractedPhone?.e164 ?? undefined
