@@ -5,6 +5,7 @@ import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   updateBookingRulesPolicyAction,
   updateBusinessHoursPolicyAction,
+  updateConversationPersonaPolicyAction,
   updateCompanyProfilePolicyAction,
   updateConfirmationLoopPolicyAction,
   updateFollowUpSequencePolicyAction,
@@ -27,6 +28,7 @@ type PolicyKey =
   | "quiet_hours"
   | "service_area"
   | "company_profile"
+  | "conversation_persona"
   | "booking_rules"
   | "confirmation_loop"
   | "follow_up_sequence"
@@ -50,6 +52,10 @@ const POLICY_LABELS: Record<PolicyKey, { title: string; description: string }> =
   company_profile: {
     title: "Company profile",
     description: "Editable facts and sales playbook used by Inbox AI."
+  },
+  conversation_persona: {
+    title: "Conversation persona",
+    description: "System instructions used by Sales Autopilot + Inbox AI drafts."
   },
   booking_rules: {
     title: "Booking rules",
@@ -244,6 +250,13 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
     typeof companyValue["agentNotes"] === "string" && companyValue["agentNotes"].trim().length > 0
       ? companyValue["agentNotes"]
       : "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links.";
+
+  const personaSetting = settingsByKey.get("conversation_persona");
+  const personaValue = isRecord(personaSetting?.value) ? personaSetting!.value : {};
+  const personaSystemPrompt =
+    typeof personaValue["systemPrompt"] === "string" && personaValue["systemPrompt"].trim().length > 0
+      ? personaValue["systemPrompt"]
+      : "";
 
   const bookingSetting = settingsByKey.get("booking_rules");
   const bookingValue = isRecord(bookingSetting?.value) ? bookingSetting!.value : {};
@@ -543,6 +556,38 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
             </div>
           </form>
           <AdvancedJsonEditor setting={companySetting} />
+        </div>
+        <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold text-slate-900">{POLICY_LABELS.conversation_persona.title}</h3>
+            <p className="text-xs text-slate-500">{POLICY_LABELS.conversation_persona.description}</p>
+          </div>
+          <form action={updateConversationPersonaPolicyAction} className="mt-4 space-y-4">
+            <div>
+              <label className={LABEL_CLASS}>System prompt</label>
+              <textarea
+                name="systemPrompt"
+                rows={12}
+                defaultValue={personaSystemPrompt}
+                className={TEXTAREA_CLASS}
+                placeholder="Write the AI's system instructions here (tone, constraints, what to ask for, service area rules, etc.)"
+                required
+              />
+              <p className="mt-2 text-[11px] text-slate-500">
+                This is the main instruction block used for draft replies in the Unified Inbox and Sales Autopilot.
+              </p>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-500">
+              <span>Last updated {formatUpdatedAt(personaSetting?.updatedAt ?? null)}</span>
+              <SubmitButton
+                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                pendingLabel="Saving..."
+              >
+                Save persona
+              </SubmitButton>
+            </div>
+          </form>
+          <AdvancedJsonEditor setting={personaSetting} />
         </div>
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
           <div className="flex flex-col gap-1">

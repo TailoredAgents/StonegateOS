@@ -10,7 +10,7 @@ import {
   properties
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
-import { getBusinessHoursPolicy, getCompanyProfilePolicy, getServiceAreaPolicy, getTemplatesPolicy, isGeorgiaPostalCode, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
+import { getBusinessHoursPolicy, getCompanyProfilePolicy, getConversationPersonaPolicy, getServiceAreaPolicy, getTemplatesPolicy, isGeorgiaPostalCode, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
@@ -452,11 +452,12 @@ export async function POST(
     propertyState: thread.propertyState ?? null
   };
 
-  const [templates, serviceArea, businessHours, companyProfile] = await Promise.all([
+  const [templates, serviceArea, businessHours, companyProfile, persona] = await Promise.all([
     getTemplatesPolicy(db),
     getServiceAreaPolicy(db),
     getBusinessHoursPolicy(db),
-    getCompanyProfilePolicy(db)
+    getCompanyProfilePolicy(db),
+    getConversationPersonaPolicy(db)
   ]);
 
   const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
@@ -477,19 +478,9 @@ export async function POST(
       ? resolveTemplateForChannel(templates.out_of_area, { inboundChannel: replyChannel, replyChannel })
       : null;
 
-  const systemPrompt = `
- You are Stonegate Assist, the warm, human, front-office voice for Stonegate Junk Removal in North Metro Atlanta.
- Write a reply the customer will receive.
-
- Rules:
- - Sound like a helpful local office rep. No emojis. Keep it natural and human.
- - Be concise and specific; avoid filler.
- - No bullet points, no numbered lists, no hyphens/dashes (do not use "-" "–" "—" anywhere in the customer message).
- - Ask for only the missing info needed to book: address (or ZIP), item details, and preferred timing.
- - If the ZIP is outside Georgia, politely say we currently serve Georgia only.
- - If the ZIP is in Georgia but outside the usual service area, do not reject. Confirm location and proceed if reasonable.
- - Do NOT mention internal systems, databases, webhooks, or that you're an AI.
- - Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
+ const systemPrompt = `
+ ${persona.systemPrompt}
+ Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
 
  Business hours policy timezone: ${businessHours.timezone}
  Company notes: We can message any time, and we typically schedule jobs during business hours.

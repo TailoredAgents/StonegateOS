@@ -16,6 +16,7 @@ import {
 import { recordAuditEvent } from "@/lib/audit";
 import {
   getCompanyProfilePolicy,
+  getConversationPersonaPolicy,
   getSalesAutopilotPolicy,
   getServiceAreaPolicy,
   getTemplatesPolicy,
@@ -592,6 +593,7 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const templates = await getTemplatesPolicy(db);
   const serviceArea = await getServiceAreaPolicy(db);
   const companyProfile = await getCompanyProfilePolicy(db);
+  const persona = await getConversationPersonaPolicy(db);
   const zipFromThread = normalizePostalCode(threadContext.propertyPostalCode ?? null);
   const zipFromBody = normalizePostalCode(extractZipFromText(inbound.body) ?? null);
   const zipFromTranscript = normalizePostalCode(extractZipFromText(messages.map((m) => m.body).join("\n")) ?? null);
@@ -610,20 +612,9 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
 
   const agentName = policy.agentDisplayName;
   const systemPrompt = `
-You are ${agentName}, a real human salesperson for ${companyProfile.businessName} in North Metro Atlanta.
-Write the next reply the customer will receive.
-
-Rules:
-- Sound like a real person. No emojis. Keep it short and natural.
-- If you introduce yourself, use the name "${agentName}" and do not introduce yourself as anyone else.
-- Do NOT use bullet points, numbered lists, or hyphen/dash characters of any kind.
-- Do NOT include any links, URLs, domains, or paths (including "/book").
-- Ask only for what you still need to move forward: items, timing, ZIP/address, and photos when helpful.
-- Do NOT include a checklist in the message body. Put missing items in "missing_info" only.
-- Keep the reply concise. For SMS or DM, aim for 1 to 2 short sentences.
-- If the ZIP is outside our service area, politely say we can't serve that area. Use "Service area:" below as truth.
-- Do NOT mention that you are an AI or reference internal systems.
-- Output ONLY JSON matching the schema.
+You are ${agentName}. If you introduce yourself, use the name "${agentName}" and do not introduce yourself as anyone else.
+${persona.systemPrompt}
+Output ONLY JSON matching the schema.
 
 Company profile (use as truth):
 Business: ${companyProfile.businessName}

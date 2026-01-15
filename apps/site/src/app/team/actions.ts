@@ -1426,6 +1426,31 @@ export async function updateCompanyProfilePolicyAction(formData: FormData) {
   );
 }
 
+export async function updateConversationPersonaPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const raw = formData.get("systemPrompt");
+  const systemPrompt = typeof raw === "string" ? raw.trim() : "";
+
+  if (!systemPrompt) {
+    jar.set({ name: "myst-flash-error", value: "System prompt is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (systemPrompt.length > 4000) {
+    jar.set({ name: "myst-flash-error", value: "System prompt must be 4000 characters or less", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  await submitPolicyUpdate(
+    jar,
+    "conversation_persona",
+    { systemPrompt },
+    "Conversation persona updated"
+  );
+}
+
 export async function updateTemplatesPolicyAction(formData: FormData) {
   const jar = await cookies();
   const firstTouch: Record<string, string> = {};

@@ -98,6 +98,10 @@ export type SalesAutopilotPolicy = {
   agentDisplayName: string;
 };
 
+export type ConversationPersonaPolicy = {
+  systemPrompt: string;
+};
+
 const DEFAULT_POLICY_TIMEZONE = process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
 
 const WEEKDAY_KEYS: WeekdayKey[] = [
@@ -154,6 +158,23 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   dmSmsFallbackAfterMinutes: 120,
   dmMinSilenceBeforeSmsMinutes: 45,
   agentDisplayName: "Stonegate"
+};
+
+export const DEFAULT_CONVERSATION_PERSONA_POLICY: ConversationPersonaPolicy = {
+  systemPrompt: [
+    "You are the warm, human, front-office voice for Stonegate Junk Removal.",
+    "Write the next reply the customer will receive.",
+    "",
+    "Rules:",
+    "- Sound like a real person. No emojis. Keep it short and natural.",
+    "- Be concise and specific; avoid filler.",
+    "- Do NOT use bullet points, numbered lists, or hyphen/dash characters of any kind in the customer message.",
+    '- Do NOT include any links, URLs, domains, or paths (including "/book").',
+    "- Ask only for what you still need to move forward: items, timing, ZIP/address, and photos when helpful.",
+    "- Do NOT mention internal systems, databases, webhooks, or that you're an AI.",
+    "- If the ZIP is outside Georgia, politely say we currently serve Georgia only.",
+    "- If the ZIP is in Georgia but outside the usual service area, do not reject. Confirm location and proceed if reasonable."
+  ].join("\n")
 };
 
 export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
@@ -994,6 +1015,18 @@ function coerceString(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
   return trimmed.length ? trimmed : fallback;
+}
+
+export async function getConversationPersonaPolicy(db: DbExecutor = getDb()): Promise<ConversationPersonaPolicy> {
+  const stored = await getPolicySetting(db, "conversation_persona");
+  if (!stored) {
+    return DEFAULT_CONVERSATION_PERSONA_POLICY;
+  }
+
+  const systemPrompt = coerceString(stored["systemPrompt"], DEFAULT_CONVERSATION_PERSONA_POLICY.systemPrompt);
+  return {
+    systemPrompt: systemPrompt.length > 4000 ? systemPrompt.slice(0, 4000) : systemPrompt
+  };
 }
 
 export async function getCompanyProfilePolicy(db: DbExecutor = getDb()): Promise<CompanyProfilePolicy> {
