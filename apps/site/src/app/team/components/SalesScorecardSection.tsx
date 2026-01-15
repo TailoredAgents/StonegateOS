@@ -4,12 +4,14 @@ import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 import { callAdminApi } from "../lib/api";
 import { resetSalesHqAction, updatePipelineStageAction } from "../actions";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type ScorecardPayload = {
   ok: true;
   memberId: string;
   rangeDays: number;
   config?: {
+    trackingStartAt?: string | null;
     weights?: {
       speedToLead?: number;
       followupCompliance?: number;
@@ -46,6 +48,10 @@ type QueuePayload = {
     minutesUntilDue: number | null;
     kind: "speed_to_lead" | "follow_up";
   }>;
+};
+
+type TeamMemberPayload = {
+  members?: Array<{ id: string; name: string; active: boolean }>;
 };
 
 function Pill({
@@ -118,19 +124,25 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
   const rangeDays = 7;
   let scorecard: ScorecardPayload | null = null;
   let queue: QueuePayload | null = null;
+  let members: TeamMemberPayload["members"] = [];
   let error: string | null = null;
   const adminKey = getAdminKey();
   const jar = await cookies();
   const isOwnerSession = Boolean(adminKey && jar.get(ADMIN_SESSION_COOKIE)?.value === adminKey);
 
   try {
-    const [scoreRes, queueRes] = await Promise.all([
+    const [scoreRes, queueRes, membersRes] = await Promise.all([
       callAdminApi(`/api/admin/sales/scorecard?rangeDays=${rangeDays}`),
-      callAdminApi(`/api/admin/sales/queue`)
+      callAdminApi(`/api/admin/sales/queue`),
+      callAdminApi(`/api/admin/team/members`)
     ]);
 
     if (scoreRes.ok) scorecard = (await scoreRes.json()) as ScorecardPayload;
     if (queueRes.ok) queue = (await queueRes.json()) as QueuePayload;
+    if (membersRes.ok) {
+      const payload = (await membersRes.json()) as TeamMemberPayload;
+      members = payload.members ?? [];
+    }
 
     if (!scoreRes.ok) error = `Scorecard unavailable (HTTP ${scoreRes.status})`;
     if (!queueRes.ok) error = error ?? `Queue unavailable (HTTP ${queueRes.status})`;
@@ -156,6 +168,12 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
   const speed = scorecard?.metrics.speedToLead;
   const followups = scorecard?.metrics.followups;
 
+  const memberLabel =
+    members?.find((member) => member.id === scorecard?.memberId)?.name ??
+    members?.find((member) => member.id === queue?.memberId)?.name ??
+    null;
+  const trackingStartAt = typeof scorecard?.config?.trackingStartAt === "string" ? scorecard?.config?.trackingStartAt : null;
+
   const urgentItems = (queue?.items ?? []).filter((item) => item.kind === "speed_to_lead").slice(0, 10);
   const followupItems = (queue?.items ?? []).filter((item) => item.kind === "follow_up").slice(0, 20);
 
@@ -167,6 +185,17 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
           <p className="mt-1 text-sm text-slate-600">
             7-day snapshot: speed-to-lead + follow-ups (call-first when a phone exists).
           </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            {memberLabel ? <Pill tone="neutral">Viewing: {memberLabel}</Pill> : null}
+            {trackingStartAt ? (
+              <Pill tone="neutral">
+                Tracking since: {new Date(trackingStartAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
+              </Pill>
+            ) : null}
+            {trackingStartAt ? (
+              <span className="text-[11px] text-slate-500">Leads created before this won’t appear in Sales HQ.</span>
+            ) : null}
+          </div>
           {error ? <p className="mt-2 text-sm text-rose-700">{error}</p> : null}
         </div>
         <div className="flex items-center gap-4">
