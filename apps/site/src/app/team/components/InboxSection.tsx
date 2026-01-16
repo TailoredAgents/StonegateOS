@@ -455,74 +455,188 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
             </div>
           ) : (
             <div className="space-y-3">
-              {threads.map((thread) => {
-                const expired = isDmExpired(thread, Date.now());
-                const threadContactId = thread.contact?.id ?? null;
-                const isActive =
-                  Boolean(threadContactId && activeContactId) &&
-                  threadContactId === activeContactId &&
-                  thread.channel === requestedChannel;
-                const href = threadContactId
-                  ? buildInboxHref({
-                      status: activeStatus === "all" ? null : activeStatus,
-                      contactId: threadContactId,
-                      channel: thread.channel
-                    })
-                  : buildInboxHref({
-                      status: activeStatus === "all" ? null : activeStatus,
-                      threadId: thread.id
+              {(() => {
+                const nowMs = Date.now();
+                type ContactGroup = {
+                  key: string;
+                  contactId: string | null;
+                  name: string;
+                  threads: ThreadSummary[];
+                  lastActivityAt: string | null;
+                  lastPreview: string | null;
+                  outOfArea: boolean;
+                  followupNextAt: string | null;
+                  followupRunning: boolean;
+                  expired: boolean;
+                  messageCount: number;
+                };
+
+                const byKey = new Map<string, ContactGroup>();
+                for (const thread of threads) {
+                  const contactId = thread.contact?.id ?? null;
+                  const key = contactId ?? `thread:${thread.id}`;
+                  const existing = byKey.get(key);
+                  const threadName = thread.contact?.name ?? "Unknown contact";
+                  const parsedLast = thread.lastMessageAt ? Date.parse(thread.lastMessageAt) : NaN;
+                  const parsedExisting = existing?.lastActivityAt ? Date.parse(existing.lastActivityAt) : NaN;
+                  const isNewer =
+                    Number.isFinite(parsedLast) &&
+                    (!Number.isFinite(parsedExisting) || parsedLast > parsedExisting);
+
+                  const expired = isDmExpired(thread, nowMs);
+                  const followupRunning = Boolean(thread.followup?.nextAt && thread.followup.state === "running");
+                  const followupNextAt = followupRunning ? thread.followup!.nextAt : null;
+
+                  if (!existing) {
+                    byKey.set(key, {
+                      key,
+                      contactId,
+                      name: threadName,
+                      threads: [thread],
+                      lastActivityAt: thread.lastMessageAt ?? null,
+                      lastPreview: thread.lastMessagePreview ?? null,
+                      outOfArea: Boolean(thread.property?.outOfArea),
+                      followupNextAt,
+                      followupRunning,
+                      expired,
+                      messageCount: thread.messageCount ?? 0
                     });
-                return (
-                  <a
-                    key={thread.id}
-                    href={href}
-                    className={`block rounded-2xl border px-4 py-3 text-sm transition ${
-                      isActive
-                        ? "border-primary-300 bg-primary-50/60 shadow-md shadow-primary-100"
-                        : "border-slate-200 bg-white hover:border-primary-200 hover:bg-primary-50/30"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="font-semibold text-slate-900">
-                        {thread.contact?.name ?? "Unknown contact"}
+                    continue;
+                  }
+
+                  existing.threads.push(thread);
+                  existing.messageCount += thread.messageCount ?? 0;
+                  existing.outOfArea = existing.outOfArea || Boolean(thread.property?.outOfArea);
+                  existing.expired = existing.expired || expired;
+
+                  if (followupRunning) {
+                    if (!existing.followupNextAt) {
+                      existing.followupNextAt = followupNextAt;
+                      existing.followupRunning = true;
+                    } else {
+                      const a = Date.parse(existing.followupNextAt);
+                      const b = Date.parse(followupNextAt ?? "");
+                      if (Number.isFinite(b) && (!Number.isFinite(a) || b < a)) {
+                        existing.followupNextAt = followupNextAt;
+                        existing.followupRunning = true;
+                      }
+                    }
+                  }
+
+                  if (isNewer) {
+                    existing.lastActivityAt = thread.lastMessageAt ?? null;
+                    existing.lastPreview = thread.lastMessagePreview ?? existing.lastPreview;
+                    existing.name = threadName || existing.name;
+                  }
+                }
+
+                const groups = Array.from(byKey.values()).sort((a, b) => {
+                  const aTime = a.lastActivityAt ? Date.parse(a.lastActivityAt) : 0;
+                  const bTime = b.lastActivityAt ? Date.parse(b.lastActivityAt) : 0;
+                  if (aTime !== bTime) return bTime - aTime;
+                  return a.name.localeCompare(b.name);
+                });
+
+                return groups.map((group) => {
+                  const isActive = Boolean(group.contactId && activeContactId) && group.contactId === activeContactId;
+
+                  const sortedThreads = [...group.threads].sort((a, b) => {
+                    const aTime = a.lastMessageAt ? Date.parse(a.lastMessageAt) : 0;
+                    const bTime = b.lastMessageAt ? Date.parse(b.lastMessageAt) : 0;
+                    if (aTime !== bTime) return bTime - aTime;
+                    return a.channel.localeCompare(b.channel);
+                  });
+
+                  const availableChannels = new Set(sortedThreads.map((t) => t.channel));
+                  const landingChannel = availableChannels.has(requestedChannel)
+                    ? requestedChannel
+                    : (sortedThreads[0]?.channel ?? requestedChannel);
+
+                  const groupHref = group.contactId
+                    ? buildInboxHref({
+                        status: activeStatus === "all" ? null : activeStatus,
+                        contactId: group.contactId,
+                        channel: landingChannel
+                      })
+                    : buildInboxHref({
+                        status: activeStatus === "all" ? null : activeStatus,
+                        threadId: group.threads[0]?.id ?? null
+                      });
+
+                  return (
+                    <div
+                      key={group.key}
+                      className={`rounded-2xl border px-4 py-3 text-sm transition ${
+                        isActive
+                          ? "border-primary-300 bg-primary-50/60 shadow-md shadow-primary-100"
+                          : "border-slate-200 bg-white hover:border-primary-200 hover:bg-primary-50/30"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <a href={groupHref} className="min-w-0 flex-1">
+                          <div className="truncate font-semibold text-slate-900">{group.name}</div>
+                        </a>
+                        <div className="flex flex-wrap items-center justify-end gap-1">
+                          {group.outOfArea ? (
+                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                              Out of area
+                            </span>
+                          ) : null}
+                          {group.followupRunning && group.followupNextAt ? (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                              Follow-up {formatTimestamp(group.followupNextAt)}
+                            </span>
+                          ) : null}
+                          {group.expired ? (
+                            <span
+                              className="inline-flex items-center justify-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800"
+                              title="At least one Messenger thread has expired; please message directly in Messenger or wait for the customer to reply."
+                            >
+                              expired
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-1">
-                        {thread.property?.outOfArea ? (
-                          <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
-                            Out of area
-                          </span>
-                        ) : null}
-                        {thread.followup?.nextAt && thread.followup.state === "running" ? (
-                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                            Follow-up {formatTimestamp(thread.followup.nextAt)}
-                          </span>
-                        ) : null}
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                          {formatStateLabel(thread.state ?? "new")}
-                        </span>
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                          {thread.channel}
-                        </span>
-                        {expired ? (
-                          <span
-                            className="inline-flex items-center justify-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800"
-                            title="Chat has expired; please message directly in Messenger or wait for the customer to reply."
-                          >
-                            expired
-                          </span>
-                        ) : null}
+
+                      <p className="mt-1 text-xs text-slate-500">{group.lastPreview ?? "No messages yet"}</p>
+
+                      <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                        <span>{formatTimestamp(group.lastActivityAt)}</span>
+                        <div className="flex flex-wrap items-center justify-end gap-1">
+                          {sortedThreads.map((t) => {
+                            const href = t.contact?.id
+                              ? buildInboxHref({
+                                  status: activeStatus === "all" ? null : activeStatus,
+                                  contactId: t.contact.id,
+                                  channel: t.channel
+                                })
+                              : buildInboxHref({
+                                  status: activeStatus === "all" ? null : activeStatus,
+                                  threadId: t.id
+                                });
+                            const isChannelActive = isActive && t.channel === requestedChannel;
+                            return (
+                              <a
+                                key={t.id}
+                                href={href}
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                  isChannelActive
+                                    ? "border-primary-300 bg-primary-100 text-primary-800"
+                                    : "border-slate-200 bg-slate-50 text-slate-600 hover:border-primary-200 hover:text-primary-700"
+                                }`}
+                                title={`${t.channel.toUpperCase()} thread`}
+                              >
+                                {t.channel}
+                              </a>
+                            );
+                          })}
+                          <span className="ml-1">{group.messageCount} msg</span>
+                        </div>
                       </div>
                     </div>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {thread.lastMessagePreview ?? "No messages yet"}
-                    </p>
-                    <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
-                      <span>{formatTimestamp(thread.lastMessageAt)}</span>
-                      <span>{thread.messageCount} msg</span>
-                    </div>
-                  </a>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           )}
 

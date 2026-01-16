@@ -143,10 +143,10 @@ export async function GET(request: NextRequest): Promise<Response> {
           channel: conversationThreads.channel,
           subject: conversationThreads.subject,
           lastActivityAt: activityLatest.lastActivityAt,
-          resolvedLastMessagePreview: sql<string | null>`coalesce(
-            ${conversationThreads.lastMessagePreview},
-            (
-              select cm.body
+           resolvedLastMessagePreview: sql<string | null>`coalesce(
+             ${conversationThreads.lastMessagePreview},
+             (
+              select coalesce(cm.body, 'Media message')
               from conversation_messages cm
               where cm.thread_id = ${conversationThreads.id}
               order by coalesce(cm.received_at, cm.sent_at, cm.created_at) desc
@@ -196,10 +196,10 @@ export async function GET(request: NextRequest): Promise<Response> {
           channel: conversationThreads.channel,
           subject: conversationThreads.subject,
           lastActivityAt: activityLatest.lastActivityAt,
-          resolvedLastMessagePreview: sql<string | null>`coalesce(
-            ${conversationThreads.lastMessagePreview},
-            (
-              select cm.body
+           resolvedLastMessagePreview: sql<string | null>`coalesce(
+             ${conversationThreads.lastMessagePreview},
+             (
+              select coalesce(cm.body, 'Media message')
               from conversation_messages cm
               where cm.thread_id = ${conversationThreads.id}
               order by coalesce(cm.received_at, cm.sent_at, cm.created_at) desc
@@ -264,25 +264,22 @@ export async function GET(request: NextRequest): Promise<Response> {
     messageCountMap.set(row.threadId, Number(row.count));
   }
 
+  const normalizeIsoTimestamp = (value: unknown): string | null => {
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? new Date(parsed).toISOString() : value;
+    }
+    return null;
+  };
+
   const threads = rows.map((row) => {
     const contactName = [row.contactFirstName, row.contactLastName].filter(Boolean).join(" ").trim();
     const normalizedPostalCode = normalizePostalCode(row.propertyPostalCode ?? null);
     const outOfArea =
       normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
-    const rawLastActivity = row.lastActivityAt as unknown;
-    const lastActivityIso =
-      rawLastActivity instanceof Date
-        ? rawLastActivity.toISOString()
-        : typeof rawLastActivity === "string"
-          ? rawLastActivity
-          : null;
-    const rawLastInbound = row.lastInboundAt as unknown;
-    const lastInboundIso =
-      rawLastInbound instanceof Date
-        ? rawLastInbound.toISOString()
-        : typeof rawLastInbound === "string"
-          ? rawLastInbound
-          : null;
+    const lastActivityIso = normalizeIsoTimestamp(row.lastActivityAt as unknown);
+    const lastInboundIso = normalizeIsoTimestamp(row.lastInboundAt as unknown);
     return {
       id: row.id,
       status: row.status,

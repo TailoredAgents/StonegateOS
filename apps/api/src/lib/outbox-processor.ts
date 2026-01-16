@@ -30,7 +30,6 @@ import {
   getSalesAutopilotPolicy,
   getServiceAreaPolicy,
   getTemplatesPolicy,
-  isGeorgiaPostalCode,
   isPostalCodeAllowed,
   normalizePostalCode,
   nextQuietHoursEnd,
@@ -1768,9 +1767,11 @@ async function queueAutoFirstTouchSms(input: {
   const templatesPolicy = await getTemplatesPolicy(input.db);
   const pipelineZip = input.propertyPostalCode ? null : await resolveContactZipFromPipeline(input.db, input.contactId);
   const normalizedPostalCode = normalizePostalCode(input.propertyPostalCode ?? pipelineZip);
-  const inGeorgia = normalizedPostalCode !== null ? isGeorgiaPostalCode(normalizedPostalCode) : null;
-  const isOutOfArea = inGeorgia === false;
-  const autoSendEligible = inGeorgia !== false;
+  const serviceArea = await getServiceAreaPolicy(input.db);
+  const outOfServiceArea =
+    normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
+  const isOutOfArea = outOfServiceArea === true;
+  const autoSendEligible = true;
   const templateGroup = isOutOfArea ? templatesPolicy.out_of_area : templatesPolicy.first_touch;
   const body =
     resolveTemplateForChannel(templateGroup, { replyChannel: "sms" }) ??
@@ -1840,6 +1841,7 @@ async function queueAutoFirstTouchSms(input: {
           autoFirstTouch: true,
           salesAutopilotNoAutosend: autoSendEligible ? undefined : true,
           outOfArea: isOutOfArea || undefined,
+          serviceAreaOutOfArea: outOfServiceArea === true ? true : undefined,
           leadId: input.leadId ?? undefined
         },
         createdAt: now

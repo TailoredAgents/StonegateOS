@@ -155,9 +155,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       const clockStart = getLeadClockStart(row.contactCreatedAt, config);
       const withinHours = clockStart.getTime() === row.contactCreatedAt.getTime();
       if (!withinHours) {
-        kind = "follow_up";
-        title = "Auto: Call overnight lead (at open)";
-        effectiveDueAt = clockStart;
+        title = "Auto: Call overnight lead (5 min SLA at open)";
+        effectiveDueAt = getSpeedToLeadDeadline(row.contactCreatedAt, config);
       }
     }
 

@@ -309,10 +309,8 @@ export async function computeSpeedToLeadForMember(input: {
   const scorableContactRows = contactRows.filter((row) => Boolean((row.phoneE164 ?? row.phone ?? "").trim().length));
   if (!scorableContactRows.length) return [];
 
-  const withinHours = scorableContactRows.filter((row) => isWithinBusinessHours(row.contactCreatedAt, config));
-  if (!withinHours.length) return [];
-
-  const contactIds = Array.from(new Set(withinHours.map((row) => row.contactId)));
+  // Leads created outside business hours are still counted; their SLA clock starts at the next business open.
+  const contactIds = Array.from(new Set(scorableContactRows.map((row) => row.contactId)));
   const disqualified = await getDisqualifiedContactIds({ db, contactIds });
 
   const completedSpeedTasks = await db
@@ -398,7 +396,7 @@ export async function computeSpeedToLeadForMember(input: {
     }
   }
 
-  return withinHours
+  return scorableContactRows
     .filter((row) => !disqualified.has(row.contactId))
     .map((row) => {
     const hasPhone = true;
