@@ -159,7 +159,7 @@ export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
 export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   enabled: true,
   autoSendAfterMinutes: 15,
-  activityWindowMinutes: 14,
+  activityWindowMinutes: 15,
   retryDelayMinutes: 2,
   dmSmsFallbackAfterMinutes: 120,
   dmMinSilenceBeforeSmsMinutes: 45,

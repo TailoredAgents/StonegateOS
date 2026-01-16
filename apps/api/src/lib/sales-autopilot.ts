@@ -528,6 +528,22 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
     return { status: "skipped" };
   }
 
+  if (
+    replyChannel === "dm" &&
+    typeof inbound.body === "string" &&
+    inbound.body.trim().length > 0 &&
+    isMessengerLeadCard(inbound.body)
+  ) {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.skipped",
+      entityType: "conversation_message",
+      entityId: messageId,
+      meta: { reason: "messenger_lead_card" }
+    });
+    return { status: "processed" };
+  }
+
   const [latestInbound] = await db
     .select({
       id: conversationMessages.id,
@@ -944,6 +960,34 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     return { status: "processed" };
   }
 
+  if (isAutoFirstTouch && row.channel === "sms") {
+    const [recentDm] = await db
+      .select({ body: conversationMessages.body })
+      .from(conversationMessages)
+      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+      .where(
+        and(
+          eq(conversationThreads.contactId, contactId),
+          eq(conversationMessages.direction, "inbound"),
+          eq(conversationMessages.channel, "dm"),
+          gt(conversationMessages.createdAt, row.createdAt)
+        )
+      )
+      .orderBy(desc(conversationMessages.createdAt))
+      .limit(1);
+
+    if (typeof recentDm?.body === "string" && recentDm.body.trim().length > 0 && !isMessengerLeadCard(recentDm.body)) {
+      await recordAuditEvent({
+        actor: { type: "ai", label: "sales-autopilot" },
+        action: "sales.autopilot.autosend_skipped",
+        entityType: "conversation_message",
+        entityId: row.id,
+        meta: { reason: "dm_active" }
+      });
+      return { status: "processed" };
+    }
+  }
+
   const [assignee] = await db
     .select({ salespersonMemberId: contacts.salespersonMemberId })
     .from(contacts)
@@ -997,42 +1041,6 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       meta: { reason: "handled", stage, booked: isBooked }
     });
     return { status: "processed" };
-  }
-
-  if (row.channel === "dm") {
-    const [latestInboundForContact] = await db
-      .select({
-        body: conversationMessages.body,
-        channel: conversationMessages.channel,
-        createdAt: conversationMessages.createdAt
-      })
-      .from(conversationMessages)
-      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
-      .where(and(eq(conversationThreads.contactId, contactId), eq(conversationMessages.direction, "inbound")))
-      .orderBy(desc(conversationMessages.createdAt))
-      .limit(1);
-
-    if (
-      latestInboundForContact?.channel === "dm" &&
-      typeof latestInboundForContact.body === "string" &&
-      latestInboundForContact.body.trim().length > 0 &&
-      !isMessengerLeadCard(latestInboundForContact.body)
-    ) {
-      const now = new Date();
-      const fallbackAt = DateTime.fromJSDate(latestInboundForContact.createdAt)
-        .plus({ minutes: policy.dmSmsFallbackAfterMinutes })
-        .toJSDate();
-      if (now < fallbackAt) {
-        return { status: "retry", error: "dm_cooldown", nextAttemptAt: fallbackAt };
-      }
-
-      const silenceUntil = DateTime.fromJSDate(latestInboundForContact.createdAt)
-        .plus({ minutes: policy.dmMinSilenceBeforeSmsMinutes })
-        .toJSDate();
-      if (now < silenceUntil) {
-        return { status: "retry", error: "dm_recent_inbound", nextAttemptAt: silenceUntil };
-      }
-    }
   }
 
   const inboundId =
@@ -1144,137 +1152,7 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     return { status: "retry", error: "recent_activity", nextAttemptAt };
   }
 
-  if (row.channel === "sms") {
-    const [latestInboundForContact] = await db
-      .select({
-        body: conversationMessages.body,
-        channel: conversationMessages.channel,
-        createdAt: conversationMessages.createdAt
-      })
-      .from(conversationMessages)
-      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
-      .where(and(eq(conversationThreads.contactId, contactId), eq(conversationMessages.direction, "inbound")))
-      .orderBy(desc(conversationMessages.createdAt))
-      .limit(1);
-
-    if (
-      latestInboundForContact?.channel === "dm" &&
-      typeof latestInboundForContact.body === "string" &&
-      latestInboundForContact.body.trim().length > 0 &&
-      !isMessengerLeadCard(latestInboundForContact.body)
-    ) {
-      const fallbackAt = DateTime.fromJSDate(latestInboundForContact.createdAt)
-        .plus({ minutes: policy.dmSmsFallbackAfterMinutes })
-        .toJSDate();
-      if (now < fallbackAt) {
-        return { status: "retry", error: "dm_cooldown", nextAttemptAt: fallbackAt };
-      }
-
-      const silenceUntil = DateTime.fromJSDate(latestInboundForContact.createdAt)
-        .plus({ minutes: policy.dmMinSilenceBeforeSmsMinutes })
-        .toJSDate();
-      if (now < silenceUntil) {
-        return { status: "retry", error: "dm_recent_inbound", nextAttemptAt: silenceUntil };
-      }
-    }
-  }
-
-  const wantsSmsFallback = row.channel === "dm";
-  let smsToAddress: string | null = null;
-  if (wantsSmsFallback) {
-    const [contact] = await db
-      .select({ phone: contacts.phone, phoneE164: contacts.phoneE164 })
-      .from(contacts)
-      .where(eq(contacts.id, contactId))
-      .limit(1);
-
-    const extracted = typeof meta?.["extractedPhoneE164"] === "string" ? (meta["extractedPhoneE164"] as string) : null;
-    smsToAddress = (contact?.phoneE164 ?? contact?.phone ?? extracted ?? "").trim() || null;
-    if (smsToAddress) {
-      const parsed = parsePhoneNumberFromString(smsToAddress, "US");
-      smsToAddress = parsed?.isValid() ? parsed.number : null;
-    }
-  }
-
   const sendAt = DateTime.fromJSDate(now).plus({ milliseconds: randomHumanisticDelayMs() }).toJSDate();
-
-  if (wantsSmsFallback && smsToAddress) {
-    const smsBody = clampReplyBody(row.body ?? "", "sms");
-    if (!smsBody) {
-      return { status: "processed" };
-    }
-
-    await db.transaction(async (tx) => {
-      const participantId = await ensureAutopilotParticipant(tx, row.threadId, now, policy.agentDisplayName);
-      const [message] = await tx
-        .insert(conversationMessages)
-        .values({
-          threadId: row.threadId,
-          participantId,
-          direction: "outbound",
-          channel: "sms",
-          subject: null,
-          body: smsBody,
-          toAddress: smsToAddress,
-          deliveryStatus: "queued",
-          metadata: {
-            salesAutopilot: true,
-            salesAutopilotDerivedFromDraftId: row.id,
-            salesAutopilotDerivedFromInboundId: inboundId ?? undefined
-          },
-          createdAt: now
-        })
-        .returning({ id: conversationMessages.id });
-
-      if (!message?.id) {
-        throw new Error("autosend_sms_create_failed");
-      }
-
-      await tx
-        .update(conversationThreads)
-        .set({
-          lastMessagePreview: smsBody.slice(0, 140),
-          lastMessageAt: now,
-          updatedAt: now
-        })
-        .where(eq(conversationThreads.id, row.threadId));
-
-      await tx.insert(outboxEvents).values({
-        type: "message.send",
-        payload: { messageId: message.id },
-        nextAttemptAt: sendAt,
-        createdAt: now
-      });
-    });
-
-    await recordAuditEvent({
-      actor: { type: "ai", label: "sales-autopilot" },
-      action: "sales.autopilot.autosent",
-      entityType: "conversation_message",
-      entityId: row.id,
-      meta: { contactId, via: "sms_fallback" }
-    });
-
-    await completeNextFollowupTaskOnTouch({
-      db,
-      contactId,
-      memberId: assigneeMemberId,
-      now
-    });
-
-    return { status: "processed" };
-  }
-
-  if (wantsSmsFallback && !smsToAddress) {
-    await recordAuditEvent({
-      actor: { type: "ai", label: "sales-autopilot" },
-      action: "sales.autopilot.autosend_skipped",
-      entityType: "conversation_message",
-      entityId: row.id,
-      meta: { reason: "no_sms_recipient" }
-    });
-    return { status: "processed" };
-  }
 
   await db.transaction(async (tx) => {
     const existingSend = await tx
