@@ -12,6 +12,7 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
 
 const CHANNELS = ["sms", "email", "dm", "call", "web"] as const;
 const DIRECTIONS = ["inbound", "outbound", "internal"] as const;
@@ -80,7 +81,7 @@ export async function POST(
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
 
-  let result: { message: typeof conversationMessages.$inferSelect; messageChannel: string };
+  let result: { message: typeof conversationMessages.$inferSelect; messageChannel: string; contactId: string | null; salespersonMemberId: string | null };
   try {
     result = await db.transaction(async (tx) => {
       const [thread] = await tx
@@ -103,6 +104,7 @@ export async function POST(
     let participantId: string | null = null;
     let resolvedToAddress: string | null = toAddress;
     let resolvedMetadata: Record<string, unknown> | null = null;
+    let salespersonMemberId: string | null = null;
 
     if (direction === "inbound") {
       const contactParticipant = await tx
@@ -213,13 +215,15 @@ export async function POST(
               .select({
                 email: contacts.email,
                 phone: contacts.phone,
-                phoneE164: contacts.phoneE164
+                phoneE164: contacts.phoneE164,
+                salespersonMemberId: contacts.salespersonMemberId
               })
               .from(contacts)
               .where(eq(contacts.id, thread.contactId))
               .limit(1)
           : [null];
 
+        salespersonMemberId = (contact?.salespersonMemberId ?? null) as string | null;
         resolvedToAddress =
           resolvedToAddress ??
           (messageChannel === "email"
@@ -274,9 +278,18 @@ export async function POST(
         payload: { messageId: message.id },
         createdAt: now
       });
+
+      if (thread.contactId) {
+        await completeNextFollowupTaskOnTouch({
+          db: tx,
+          contactId: thread.contactId,
+          memberId: salespersonMemberId ?? actor.id ?? null,
+          now
+        });
+      }
     }
 
-      return { message, messageChannel };
+      return { message, messageChannel, contactId: thread.contactId ?? null, salespersonMemberId };
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "message_create_failed";

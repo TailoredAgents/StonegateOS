@@ -1,10 +1,11 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { conversationMessages, getDb, messageDeliveryEvents, outboxEvents } from "@/db";
+import { contacts, conversationMessages, conversationThreads, getDb, messageDeliveryEvents, outboxEvents } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -40,9 +41,13 @@ export async function POST(
       deliveryStatus: conversationMessages.deliveryStatus,
       direction: conversationMessages.direction,
       threadId: conversationMessages.threadId,
-      metadata: conversationMessages.metadata
+      metadata: conversationMessages.metadata,
+      contactId: conversationThreads.contactId,
+      salespersonMemberId: contacts.salespersonMemberId
     })
     .from(conversationMessages)
+    .leftJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
     .where(eq(conversationMessages.id, messageId))
     .limit(1);
 
@@ -108,6 +113,16 @@ export async function POST(
       provider: null,
       occurredAt: now
     });
+
+    if (message.contactId) {
+      const actor = getAuditActorFromRequest(request);
+      await completeNextFollowupTaskOnTouch({
+        db: tx,
+        contactId: message.contactId,
+        memberId: message.salespersonMemberId ?? actor.id ?? null,
+        now
+      });
+    }
   });
 
   await recordAuditEvent({

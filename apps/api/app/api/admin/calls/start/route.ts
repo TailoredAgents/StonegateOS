@@ -6,6 +6,7 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { normalizePhone } from "../../../web/utils";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
+import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
 
 type StartCallPayload = {
   contactId?: string;
@@ -302,6 +303,13 @@ export async function POST(request: NextRequest): Promise<Response> {
             ilike(crmTasks.notes, "%kind=speed_to_lead%")
           )
         );
+
+      await completeNextFollowupTaskOnTouch({
+        db,
+        contactId: contactEntityId,
+        memberId: actor.id,
+        now
+      });
     } catch (error) {
       console.warn("[calls.start] task_touch_update_failed", { contactId: contactEntityId, actorId: actor.id, error: String(error) });
     }

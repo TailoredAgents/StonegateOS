@@ -14,6 +14,7 @@ import {
   properties
 } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
+import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
 import {
   getCompanyProfilePolicy,
   getConversationPersonaPolicy,
@@ -943,6 +944,16 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     return { status: "processed" };
   }
 
+  const [assignee] = await db
+    .select({ salespersonMemberId: contacts.salespersonMemberId })
+    .from(contacts)
+    .where(eq(contacts.id, contactId))
+    .limit(1);
+  const assigneeMemberId =
+    typeof assignee?.salespersonMemberId === "string" && assignee.salespersonMemberId.trim().length > 0
+      ? assignee.salespersonMemberId.trim()
+      : null;
+
   if (input.inboundMessageId) {
     const [latestInbound] = await db
       .select({ id: conversationMessages.id })
@@ -1244,6 +1255,13 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       meta: { contactId, via: "sms_fallback" }
     });
 
+    await completeNextFollowupTaskOnTouch({
+      db,
+      contactId,
+      memberId: assigneeMemberId,
+      now
+    });
+
     return { status: "processed" };
   }
 
@@ -1305,6 +1323,13 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
     entityType: "conversation_message",
     entityId: row.id,
     meta: { contactId }
+  });
+
+  await completeNextFollowupTaskOnTouch({
+    db,
+    contactId,
+    memberId: assigneeMemberId,
+    now
   });
 
   return { status: "processed" };
