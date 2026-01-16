@@ -240,6 +240,12 @@ export function buildContactTag(contactId: string): string {
   return `[auto] contactId=${contactId}`;
 }
 
+function parseLeadIdFromNotes(notes: string | null): string | null {
+  if (!notes) return null;
+  const match = notes.match(/leadId=([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/i);
+  return match?.[1] ?? null;
+}
+
 function isDisqualifyMarker(notes: string | null): boolean {
   if (!notes) return false;
   return /\bdisqualify\s*=\s*[a-z0-9_]+\b/i.test(notes);
@@ -288,136 +294,185 @@ export async function computeSpeedToLeadForMember(input: {
   const db = input.db ?? getDb();
   const config = await getSalesScorecardConfig(db);
 
-  const contactRows = await db
+  const speedTaskRows = await db
     .select({
-      contactId: contacts.id,
-      contactCreatedAt: contacts.createdAt,
+      taskId: crmTasks.id,
+      contactId: crmTasks.contactId,
+      taskCreatedAt: crmTasks.createdAt,
+      taskDueAt: crmTasks.dueAt,
+      taskStatus: crmTasks.status,
+      taskUpdatedAt: crmTasks.updatedAt,
+      taskNotes: crmTasks.notes,
       phone: contacts.phone,
       phoneE164: contacts.phoneE164
     })
-    .from(contacts)
-    .where(
-      and(
-        eq(contacts.salespersonMemberId, input.memberId),
-        gte(contacts.createdAt, input.since),
-        lte(contacts.createdAt, input.until)
-      )
-    )
-    .orderBy(desc(contacts.createdAt))
-    .limit(500);
-
-  const scorableContactRows = contactRows.filter((row) => Boolean((row.phoneE164 ?? row.phone ?? "").trim().length));
-  if (!scorableContactRows.length) return [];
-
-  // Leads created outside business hours are still counted; their SLA clock starts at the next business open.
-  const contactIds = Array.from(new Set(scorableContactRows.map((row) => row.contactId)));
-  const disqualified = await getDisqualifiedContactIds({ db, contactIds });
-
-  const completedSpeedTasks = await db
-    .select({
-      contactId: crmTasks.contactId,
-      touchedAt: sql<Date>`min(${crmTasks.updatedAt})`.as("touched_at")
-    })
     .from(crmTasks)
+    .innerJoin(contacts, eq(crmTasks.contactId, contacts.id))
     .where(
       and(
         eq(crmTasks.assignedTo, input.memberId),
-        eq(crmTasks.status, "completed"),
         isNotNull(crmTasks.contactId),
-        inArray(crmTasks.contactId, contactIds),
+        isNotNull(crmTasks.dueAt),
         isNotNull(crmTasks.notes),
         ilike(crmTasks.notes, "%kind=speed_to_lead%"),
-        gte(crmTasks.updatedAt, input.since),
-        lte(crmTasks.updatedAt, input.until)
+        gte(crmTasks.createdAt, input.since),
+        lte(crmTasks.createdAt, input.until)
       )
     )
-    .groupBy(crmTasks.contactId);
+    .orderBy(desc(crmTasks.createdAt))
+    .limit(800);
 
-  const speedTaskTouchMap = new Map<string, Date>();
-  for (const row of completedSpeedTasks) {
-    if (typeof row.contactId === "string" && row.touchedAt instanceof Date) {
-      speedTaskTouchMap.set(row.contactId, row.touchedAt);
+  if (!speedTaskRows.length) return [];
+
+  const contactIds = Array.from(
+    new Set(speedTaskRows.map((row) => (typeof row.contactId === "string" ? row.contactId : "")).filter(Boolean))
+  );
+  const disqualified = await getDisqualifiedContactIds({ db, contactIds });
+
+  const taskIds = speedTaskRows.map((row) => row.taskId);
+  const taskIdFromMeta = sql<string>`(${auditLogs.meta} ->> 'taskId')`;
+  const callTimesByTask = new Map<string, Date>();
+  const callTimesByContact = new Map<string, Date>();
+
+  if (taskIds.length) {
+    const callRows = await db
+      .select({
+        taskId: taskIdFromMeta,
+        createdAt: auditLogs.createdAt
+      })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.action, "call.started"),
+          eq(auditLogs.entityType, "contact"),
+          eq(auditLogs.actorId, input.memberId),
+          isNotNull(auditLogs.meta),
+          inArray(taskIdFromMeta, taskIds),
+          gte(auditLogs.createdAt, input.since),
+          lte(auditLogs.createdAt, input.until)
+        )
+      )
+      .limit(2000);
+
+    for (const row of callRows) {
+      const taskId = typeof row.taskId === "string" ? row.taskId : "";
+      if (!taskId) continue;
+      if (!(row.createdAt instanceof Date)) continue;
+      const current = callTimesByTask.get(taskId);
+      if (!current || row.createdAt.getTime() < current.getTime()) {
+        callTimesByTask.set(taskId, row.createdAt);
+      }
     }
   }
 
-  const firstCalls = await db
-    .select({
-      contactId: auditLogs.entityId,
-      firstCallAt: sql<Date>`min(${auditLogs.createdAt})`.as("first_call_at")
-    })
-    .from(auditLogs)
-    .where(
-      and(
-        eq(auditLogs.action, "call.started"),
-        eq(auditLogs.entityType, "contact"),
-        eq(auditLogs.actorId, input.memberId),
-        isNotNull(auditLogs.entityId),
-        inArray(auditLogs.entityId, contactIds),
-        gte(auditLogs.createdAt, input.since),
-        lte(auditLogs.createdAt, input.until)
+  if (contactIds.length) {
+    const callRows = await db
+      .select({
+        contactId: auditLogs.entityId,
+        createdAt: auditLogs.createdAt
+      })
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.action, "call.started"),
+          eq(auditLogs.entityType, "contact"),
+          eq(auditLogs.actorId, input.memberId),
+          isNotNull(auditLogs.entityId),
+          inArray(auditLogs.entityId, contactIds),
+          gte(auditLogs.createdAt, input.since),
+          lte(auditLogs.createdAt, input.until)
+        )
       )
-    )
-    .groupBy(auditLogs.entityId);
+      .limit(4000);
 
-  const callMap = new Map<string, Date>();
-  for (const row of firstCalls) {
-    if (typeof row.contactId === "string" && row.firstCallAt instanceof Date) {
-      callMap.set(row.contactId, row.firstCallAt);
+    for (const row of callRows) {
+      if (typeof row.contactId !== "string" || !row.contactId) continue;
+      if (!(row.createdAt instanceof Date)) continue;
+      const current = callTimesByContact.get(row.contactId);
+      if (!current || row.createdAt.getTime() < current.getTime()) {
+        callTimesByContact.set(row.contactId, row.createdAt);
+      }
     }
   }
-
-  const firstOutboundMessages = await db
-    .select({
-      contactId: conversationThreads.contactId,
-      firstOutboundAt: sql<Date>`min(${conversationMessages.createdAt})`.as("first_outbound_at")
-    })
-    .from(conversationMessages)
-    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
-    .innerJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
-    .where(
-      and(
-        eq(conversationMessages.direction, "outbound"),
-        eq(conversationParticipants.participantType, "team"),
-        eq(conversationParticipants.teamMemberId, input.memberId),
-        gte(conversationMessages.createdAt, input.since),
-        lte(conversationMessages.createdAt, input.until),
-        isNotNull(conversationThreads.contactId),
-        inArray(conversationThreads.contactId, contactIds)
-      )
-    )
-    .groupBy(conversationThreads.contactId);
 
   const outboundByContact = new Map<string, Date>();
-  for (const row of firstOutboundMessages) {
-    if (row.firstOutboundAt instanceof Date) {
-      if (typeof row.contactId === "string" && row.contactId.length) {
+  if (contactIds.length) {
+    const outboundRows = await db
+      .select({
+        contactId: conversationThreads.contactId,
+        firstOutboundAt: sql<Date>`min(${conversationMessages.createdAt})`.as("first_outbound_at")
+      })
+      .from(conversationMessages)
+      .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+      .innerJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
+      .where(
+        and(
+          eq(conversationMessages.direction, "outbound"),
+          eq(conversationParticipants.participantType, "team"),
+          eq(conversationParticipants.teamMemberId, input.memberId),
+          gte(conversationMessages.createdAt, input.since),
+          lte(conversationMessages.createdAt, input.until),
+          isNotNull(conversationThreads.contactId),
+          inArray(conversationThreads.contactId, contactIds)
+        )
+      )
+      .groupBy(conversationThreads.contactId);
+
+    for (const row of outboundRows) {
+      if (row.firstOutboundAt instanceof Date && typeof row.contactId === "string" && row.contactId.length) {
         outboundByContact.set(row.contactId, row.firstOutboundAt);
       }
     }
   }
 
-  return scorableContactRows
-    .filter((row) => !disqualified.has(row.contactId))
+  return speedTaskRows
+    .filter((row) => typeof row.contactId === "string" && row.contactId.length > 0 && !disqualified.has(row.contactId))
     .map((row) => {
-    const hasPhone = true;
-    const deadline = getSpeedToLeadDeadline(row.contactCreatedAt, config);
-    const firstCallAt = callMap.get(row.contactId) ?? speedTaskTouchMap.get(row.contactId) ?? null;
-    const firstOutboundAt = outboundByContact.get(row.contactId) ?? null;
-    const met = hasPhone
-      ? Boolean(firstCallAt && firstCallAt.getTime() <= deadline.getTime())
-      : Boolean(firstOutboundAt && firstOutboundAt.getTime() <= deadline.getTime());
+      const contactId = row.contactId as string;
+      const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
+      const dueAt = row.taskDueAt instanceof Date ? row.taskDueAt : null;
+      if (!dueAt) {
+        const fallbackDeadline = getSpeedToLeadDeadline(row.taskCreatedAt instanceof Date ? row.taskCreatedAt : new Date(), config);
+        return {
+          leadId: parseLeadIdFromNotes(row.taskNotes),
+          contactId,
+          createdAt: row.taskCreatedAt instanceof Date ? row.taskCreatedAt.toISOString() : new Date().toISOString(),
+          hasPhone,
+          deadlineAt: fallbackDeadline.toISOString(),
+          firstCallAt: null,
+          firstOutboundMessageAt: null,
+          met: false
+        };
+      }
 
-    return {
-      leadId: null,
-      contactId: row.contactId,
-      createdAt: row.contactCreatedAt.toISOString(),
-      hasPhone,
-      deadlineAt: deadline.toISOString(),
-      firstCallAt: firstCallAt ? firstCallAt.toISOString() : null,
-      firstOutboundMessageAt: firstOutboundAt ? firstOutboundAt.toISOString() : null,
-      met
-    };
-  });
+      const clockStart = new Date(dueAt.getTime() - config.speedToLeadMinutes * 60_000);
+      const fallbackCallAt = callTimesByContact.get(contactId) ?? null;
+      const firstCallAtCandidate = callTimesByTask.get(row.taskId) ?? fallbackCallAt;
+      const firstCallAt =
+        firstCallAtCandidate && firstCallAtCandidate.getTime() >= clockStart.getTime()
+          ? firstCallAtCandidate
+          : null;
+      const outboundCandidate = outboundByContact.get(contactId) ?? null;
+      const firstOutboundAt =
+        outboundCandidate && outboundCandidate.getTime() >= clockStart.getTime() ? outboundCandidate : null;
+
+      const completionTouch =
+        row.taskStatus === "completed" && row.taskUpdatedAt instanceof Date ? row.taskUpdatedAt : null;
+      const touchAt = firstCallAt ?? completionTouch ?? firstOutboundAt;
+
+      const met = Boolean(touchAt && touchAt.getTime() <= dueAt.getTime());
+
+      return {
+        leadId: parseLeadIdFromNotes(row.taskNotes),
+        contactId,
+        createdAt: clockStart.toISOString(),
+        hasPhone,
+        deadlineAt: dueAt.toISOString(),
+        firstCallAt: firstCallAt ? firstCallAt.toISOString() : null,
+        firstOutboundMessageAt: firstOutboundAt ? firstOutboundAt.toISOString() : null,
+        met
+      };
+    });
 }
 
 export type FollowupComplianceResult = {

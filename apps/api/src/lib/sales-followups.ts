@@ -1,4 +1,4 @@
-import { and, asc, eq, ilike, isNotNull, or } from "drizzle-orm";
+import { and, asc, eq, ilike, isNotNull, lte, or } from "drizzle-orm";
 import { contacts, crmTasks, getDb } from "@/db";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
 
@@ -46,6 +46,7 @@ export async function completeNextFollowupTaskOnTouch(input: {
         eq(crmTasks.assignedTo, memberId),
         eq(crmTasks.status, "open"),
         isNotNull(crmTasks.dueAt),
+        lte(crmTasks.dueAt, now),
         isNotNull(crmTasks.notes),
         or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%")),
         ilike(crmTasks.notes, "%kind=follow_up%")
@@ -63,4 +64,3 @@ export async function completeNextFollowupTaskOnTouch(input: {
 
   return { completedTaskId: task.id };
 }
-
