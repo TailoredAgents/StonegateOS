@@ -2154,9 +2154,11 @@ export async function suggestThreadReplyAction(formData: FormData) {
   const channel = formData.get("channel");
 
   let resolvedThreadId = typeof threadId === "string" ? threadId.trim() : "";
+  const resolvedChannel = typeof channel === "string" ? channel.trim() : "";
+  const resolvedContactId = typeof contactId === "string" ? contactId.trim() : "";
   if (resolvedThreadId.length === 0) {
-    const ensuredContactId = typeof contactId === "string" ? contactId.trim() : "";
-    const ensuredChannel = typeof channel === "string" ? channel.trim() : "";
+    const ensuredContactId = resolvedContactId;
+    const ensuredChannel = resolvedChannel;
 
     if (!ensuredContactId || !ensuredChannel) {
       jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
@@ -2204,7 +2206,7 @@ export async function suggestThreadReplyAction(formData: FormData) {
   }
 
   jar.set({ name: "myst-flash", value: "AI draft created. Review and click Send when ready.", path: "/" });
-  revalidatePath("/team");
+  redirect(`/team?tab=inbox&threadId=${encodeURIComponent(resolvedThreadId)}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}`);
 }
 
 export async function logoutCrew() {
