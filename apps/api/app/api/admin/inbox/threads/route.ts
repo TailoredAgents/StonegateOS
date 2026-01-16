@@ -113,6 +113,18 @@ export async function GET(request: NextRequest): Promise<Response> {
     .groupBy(conversationMessages.threadId)
     .as("inboundLatest");
 
+  const activityLatest = db
+    .select({
+      threadId: conversationMessages.threadId,
+      lastActivityAt:
+        sql<Date | null>`max(coalesce(${conversationMessages.receivedAt}, ${conversationMessages.sentAt}, ${conversationMessages.createdAt}))`.as(
+          "lastActivityAt"
+        )
+    })
+    .from(conversationMessages)
+    .groupBy(conversationMessages.threadId)
+    .as("activityLatest");
+
   const totalResult = whereClause
     ? await db
         .select({ count: sql<number>`count(*)` })
@@ -130,8 +142,17 @@ export async function GET(request: NextRequest): Promise<Response> {
           state: conversationThreads.state,
           channel: conversationThreads.channel,
           subject: conversationThreads.subject,
-          lastMessagePreview: conversationThreads.lastMessagePreview,
-          lastMessageAt: conversationThreads.lastMessageAt,
+          lastActivityAt: activityLatest.lastActivityAt,
+          resolvedLastMessagePreview: sql<string | null>`coalesce(
+            ${conversationThreads.lastMessagePreview},
+            (
+              select cm.body
+              from conversation_messages cm
+              where cm.thread_id = ${conversationThreads.id}
+              order by coalesce(cm.received_at, cm.sent_at, cm.created_at) desc
+              limit 1
+            )
+          )`,
           updatedAt: conversationThreads.updatedAt,
           stateUpdatedAt: conversationThreads.stateUpdatedAt,
           contactId: conversationThreads.contactId,
@@ -165,6 +186,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         )
         .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id))
         .leftJoin(inboundLatest, eq(inboundLatest.threadId, conversationThreads.id))
+        .leftJoin(activityLatest, eq(activityLatest.threadId, conversationThreads.id))
         .where(whereClause)
     : db
         .select({
@@ -173,8 +195,17 @@ export async function GET(request: NextRequest): Promise<Response> {
           state: conversationThreads.state,
           channel: conversationThreads.channel,
           subject: conversationThreads.subject,
-          lastMessagePreview: conversationThreads.lastMessagePreview,
-          lastMessageAt: conversationThreads.lastMessageAt,
+          lastActivityAt: activityLatest.lastActivityAt,
+          resolvedLastMessagePreview: sql<string | null>`coalesce(
+            ${conversationThreads.lastMessagePreview},
+            (
+              select cm.body
+              from conversation_messages cm
+              where cm.thread_id = ${conversationThreads.id}
+              order by coalesce(cm.received_at, cm.sent_at, cm.created_at) desc
+              limit 1
+            )
+          )`,
           updatedAt: conversationThreads.updatedAt,
           stateUpdatedAt: conversationThreads.stateUpdatedAt,
           contactId: conversationThreads.contactId,
@@ -207,8 +238,9 @@ export async function GET(request: NextRequest): Promise<Response> {
           )
         )
         .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id))
-        .leftJoin(inboundLatest, eq(inboundLatest.threadId, conversationThreads.id)))
-    .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
+        .leftJoin(inboundLatest, eq(inboundLatest.threadId, conversationThreads.id))
+        .leftJoin(activityLatest, eq(activityLatest.threadId, conversationThreads.id)))
+    .orderBy(sql`${activityLatest.lastActivityAt} desc nulls last`, desc(conversationThreads.updatedAt))
     .limit(limit)
     .offset(offset);
 
@@ -250,8 +282,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       state: row.state,
       channel: row.channel,
       subject: row.subject ?? null,
-      lastMessagePreview: row.lastMessagePreview ?? null,
-      lastMessageAt: row.lastMessageAt ? row.lastMessageAt.toISOString() : null,
+      lastMessagePreview: row.resolvedLastMessagePreview ?? null,
+      lastMessageAt: row.lastActivityAt ? row.lastActivityAt.toISOString() : null,
       updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
       stateUpdatedAt: row.stateUpdatedAt ? row.stateUpdatedAt.toISOString() : null,
       lastInboundAt: lastInboundIso,
