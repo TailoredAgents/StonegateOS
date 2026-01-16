@@ -1451,6 +1451,20 @@ export async function updateConversationPersonaPolicyAction(formData: FormData) 
   );
 }
 
+export async function updateInboxAlertsPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const sms = formData.get("sms") === "on";
+  const dm = formData.get("dm") === "on";
+  const email = formData.get("email") === "on";
+
+  await submitPolicyUpdate(
+    jar,
+    "inbox_alerts",
+    { sms, dm, email },
+    "Inbox alerts updated"
+  );
+}
+
 export async function updateTemplatesPolicyAction(formData: FormData) {
   const jar = await cookies();
   const firstTouch: Record<string, string> = {};
@@ -2286,6 +2300,68 @@ export async function resetSalesHqAction() {
   }
 
   jar.set({ name: "myst-flash", value: "Sales HQ cleared. Only new leads will appear going forward.", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function markSalesTouchAction(formData: FormData) {
+  const jar = await cookies();
+  const contactIdRaw = formData.get("contactId");
+
+  if (typeof contactIdRaw !== "string" || contactIdRaw.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Missing contact id", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/sales/touch", {
+    method: "POST",
+    body: JSON.stringify({ contactId: contactIdRaw.trim() })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to mark contacted");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Marked contacted.", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function setSalesDispositionAction(formData: FormData) {
+  const jar = await cookies();
+  const contactIdRaw = formData.get("contactId");
+  const dispositionRaw = formData.get("disposition");
+
+  if (typeof contactIdRaw !== "string" || contactIdRaw.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Missing contact id", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (typeof dispositionRaw !== "string" || dispositionRaw.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Missing disposition", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/sales/disposition", {
+    method: "POST",
+    body: JSON.stringify({
+      contactId: contactIdRaw.trim(),
+      disposition: dispositionRaw.trim()
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to remove from Sales HQ");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Removed from Sales HQ.", path: "/" });
   revalidatePath("/team");
 }
 

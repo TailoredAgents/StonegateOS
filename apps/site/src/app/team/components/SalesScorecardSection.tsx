@@ -3,7 +3,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 import { callAdminApi } from "../lib/api";
-import { resetSalesHqAction } from "../actions";
+import { markSalesTouchAction, resetSalesHqAction, setSalesDispositionAction } from "../actions";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type ScorecardPayload = {
@@ -317,6 +317,45 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                     >
                       Open contact
                     </a>
+                    <form action={markSalesTouchAction} className="w-full">
+                      <input type="hidden" name="contactId" value={item.contact.id} />
+                      <SubmitButton
+                        className="w-full rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-300"
+                        pendingLabel="Saving..."
+                      >
+                        Mark contacted
+                      </SubmitButton>
+                    </form>
+                    <details className="w-full">
+                      <summary className="cursor-pointer list-none rounded-full border border-slate-200 px-3 py-1.5 text-center text-xs font-semibold text-slate-700 hover:border-slate-300">
+                        Remove
+                      </summary>
+                      <div className="mt-2 rounded-2xl border border-slate-200 bg-white p-3">
+                        <form action={setSalesDispositionAction} className="space-y-2">
+                          <input type="hidden" name="contactId" value={item.contact.id} />
+                          <select
+                            name="disposition"
+                            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs"
+                            defaultValue="not_a_lead"
+                          >
+                            <option value="spam">Spam</option>
+                            <option value="not_a_lead">Not a lead</option>
+                            <option value="out_of_state">Out of state</option>
+                            <option value="out_of_area">Out of area</option>
+                            <option value="bad_phone">Bad phone</option>
+                            <option value="duplicate">Duplicate</option>
+                            <option value="handled">Handled</option>
+                            <option value="do_not_contact">Do not contact</option>
+                          </select>
+                          <SubmitButton
+                            className="w-full rounded-full bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+                            pendingLabel="Removing..."
+                          >
+                            Confirm remove
+                          </SubmitButton>
+                        </form>
+                      </div>
+                    </details>
                   </div>
                 </div>
               ))
@@ -361,6 +400,45 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                     >
                       Open contact
                     </a>
+                    <form action={markSalesTouchAction} className="w-full">
+                      <input type="hidden" name="contactId" value={item.contact.id} />
+                      <SubmitButton
+                        className="w-full rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-300"
+                        pendingLabel="Saving..."
+                      >
+                        Mark contacted
+                      </SubmitButton>
+                    </form>
+                    <details className="w-full">
+                      <summary className="cursor-pointer list-none rounded-full border border-slate-200 px-3 py-1.5 text-center text-xs font-semibold text-slate-700 hover:border-slate-300">
+                        Remove
+                      </summary>
+                      <div className="mt-2 rounded-2xl border border-slate-200 bg-white p-3">
+                        <form action={setSalesDispositionAction} className="space-y-2">
+                          <input type="hidden" name="contactId" value={item.contact.id} />
+                          <select
+                            name="disposition"
+                            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs"
+                            defaultValue="handled"
+                          >
+                            <option value="spam">Spam</option>
+                            <option value="not_a_lead">Not a lead</option>
+                            <option value="out_of_state">Out of state</option>
+                            <option value="out_of_area">Out of area</option>
+                            <option value="bad_phone">Bad phone</option>
+                            <option value="duplicate">Duplicate</option>
+                            <option value="handled">Handled</option>
+                            <option value="do_not_contact">Do not contact</option>
+                          </select>
+                          <SubmitButton
+                            className="w-full rounded-full bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+                            pendingLabel="Removing..."
+                          >
+                            Confirm remove
+                          </SubmitButton>
+                        </form>
+                      </div>
+                    </details>
                   </div>
                 </div>
               ))

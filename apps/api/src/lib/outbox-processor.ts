@@ -25,6 +25,7 @@ import {
   getBusinessHoursPolicy,
   getConfirmationLoopPolicy,
   getFollowUpSequencePolicy,
+  getInboxAlertsPolicy,
   getQuietHoursPolicy,
   getSalesAutopilotPolicy,
   getServiceAreaPolicy,
@@ -461,14 +462,23 @@ async function getTeamMemberPhoneMap(db: ReturnType<typeof getDb>): Promise<Reco
   return readPhoneMapValue(row?.value);
 }
 
-function buildInboundSmsAlertText(input: {
+function buildInboundInboxAlertText(input: {
   contactName: string | null;
   contactPhone: string | null;
   body: string;
+  channel: string | null;
 }): string {
   const name = input.contactName?.trim().length ? input.contactName.trim() : null;
   const phone = input.contactPhone?.trim().length ? input.contactPhone.trim() : null;
-  const header = name ? `New text from ${name}` : phone ? `New text from ${phone}` : "New text in inbox";
+  const label =
+    input.channel === "dm"
+      ? "Messenger"
+      : input.channel === "email"
+        ? "email"
+        : input.channel === "sms"
+          ? "text"
+          : "message";
+  const header = name ? `New ${label} from ${name}` : phone ? `New ${label} from ${phone}` : `New ${label} in inbox`;
   const rawBody = input.body.trim().replace(/\s+/g, " ");
   const snippet = rawBody.length > 220 ? `${rawBody.slice(0, 217)}...` : rawBody;
   const phoneLine = name && phone ? ` (${phone})` : "";
@@ -502,14 +512,25 @@ async function maybeNotifyAssigneeForInboundSmsMessage(input: {
 
   if (!message?.id) return;
   if (message.direction !== "inbound") return;
-  if (message.channel !== "sms") return;
+  if (message.channel !== "sms" && message.channel !== "dm" && message.channel !== "email") return;
+
+  const inboxAlerts = await getInboxAlertsPolicy(input.db);
+  const alertAllowed =
+    message.channel === "sms"
+      ? inboxAlerts.sms
+      : message.channel === "dm"
+        ? inboxAlerts.dm
+        : message.channel === "email"
+          ? inboxAlerts.email
+          : false;
+  if (!alertAllowed) return;
 
   const [alreadySent] = await input.db
     .select({ id: auditLogs.id })
     .from(auditLogs)
     .where(
       and(
-        eq(auditLogs.action, "inbox.alert.sms.sent"),
+        or(eq(auditLogs.action, "inbox.alert.sent"), eq(auditLogs.action, "inbox.alert.sms.sent")),
         eq(auditLogs.entityType, "conversation_message"),
         eq(auditLogs.entityId, input.messageId)
       )
@@ -531,10 +552,11 @@ async function maybeNotifyAssigneeForInboundSmsMessage(input: {
 
   const contactName = [message.contactFirstName, message.contactLastName].filter(Boolean).join(" ").trim() || null;
   const contactPhone = (message.contactPhoneE164 ?? message.contactPhone ?? "").trim() || null;
-  const text = buildInboundSmsAlertText({
+  const text = buildInboundInboxAlertText({
     contactName,
     contactPhone,
-    body: message.body ?? ""
+    body: message.body ?? "",
+    channel: message.channel ?? null
   });
 
   const result = await sendSmsMessage(recipientPhone, text);
@@ -542,13 +564,14 @@ async function maybeNotifyAssigneeForInboundSmsMessage(input: {
     await recordProviderSuccessSafe("sms");
     await recordAuditEvent({
       actor: { type: "worker", label: "outbox" },
-      action: "inbox.alert.sms.sent",
+      action: "inbox.alert.sent",
       entityType: "conversation_message",
       entityId: input.messageId,
       meta: {
         to: recipientPhone,
         contactId,
         assignedTo,
+        inboundChannel: message.channel ?? null,
         provider: result.provider ?? null
       }
     });
@@ -558,13 +581,14 @@ async function maybeNotifyAssigneeForInboundSmsMessage(input: {
   await recordProviderFailureSafe("sms", result.detail ?? null);
   await recordAuditEvent({
     actor: { type: "worker", label: "outbox" },
-    action: "inbox.alert.sms.failed",
+    action: "inbox.alert.failed",
     entityType: "conversation_message",
     entityId: input.messageId,
     meta: {
       to: recipientPhone,
       contactId,
       assignedTo,
+      inboundChannel: message.channel ?? null,
       provider: result.provider ?? null,
       detail: result.detail ?? null
     }

@@ -98,6 +98,12 @@ export type SalesAutopilotPolicy = {
   agentDisplayName: string;
 };
 
+export type InboxAlertsPolicy = {
+  sms: boolean;
+  dm: boolean;
+  email: boolean;
+};
+
 export type ConversationPersonaPolicy = {
   systemPrompt: string;
 };
@@ -158,6 +164,12 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   dmSmsFallbackAfterMinutes: 120,
   dmMinSilenceBeforeSmsMinutes: 45,
   agentDisplayName: "Devon"
+};
+
+export const DEFAULT_INBOX_ALERTS_POLICY: InboxAlertsPolicy = {
+  sms: true,
+  dm: false,
+  email: false
 };
 
 export const DEFAULT_CONVERSATION_PERSONA_POLICY: ConversationPersonaPolicy = {
@@ -1085,5 +1097,19 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
       { min: 5, max: 12 * 60 }
     ),
     agentDisplayName: coerceString(stored["agentDisplayName"], DEFAULT_SALES_AUTOPILOT_POLICY.agentDisplayName)
+  };
+}
+
+export async function getInboxAlertsPolicy(db: DbExecutor = getDb()): Promise<InboxAlertsPolicy> {
+  const stored = await getPolicySetting(db, "inbox_alerts");
+  if (!stored) {
+    return DEFAULT_INBOX_ALERTS_POLICY;
+  }
+
+  return {
+    sms: typeof stored["sms"] === "boolean" ? (stored["sms"] as boolean) : DEFAULT_INBOX_ALERTS_POLICY.sms,
+    dm: typeof stored["dm"] === "boolean" ? (stored["dm"] as boolean) : DEFAULT_INBOX_ALERTS_POLICY.dm,
+    email:
+      typeof stored["email"] === "boolean" ? (stored["email"] as boolean) : DEFAULT_INBOX_ALERTS_POLICY.email
   };
 }

@@ -9,6 +9,7 @@ import {
   updateCompanyProfilePolicyAction,
   updateConfirmationLoopPolicyAction,
   updateFollowUpSequencePolicyAction,
+  updateInboxAlertsPolicyAction,
   updateItemPoliciesAction,
   updatePolicyAction,
   updateQuietHoursPolicyAction,
@@ -29,6 +30,7 @@ type PolicyKey =
   | "service_area"
   | "company_profile"
   | "conversation_persona"
+  | "inbox_alerts"
   | "booking_rules"
   | "confirmation_loop"
   | "follow_up_sequence"
@@ -56,6 +58,10 @@ const POLICY_LABELS: Record<PolicyKey, { title: string; description: string }> =
   conversation_persona: {
     title: "Conversation persona",
     description: "System instructions used by Sales Autopilot + Inbox AI drafts."
+  },
+  inbox_alerts: {
+    title: "Inbox alerts",
+    description: "Text the assigned salesperson when new inbound messages arrive."
   },
   booking_rules: {
     title: "Booking rules",
@@ -257,6 +263,12 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
     typeof personaValue["systemPrompt"] === "string" && personaValue["systemPrompt"].trim().length > 0
       ? personaValue["systemPrompt"]
       : "";
+
+  const inboxAlertsSetting = settingsByKey.get("inbox_alerts");
+  const inboxAlertsValue = isRecord(inboxAlertsSetting?.value) ? inboxAlertsSetting!.value : {};
+  const inboxAlertsSms = inboxAlertsValue["sms"] !== false;
+  const inboxAlertsDm = inboxAlertsValue["dm"] === true;
+  const inboxAlertsEmail = inboxAlertsValue["email"] === true;
 
   const bookingSetting = settingsByKey.get("booking_rules");
   const bookingValue = isRecord(bookingSetting?.value) ? bookingSetting!.value : {};
@@ -588,6 +600,41 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
             </div>
           </form>
           <AdvancedJsonEditor setting={personaSetting} />
+        </div>
+        <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold text-slate-900">{POLICY_LABELS.inbox_alerts.title}</h3>
+            <p className="text-xs text-slate-500">{POLICY_LABELS.inbox_alerts.description}</p>
+          </div>
+          <form action={updateInboxAlertsPolicyAction} className="mt-4 space-y-4">
+            <div className="space-y-2">
+              <label className="flex items-center gap-3 text-sm text-slate-700">
+                <input name="sms" type="checkbox" defaultChecked={inboxAlertsSms} className="h-4 w-4" />
+                Alert on inbound SMS
+              </label>
+              <label className="flex items-center gap-3 text-sm text-slate-700">
+                <input name="dm" type="checkbox" defaultChecked={inboxAlertsDm} className="h-4 w-4" />
+                Alert on inbound Messenger
+              </label>
+              <label className="flex items-center gap-3 text-sm text-slate-700">
+                <input name="email" type="checkbox" defaultChecked={inboxAlertsEmail} className="h-4 w-4" />
+                Alert on inbound email
+              </label>
+              <p className="text-[11px] text-slate-500">
+                Alerts are sent as an SMS to the assigned salesperson’s phone (set in Access).
+              </p>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-500">
+              <span>Last updated {formatUpdatedAt(inboxAlertsSetting?.updatedAt ?? null)}</span>
+              <SubmitButton
+                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                pendingLabel="Saving..."
+              >
+                Save alerts
+              </SubmitButton>
+            </div>
+          </form>
+          <AdvancedJsonEditor setting={inboxAlertsSetting} />
         </div>
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
           <div className="flex flex-col gap-1">

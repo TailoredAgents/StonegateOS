@@ -13,7 +13,9 @@ import {
   deleteMessageAction,
   suggestThreadReplyAction,
   updateThreadAction,
-  startContactCallAction
+  startContactCallAction,
+  markSalesTouchAction,
+  setSalesDispositionAction
 } from "../actions";
 
 type ThreadSummary = {
@@ -707,6 +709,49 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                         Call
                       </SubmitButton>
                     </form>
+                    {activeContactId ? (
+                      <form action={markSalesTouchAction} className="inline">
+                        <input type="hidden" name="contactId" value={activeContactId} />
+                        <SubmitButton
+                          className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                          pendingLabel="Saving..."
+                        >
+                          Mark contacted
+                        </SubmitButton>
+                      </form>
+                    ) : null}
+                    {activeContactId ? (
+                      <details className="relative">
+                        <summary className="cursor-pointer list-none rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700">
+                          Remove
+                        </summary>
+                        <div className="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
+                          <form action={setSalesDispositionAction} className="space-y-2">
+                            <input type="hidden" name="contactId" value={activeContactId} />
+                            <select
+                              name="disposition"
+                              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs"
+                              defaultValue="handled"
+                            >
+                              <option value="spam">Spam</option>
+                              <option value="not_a_lead">Not a lead</option>
+                              <option value="out_of_state">Out of state</option>
+                              <option value="out_of_area">Out of area</option>
+                              <option value="bad_phone">Bad phone</option>
+                              <option value="duplicate">Duplicate</option>
+                              <option value="handled">Handled</option>
+                              <option value="do_not_contact">Do not contact</option>
+                            </select>
+                            <SubmitButton
+                              className="w-full rounded-full bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+                              pendingLabel="Removing..."
+                            >
+                              Confirm remove
+                            </SubmitButton>
+                          </form>
+                        </div>
+                      </details>
+                    ) : null}
                   </div>
                   {selectedThreadId ? (
                     <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
