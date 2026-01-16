@@ -3286,20 +3286,21 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
 
       const db = getDb();
-      const rows = await db
-        .select({
-          id: conversationMessages.id,
-          threadId: conversationMessages.threadId,
-          channel: conversationMessages.channel,
-          body: conversationMessages.body,
-          subject: conversationMessages.subject,
-          toAddress: conversationMessages.toAddress,
-          metadata: conversationMessages.metadata,
-          sentAt: conversationMessages.sentAt,
-          contactId: conversationThreads.contactId,
-          contactPhone: contacts.phone,
-          contactPhoneE164: contacts.phoneE164,
-          contactEmail: contacts.email
+        const rows = await db
+          .select({
+            id: conversationMessages.id,
+            threadId: conversationMessages.threadId,
+            channel: conversationMessages.channel,
+            body: conversationMessages.body,
+            subject: conversationMessages.subject,
+            toAddress: conversationMessages.toAddress,
+            metadata: conversationMessages.metadata,
+            deliveryStatus: conversationMessages.deliveryStatus,
+            sentAt: conversationMessages.sentAt,
+            contactId: conversationThreads.contactId,
+            contactPhone: contacts.phone,
+            contactPhoneE164: contacts.phoneE164,
+            contactEmail: contacts.email
         })
         .from(conversationMessages)
         .leftJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
@@ -3311,6 +3312,10 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       if (!message) {
         console.warn("[outbox] message.send.not_found", { messageId });
         return { status: "skipped" };
+      }
+
+      if (message.deliveryStatus === "sent" || message.deliveryStatus === "delivered") {
+        return { status: "processed" };
       }
 
       const channel = message.channel ?? "sms";

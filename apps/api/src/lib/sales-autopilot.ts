@@ -779,6 +779,19 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     const dmAutosendAllowed =
       replyChannel === "dm" && typeof inbound.body === "string" ? shouldAllowDmAutosend(messages, inbound.body) : true;
     const noAutosend = !autoSendEligible || (replyChannel === "dm" && !dmAutosendAllowed);
+
+    await tx
+      .delete(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.threadId, threadId),
+          eq(conversationMessages.direction, "outbound"),
+          eq(conversationMessages.channel, replyChannel),
+          sql`${conversationMessages.metadata} ->> 'salesAutopilot' = 'true'`,
+          sql`${conversationMessages.metadata} ->> 'draft' = 'true'`
+        )
+      );
+
     const [message] = await tx
       .insert(conversationMessages)
       .values({

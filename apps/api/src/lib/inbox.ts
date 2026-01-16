@@ -155,8 +155,11 @@ function normalizePhone(input: string): { raw: string; e164: string } {
 
 function resolveContactName(fallbackName: string | null | undefined): { firstName: string; lastName: string } {
   const cleaned = typeof fallbackName === "string" && fallbackName.trim().length > 0 ? fallbackName.trim() : "Unknown Contact";
+  if (!isMeaningfulName(cleaned)) {
+    return { firstName: "Unknown", lastName: "Contact" };
+  }
   const sanitized = sanitizeNameCandidate(cleaned);
-  if (!sanitized) {
+  if (!sanitized || !isMeaningfulName(sanitized)) {
     return { firstName: "Unknown", lastName: "Contact" };
   }
   const parts = sanitized.trim().split(/\s+/).filter(Boolean);
@@ -283,6 +286,8 @@ function isMeaningfulName(value: string): boolean {
   if (GENERIC_NON_NAME_VALUES.has(lowered)) return false;
   if (lowered.includes("phone number")) return false;
   if (lowered.includes("zip code")) return false;
+  if (lowered.startsWith("address")) return false;
+  if (lowered.startsWith("when do you want")) return false;
   return true;
 }
 
