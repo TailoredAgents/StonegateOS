@@ -24,6 +24,7 @@ import { PolicyCenterSection } from "./components/PolicyCenterSection";
 import { AutomationSection } from "./components/AutomationSection";
 import { AccessSection } from "./components/AccessSection";
 import { AuditLogSection } from "./components/AuditLogSection";
+import { SalesActivityLogSection } from "./components/SalesActivityLogSection";
 import { MergeQueueSection } from "./components/MergeQueueSection";
 import { SalesScorecardSection } from "./components/SalesScorecardSection";
 import { SeoAgentSection } from "./components/SeoAgentSection";
@@ -57,6 +58,7 @@ export default async function TeamPage({
     threadId?: string;
     status?: string;
     channel?: string;
+    memberId?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -83,6 +85,7 @@ export default async function TeamPage({
   const inboxThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
   const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
+  const memberIdParam = typeof params?.memberId === "string" ? params.memberId : undefined;
 
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
@@ -105,6 +108,7 @@ export default async function TeamPage({
     { id: "seo", label: "SEO Agent", href: "/team?tab=seo", requires: "owner" },
     { id: "automation", label: "Messaging Automation", href: "/team?tab=automation", requires: "owner" },
     { id: "access", label: "Access", href: "/team?tab=access", requires: "owner" },
+    { id: "sales-log", label: "Sales Log", href: "/team?tab=sales-log", requires: "owner" },
     { id: "audit", label: "Audit Log", href: "/team?tab=audit", requires: "owner" },
     { id: "merge", label: "Merge Queue", href: "/team?tab=merge", requires: "owner" },
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
@@ -113,7 +117,7 @@ export default async function TeamPage({
     { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
     { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "pipeline", "sales-hq", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
-    { id: "control", label: "Control", itemIds: ["commissions", "seo", "policy", "automation", "access", "audit", "merge"] },
+    { id: "control", label: "Control", itemIds: ["commissions", "seo", "policy", "automation", "access", "sales-log", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
@@ -410,6 +414,16 @@ export default async function TeamPage({
             }
           >
             <AccessSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "sales-log" && hasOwner ? (
+          <React.Suspense
+            fallback={
+              <TeamSkeletonCard title="Loading sales activity" />
+            }
+          >
+            <SalesActivityLogSection memberId={memberIdParam} />
           </React.Suspense>
         ) : null}
 
