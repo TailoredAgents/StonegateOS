@@ -57,6 +57,7 @@ export default async function TeamPage({
     tab?: string;
     q?: string;
     offset?: string;
+    includeOutbound?: string;
     contactId?: string;
     threadId?: string;
     status?: string;
@@ -85,6 +86,7 @@ export default async function TeamPage({
         : "myday"
       : requestedTab || (hasCrew && !hasOwner ? "myday" : "inbox");
   const contactsQuery = typeof params?.q === "string" ? params.q : undefined;
+  const contactsIncludeOutbound = params?.includeOutbound === "1";
   let contactsOffset: number | undefined;
   if (typeof params?.offset === "string") {
     const parsed = Number(params.offset);
@@ -397,7 +399,12 @@ export default async function TeamPage({
               <TeamSkeletonCard title="Loading contacts" />
             }
           >
-            <ContactsSection search={contactsQuery} offset={contactsOffset} contactId={contactIdParam} />
+            <ContactsSection
+              search={contactsQuery}
+              offset={contactsOffset}
+              contactId={contactIdParam}
+              excludeOutbound={!contactsIncludeOutbound}
+            />
           </React.Suspense>
         ) : null}
 

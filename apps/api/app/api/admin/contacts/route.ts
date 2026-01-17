@@ -16,7 +16,7 @@ import { forwardGeocode } from "@/lib/geocode";
 import { getContactAssigneeMap, setContactAssignee } from "@/lib/contact-assignees";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 import type { SQL } from "drizzle-orm";
-import { asc, desc, eq, inArray, ilike, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ilike, or, sql } from "drizzle-orm";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 200;
@@ -82,6 +82,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const contactIdRaw = searchParams.get("contactId");
   const contactIdFilter = contactIdRaw && contactIdRaw.trim().length > 0 ? contactIdRaw.trim() : null;
   const searchTerm = rawSearch ? sanitizeSearchTerm(rawSearch) : null;
+  const excludeOutbound = searchParams.get("excludeOutbound") === "1";
   const limit = contactIdFilter ? 1 : parseLimit(searchParams.get("limit"));
   const offset = contactIdFilter ? 0 : parseOffset(searchParams.get("offset"));
 
@@ -113,20 +114,24 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (contactIdFilter) {
     filters.push(eq(contacts.id, contactIdFilter));
   } else if (likePattern) {
-    filters.push(
+    const searchFilters: SQL<unknown>[] = [
       ilike(contacts.firstName, likePattern),
       ilike(contacts.lastName, likePattern),
       ilike(contacts.email, likePattern),
       ilike(contacts.phone, likePattern),
       ilike(contacts.phoneE164, likePattern)
-    );
+    ];
     if (propertyContactIds.length > 0) {
-      filters.push(inArray(contacts.id, propertyContactIds));
+      searchFilters.push(inArray(contacts.id, propertyContactIds));
     }
+    filters.push(or(...searchFilters)!);
   }
 
-  const whereClause =
-    filters.length === 0 ? undefined : filters.length === 1 ? filters[0] : or(...filters);
+  if (excludeOutbound && !contactIdFilter) {
+    filters.push(sql`coalesce(${contacts.source}, '') not ilike ${"outbound:%"}`);
+  }
+
+  const whereClause = filters.length === 0 ? undefined : filters.length === 1 ? filters[0] : and(...filters);
 
   const totalResult = whereClause
     ? await db

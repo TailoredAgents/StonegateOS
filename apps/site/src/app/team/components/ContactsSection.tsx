@@ -8,7 +8,7 @@ import { TEAM_CARD_PADDED, TEAM_EMPTY_STATE, TEAM_INPUT, teamButtonClass } from 
 
 const PAGE_SIZE = 25;
 
-function buildHref(args: { search?: string; offset?: number }): string {
+function buildHref(args: { search?: string; offset?: number; includeOutbound?: boolean }): string {
   const query = new URLSearchParams();
   query.set("tab", "contacts");
   if (args.search && args.search.trim().length > 0) {
@@ -16,6 +16,9 @@ function buildHref(args: { search?: string; offset?: number }): string {
   }
   if (typeof args.offset === "number" && args.offset > 0) {
     query.set("offset", String(args.offset));
+  }
+  if (args.includeOutbound) {
+    query.set("includeOutbound", "1");
   }
   return `/team?${query.toString()}`;
 }
@@ -33,10 +36,18 @@ type ContactsSectionProps = {
   search?: string;
   offset?: number;
   contactId?: string;
+  excludeOutbound?: boolean;
 };
 
-export async function ContactsSection({ search, offset, contactId }: ContactsSectionProps): Promise<ReactElement> {
+export async function ContactsSection({
+  search,
+  offset,
+  contactId,
+  excludeOutbound
+}: ContactsSectionProps): Promise<ReactElement> {
   const safeOffset = typeof offset === "number" && offset > 0 ? offset : 0;
+  const shouldExcludeOutbound = excludeOutbound !== false;
+  const includeOutbound = !shouldExcludeOutbound;
 
   let teamMembers: Array<{ id: string; name: string }> = [];
   try {
@@ -54,6 +65,7 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
   if (safeOffset > 0) params.set("offset", String(safeOffset));
   if (search && search.trim().length > 0) params.set("q", search.trim());
   if (contactId) params.set("contactId", contactId);
+  if (shouldExcludeOutbound) params.set("excludeOutbound", "1");
 
   const response = await callAdminApi(`/api/admin/contacts?${params.toString()}`);
   if (!response.ok) {
@@ -218,6 +230,16 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
           placeholder="Search name, email, address"
           className="min-w-[220px] flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
         />
+        <label className="inline-flex items-center gap-2 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            name="includeOutbound"
+            value="1"
+            defaultChecked={includeOutbound}
+            className="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-200"
+          />
+          Show outbound prospects
+        </label>
         <button
           type="submit"
           className={teamButtonClass("secondary")}
@@ -240,7 +262,7 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
                 className={`rounded-full border border-slate-200 px-4 py-1.5 ${
                   hasPrev ? "text-slate-600 hover:border-primary-300 hover:text-primary-700" : "pointer-events-none opacity-40"
                 }`}
-                href={hasPrev ? buildHref({ search, offset: prevOffset }) : "#"}
+                href={hasPrev ? buildHref({ search, offset: prevOffset, includeOutbound }) : "#"}
               >
                 Previous
               </a>
@@ -249,7 +271,7 @@ export async function ContactsSection({ search, offset, contactId }: ContactsSec
                 className={`rounded-full border border-slate-200 px-4 py-1.5 ${
                   hasNext ? "text-slate-600 hover:border-primary-300 hover:text-primary-700" : "pointer-events-none opacity-40"
                 }`}
-                href={hasNext ? buildHref({ search, offset: nextOffset }) : "#"}
+                href={hasNext ? buildHref({ search, offset: nextOffset, includeOutbound }) : "#"}
               >
                 Next
               </a>
