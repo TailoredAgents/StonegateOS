@@ -209,7 +209,7 @@ export async function OutboundSection({ memberId }: { memberId?: string }): Prom
                       </p>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                       <form action={startContactCallAction}>
                         <input type="hidden" name="contactId" value={item.contact.id} />
                         <SubmitButton className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/40 transition hover:bg-primary-700" pendingLabel="Calling...">
@@ -218,9 +218,9 @@ export async function OutboundSection({ memberId }: { memberId?: string }): Prom
                       </form>
                       <form action={openContactThreadAction}>
                         <input type="hidden" name="contactId" value={item.contact.id} />
-                        <input type="hidden" name="channel" value="sms" />
+                        <input type="hidden" name="channel" value={item.contact.email ? "email" : "sms"} />
                         <SubmitButton className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-primary-300 hover:text-primary-700" pendingLabel="Opening...">
-                          Message (SMS)
+                          Message ({item.contact.email ? "Email" : "SMS"})
                         </SubmitButton>
                       </form>
                       <a
@@ -267,4 +267,3 @@ export async function OutboundSection({ memberId }: { memberId?: string }): Prom
     </section>
   );
 }
-

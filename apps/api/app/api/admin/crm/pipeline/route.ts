@@ -31,6 +31,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       lastName: contacts.lastName,
       email: contacts.email,
       phone: contacts.phone,
+      source: contacts.source,
       updatedAt: contacts.updatedAt,
       createdAt: contacts.createdAt
     })
@@ -174,6 +175,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       lastName: row.lastName,
       email: row.email,
       phone: row.phone,
+      source: row.source ?? null,
       pipeline: {
         stage,
         notes: row.notes ?? null,

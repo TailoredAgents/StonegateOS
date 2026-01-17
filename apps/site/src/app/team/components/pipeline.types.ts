@@ -4,6 +4,7 @@ export type PipelineContact = {
   lastName: string;
   email: string | null;
   phone: string | null;
+  source?: string | null;
   pipeline: {
     stage: string;
     notes: string | null;

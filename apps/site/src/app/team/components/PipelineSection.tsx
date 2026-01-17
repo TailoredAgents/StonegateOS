@@ -12,7 +12,14 @@ export async function PipelineSection(): Promise<ReactElement> {
   }
 
   const payload = (await response.json()) as PipelineResponse;
-  const totalContacts = payload.lanes.reduce((sum, lane) => sum + lane.contacts.length, 0);
+  const filteredPayload: PipelineResponse = {
+    stages: payload.stages,
+    lanes: payload.lanes.map((lane) => ({
+      ...lane,
+      contacts: lane.contacts.filter((contact) => !(contact.source && contact.source.startsWith("outbound:")))
+    }))
+  };
+  const totalContacts = filteredPayload.lanes.reduce((sum, lane) => sum + lane.contacts.length, 0);
 
   return (
     <section className="space-y-5">
@@ -29,7 +36,7 @@ export async function PipelineSection(): Promise<ReactElement> {
           No contacts in the pipeline yet. Create contacts to get started.
         </p>
       ) : (
-        <PipelineBoardClient stages={payload.stages} lanes={payload.lanes} />
+        <PipelineBoardClient stages={filteredPayload.stages} lanes={filteredPayload.lanes} />
       )}
 
       <PipelineAudit />
