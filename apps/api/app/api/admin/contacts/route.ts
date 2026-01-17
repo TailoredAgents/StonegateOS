@@ -439,6 +439,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     lastName,
     email,
     phone,
+    source,
     salespersonMemberId,
     pipelineStage,
     pipelineNotes,
@@ -507,6 +508,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
+  const resolvedSource = typeof source === "string" && source.trim().toLowerCase() === "canvass" ? "canvass" : "manual";
 
   try {
     const result = await db.transaction(async (tx) => {
@@ -519,7 +521,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         phoneE164: normalizedPhone?.e164 ?? null,
         salespersonMemberId:
           normalizedSalespersonMemberId !== undefined ? normalizedSalespersonMemberId : defaultAssigneeMemberId,
-        source: "manual",
+        source: resolvedSource,
         createdAt: new Date(),
         updatedAt: new Date()
       };
@@ -656,7 +658,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       entityId: contact.id,
       meta: {
         propertyId: property?.id ?? null,
-        source: "manual"
+        source: resolvedSource
       }
     });
 

@@ -263,6 +263,7 @@ export async function createQuoteAction(formData: FormData) {
   const propertyId = formData.get("propertyId");
   const appointmentId = formData.get("appointmentId");
   const zoneId = formData.get("zoneId");
+  const workflow = formData.get("workflow");
   const servicesRaw = formData.get("services");
   const depositRate = formData.get("depositRate");
   const expiresInDays = formData.get("expiresInDays");
@@ -346,6 +347,7 @@ export async function createQuoteAction(formData: FormData) {
   type CreateQuoteResponse = {
     quote?: { id: string; shareToken?: string | null };
     shareUrl?: string;
+    breakdown?: { total?: number };
     error?: string;
     details?: unknown;
   };
@@ -368,6 +370,7 @@ export async function createQuoteAction(formData: FormData) {
   const quoteId = data?.quote?.id ?? null;
   const shareLink = data?.shareUrl ?? (data?.quote?.shareToken ? `/quote/${data.quote.shareToken}` : null);
   const shouldSend = typeof formData.get("sendQuote") === "string";
+  const isCanvass = typeof workflow === "string" && workflow.trim().toLowerCase() === "canvass";
 
   let successMessage = shareLink ? `Quote created. Share link: ${shareLink}` : "Quote created";
   let sendError: string | null = null;
@@ -392,6 +395,47 @@ export async function createQuoteAction(formData: FormData) {
   jar.set({ name: "myst-flash", value: successMessage, path: "/" });
   if (sendError) {
     jar.set({ name: "myst-flash-error", value: sendError, path: "/" });
+  }
+
+  if (isCanvass && quoteId && typeof contactId === "string") {
+    const repName = jar.get("myst-team-actor-label")?.value?.trim() || "Stonegate";
+
+    let firstName = "there";
+    try {
+      const lookup = await callAdminApi(`/api/admin/contacts?contactId=${encodeURIComponent(contactId)}&limit=1`);
+      if (lookup.ok) {
+        const payload = (await lookup.json()) as { contacts?: Array<{ firstName?: string | null }> };
+        const candidate = payload.contacts?.[0]?.firstName;
+        if (candidate && candidate.trim().length) firstName = candidate.trim();
+      }
+    } catch {
+      // ignore lookup failures
+    }
+
+    const total = typeof data?.breakdown?.total === "number" ? data.breakdown.total : null;
+    const totalText = total !== null ? `$${total.toFixed(0)}` : "your total";
+    const draftBody = `Hey ${firstName}, this is ${repName} with Stonegate Junk Removal. Your quote total is ${totalText}. What day works best for pickup?`;
+
+    try {
+      const ensured = await callAdminApi("/api/admin/inbox/threads/ensure", {
+        method: "POST",
+        body: JSON.stringify({ contactId, channel: "sms" })
+      });
+      if (ensured.ok) {
+        const ensuredPayload = (await ensured.json()) as { threadId?: string };
+        const threadId = typeof ensuredPayload.threadId === "string" ? ensuredPayload.threadId : null;
+        if (threadId) {
+          await callAdminApi(`/api/admin/inbox/threads/${threadId}/draft`, {
+            method: "POST",
+            body: JSON.stringify({ channel: "sms", body: draftBody })
+          });
+          jar.set({ name: "myst-flash", value: "Quote created. Draft SMS prepared in Inbox.", path: "/" });
+          redirect(`/team?tab=inbox&threadId=${encodeURIComponent(threadId)}`);
+        }
+      }
+    } catch {
+      // ignore draft failures; keep standard flow
+    }
   }
 
   revalidatePath("/team");
@@ -585,6 +629,189 @@ function parseUsdToCents(value: FormDataEntryValue | null): number | null {
   const parsed = Number(cleaned);
   if (!Number.isFinite(parsed) || parsed < 0) return null;
   return Math.round(parsed * 100);
+}
+
+export async function createCanvassLeadAction(formData: FormData) {
+  const jar = await cookies();
+
+  const firstName = formData.get("firstName");
+  const lastName = formData.get("lastName");
+  const phone = formData.get("phone");
+  const email = formData.get("email");
+  const addressLine1 = formData.get("addressLine1");
+  const city = formData.get("city");
+  const state = formData.get("state");
+  const postalCode = formData.get("postalCode");
+  const salespersonMemberId = formData.get("salespersonMemberId");
+
+  const hasPhone = typeof phone === "string" && phone.trim().length > 0;
+  const hasEmail = typeof email === "string" && email.trim().length > 0;
+
+  if (typeof firstName !== "string" || firstName.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "First name is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  if (typeof lastName !== "string" || lastName.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Last name is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  if (!hasPhone && !hasEmail) {
+    jar.set({ name: "myst-flash-error", value: "Phone or email is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (
+    typeof addressLine1 !== "string" ||
+    typeof city !== "string" ||
+    typeof state !== "string" ||
+    typeof postalCode !== "string" ||
+    addressLine1.trim().length === 0 ||
+    city.trim().length === 0 ||
+    state.trim().length === 0 ||
+    postalCode.trim().length === 0
+  ) {
+    jar.set({ name: "myst-flash-error", value: "Full address is required for canvass leads", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+    pipelineStage: "contacted",
+    source: "canvass",
+    property: {
+      addressLine1: addressLine1.trim(),
+      city: city.trim(),
+      state: state.trim(),
+      postalCode: postalCode.trim()
+    }
+  };
+
+  if (hasPhone) payload["phone"] = (phone as string).trim();
+  if (hasEmail) payload["email"] = (email as string).trim();
+  if (typeof salespersonMemberId === "string" && salespersonMemberId.trim().length > 0) {
+    payload["salespersonMemberId"] = salespersonMemberId.trim();
+  }
+
+  const response = await callAdminApi("/api/admin/contacts", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  type ContactCreateResponse =
+    | { contact?: { id: string; salespersonMemberId?: string | null } }
+    | { existingContact?: { id?: string } };
+
+  let data: ContactCreateResponse | null = null;
+  try {
+    data = (await response.json()) as ContactCreateResponse;
+  } catch {
+    data = null;
+  }
+
+  if (!response.ok) {
+    if (response.status === 409) {
+      const existingId =
+        data && "existingContact" in data && data.existingContact && typeof data.existingContact.id === "string"
+          ? data.existingContact.id
+          : null;
+      if (existingId) {
+        jar.set({ name: "myst-flash-error", value: "Contact already exists. Opening existing record.", path: "/" });
+        redirect(`/team?tab=canvass&contactId=${encodeURIComponent(existingId)}`);
+      }
+    }
+
+    const message = await readErrorMessage(response, "Unable to create canvass lead");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const contactId =
+    data && "contact" in data && data.contact && typeof data.contact.id === "string" ? data.contact.id : null;
+  if (!contactId) {
+    jar.set({ name: "myst-flash-error", value: "Canvass lead created, but no contact ID returned", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const assigneeFromForm =
+    typeof salespersonMemberId === "string" && salespersonMemberId.trim().length > 0 ? salespersonMemberId.trim() : null;
+  const assigneeFromApi =
+    data && "contact" in data && data.contact && typeof data.contact.salespersonMemberId === "string"
+      ? data.contact.salespersonMemberId
+      : null;
+  const assignee = assigneeFromForm ?? assigneeFromApi;
+
+  try {
+    await callAdminApi("/api/admin/crm/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        contactId,
+        title: "Canvass lead",
+        assignedTo: assignee ?? undefined,
+        notes: "kind=canvass"
+      })
+    });
+  } catch {
+    // ignore task failures
+  }
+
+  jar.set({ name: "myst-flash", value: "Canvass lead created", path: "/" });
+  redirect(
+    `/team?tab=canvass&contactId=${encodeURIComponent(contactId)}${
+      assignee ? `&memberId=${encodeURIComponent(assignee)}` : ""
+    }`
+  );
+}
+
+export async function createCanvassFollowupAction(formData: FormData) {
+  const jar = await cookies();
+  const contactId = formData.get("contactId");
+  const dueAt = formData.get("dueAt");
+  const assignedTo = formData.get("assignedTo");
+  const notes = formData.get("notes");
+
+  if (typeof contactId !== "string" || contactId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  if (typeof dueAt !== "string" || dueAt.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Follow-up time required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload: Record<string, unknown> = {
+    contactId: contactId.trim(),
+    title: "Canvass follow-up",
+    dueAt: dueAt.trim(),
+    notes: `kind=canvass${typeof notes === "string" && notes.trim().length ? `\nnotes=${notes.trim()}` : ""}`
+  };
+
+  if (typeof assignedTo === "string" && assignedTo.trim().length > 0) {
+    payload["assignedTo"] = assignedTo.trim();
+  }
+
+  const response = await callAdminApi("/api/admin/crm/reminders", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to schedule follow-up");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Follow-up scheduled", path: "/" });
+  revalidatePath("/team");
 }
 
 export async function startContactCallAction(formData: FormData) {

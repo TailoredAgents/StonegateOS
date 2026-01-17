@@ -40,6 +40,7 @@ interface QuoteBuilderClientProps {
   zones: QuoteBuilderZoneOption[];
   defaultZoneId: string | null;
   initialContactId?: string;
+  workflow?: "canvass" | null;
 }
 
 export function QuoteBuilderClient({
@@ -47,7 +48,8 @@ export function QuoteBuilderClient({
   services,
   zones,
   defaultZoneId,
-  initialContactId
+  initialContactId,
+  workflow
 }: QuoteBuilderClientProps) {
   const [contactId, setContactId] = React.useState<string>(() => {
     if (initialContactId) {
@@ -218,9 +220,13 @@ export function QuoteBuilderClient({
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Build and send a quote</h2>
+            <h2 className="text-xl font-semibold text-slate-900">
+              {workflow === "canvass" ? "Build a canvass quote" : "Build and send a quote"}
+            </h2>
             <p className="text-sm text-slate-600">
-              Choose a saved contact and property, bundle the services, and optionally email the proposal right away.
+              {workflow === "canvass"
+                ? "Create the quote, then the system prepares an SMS draft for you to send from the Unified Inbox."
+                : "Choose a saved contact and property, bundle the services, and optionally email the proposal right away."}
             </p>
           </div>
         </div>
@@ -229,6 +235,7 @@ export function QuoteBuilderClient({
             <input type="hidden" name="services" value={JSON.stringify(selectedServices)} />
             <input type="hidden" name="serviceOverrides" value={serializedOverrides} />
             <input type="hidden" name="zoneId" value={zoneId} />
+            {workflow ? <input type="hidden" name="workflow" value={workflow} /> : null}
 
           <div className="grid gap-4 lg:grid-cols-2">
             <label className="flex flex-col gap-2 text-sm text-slate-600">

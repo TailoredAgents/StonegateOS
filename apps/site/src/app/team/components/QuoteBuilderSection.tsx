@@ -12,7 +12,13 @@ type ContactsResponse = {
   contacts: ContactSummary[];
 };
 
-export async function QuoteBuilderSection({ initialContactId }: { initialContactId?: string }): Promise<ReactElement> {
+export async function QuoteBuilderSection({
+  initialContactId,
+  workflow
+}: {
+  initialContactId?: string;
+  workflow?: "canvass" | null;
+}): Promise<ReactElement> {
   const response = await callAdminApi("/api/admin/contacts?limit=100");
   if (!response.ok) {
     throw new Error("Failed to load contacts");
@@ -61,6 +67,7 @@ export async function QuoteBuilderSection({ initialContactId }: { initialContact
       zones={zoneOptions}
       defaultZoneId={zones[0]?.id ?? null}
       initialContactId={initialContactId}
+      workflow={workflow ?? null}
     />
   );
 }

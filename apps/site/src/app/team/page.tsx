@@ -29,6 +29,7 @@ import { MergeQueueSection } from "./components/MergeQueueSection";
 import { SalesScorecardSection } from "./components/SalesScorecardSection";
 import { OutboundSection } from "./components/OutboundSection";
 import { SeoAgentSection } from "./components/SeoAgentSection";
+import { CanvassSection } from "./components/CanvassSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
@@ -116,6 +117,7 @@ export default async function TeamPage({
     { id: "expenses", label: "Expenses", href: "/team?tab=expenses", requires: "crew" },
     { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "owner" },
     { id: "quote-builder", label: "Quote Builder", href: "/team?tab=quote-builder", requires: "crew" },
+    { id: "canvass", label: "Canvass Quote", href: "/team?tab=canvass", requires: "crew" },
     { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "owner" },
     { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "owner" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
@@ -136,7 +138,7 @@ export default async function TeamPage({
   ];
   const tabGroups: TabNavGroup[] = [
     { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
-    { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "pipeline", "sales-hq", "outbound", "contacts", "inbox", "calendar"] },
+    { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "canvass", "pipeline", "sales-hq", "outbound", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
     { id: "control", label: "Control", itemIds: ["commissions", "seo", "policy", "automation", "access", "sales-log", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
@@ -311,6 +313,12 @@ export default async function TeamPage({
             }
           >
             <QuoteBuilderSection initialContactId={contactIdParam} />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "canvass" && (hasCrew || hasOwner) ? (
+          <React.Suspense fallback={<TeamSkeletonCard title="Loading Canvass Quote" />}>
+            <CanvassSection initialContactId={contactIdParam} memberId={memberIdParam} />
           </React.Suspense>
         ) : null}
 
