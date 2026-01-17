@@ -1771,7 +1771,7 @@ async function queueAutoFirstTouchSms(input: {
   const outOfServiceArea =
     normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
   const isOutOfArea = outOfServiceArea === true;
-  const autoSendEligible = true;
+  const autoSendEligible = (await getAutomationMode(input.db, "sms")) === "auto";
   const templateGroup = isOutOfArea ? templatesPolicy.out_of_area : templatesPolicy.first_touch;
   const body =
     resolveTemplateForChannel(templateGroup, { replyChannel: "sms" }) ??

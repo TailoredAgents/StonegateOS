@@ -3,6 +3,7 @@ import { and, desc, eq, gt, gte, isNotNull, ne, or, sql } from "drizzle-orm";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import {
   auditLogs,
+  automationSettings,
   appointments,
   contacts,
   conversationMessages,
@@ -77,6 +78,19 @@ function readEnvString(key: string): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   return trimmed.length ? trimmed : null;
+}
+
+async function getAutomationModeForReplyChannel(
+  db: DatabaseClient,
+  channel: ReplyChannel
+): Promise<"draft" | "assist" | "auto"> {
+  const [row] = await db
+    .select({ mode: automationSettings.mode })
+    .from(automationSettings)
+    .where(eq(automationSettings.channel, channel))
+    .limit(1);
+
+  return (row?.mode ?? "draft") as "draft" | "assist" | "auto";
 }
 
 function getOpenAIConfig():
@@ -666,7 +680,8 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const normalizedPostal = zipFromThread ?? zipFromBody ?? zipFromTranscript;
   const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
   const outOfServiceArea = normalizedPostal !== null ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
-  const autoSendEligible = true;
+  const automationMode = await getAutomationModeForReplyChannel(db, replyChannel);
+  const autoSendEligible = automationMode === "auto";
   const extractedPhone = extractPhoneFromText(messages.map((m) => m.body).join("\n"));
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, { inboundChannel: replyChannel, replyChannel });
@@ -964,6 +979,24 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       entityType: "conversation_message",
       entityId: row.id,
       meta: { reason: "autosend_disabled" }
+    });
+    return { status: "processed" };
+  }
+
+  const replyChannel: ReplyChannel | null =
+    row.channel === "sms" || row.channel === "email" || row.channel === "dm" ? (row.channel as ReplyChannel) : null;
+  if (!replyChannel) {
+    return { status: "processed" };
+  }
+
+  const automationMode = await getAutomationModeForReplyChannel(db, replyChannel);
+  if (automationMode !== "auto") {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: { reason: "automation_mode", mode: automationMode, channel: replyChannel }
     });
     return { status: "processed" };
   }
