@@ -210,57 +210,6 @@ export async function OutboundSection({
       </header>
 
       <div className={TEAM_CARD_PADDED}>
-        <h3 className="text-base font-semibold text-slate-900">Import prospects</h3>
-        <p className="mt-1 text-sm text-slate-600">
-          Paste a CSV (or upload one) and we&apos;ll create contacts + an outbound task. These will be labeled clearly as outbound.
-        </p>
-        <form action={importOutboundProspectsAction} className="mt-4 grid gap-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="flex flex-col gap-1 text-sm text-slate-600">
-              <span>Campaign</span>
-              <input name="campaign" className={TEAM_INPUT} defaultValue="property_management" />
-            </label>
-            <label className="flex flex-col gap-1 text-sm text-slate-600">
-              <span>Assign to</span>
-              <select name="assignedToMemberId" defaultValue={resolvedMemberId} className={TEAM_INPUT}>
-                <option value="">Default assignee</option>
-                {members.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <label className="flex flex-col gap-1 text-sm text-slate-600">
-            <span>CSV</span>
-            <textarea
-              name="csv"
-              className={`${TEAM_INPUT} min-h-[160px] font-mono text-xs`}
-              placeholder={
-                "company,contactName,phone,email,city,state,zip,notes\nAcme Property Mgmt,Jane Doe,555-555-5555,jane@acme.com,Atlanta,GA,30303,\"prefers email\""
-              }
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm text-slate-600">
-            <span>Or upload CSV</span>
-            <input name="file" type="file" accept=".csv,text/csv,text/plain" className="text-sm text-slate-600" />
-          </label>
-
-          <div className="flex flex-wrap gap-3">
-            <SubmitButton
-              className="rounded-full bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
-              pendingLabel="Importing..."
-            >
-              Import outbound list
-            </SubmitButton>
-            <p className="text-xs text-slate-500">Required per row: email or phone. Name/company optional. Max 2000 rows per import.</p>
-          </div>
-        </form>
-      </div>
-
-      <div className={TEAM_CARD_PADDED}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h3 className="text-base font-semibold text-slate-900">Queue</h3>
@@ -298,6 +247,9 @@ export async function OutboundSection({
               })}
             >
               Callbacks today ({queuePayload.summary?.callbacksToday ?? 0})
+            </a>
+            <a className="rounded-full bg-white px-3 py-1 font-semibold text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50" href="#outbound-import">
+              Import
             </a>
           </div>
         </div>
@@ -554,6 +506,57 @@ export async function OutboundSection({
           <span className="text-[11px] text-slate-500">Tip: outbound dispositions schedule the next touch automatically.</span>
         </div>
       </div>
+
+      <details id="outbound-import" className={TEAM_CARD_PADDED}>
+        <summary className="cursor-pointer select-none text-base font-semibold text-slate-900">
+          Import prospects
+          <span className="ml-2 text-xs font-normal text-slate-500">(CSV)</span>
+        </summary>
+        <p className="mt-2 text-sm text-slate-600">
+          Paste a CSV (or upload one) and we&apos;ll create contacts + an outbound task. These will be labeled clearly as outbound.
+        </p>
+        <form action={importOutboundProspectsAction} className="mt-4 grid gap-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm text-slate-600">
+              <span>Campaign</span>
+              <input name="campaign" className={TEAM_INPUT} defaultValue="property_management" />
+            </label>
+            <label className="flex flex-col gap-1 text-sm text-slate-600">
+              <span>Assign to</span>
+              <select name="assignedToMemberId" defaultValue={resolvedMemberId} className={TEAM_INPUT}>
+                <option value="">Default assignee</option>
+                {members.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="flex flex-col gap-1 text-sm text-slate-600">
+            <span>CSV</span>
+            <textarea
+              name="csv"
+              className={`${TEAM_INPUT} min-h-[160px] font-mono text-xs`}
+              placeholder={
+                "company,contactName,phone,email,city,state,zip,notes\nAcme Property Mgmt,Jane Doe,555-555-5555,jane@acme.com,Atlanta,GA,30303,\"prefers email\""
+              }
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm text-slate-600">
+            <span>Or upload CSV</span>
+            <input name="file" type="file" accept=".csv,text/csv,text/plain" className="text-sm text-slate-600" />
+          </label>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <SubmitButton className={teamButtonClass("primary")} pendingLabel="Importing...">
+              Import outbound list
+            </SubmitButton>
+            <p className="text-xs text-slate-500">Required per row: email or phone. Max 2000 rows per import.</p>
+          </div>
+        </form>
+      </details>
     </section>
   );
 }
