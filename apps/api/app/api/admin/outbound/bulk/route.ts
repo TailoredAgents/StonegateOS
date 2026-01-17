@@ -21,6 +21,10 @@ function upsertField(notes: string, key: string, value: string): string {
   return notes.length ? `${notes}\n${line}` : line;
 }
 
+function hasStartedAt(notes: string): boolean {
+  return /(^|\n)startedAt=/.test(notes);
+}
+
 type ActionKind = "assign" | "start" | "assign_start" | "snooze";
 
 function parseAction(value: unknown): ActionKind | null {
@@ -154,6 +158,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     let started = 0;
     let assigned = 0;
     let snoozed = 0;
+    let snoozeSkippedNotStarted = 0;
+    const snoozedTaskIds: string[] = [];
 
     for (const row of rows) {
       const notes = typeof row.notes === "string" ? row.notes : "";
@@ -181,10 +187,15 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
 
       if (action === "snooze" && snoozeDueAt) {
-        patch.dueAt = snoozeDueAt;
-        if (!(row.dueAt instanceof Date)) {
-          nextNotes = upsertField(nextNotes, "startedAt", now.toISOString());
+        const isStarted = row.dueAt instanceof Date || hasStartedAt(notes);
+        if (!isStarted) {
+          snoozeSkippedNotStarted += 1;
+          skipped += 1;
+          continue;
         }
+
+        patch.dueAt = snoozeDueAt;
+        snoozedTaskIds.push(row.id);
         snoozed += 1;
       }
 
@@ -202,11 +213,11 @@ export async function POST(request: NextRequest): Promise<Response> {
       updated += 1;
     }
 
-    return { updated, skipped, started, assigned, snoozed };
+    return { updated, skipped, started, assigned, snoozed, snoozeSkippedNotStarted, snoozedTaskIds };
   });
 
   if (action === "snooze" && snoozeDueAt) {
-    for (const taskId of taskIds) {
+    for (const taskId of result.snoozedTaskIds) {
       await ensureReminderOutbox(db, taskId, snoozeDueAt);
     }
   }
@@ -222,9 +233,27 @@ export async function POST(request: NextRequest): Promise<Response> {
       assignedToMemberId: assignedToMemberId ?? null,
       snoozePreset: snoozePreset ?? null,
       snoozeDueAt: snoozeDueAt ? snoozeDueAt.toISOString() : null,
-      ...result
+      updated: result.updated,
+      skipped: result.skipped,
+      started: result.started,
+      assigned: result.assigned,
+      snoozed: result.snoozed,
+      snoozeSkippedNotStarted: result.snoozeSkippedNotStarted
     }
   });
 
-  return NextResponse.json({ ok: true, action, taskCount: taskIds.length, assignedToMemberId, snoozePreset, snoozeDueAt: snoozeDueAt ? snoozeDueAt.toISOString() : null, ...result });
+  return NextResponse.json({
+    ok: true,
+    action,
+    taskCount: taskIds.length,
+    assignedToMemberId,
+    snoozePreset,
+    snoozeDueAt: snoozeDueAt ? snoozeDueAt.toISOString() : null,
+    updated: result.updated,
+    skipped: result.skipped,
+    started: result.started,
+    assigned: result.assigned,
+    snoozed: result.snoozed,
+    snoozeSkippedNotStarted: result.snoozeSkippedNotStarted
+  });
 }

@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, asc, desc, eq, ilike, isNotNull } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { contacts, crmTasks, getDb } from "@/db";
+import { contacts, crmTasks, getDb, outboxEvents } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
@@ -131,6 +131,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     const lastDisposition = normalizeDisposition(parseField(notes, "lastDisposition"));
     const company = parseField(notes, "company");
     const noteSnippet = parseField(notes, "notes");
+    const startedAt = parseField(notes, "startedAt");
     const dueAtIso = row.dueAt instanceof Date ? row.dueAt.toISOString() : null;
     const dueMs = row.dueAt instanceof Date ? row.dueAt.getTime() : null;
     const overdue = dueMs !== null ? dueMs < now.getTime() : false;
@@ -148,6 +149,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       lastDisposition,
       company,
       noteSnippet,
+      startedAt: startedAt && !Number.isNaN(Date.parse(startedAt)) ? new Date(startedAt).toISOString() : null,
+      reminderAt: null as string | null,
       contact: {
         id: row.contactId,
         name,
@@ -200,6 +203,30 @@ export async function GET(request: NextRequest): Promise<Response> {
   const total = filtered.length;
   const page = filtered.slice(offset, offset + limit);
   const nextOffset = offset + page.length < total ? offset + page.length : null;
+
+  const pageIds = page.map((item) => item.id);
+  if (pageIds.length > 0) {
+    const taskIdExpr = sql<string>`(${outboxEvents.payload} ->> 'taskId')`;
+    const idList = sql.join(
+      pageIds.map((id) => sql`${id}`),
+      sql`,`
+    );
+
+    const reminderRows = await db
+      .select({ taskId: taskIdExpr, nextAttemptAt: outboxEvents.nextAttemptAt })
+      .from(outboxEvents)
+      .where(and(eq(outboxEvents.type, "crm.reminder.sms"), sql`${taskIdExpr} in (${idList})`, sql`${outboxEvents.processedAt} is null`));
+
+    const reminderMap = new Map<string, string>();
+    for (const row of reminderRows) {
+      if (!row.taskId || reminderMap.has(row.taskId)) continue;
+      if (row.nextAttemptAt instanceof Date) reminderMap.set(row.taskId, row.nextAttemptAt.toISOString());
+    }
+
+    for (const item of page) {
+      item.reminderAt = reminderMap.get(item.id) ?? null;
+    }
+  }
 
   const summary = filtered.reduce(
     (acc, item) => {

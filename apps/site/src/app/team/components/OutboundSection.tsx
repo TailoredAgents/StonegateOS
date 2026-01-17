@@ -17,6 +17,7 @@ import {
   TEAM_SECTION_TITLE,
   teamButtonClass
 } from "./team-ui";
+import { OutboundBulkSelectionControls } from "./OutboundBulkSelectionControls";
 
 type TeamMember = { id: string; name: string; active?: boolean };
 
@@ -31,6 +32,8 @@ type OutboundQueueItem = {
   lastDisposition: string | null;
   company: string | null;
   noteSnippet: string | null;
+  startedAt?: string | null;
+  reminderAt?: string | null;
   contact: {
     id: string;
     name: string;
@@ -76,6 +79,13 @@ function formatDue(item: OutboundQueueItem): string {
   const due = new Date(item.dueAt);
   if (Number.isNaN(due.getTime())) return item.dueAt;
   return due.toLocaleString();
+}
+
+function formatTimestamp(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
 }
 
 function formatDueBadge(item: OutboundQueueItem): { label: string; tone: string } {
@@ -386,8 +396,9 @@ export async function OutboundSection({
                     <option value="next_monday_9am">Next Monday (9am ET)</option>
                     <option value="plus_7d_9am">+7 days (9am ET)</option>
                   </select>
+                  <span className="text-[11px] text-slate-500">Snooze skips rows that are not started yet.</span>
                 </label>
-                <div className="text-xs text-slate-500">Select rows below, then apply.</div>
+                <OutboundBulkSelectionControls formId="outboundBulkForm" />
               </div>
               <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Applying...">
                 Apply
@@ -469,13 +480,20 @@ export async function OutboundSection({
                     <p className="mt-2 text-xs text-slate-600">
                       {selected.contact.phone ?? "No phone"} / {selected.contact.email ?? "No email"}
                     </p>
-                    <p className="mt-1 text-[11px] text-slate-500">
-                      Attempt {selected.attempt} / {selected.campaign ?? "outbound"} / Due {formatDue(selected)}
-                    </p>
-                    {selected.noteSnippet ? (
-                      <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{selected.noteSnippet}</p>
-                    ) : null}
-                  </div>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Attempt {selected.attempt} / {selected.campaign ?? "outbound"} / Due {formatDue(selected)}
+                      </p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        {selected.dueAt ? "Cadence started" : "Cadence not started"}
+                        {formatTimestamp(selected.startedAt) ? ` (${formatTimestamp(selected.startedAt)})` : ""}
+                      </p>
+                      {formatTimestamp(selected.reminderAt) ? (
+                        <p className="mt-1 text-[11px] text-slate-500">Reminder scheduled {formatTimestamp(selected.reminderAt)}</p>
+                      ) : null}
+                      {selected.noteSnippet ? (
+                        <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{selected.noteSnippet}</p>
+                      ) : null}
+                    </div>
 
                   {!selected.dueAt ? (
                     <form action={startOutboundCadenceAction} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
