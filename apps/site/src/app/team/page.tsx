@@ -61,6 +61,14 @@ export default async function TeamPage({
     status?: string;
     channel?: string;
     memberId?: string;
+    out_q?: string;
+    out_campaign?: string;
+    out_attempt?: string;
+    out_due?: string;
+    out_has?: string;
+    out_disposition?: string;
+    out_taskId?: string;
+    out_offset?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -88,6 +96,16 @@ export default async function TeamPage({
   const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
   const memberIdParam = typeof params?.memberId === "string" ? params.memberId : undefined;
+  const outboundFilters = {
+    q: typeof params?.out_q === "string" ? params.out_q : undefined,
+    campaign: typeof params?.out_campaign === "string" ? params.out_campaign : undefined,
+    attempt: typeof params?.out_attempt === "string" ? params.out_attempt : undefined,
+    due: typeof params?.out_due === "string" ? params.out_due : undefined,
+    has: typeof params?.out_has === "string" ? params.out_has : undefined,
+    disposition: typeof params?.out_disposition === "string" ? params.out_disposition : undefined,
+    taskId: typeof params?.out_taskId === "string" ? params.out_taskId : undefined,
+    offset: typeof params?.out_offset === "string" ? params.out_offset : undefined
+  };
 
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
@@ -361,7 +379,7 @@ export default async function TeamPage({
 
         {tab === "outbound" && hasOwner ? (
           <React.Suspense fallback={<TeamSkeletonCard title="Loading outbound prospects" />}>
-            <OutboundSection memberId={memberIdParam} />
+            <OutboundSection memberId={memberIdParam} filters={outboundFilters} />
           </React.Suspense>
         ) : null}
 
