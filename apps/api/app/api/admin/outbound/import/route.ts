@@ -286,7 +286,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         contactId,
         title: "Outbound: Call property manager",
         status: "open",
-        dueAt: now,
+        dueAt: null,
         assignedTo: assignee,
         notes: buildOutboundNotes({ campaign, attempt: 1, company, notes: notesExtra })
       });

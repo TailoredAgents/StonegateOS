@@ -38,7 +38,7 @@ type OutboundQueueItem = {
   };
 };
 
-type OutboundQueueSummary = { dueNow: number; overdue: number; callbacksToday: number };
+type OutboundQueueSummary = { dueNow: number; overdue: number; callbacksToday: number; notStarted?: number };
 type OutboundQueueFacets = { campaigns: string[]; dispositions: string[]; attempts: string[] };
 
 type OutboundQueueResponse = {
@@ -66,14 +66,14 @@ type OutboundFilters = {
 };
 
 function formatDue(item: OutboundQueueItem): string {
-  if (!item.dueAt) return "No due time";
+  if (!item.dueAt) return "Not started";
   const due = new Date(item.dueAt);
   if (Number.isNaN(due.getTime())) return item.dueAt;
   return due.toLocaleString();
 }
 
 function formatDueBadge(item: OutboundQueueItem): { label: string; tone: string } {
-  if (!item.dueAt) return { label: "No due", tone: "bg-slate-100 text-slate-600" };
+  if (!item.dueAt) return { label: "Not started", tone: "bg-slate-100 text-slate-600" };
   if (item.overdue) return { label: "Overdue", tone: "bg-rose-100 text-rose-700" };
   if (typeof item.minutesUntilDue === "number") {
     if (item.minutesUntilDue <= 0) return { label: "Due now", tone: "bg-amber-100 text-amber-700" };
@@ -225,6 +225,12 @@ export async function OutboundSection({
               })}
             >
               All ({pagination.total})
+            </a>
+            <a
+              className="rounded-full bg-slate-50 px-3 py-1 font-semibold text-slate-700 hover:bg-slate-100"
+              href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { due: "not_started", offset: "0" } })}
+            >
+              Not started ({queuePayload.summary?.notStarted ?? 0})
             </a>
             <a
               className="rounded-full bg-amber-50 px-3 py-1 font-semibold text-amber-700 hover:bg-amber-100"

@@ -6,6 +6,7 @@ import { contacts, crmTasks, getDb } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
+import { sql } from "drizzle-orm";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -37,12 +38,12 @@ function parseField(notes: string, key: string): string | null {
   return value && value.length ? value : null;
 }
 
-type DueFilter = "all" | "overdue" | "due_now" | "today";
+type DueFilter = "all" | "overdue" | "due_now" | "today" | "not_started";
 type HasFilter = "any" | "phone" | "email" | "both";
 
 function parseDue(value: string | null): DueFilter {
   const key = value?.trim().toLowerCase();
-  if (key === "overdue" || key === "due_now" || key === "today") return key;
+  if (key === "overdue" || key === "due_now" || key === "today" || key === "not_started") return key;
   return "all";
 }
 
@@ -115,7 +116,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         isNotNull(crmTasks.contactId)
       )
     )
-    .orderBy(asc(crmTasks.dueAt), desc(crmTasks.createdAt))
+    .orderBy(sql`(${crmTasks.dueAt} is null) asc`, asc(crmTasks.dueAt), desc(crmTasks.createdAt))
     .limit(MAX_SCAN);
 
   const now = new Date();
@@ -175,6 +176,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       if (dueMs === null || dueMs > now.getTime()) return false;
     } else if (dueFilter === "today") {
       if (dueMs === null || dueMs < startOfTodayUtc || dueMs > endOfTodayUtc) return false;
+    } else if (dueFilter === "not_started") {
+      if (dueMs !== null) return false;
     }
 
     if (q) {
@@ -203,11 +206,12 @@ export async function GET(request: NextRequest): Promise<Response> {
       const dueMs = item.dueAt ? Date.parse(item.dueAt) : null;
       if (dueMs !== null && dueMs <= now.getTime()) acc.dueNow += 1;
       if (dueMs !== null && dueMs < now.getTime()) acc.overdue += 1;
+      if (dueMs === null) acc.notStarted += 1;
       const isCallback = (item.title ?? "").toLowerCase().includes("callback") || item.lastDisposition === "callback_requested";
       if (isCallback && dueMs !== null && dueMs >= startOfTodayUtc && dueMs <= endOfTodayUtc) acc.callbacksToday += 1;
       return acc;
     },
-    { dueNow: 0, overdue: 0, callbacksToday: 0 }
+    { dueNow: 0, overdue: 0, callbacksToday: 0, notStarted: 0 }
   );
 
   const facets = filtered.reduce(
