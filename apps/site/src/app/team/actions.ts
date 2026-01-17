@@ -2693,6 +2693,9 @@ export async function bulkOutboundAction(formData: FormData) {
   const assignedToRaw = formData.get("assignedToMemberId");
   const assignedToMemberId = typeof assignedToRaw === "string" && assignedToRaw.trim().length ? assignedToRaw.trim() : null;
 
+  const snoozePresetRaw = formData.get("snoozePreset");
+  const snoozePreset = typeof snoozePresetRaw === "string" && snoozePresetRaw.trim().length ? snoozePresetRaw.trim() : null;
+
   const taskIds = formData
     .getAll("taskIds")
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
@@ -2704,7 +2707,7 @@ export async function bulkOutboundAction(formData: FormData) {
     return;
   }
 
-  if (action !== "assign" && action !== "start" && action !== "assign_start") {
+  if (action !== "assign" && action !== "start" && action !== "assign_start" && action !== "snooze") {
     jar.set({ name: "myst-flash-error", value: "Pick a bulk action first.", path: "/" });
     revalidatePath("/team");
     return;
@@ -2716,11 +2719,18 @@ export async function bulkOutboundAction(formData: FormData) {
     return;
   }
 
+  if (action === "snooze" && !snoozePreset) {
+    jar.set({ name: "myst-flash-error", value: "Pick a snooze time first.", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
   const response = await callAdminApi("/api/admin/outbound/bulk", {
     method: "POST",
     body: JSON.stringify({
       action,
       assignedToMemberId: assignedToMemberId ?? undefined,
+      snoozePreset: snoozePreset ?? undefined,
       taskIds
     })
   });

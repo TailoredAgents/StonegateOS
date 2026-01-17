@@ -363,6 +363,7 @@ export async function OutboundSection({
                     <option value="assign_start">Assign + start cadence</option>
                     <option value="assign">Assign only</option>
                     <option value="start">Start cadence only</option>
+                    <option value="snooze">Snooze</option>
                   </select>
                 </label>
                 <label className="flex flex-col gap-1 text-xs text-slate-600">
@@ -374,6 +375,16 @@ export async function OutboundSection({
                         {member.name}
                       </option>
                     ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-slate-600">
+                  <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Snooze until</span>
+                  <select name="snoozePreset" defaultValue="tomorrow_9am" className={TEAM_INPUT_COMPACT}>
+                    <option value="today_5pm">Later today (5pm ET)</option>
+                    <option value="tomorrow_9am">Tomorrow (9am ET)</option>
+                    <option value="plus_3d_9am">+3 days (9am ET)</option>
+                    <option value="next_monday_9am">Next Monday (9am ET)</option>
+                    <option value="plus_7d_9am">+7 days (9am ET)</option>
                   </select>
                 </label>
                 <div className="text-xs text-slate-500">Select rows below, then apply.</div>
