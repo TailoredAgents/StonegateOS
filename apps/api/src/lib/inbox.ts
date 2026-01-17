@@ -195,9 +195,11 @@ function extractPhoneFromText(body: string): { raw: string; e164: string } | nul
   return null;
 }
 
-function extractNameFromText(body: string): string | null {
+function extractNameFromText(body: string, options?: { allowFirstLineFallback?: boolean }): string | null {
   const normalized = body.replace(/\r\n/g, "\n").trim();
   if (!normalized) return null;
+
+  const allowFirstLineFallback = options?.allowFirstLineFallback !== false;
 
   const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
   const kv: Record<string, string> = {};
@@ -251,6 +253,8 @@ function extractNameFromText(body: string): string | null {
       }
     }
   }
+
+  if (!allowFirstLineFallback) return null;
 
   const firstLine = normalized.split("\n")[0]?.trim() ?? "";
   const firstLineCandidate = firstLine
@@ -625,7 +629,7 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         contact = await findContactByPhone(tx, normalizedContactPhone.e164, normalizedContactPhone.raw);
       }
 
-      const extractedName = extractNameFromText(body);
+      const extractedName = extractNameFromText(body, { allowFirstLineFallback: channel !== "dm" });
       if (!senderName && extractedName) {
         senderName = extractedName;
       }
