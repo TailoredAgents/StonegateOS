@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, eq, ilike, isNotNull } from "drizzle-orm";
-import { crmTasks, getDb } from "@/db";
+import { and, eq, ilike, isNotNull, isNull, sql } from "drizzle-orm";
+import { crmTasks, getDb, outboxEvents } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -36,6 +36,35 @@ function normalizeDisposition(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim().toLowerCase();
   return trimmed.length ? trimmed : null;
+}
+
+type DbClient = ReturnType<typeof getDb>;
+type TxClient = Parameters<DbClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown> ? Tx : never;
+type DbExecutor = DbClient | TxClient;
+
+async function ensureReminderOutbox(db: DbExecutor, taskId: string, dueAt: Date): Promise<void> {
+  const [existing] = await db
+    .select({ id: outboxEvents.id })
+    .from(outboxEvents)
+    .where(
+      and(
+        eq(outboxEvents.type, "crm.reminder.sms"),
+        isNull(outboxEvents.processedAt),
+        sql`(${outboxEvents.payload} ->> 'taskId') = ${taskId}`
+      )
+    )
+    .limit(1);
+
+  if (existing?.id) {
+    await db.update(outboxEvents).set({ nextAttemptAt: dueAt }).where(eq(outboxEvents.id, existing.id));
+    return;
+  }
+
+  await db.insert(outboxEvents).values({
+    type: "crm.reminder.sms",
+    payload: { taskId },
+    nextAttemptAt: dueAt
+  });
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -137,7 +166,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const [nextExisting] = await db
-    .select({ id: crmTasks.id })
+    .select({ id: crmTasks.id, dueAt: crmTasks.dueAt })
     .from(crmTasks)
     .where(
       and(
@@ -149,16 +178,27 @@ export async function POST(request: NextRequest): Promise<Response> {
     )
     .limit(1);
 
-  if (!nextExisting?.id) {
+  let nextTaskId = nextExisting?.id ?? null;
+  let nextTaskDueAt = nextExisting?.dueAt instanceof Date ? nextExisting.dueAt : null;
+
+  if (!nextTaskId) {
     const nextNotes = upsertField(upsertField(notes, "attempt", String(nextAttempt)), "lastDisposition", disposition);
-    await db.insert(crmTasks).values({
-      contactId: task.contactId,
-      title: callbackAt ? "Outbound: Callback" : "Outbound: Follow up",
-      status: "open",
-      dueAt: nextDueAt,
-      assignedTo: task.assignedTo,
-      notes: nextNotes
-    });
+    const [created] = await db
+      .insert(crmTasks)
+      .values({
+        contactId: task.contactId,
+        title: callbackAt ? "Outbound: Callback" : "Outbound: Follow up",
+        status: "open",
+        dueAt: nextDueAt,
+        assignedTo: task.assignedTo,
+        notes: nextNotes
+      })
+      .returning({ id: crmTasks.id });
+
+    if (created?.id) {
+      nextTaskId = created.id;
+      nextTaskDueAt = nextDueAt;
+    }
   }
 
   // Nudge only once it becomes due; reminders already handle the salesperson SMS.
@@ -170,6 +210,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     assignedTo: null,
     notes: `Outbound updated: ${disposition}`
   });
+
+  if (nextTaskId && nextTaskDueAt) {
+    await ensureReminderOutbox(db, nextTaskId, nextTaskDueAt);
+  }
 
   return NextResponse.json({ ok: true, taskId, contactId: task.contactId, nextDueAt: nextDueAt.toISOString() });
 }
