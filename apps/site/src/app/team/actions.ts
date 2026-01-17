@@ -2656,3 +2656,30 @@ export async function setOutboundDispositionAction(formData: FormData) {
   jar.set({ name: "myst-flash", value: "Outbound updated.", path: "/" });
   revalidatePath("/team");
 }
+
+export async function startOutboundCadenceAction(formData: FormData) {
+  const jar = await cookies();
+  const taskIdRaw = formData.get("taskId");
+  const taskId = typeof taskIdRaw === "string" ? taskIdRaw.trim() : "";
+
+  if (!taskId) {
+    jar.set({ name: "myst-flash-error", value: "Task ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/outbound/start", {
+    method: "POST",
+    body: JSON.stringify({ taskId })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to start outbound cadence");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Outbound cadence started.", path: "/" });
+  revalidatePath("/team");
+}

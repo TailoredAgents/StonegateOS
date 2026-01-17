@@ -4,7 +4,8 @@ import {
   importOutboundProspectsAction,
   openContactThreadAction,
   setOutboundDispositionAction,
-  startContactCallAction
+  startContactCallAction,
+  startOutboundCadenceAction
 } from "../actions";
 import {
   TEAM_CARD_PADDED,
@@ -34,7 +35,7 @@ type OutboundQueueItem = {
     name: string;
     email: string | null;
     phone: string | null;
-    source: string | null;
+    source?: string | null;
   };
 };
 
@@ -65,6 +66,10 @@ type OutboundFilters = {
   offset?: string;
 };
 
+function normalizeFilterValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function formatDue(item: OutboundQueueItem): string {
   if (!item.dueAt) return "Not started";
   const due = new Date(item.dueAt);
@@ -82,15 +87,7 @@ function formatDueBadge(item: OutboundQueueItem): { label: string; tone: string 
   return { label: "Scheduled", tone: "bg-slate-100 text-slate-600" };
 }
 
-function normalizeFilterValue(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function buildOutboundHref(args: {
-  memberId?: string;
-  filters: OutboundFilters;
-  patch?: Partial<OutboundFilters>;
-}): string {
+function buildOutboundHref(args: { memberId?: string; filters: OutboundFilters; patch?: Partial<OutboundFilters> }): string {
   const qs = new URLSearchParams();
   qs.set("tab", "outbound");
   if (args.memberId) qs.set("memberId", args.memberId);
@@ -147,7 +144,6 @@ export async function OutboundSection({
     ["has", "has", normalizeFilterValue(resolvedFilters.has)],
     ["disposition", "disposition", normalizeFilterValue(resolvedFilters.disposition)]
   ];
-
   for (const [, apiKey, value] of apiFilterMap) {
     if (value) apiQs.set(apiKey, value);
   }
@@ -171,6 +167,7 @@ export async function OutboundSection({
     limit: queuePayload.limit ?? 50,
     nextOffset: queuePayload.nextOffset ?? null
   };
+
   const hasPrev = pagination.offset > 0;
   const prevOffset = hasPrev ? Math.max(pagination.offset - pagination.limit, 0) : 0;
   const hasNext = typeof pagination.nextOffset === "number" && pagination.nextOffset > pagination.offset;
@@ -199,8 +196,8 @@ export async function OutboundSection({
           <div className="text-right text-xs text-slate-500">
             {pagination.total > 0 ? (
               <span>
-                Showing {Math.min(pagination.offset + 1, pagination.total)}-
-                {Math.min(pagination.offset + items.length, pagination.total)} of {pagination.total}
+                Showing {Math.min(pagination.offset + 1, pagination.total)}-{Math.min(pagination.offset + items.length, pagination.total)} of{" "}
+                {pagination.total}
               </span>
             ) : (
               <span>No open outbound tasks</span>
@@ -277,16 +274,12 @@ export async function OutboundSection({
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
             <label className="flex flex-col gap-1 text-xs text-slate-600 lg:col-span-2">
-              <span>Search</span>
-              <input
-                name="out_q"
-                defaultValue={resolvedFilters.q ?? ""}
-                placeholder="Company, name, phone, email…"
-                className={TEAM_INPUT_COMPACT}
-              />
+              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Search</span>
+              <input name="out_q" defaultValue={resolvedFilters.q ?? ""} className={TEAM_INPUT_COMPACT} placeholder="Company, name, phone, email..." />
             </label>
+
             <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span>Campaign</span>
+              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Campaign</span>
               <select name="out_campaign" defaultValue={resolvedFilters.campaign ?? ""} className={TEAM_INPUT_COMPACT}>
                 <option value="">All</option>
                 {(queuePayload.facets?.campaigns ?? []).map((value) => (
@@ -296,8 +289,9 @@ export async function OutboundSection({
                 ))}
               </select>
             </label>
+
             <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span>Attempt</span>
+              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Attempt</span>
               <select name="out_attempt" defaultValue={resolvedFilters.attempt ?? ""} className={TEAM_INPUT_COMPACT}>
                 <option value="">All</option>
                 {(queuePayload.facets?.attempts ?? []).map((value) => (
@@ -307,28 +301,32 @@ export async function OutboundSection({
                 ))}
               </select>
             </label>
+
             <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span>Due</span>
+              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Due</span>
               <select name="out_due" defaultValue={resolvedFilters.due ?? ""} className={TEAM_INPUT_COMPACT}>
                 <option value="">All</option>
+                <option value="not_started">Not started</option>
                 <option value="due_now">Due now</option>
                 <option value="overdue">Overdue</option>
                 <option value="today">Today</option>
               </select>
             </label>
+
             <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span>Has</span>
+              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Has</span>
               <select name="out_has" defaultValue={resolvedFilters.has ?? ""} className={TEAM_INPUT_COMPACT}>
                 <option value="">Any</option>
                 <option value="phone">Phone</option>
                 <option value="email">Email</option>
-                <option value="both">Phone + Email</option>
+                <option value="both">Both</option>
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-xs text-slate-600">
-              <span>Disposition</span>
+
+            <label className="flex flex-col gap-1 text-xs text-slate-600 lg:col-span-2">
+              <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Disposition</span>
               <select name="out_disposition" defaultValue={resolvedFilters.disposition ?? ""} className={TEAM_INPUT_COMPACT}>
-                <option value="">Any</option>
+                <option value="">All</option>
                 {(queuePayload.facets?.dispositions ?? []).map((value) => (
                   <option key={value} value={value}>
                     {value.replace(/_/g, " ")}
@@ -336,16 +334,15 @@ export async function OutboundSection({
                 ))}
               </select>
             </label>
-          </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <input type="hidden" name="out_offset" value="0" />
-            <button type="submit" className={teamButtonClass("secondary", "sm")}>
-              Apply filters
-            </button>
-            <a className="text-xs font-semibold text-slate-500 hover:text-slate-700" href={buildOutboundHref({ memberId: resolvedMemberId, filters: {} })}>
-              Clear filters
-            </a>
+            <div className="flex items-end gap-2">
+              <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Filtering...">
+                Filter
+              </SubmitButton>
+              <a className="text-xs font-semibold text-slate-500 hover:text-slate-700" href={buildOutboundHref({ memberId: resolvedMemberId, filters: {} })}>
+                Reset
+              </a>
+            </div>
           </div>
         </form>
 
@@ -379,19 +376,14 @@ export async function OutboundSection({
                         </td>
                         <td className="px-4 py-3 text-slate-600">{item.attempt}</td>
                         <td className="px-4 py-3">
-                          <a
-                            href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { taskId: item.id } })}
-                            className="block max-w-[320px]"
-                          >
+                          <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { taskId: item.id } })} className="block max-w-[320px]">
                             <div className="truncate text-sm font-semibold text-slate-900">{item.company ? item.company : item.contact.name}</div>
-                            <div className="mt-0.5 truncate text-[11px] text-slate-500">
-                              {item.company ? item.contact.name : item.campaign ? item.campaign : "Outbound"}
-                            </div>
+                            <div className="mt-0.5 truncate text-[11px] text-slate-500">{item.company ? item.contact.name : item.campaign ? item.campaign : "Outbound"}</div>
                           </a>
                         </td>
-                        <td className="px-4 py-3 text-slate-600">{item.contact.phone ?? "—"}</td>
-                        <td className="px-4 py-3 text-slate-600">{item.contact.email ?? "—"}</td>
-                        <td className="px-4 py-3 text-slate-600">{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "—"}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.contact.phone ?? "-"}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.contact.email ?? "-"}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "-"}</td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap justify-end gap-2">
                             <form action={startContactCallAction}>
@@ -424,15 +416,30 @@ export async function OutboundSection({
                     <p className="mt-1 text-base font-semibold text-slate-900">{selected.company ? selected.company : selected.contact.name}</p>
                     <p className="mt-1 text-xs text-slate-600">{selected.contact.name}</p>
                     <p className="mt-2 text-xs text-slate-600">
-                      {selected.contact.phone ?? "No phone"} · {selected.contact.email ?? "No email"}
+                      {selected.contact.phone ?? "No phone"} / {selected.contact.email ?? "No email"}
                     </p>
                     <p className="mt-1 text-[11px] text-slate-500">
-                      Attempt {selected.attempt} · {selected.campaign ?? "outbound"} · Due {formatDue(selected)}
+                      Attempt {selected.attempt} / {selected.campaign ?? "outbound"} / Due {formatDue(selected)}
                     </p>
                     {selected.noteSnippet ? (
                       <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{selected.noteSnippet}</p>
                     ) : null}
                   </div>
+
+                  {!selected.dueAt ? (
+                    <form action={startOutboundCadenceAction} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <input type="hidden" name="taskId" value={selected.id} />
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Kickoff</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Start the cadence when you&apos;re ready. After your first touch, follow-ups will schedule automatically.
+                      </p>
+                      <div className="mt-2">
+                        <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Starting...">
+                          Start cadence
+                        </SubmitButton>
+                      </div>
+                    </form>
+                  ) : null}
 
                   <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">Call script</p>
@@ -473,7 +480,7 @@ export async function OutboundSection({
                   </div>
 
                   <a href={`/team?tab=contacts&contactId=${encodeURIComponent(selected.contact.id)}`} className="text-xs font-semibold text-primary-700 hover:text-primary-900">
-                    Open contact →
+                    Open contact &gt;
                   </a>
                 </div>
               ) : (
@@ -489,20 +496,14 @@ export async function OutboundSection({
         <div className="mt-4 flex items-center justify-between text-xs text-slate-600">
           <div className="flex items-center gap-2">
             {hasPrev ? (
-              <a
-                className={teamButtonClass("secondary", "sm")}
-                href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { offset: String(prevOffset) } })}
-              >
+              <a className={teamButtonClass("secondary", "sm")} href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { offset: String(prevOffset) } })}>
                 Prev
               </a>
             ) : (
               <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-400">Prev</span>
             )}
             {hasNext && nextOffset !== null ? (
-              <a
-                className={teamButtonClass("secondary", "sm")}
-                href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { offset: String(nextOffset) } })}
-              >
+              <a className={teamButtonClass("secondary", "sm")} href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { offset: String(nextOffset) } })}>
                 Next
               </a>
             ) : (
@@ -546,7 +547,7 @@ export async function OutboundSection({
               name="csv"
               className={`${TEAM_INPUT} min-h-[160px] font-mono text-xs`}
               placeholder={
-                "company,contactName,phone,email,city,state,zip,notes\nAcme Property Mgmt,Jane Doe,555-555-5555,jane@acme.com,Atlanta,GA,30303,\"prefers email\""
+                "company,contactName,phone,email,city,state,zip,notes\nAcme Property Mgmt,Jane Doe,555-555-5555,jane@acme.com,Atlanta,GA,30303,prefers email"
               }
             />
           </label>
@@ -566,3 +567,4 @@ export async function OutboundSection({
     </section>
   );
 }
+
