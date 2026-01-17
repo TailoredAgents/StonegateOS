@@ -146,6 +146,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     phone: contacts.phone,
     phoneE164: contacts.phoneE164,
     salespersonMemberId: contacts.salespersonMemberId,
+    source: contacts.source,
     createdAt: contacts.createdAt,
     updatedAt: contacts.updatedAt
   } as const;
@@ -157,6 +158,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     email: contacts.email,
     phone: contacts.phone,
     phoneE164: contacts.phoneE164,
+    source: contacts.source,
     createdAt: contacts.createdAt,
     updatedAt: contacts.updatedAt
   } as const;
@@ -169,6 +171,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     phone: string | null;
     phoneE164: string | null;
     salespersonMemberId: string | null;
+    source: string | null;
     createdAt: Date;
     updatedAt: Date;
   }> = [];
@@ -379,6 +382,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       phone: contact.phone,
       phoneE164: contact.phoneE164,
       salespersonMemberId: contact.salespersonMemberId ?? null,
+      source: contact.source ?? null,
       createdAt: contact.createdAt.toISOString(),
       updatedAt: contact.updatedAt.toISOString(),
       lastActivityAt: lastActivity ? lastActivity.toISOString() : null,

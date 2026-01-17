@@ -27,6 +27,7 @@ import { AuditLogSection } from "./components/AuditLogSection";
 import { SalesActivityLogSection } from "./components/SalesActivityLogSection";
 import { MergeQueueSection } from "./components/MergeQueueSection";
 import { SalesScorecardSection } from "./components/SalesScorecardSection";
+import { OutboundSection } from "./components/OutboundSection";
 import { SeoAgentSection } from "./components/SeoAgentSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
@@ -44,6 +45,7 @@ type LeadContactSummary = {
   name: string;
   phone: string | null;
   phoneE164: string | null;
+  source?: string | null;
   pipeline?: { stage?: string | null };
 };
 
@@ -100,6 +102,7 @@ export default async function TeamPage({
     { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "owner" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
     { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "owner" },
+    { id: "outbound", label: "Outbound", href: "/team?tab=outbound", requires: "owner" },
     { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
@@ -115,7 +118,7 @@ export default async function TeamPage({
   ];
   const tabGroups: TabNavGroup[] = [
     { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
-    { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "pipeline", "sales-hq", "contacts", "inbox", "calendar"] },
+    { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "pipeline", "sales-hq", "outbound", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
     { id: "control", label: "Control", itemIds: ["commissions", "seo", "policy", "automation", "access", "sales-log", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
@@ -159,6 +162,7 @@ export default async function TeamPage({
           contacts.find(
             (contact) =>
               contact.pipeline?.stage === "new" &&
+              !(contact.source && contact.source.startsWith("outbound:")) &&
               (!dismissedNewLeadId || contact.id !== dismissedNewLeadId)
           ) ?? null;
       }
@@ -352,6 +356,12 @@ export default async function TeamPage({
             }
           >
             <SalesScorecardSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "outbound" && hasOwner ? (
+          <React.Suspense fallback={<TeamSkeletonCard title="Loading outbound prospects" />}>
+            <OutboundSection memberId={memberIdParam} />
           </React.Suspense>
         ) : null}
 

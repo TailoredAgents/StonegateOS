@@ -41,6 +41,7 @@ export type ContactSummary = {
   phone: string | null;
   phoneE164: string | null;
   salespersonMemberId: string | null;
+  source: string | null;
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string | null;

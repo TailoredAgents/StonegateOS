@@ -616,6 +616,53 @@ export async function startContactCallAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function openContactThreadAction(formData: FormData) {
+  const jar = await cookies();
+  const contactId = formData.get("contactId");
+  const channel = formData.get("channel");
+
+  const resolvedContactId = typeof contactId === "string" ? contactId.trim() : "";
+  const resolvedChannel = typeof channel === "string" ? channel.trim() : "sms";
+
+  if (!resolvedContactId) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (resolvedChannel === "dm") {
+    jar.set({ name: "myst-flash-error", value: "Messenger thread not found yet.", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const ensureRes = await callAdminApi("/api/admin/inbox/threads/ensure", {
+    method: "POST",
+    body: JSON.stringify({ contactId: resolvedContactId, channel: resolvedChannel })
+  });
+
+  if (!ensureRes.ok) {
+    const message = await readErrorMessage(ensureRes, "Unable to open a thread for this contact");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const ensurePayload = (await ensureRes.json().catch(() => null)) as { threadId?: string } | null;
+  const threadId = typeof ensurePayload?.threadId === "string" ? ensurePayload.threadId.trim() : "";
+  if (!threadId) {
+    jar.set({ name: "myst-flash-error", value: "Unable to open a thread for this contact", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  redirect(
+    `/team?tab=inbox&threadId=${encodeURIComponent(threadId)}&contactId=${encodeURIComponent(
+      resolvedContactId
+    )}&channel=${encodeURIComponent(resolvedChannel)}`
+  );
+}
+
 export async function sendDraftMessageAction(formData: FormData) {
   const jar = await cookies();
   const messageId = formData.get("messageId");
@@ -2393,4 +2440,219 @@ export async function runSeoAutopublishAction() {
   }
 
   redirect("/team?tab=seo");
+}
+
+type OutboundImportRow = {
+  company?: string;
+  contactName?: string;
+  phone?: string;
+  email?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  notes?: string;
+};
+
+function parseDelimitedLine(line: string, delimiter: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (char === "\"") {
+      const next = line[i + 1];
+      if (inQuotes && next === "\"") {
+        current += "\"";
+        i += 1;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (!inQuotes && char === delimiter) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function detectDelimiter(headerLine: string): string {
+  const commaCount = (headerLine.match(/,/g) ?? []).length;
+  const tabCount = (headerLine.match(/\t/g) ?? []).length;
+  const semiCount = (headerLine.match(/;/g) ?? []).length;
+
+  if (tabCount > commaCount && tabCount > semiCount) return "\t";
+  if (semiCount > commaCount) return ";";
+  return ",";
+}
+
+function normalizeHeader(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+}
+
+function coerceRow(rows: Record<string, string>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = rows[key];
+    if (typeof value === "string" && value.trim().length) return value.trim();
+  }
+  return undefined;
+}
+
+function parseOutboundCsv(text: string): OutboundImportRow[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+  if (lines.length === 0) return [];
+
+  const delimiter = detectDelimiter(lines[0] ?? "");
+  const headersRaw = parseDelimitedLine(lines[0] ?? "", delimiter);
+  const headers = headersRaw.map(normalizeHeader);
+  const rows: OutboundImportRow[] = [];
+
+  for (const rawLine of lines.slice(1)) {
+    const cells = parseDelimitedLine(rawLine, delimiter);
+    const record: Record<string, string> = {};
+    for (let i = 0; i < headers.length; i += 1) {
+      const header = headers[i];
+      if (!header) continue;
+      record[header] = (cells[i] ?? "").trim();
+    }
+
+    const company = coerceRow(record, ["company", "company_name", "business", "property_manager", "property_management_company"]);
+    const contactName = coerceRow(record, ["contactname", "contact_name", "name", "contact", "full_name"]);
+    const phone = coerceRow(record, ["phone", "phone_number", "mobile", "cell"]);
+    const email = coerceRow(record, ["email", "email_address"]);
+    const city = coerceRow(record, ["city"]);
+    const state = coerceRow(record, ["state"]);
+    const zip = coerceRow(record, ["zip", "zipcode", "postal", "postal_code"]);
+    const notes = coerceRow(record, ["notes", "note", "details"]);
+
+    if (!company && !contactName && !phone && !email) continue;
+
+    rows.push({
+      company,
+      contactName,
+      phone,
+      email,
+      city,
+      state,
+      zip,
+      notes
+    });
+  }
+
+  return rows;
+}
+
+export async function importOutboundProspectsAction(formData: FormData) {
+  const jar = await cookies();
+
+  const campaignRaw = formData.get("campaign");
+  const campaign = typeof campaignRaw === "string" && campaignRaw.trim().length ? campaignRaw.trim() : "property_management";
+
+  const assigneeRaw = formData.get("assignedToMemberId");
+  const assignedToMemberId = typeof assigneeRaw === "string" && assigneeRaw.trim().length ? assigneeRaw.trim() : null;
+
+  const file = formData.get("file");
+  const csvTextRaw = formData.get("csv");
+
+  let text = typeof csvTextRaw === "string" ? csvTextRaw : "";
+  if ((!text || text.trim().length === 0) && file instanceof File && file.size > 0) {
+    text = await file.text();
+  }
+
+  if (!text || text.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Paste a CSV or upload a file first.", path: "/" });
+    redirect("/team?tab=outbound");
+  }
+
+  const parsed = parseOutboundCsv(text);
+  if (parsed.length === 0) {
+    jar.set({ name: "myst-flash-error", value: "No valid rows found. Include at least email or phone.", path: "/" });
+    redirect("/team?tab=outbound");
+  }
+
+  const rows = parsed.slice(0, 2000);
+
+  const response = await callAdminApi("/api/admin/outbound/import", {
+    method: "POST",
+    body: JSON.stringify({
+      campaign,
+      assignedToMemberId: assignedToMemberId ?? undefined,
+      rows
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to import outbound list");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    redirect("/team?tab=outbound");
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as any;
+  const created = Number(payload?.created ?? 0);
+  const updated = Number(payload?.updated ?? 0);
+  const tasksCreated = Number(payload?.tasksCreated ?? 0);
+  const skipped = Number(payload?.skipped ?? 0);
+  const resolvedAssignee = typeof payload?.assignedToMemberId === "string" ? payload.assignedToMemberId : assignedToMemberId;
+
+  jar.set({
+    name: "myst-flash",
+    value: `Outbound imported: ${created} new, ${updated} updated, ${tasksCreated} tasks, ${skipped} skipped.`,
+    path: "/"
+  });
+
+  redirect(`/team?tab=outbound${resolvedAssignee ? `&memberId=${encodeURIComponent(resolvedAssignee)}` : ""}`);
+}
+
+export async function setOutboundDispositionAction(formData: FormData) {
+  const jar = await cookies();
+  const taskIdRaw = formData.get("taskId");
+  const dispositionRaw = formData.get("disposition");
+  const callbackAtRaw = formData.get("callbackAt");
+
+  const taskId = typeof taskIdRaw === "string" ? taskIdRaw.trim() : "";
+  const disposition = typeof dispositionRaw === "string" ? dispositionRaw.trim() : "";
+  const callbackAtString = typeof callbackAtRaw === "string" ? callbackAtRaw.trim() : "";
+  const callbackAt =
+    callbackAtString && Number.isFinite(Date.parse(callbackAtString)) ? new Date(callbackAtString).toISOString() : null;
+
+  if (!taskId) {
+    jar.set({ name: "myst-flash-error", value: "Task ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+  if (!disposition) {
+    jar.set({ name: "myst-flash-error", value: "Disposition required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/outbound/disposition", {
+    method: "POST",
+    body: JSON.stringify({
+      taskId,
+      disposition,
+      callbackAt: callbackAt ?? undefined
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to save disposition");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Outbound updated.", path: "/" });
+  revalidatePath("/team");
 }
