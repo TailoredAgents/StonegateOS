@@ -2,6 +2,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import {
   importOutboundProspectsAction,
+  bulkOutboundAction,
   openContactThreadAction,
   setOutboundDispositionAction,
   startContactCallAction,
@@ -349,11 +350,47 @@ export async function OutboundSection({
         {items.length === 0 ? (
           <div className={`${TEAM_EMPTY_STATE} mt-4`}>No outbound tasks match these filters.</div>
         ) : (
-          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <>
+            <form
+              id="outboundBulkForm"
+              action={bulkOutboundAction}
+              className="mt-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:flex-row sm:items-end sm:justify-between"
+            >
+              <div className="grid w-full gap-3 sm:grid-cols-3">
+                <label className="flex flex-col gap-1 text-xs text-slate-600">
+                  <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Bulk action</span>
+                  <select name="action" defaultValue="assign_start" className={TEAM_INPUT_COMPACT}>
+                    <option value="assign_start">Assign + start cadence</option>
+                    <option value="assign">Assign only</option>
+                    <option value="start">Start cadence only</option>
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-slate-600">
+                  <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Assign to</span>
+                  <select name="assignedToMemberId" defaultValue={resolvedMemberId} className={TEAM_INPUT_COMPACT}>
+                    <option value="">Default assignee</option>
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="text-xs text-slate-500">Select rows below, then apply.</div>
+              </div>
+              <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Applying...">
+                Apply
+              </SubmitButton>
+            </form>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
             <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
               <table className="min-w-full text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                   <tr>
+                    <th className="px-4 py-3">
+                      <span className="sr-only">Select</span>
+                    </th>
                     <th className="px-4 py-3">Due</th>
                     <th className="px-4 py-3">Attempt</th>
                     <th className="px-4 py-3">Prospect</th>
@@ -369,6 +406,9 @@ export async function OutboundSection({
                     const isSelected = Boolean(selectedTaskId && item.id === selectedTaskId);
                     return (
                       <tr key={item.id} className={isSelected ? "bg-primary-50/40" : "hover:bg-slate-50"}>
+                        <td className="px-4 py-3">
+                          <input form="outboundBulkForm" type="checkbox" name="taskIds" value={item.id} />
+                        </td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${dueBadge.tone}`}>
                             {dueBadge.label}
@@ -491,6 +531,7 @@ export async function OutboundSection({
               )}
             </aside>
           </div>
+          </>
         )}
 
         <div className="mt-4 flex items-center justify-between text-xs text-slate-600">
@@ -567,4 +608,3 @@ export async function OutboundSection({
     </section>
   );
 }
-

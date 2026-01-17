@@ -2683,3 +2683,62 @@ export async function startOutboundCadenceAction(formData: FormData) {
   jar.set({ name: "myst-flash", value: "Outbound cadence started.", path: "/" });
   revalidatePath("/team");
 }
+
+export async function bulkOutboundAction(formData: FormData) {
+  const jar = await cookies();
+
+  const actionRaw = formData.get("action");
+  const action = typeof actionRaw === "string" ? actionRaw.trim() : "";
+
+  const assignedToRaw = formData.get("assignedToMemberId");
+  const assignedToMemberId = typeof assignedToRaw === "string" && assignedToRaw.trim().length ? assignedToRaw.trim() : null;
+
+  const taskIds = formData
+    .getAll("taskIds")
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+
+  if (taskIds.length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Select at least one prospect first.", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (action !== "assign" && action !== "start" && action !== "assign_start") {
+    jar.set({ name: "myst-flash-error", value: "Pick a bulk action first.", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  if ((action === "assign" || action === "assign_start") && !assignedToMemberId) {
+    jar.set({ name: "myst-flash-error", value: "Pick a team member to assign to.", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/outbound/bulk", {
+    method: "POST",
+    body: JSON.stringify({
+      action,
+      assignedToMemberId: assignedToMemberId ?? undefined,
+      taskIds
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to apply bulk action");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload = (await response.json().catch(() => ({}))) as any;
+  const updated = Number(payload?.updated ?? 0);
+  const skipped = Number(payload?.skipped ?? 0);
+  jar.set({
+    name: "myst-flash",
+    value: `Outbound updated: ${updated} changed (${skipped} skipped).`,
+    path: "/"
+  });
+  revalidatePath("/team");
+}
