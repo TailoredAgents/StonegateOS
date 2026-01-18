@@ -629,6 +629,23 @@ function minutesBetween(a: Date, b: Date): number {
   return Math.round((b.getTime() - a.getTime()) / 60_000);
 }
 
+async function completeSalesTasksForContact(db: ReturnType<typeof getDb>, contactId: string, now: Date): Promise<void> {
+  const id = contactId.trim();
+  if (!id) return;
+
+  await db
+    .update(crmTasks)
+    .set({ status: "completed", updatedAt: now })
+    .where(
+      and(
+        eq(crmTasks.contactId, id),
+        eq(crmTasks.status, "open"),
+        isNotNull(crmTasks.notes),
+        or(ilike(crmTasks.notes, "%kind=speed_to_lead%"), ilike(crmTasks.notes, "%kind=follow_up%"))
+      )
+    );
+}
+
 async function ensureSalesFollowupsForLead(input: {
   db: ReturnType<typeof getDb>;
   leadId: string;
@@ -2087,6 +2104,9 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       await sendEstimateConfirmation(notification, "requested");
       await scheduleAppointmentReminders(appointmentId, notification.appointment.startAt);
       await clearLeadFollowups(notification.leadId ?? null);
+      if (notification.contactId) {
+        await completeSalesTasksForContact(getDb(), notification.contactId, new Date());
+      }
       await updatePipelineStageForContact(
         notification.contactId ?? null,
         "qualified",
@@ -2129,6 +2149,9 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       await sendEstimateConfirmation(notification, "rescheduled");
       await scheduleAppointmentReminders(appointmentId, notification.appointment.startAt, { reset: true });
       await clearLeadFollowups(notification.leadId ?? null);
+      if (notification.contactId) {
+        await completeSalesTasksForContact(getDb(), notification.contactId, new Date());
+      }
       await updatePipelineStageForContact(
         notification.contactId ?? null,
         "qualified",
@@ -2283,6 +2306,9 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       }
       if (event.type === "estimate.status_changed") {
         await clearLeadFollowups(leadId);
+      }
+      if (notification.contactId) {
+        await completeSalesTasksForContact(db, notification.contactId, new Date());
       }
       if (notification.contactId) {
         const targetStage: PipelineStage =
