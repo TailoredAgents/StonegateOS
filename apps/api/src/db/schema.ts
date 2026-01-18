@@ -666,6 +666,7 @@ export const callRecords = pgTable(
     extracted: jsonb("extracted").$type<Record<string, unknown> | null>(),
     summary: text("summary"),
     coaching: text("coaching"),
+    noteTaskId: uuid("note_task_id").references(() => crmTasks.id, { onDelete: "set null" }),
     processedAt: timestamp("processed_at", { withTimezone: true }),
     deleteAfter: timestamp("delete_after", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),

@@ -3275,6 +3275,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           callSid: callRecords.callSid,
           contactId: callRecords.contactId,
           assignedTo: callRecords.assignedTo,
+          noteTaskId: callRecords.noteTaskId,
           processedAt: callRecords.processedAt
         })
         .from(callRecords)
@@ -3457,7 +3458,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           analysis.extracted.timeframe ? `Timing: ${analysis.extracted.timeframe}` : null,
           analysis.extracted.items ? `Items: ${analysis.extracted.items}` : null
         ].filter(Boolean);
-        const note = [`Call ${when} (Call SID: ${callSid})`, analysis.summary, extractedBits.length ? extractedBits.join(" | ") : null]
+        const note = [`Call ${when}`, analysis.summary, extractedBits.length ? extractedBits.join(" | ") : null]
           .filter(Boolean)
           .join("\n");
 
@@ -3478,28 +3479,29 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
             set: { notes: capped, updatedAt: now }
           });
 
-        const noteBody = note.length > 3500 ? `${note.slice(0, 3497)}...` : note;
-        const noteTitleRaw = analysis.summary.trim().split("\n")[0] ?? "";
-        const noteTitle =
-          noteTitleRaw.trim().length > 0
-            ? noteTitleRaw.trim().slice(0, 60).trimEnd()
-            : "Call note";
-        const title = noteTitle.length > 60 ? `${noteTitle.slice(0, 57)}...` : noteTitle;
+        if (!call.noteTaskId) {
+          const noteBody = note.length > 3500 ? `${note.slice(0, 3497)}...` : note;
+          const noteTitleRaw = analysis.summary.trim().split("\n")[0] ?? "";
+          const noteTitle =
+            noteTitleRaw.trim().length > 0
+              ? noteTitleRaw.trim().slice(0, 60).trimEnd()
+              : "Call note";
+          const title = noteTitle.length > 60 ? `${noteTitle.slice(0, 57)}...` : noteTitle;
 
-        const [existingNote] = await db
-          .select({ id: crmTasks.id })
-          .from(crmTasks)
-          .where(and(eq(crmTasks.contactId, call.contactId), ilike(crmTasks.notes, `%${callSid}%`)))
-          .limit(1);
-
-        if (!existingNote?.id) {
-          await db.insert(crmTasks).values({
+          const [createdNote] = await db
+            .insert(crmTasks)
+            .values({
             contactId: call.contactId,
             title,
             notes: noteBody,
             status: "completed",
             assignedTo: call.assignedTo ?? null
-          });
+            })
+            .returning({ id: crmTasks.id });
+
+          if (createdNote?.id) {
+            await db.update(callRecords).set({ noteTaskId: createdNote.id, updatedAt: now }).where(eq(callRecords.id, call.id));
+          }
         }
       }
 
