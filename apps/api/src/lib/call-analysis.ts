@@ -7,7 +7,7 @@ export type CallExtracted = {
   postalCode?: string | null;
   timeframe?: string | null;
   items?: string | null;
-  confidence?: Record<string, number> | null;
+  confidence?: Record<string, number | null> | null;
 };
 
 export type CallAnalysis = {
@@ -70,7 +70,17 @@ const AnalysisSchema = z.object({
     postalCode: z.string().min(2).max(16).nullable().optional(),
     timeframe: z.string().min(2).max(120).nullable().optional(),
     items: z.string().min(2).max(500).nullable().optional(),
-    confidence: z.record(z.number().min(0).max(1)).nullable().optional()
+    confidence: z
+      .object({
+        firstName: z.number().min(0).max(1).nullable(),
+        lastName: z.number().min(0).max(1).nullable(),
+        email: z.number().min(0).max(1).nullable(),
+        postalCode: z.number().min(0).max(1).nullable(),
+        timeframe: z.number().min(0).max(1).nullable(),
+        items: z.number().min(0).max(1).nullable()
+      })
+      .nullable()
+      .optional()
   })
 });
 
@@ -121,7 +131,24 @@ export async function analyzeCallTranscript(input: {
           postalCode: { anyOf: [{ type: "string" }, { type: "null" }] },
           timeframe: { anyOf: [{ type: "string" }, { type: "null" }] },
           items: { anyOf: [{ type: "string" }, { type: "null" }] },
-          confidence: { anyOf: [{ type: "object" }, { type: "null" }] }
+          confidence: {
+            anyOf: [
+              {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  firstName: { anyOf: [{ type: "number" }, { type: "null" }] },
+                  lastName: { anyOf: [{ type: "number" }, { type: "null" }] },
+                  email: { anyOf: [{ type: "number" }, { type: "null" }] },
+                  postalCode: { anyOf: [{ type: "number" }, { type: "null" }] },
+                  timeframe: { anyOf: [{ type: "number" }, { type: "null" }] },
+                  items: { anyOf: [{ type: "number" }, { type: "null" }] }
+                },
+                required: ["firstName", "lastName", "email", "postalCode", "timeframe", "items"]
+              },
+              { type: "null" }
+            ]
+          }
         },
         required: ["firstName", "lastName", "email", "postalCode", "timeframe", "items", "confidence"]
       }

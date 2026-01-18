@@ -4,6 +4,7 @@ import { and, desc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { auditLogs, callRecords, contacts, crmTasks, getDb, outboxEvents, conversationThreads, leads, properties } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
 import { recordInboundMessage } from "@/lib/inbox";
+import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 import { normalizePhone } from "../../../web/utils";
 
 export const dynamic = "force-dynamic";
@@ -128,6 +129,44 @@ function parseRecordMeta(meta: unknown): Record<string, unknown> | null {
   return typeof meta === "object" && meta !== null ? (meta as Record<string, unknown>) : null;
 }
 
+async function ensureInboundContact(input: {
+  db: ReturnType<typeof getDb>;
+  from: string;
+}): Promise<string | null> {
+  const now = new Date();
+  let phoneE164: string | null = null;
+  try {
+    phoneE164 = normalizePhone(input.from).e164;
+  } catch {
+    return null;
+  }
+
+  const [existing] = await input.db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(or(eq(contacts.phoneE164, phoneE164), eq(contacts.phone, input.from)))
+    .limit(1);
+  if (existing?.id) return existing.id;
+
+  const salespersonMemberId = await getDefaultSalesAssigneeMemberId(input.db).catch(() => null);
+
+  const [created] = await input.db
+    .insert(contacts)
+    .values({
+      firstName: "Unknown",
+      lastName: "Caller",
+      phone: input.from,
+      phoneE164,
+      salespersonMemberId: salespersonMemberId && salespersonMemberId.length > 0 ? salespersonMemberId : null,
+      source: "inbound_call",
+      createdAt: now,
+      updatedAt: now
+    })
+    .returning({ id: contacts.id });
+
+  return created?.id ?? null;
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   let formData: FormData;
   try {
@@ -215,6 +254,14 @@ export async function POST(request: NextRequest): Promise<Response> {
         resolvedContactId = match?.id ?? null;
       } catch {
         // ignore invalid inbound caller id
+      }
+
+      if (!resolvedContactId && payload.callStatus === "completed" && (payload.callDuration ?? 0) > 0) {
+        try {
+          resolvedContactId = await ensureInboundContact({ db, from: payload.from });
+        } catch (error) {
+          console.warn("[twilio.call_status] inbound_contact_create_failed", { callSid, error: String(error) });
+        }
       }
     } else {
       const callSidCandidates = [payload.callSid, payload.parentCallSid].filter(
