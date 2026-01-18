@@ -44,22 +44,52 @@ export async function GET(request: NextRequest): Promise<Response> {
   const now = new Date();
   const since = new Date(now.getTime() - rangeDays * 24 * 60_000 * 60);
 
-  const recentCoaching = await db
-    .select({
-      callRecordId: callCoaching.callRecordId,
-      rubric: callCoaching.rubric,
-      scoreOverall: callCoaching.scoreOverall,
-      wins: callCoaching.wins,
-      improvements: callCoaching.improvements,
-      createdAt: callCoaching.createdAt
-    })
-    .from(callCoaching)
-    .where(and(eq(callCoaching.memberId, memberId), eq(callCoaching.version, 1), gte(callCoaching.createdAt, since)))
-    .orderBy(desc(callCoaching.createdAt))
-    .limit(200);
+  let recentCoaching:
+    | Array<{
+        callRecordId: string;
+        rubric: "inbound" | "outbound";
+        scoreOverall: number;
+        wins: string[] | null;
+        improvements: string[] | null;
+        createdAt: Date;
+      }>
+    | null = null;
+
+  try {
+    recentCoaching = await db
+      .select({
+        callRecordId: callCoaching.callRecordId,
+        rubric: callCoaching.rubric,
+        scoreOverall: callCoaching.scoreOverall,
+        wins: callCoaching.wins,
+        improvements: callCoaching.improvements,
+        createdAt: callCoaching.createdAt
+      })
+      .from(callCoaching)
+      .where(and(eq(callCoaching.memberId, memberId), eq(callCoaching.version, 1), gte(callCoaching.createdAt, since)))
+      .orderBy(desc(callCoaching.createdAt))
+      .limit(200);
+  } catch (error) {
+    const dbError = error as { code?: string } | null;
+    if (dbError?.code === "42P01") {
+      return NextResponse.json({
+        ok: true,
+        schemaReady: false,
+        memberId,
+        rangeDays,
+        since: since.toISOString(),
+        summary: {
+          inbound: { avgScore: null, count: 0 },
+          outbound: { avgScore: null, count: 0 }
+        },
+        items: []
+      });
+    }
+    throw error;
+  }
 
   const uniqueCallIds: string[] = [];
-  for (const row of recentCoaching) {
+  for (const row of recentCoaching ?? []) {
     const id = row.callRecordId;
     if (!id) continue;
     if (uniqueCallIds.includes(id)) continue;
@@ -87,7 +117,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       : [];
 
   const callIds = recentCalls.map((row) => row.id).filter((id) => typeof id === "string");
-  const coachingRows = recentCoaching.filter((row) => row.callRecordId && callIds.includes(row.callRecordId));
+  const coachingRows = (recentCoaching ?? []).filter((row) => row.callRecordId && callIds.includes(row.callRecordId));
 
   const byCall = new Map<string, Partial<Record<"inbound" | "outbound", CoachingRow>>>();
   for (const row of coachingRows) {

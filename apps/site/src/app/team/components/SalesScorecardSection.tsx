@@ -225,6 +225,9 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
   const urgentItems = (queue?.items ?? []).filter((item) => item.kind === "speed_to_lead").slice(0, 10);
   const followupItems = (queue?.items ?? []).filter((item) => item.kind === "follow_up").slice(0, 20);
 
+  const coachingSummary = callCoaching?.summary ?? null;
+  const coachingItems = callCoaching?.items ?? [];
+
   return (
     <section className="rounded-3xl border border-white/70 bg-white/80 p-6 shadow-xl shadow-slate-200/60 backdrop-blur sm:p-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -323,7 +326,7 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
         </div>
       </div>
 
-      {callCoaching?.items?.length ? (
+      {activeMemberId ? (
         <div className="mt-6 rounded-2xl border border-slate-200 bg-white">
           <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -333,17 +336,18 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Pill tone={scoreTone(callCoaching.summary.inbound.avgScore)}>
-                Inbound avg: {callCoaching.summary.inbound.avgScore ?? "—"} ({callCoaching.summary.inbound.count})
+              <Pill tone={scoreTone(coachingSummary?.inbound.avgScore ?? null)}>
+                Inbound avg: {coachingSummary?.inbound.avgScore ?? "—"} ({coachingSummary?.inbound.count ?? 0})
               </Pill>
-              <Pill tone={scoreTone(callCoaching.summary.outbound.avgScore)}>
-                Outbound avg: {callCoaching.summary.outbound.avgScore ?? "—"} ({callCoaching.summary.outbound.count})
+              <Pill tone={scoreTone(coachingSummary?.outbound.avgScore ?? null)}>
+                Outbound avg: {coachingSummary?.outbound.avgScore ?? "—"} ({coachingSummary?.outbound.count ?? 0})
               </Pill>
             </div>
           </div>
 
-          <div className="divide-y divide-slate-200">
-            {callCoaching.items.map((item) => {
+          {coachingItems.length ? (
+            <div className="divide-y divide-slate-200">
+              {coachingItems.map((item) => {
               const createdAt = new Date(item.createdAt);
               const primary = item.primary;
               const secondary = item.secondary;
@@ -432,8 +436,13 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                   </div>
                 </details>
               );
-            })}
-          </div>
+              })}
+            </div>
+          ) : (
+            <div className="px-4 py-4 text-sm text-slate-600">
+              No calls scored yet. Make an inbound or outbound call, then wait ~1–2 minutes for the outbox worker to process and score it.
+            </div>
+          )}
         </div>
       ) : null}
 
