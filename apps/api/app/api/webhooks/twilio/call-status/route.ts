@@ -305,9 +305,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     const shouldQueueRecording =
-      (leg === "agent" || leg === "inbound") &&
       payload.callStatus === "completed" &&
-      (payload.callDuration ?? 0) > 0;
+      (payload.callDuration ?? 0) > 0 &&
+      (direction === "inbound" || inboundMode ? leg === "inbound" : leg === "customer");
 
     if (shouldQueueRecording) {
       try {
