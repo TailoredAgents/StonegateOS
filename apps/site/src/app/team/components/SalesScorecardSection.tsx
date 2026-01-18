@@ -60,6 +60,26 @@ type TeamMemberPayload = {
   members?: Array<{ id: string; name: string; active: boolean }>;
 };
 
+type CallCoachingPayload = {
+  ok: true;
+  memberId: string;
+  rangeDays: number;
+  since: string;
+  summary: {
+    inbound: { avgScore: number | null; count: number };
+    outbound: { avgScore: number | null; count: number };
+  };
+  items: Array<{
+    callRecordId: string;
+    createdAt: string;
+    durationSec: number | null;
+    contact: { id: string | null; name: string; source: string | null };
+    primaryRubric: "inbound" | "outbound";
+    primary: { rubric: "inbound" | "outbound"; scoreOverall: number; wins: string[]; improvements: string[] } | null;
+    secondary: { rubric: "inbound" | "outbound"; scoreOverall: number; wins: string[]; improvements: string[] } | null;
+  }>;
+};
+
 function Pill({
   tone,
   children
@@ -126,11 +146,19 @@ function normalizeScore(score: number, weight: number): number {
   return clampPercent((score / weight) * 100);
 }
 
+function scoreTone(value: number | null): "good" | "warn" | "bad" | "neutral" {
+  if (value === null || !Number.isFinite(value)) return "neutral";
+  if (value >= 90) return "good";
+  if (value >= 80) return "warn";
+  return "bad";
+}
+
 export async function SalesScorecardSection(): Promise<React.ReactElement> {
   const rangeDays = 7;
   let scorecard: ScorecardPayload | null = null;
   let queue: QueuePayload | null = null;
   let members: TeamMemberPayload["members"] = [];
+  let callCoaching: CallCoachingPayload | null = null;
   let error: string | null = null;
   const adminKey = getAdminKey();
   const jar = await cookies();
@@ -154,6 +182,20 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
     if (!queueRes.ok) error = error ?? `Queue unavailable (HTTP ${queueRes.status})`;
   } catch {
     error = "Sales scorecard unavailable.";
+  }
+
+  const activeMemberId = scorecard?.memberId ?? queue?.memberId ?? null;
+  if (!error && activeMemberId) {
+    try {
+      const coachingRes = await callAdminApi(
+        `/api/admin/calls/coaching?rangeDays=${rangeDays}&memberId=${encodeURIComponent(activeMemberId)}`
+      );
+      if (coachingRes.ok) {
+        callCoaching = (await coachingRes.json()) as CallCoachingPayload;
+      }
+    } catch {
+      // ignore; coaching is optional
+    }
   }
 
   const score = scorecard?.score.total ?? 0;
@@ -280,6 +322,120 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
           ) : null}
         </div>
       </div>
+
+      {callCoaching?.items?.length ? (
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white">
+          <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">Call Coaching</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Primary score matches call type (inbound lead vs outbound cold outreach). Expand a call to see the other score.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Pill tone={scoreTone(callCoaching.summary.inbound.avgScore)}>
+                Inbound avg: {callCoaching.summary.inbound.avgScore ?? "—"} ({callCoaching.summary.inbound.count})
+              </Pill>
+              <Pill tone={scoreTone(callCoaching.summary.outbound.avgScore)}>
+                Outbound avg: {callCoaching.summary.outbound.avgScore ?? "—"} ({callCoaching.summary.outbound.count})
+              </Pill>
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-200">
+            {callCoaching.items.map((item) => {
+              const createdAt = new Date(item.createdAt);
+              const primary = item.primary;
+              const secondary = item.secondary;
+              return (
+                <details key={item.callRecordId} className="group px-4 py-3">
+                  <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">{item.contact.name}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {createdAt.toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
+                        {item.durationSec ? ` • ${item.durationSec}s` : ""}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center">
+                      <Pill tone={scoreTone(primary?.scoreOverall ?? null)}>
+                        {item.primaryRubric === "outbound" ? "Outbound" : "Inbound"}: {primary?.scoreOverall ?? "—"}
+                      </Pill>
+                      <Pill tone="neutral">
+                        {item.primaryRubric === "outbound" ? "Inbound" : "Outbound"}: {secondary?.scoreOverall ?? "—"}
+                      </Pill>
+                    </div>
+                  </summary>
+
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <p className="text-xs font-semibold text-slate-700">Primary ({item.primaryRubric})</p>
+                      {primary ? (
+                        <div className="mt-2 space-y-2 text-xs text-slate-700">
+                          <div>
+                            <p className="font-semibold text-slate-800">Wins</p>
+                            <ul className="mt-1 list-disc pl-4">
+                              {primary.wins.slice(0, 3).map((win) => (
+                                <li key={win}>{win}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          {primary.improvements?.length ? (
+                            <div>
+                              <p className="font-semibold text-slate-800">Next time</p>
+                              <ul className="mt-1 list-disc pl-4">
+                                {primary.improvements.slice(0, 3).map((tip) => (
+                                  <li key={tip}>{tip}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : (
+                            <p className="text-slate-600">Great job — no fixes needed.</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-xs text-slate-600">No score yet.</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 bg-white p-3">
+                      <p className="text-xs font-semibold text-slate-700">
+                        Secondary ({item.primaryRubric === "outbound" ? "inbound" : "outbound"})
+                      </p>
+                      {secondary ? (
+                        <div className="mt-2 space-y-2 text-xs text-slate-700">
+                          <div>
+                            <p className="font-semibold text-slate-800">Wins</p>
+                            <ul className="mt-1 list-disc pl-4">
+                              {secondary.wins.slice(0, 3).map((win) => (
+                                <li key={win}>{win}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          {secondary.improvements?.length ? (
+                            <div>
+                              <p className="font-semibold text-slate-800">Next time</p>
+                              <ul className="mt-1 list-disc pl-4">
+                                {secondary.improvements.slice(0, 3).map((tip) => (
+                                  <li key={tip}>{tip}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : (
+                            <p className="text-slate-600">Great job — no fixes needed.</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-xs text-slate-600">No score yet.</p>
+                      )}
+                    </div>
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white">

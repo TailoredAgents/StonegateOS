@@ -6,6 +6,7 @@ import {
   getDb,
   outboxEvents,
   callRecords,
+  callCoaching,
   appointments,
   automationSettings,
   leads,
@@ -39,6 +40,7 @@ import {
   resolveTemplateForChannel
 } from "@/lib/policy";
 import { analyzeCallTranscript, transcribeAudio } from "@/lib/call-analysis";
+import { scoreCallTranscript } from "@/lib/call-coaching";
 import {
   deleteTwilioRecording,
   downloadTwilioRecordingAudio,
@@ -3415,7 +3417,8 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           .select({
             firstName: contacts.firstName,
             lastName: contacts.lastName,
-            email: contacts.email
+            email: contacts.email,
+            salespersonMemberId: contacts.salespersonMemberId
           })
           .from(contacts)
           .where(eq(contacts.id, call.contactId))
@@ -3502,6 +3505,87 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           if (createdNote?.id) {
             await db.update(callRecords).set({ noteTaskId: createdNote.id, updatedAt: now }).where(eq(callRecords.id, call.id));
           }
+        }
+
+        try {
+          const coachingMemberId =
+            call.assignedTo ??
+            (typeof existingContact?.salespersonMemberId === "string" && existingContact.salespersonMemberId.trim().length > 0
+              ? existingContact.salespersonMemberId
+              : null);
+
+          const [existingInbound] = await db
+            .select({ id: callCoaching.id })
+            .from(callCoaching)
+            .where(and(eq(callCoaching.callRecordId, call.id), eq(callCoaching.rubric, "inbound"), eq(callCoaching.version, 1)))
+            .limit(1);
+
+          const [existingOutbound] = await db
+            .select({ id: callCoaching.id })
+            .from(callCoaching)
+            .where(and(eq(callCoaching.callRecordId, call.id), eq(callCoaching.rubric, "outbound"), eq(callCoaching.version, 1)))
+            .limit(1);
+
+          if (!existingInbound?.id || !existingOutbound?.id) {
+            const inboundCoaching =
+              existingInbound?.id
+                ? null
+                : await scoreCallTranscript({
+                    transcript,
+                    agentName,
+                    businessName: companyProfile.businessName,
+                    rubric: "inbound"
+                  });
+            const outboundCoaching =
+              existingOutbound?.id
+                ? null
+                : await scoreCallTranscript({
+                    transcript,
+                    agentName,
+                    businessName: companyProfile.businessName,
+                    rubric: "outbound"
+                  });
+
+            if (inboundCoaching) {
+              await db
+                .insert(callCoaching)
+                .values({
+                  callRecordId: call.id,
+                  memberId: coachingMemberId,
+                  rubric: "inbound",
+                  version: 1,
+                  model: inboundCoaching.model,
+                  scoreOverall: inboundCoaching.scoreOverall,
+                  scoreBreakdown: inboundCoaching.scoreBreakdown,
+                  wins: inboundCoaching.wins,
+                  improvements: inboundCoaching.improvements,
+                  createdAt: now,
+                  updatedAt: now
+                })
+                .onConflictDoNothing();
+            }
+
+            if (outboundCoaching) {
+              await db
+                .insert(callCoaching)
+                .values({
+                  callRecordId: call.id,
+                  memberId: coachingMemberId,
+                  rubric: "outbound",
+                  version: 1,
+                  model: outboundCoaching.model,
+                  scoreOverall: outboundCoaching.scoreOverall,
+                  scoreBreakdown: outboundCoaching.scoreBreakdown,
+                  wins: outboundCoaching.wins,
+                  improvements: outboundCoaching.improvements,
+                  createdAt: now,
+                  updatedAt: now
+                })
+                .onConflictDoNothing();
+            }
+          }
+        } catch (error) {
+          console.warn("[call.coaching] store_failed", { callSid, error: String(error) });
         }
       }
 

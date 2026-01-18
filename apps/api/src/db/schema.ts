@@ -684,6 +684,37 @@ export const callRecords = pgTable(
   })
 );
 
+export const callCoachingRubricEnum = pgEnum("call_coaching_rubric", ["inbound", "outbound"]);
+
+export const callCoaching = pgTable(
+  "call_coaching",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    callRecordId: uuid("call_record_id")
+      .notNull()
+      .references(() => callRecords.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    rubric: callCoachingRubricEnum("rubric").notNull(),
+    version: integer("version").default(1).notNull(),
+    model: text("model"),
+    scoreOverall: integer("score_overall").notNull(),
+    scoreBreakdown: jsonb("score_breakdown").$type<Record<string, number> | null>(),
+    wins: text("wins").array().notNull().default([]),
+    improvements: text("improvements").array().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    uniqueIdx: uniqueIndex("call_coaching_unique").on(table.callRecordId, table.rubric, table.version),
+    callIdx: index("call_coaching_call_idx").on(table.callRecordId),
+    memberIdx: index("call_coaching_member_idx").on(table.memberId),
+    rubricIdx: index("call_coaching_rubric_idx").on(table.rubric)
+  })
+);
+
 export const commissionSettings = pgTable("commission_settings", {
   key: text("key").primaryKey(),
   timezone: text("timezone").default("America/New_York").notNull(),
