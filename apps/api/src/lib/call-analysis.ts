@@ -33,13 +33,19 @@ function getOpenAIKey(): string | null {
   return key ?? null;
 }
 
-export async function transcribeAudioMp3(buffer: Buffer): Promise<string | null> {
+export async function transcribeAudio(
+  buffer: Buffer,
+  options?: { contentType?: string; filename?: string }
+): Promise<string | null> {
   const apiKey = getOpenAIKey();
   if (!apiKey) return null;
 
+  const contentType = options?.contentType && options.contentType.trim().length ? options.contentType : "audio/mpeg";
+  const filename = options?.filename && options.filename.trim().length ? options.filename : "call.mp3";
+
   const form = new FormData();
   form.append("model", "whisper-1");
-  form.append("file", new Blob([new Uint8Array(buffer)], { type: "audio/mpeg" }), "call.mp3");
+  form.append("file", new Blob([new Uint8Array(buffer)], { type: contentType }), filename);
 
   const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
@@ -58,6 +64,10 @@ export async function transcribeAudioMp3(buffer: Buffer): Promise<string | null>
   const payload = (await response.json().catch(() => null)) as { text?: unknown } | null;
   const transcript = typeof payload?.text === "string" ? payload.text.trim() : "";
   return transcript.length ? transcript : null;
+}
+
+export async function transcribeAudioMp3(buffer: Buffer): Promise<string | null> {
+  return transcribeAudio(buffer, { contentType: "audio/mpeg", filename: "call.mp3" });
 }
 
 const AnalysisSchema = z.object({

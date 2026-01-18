@@ -5,6 +5,19 @@ type TwilioRecording = {
   uri: string | null;
 };
 
+export type TwilioRecordingDownloadResult =
+  | {
+      ok: true;
+      buffer: Buffer;
+      contentType: string;
+      filename: string;
+    }
+  | {
+      ok: false;
+      retryable: boolean;
+      status: number | null;
+    };
+
 function getTwilioConfig():
   | { sid: string; token: string; baseUrl: string }
   | { sid: null; token: null; baseUrl: string } {
@@ -73,28 +86,54 @@ export async function listTwilioRecordingsForCall(callSid: string): Promise<Twil
   return recordings;
 }
 
-export async function downloadTwilioRecordingMp3(recordingSid: string): Promise<Buffer | null> {
+export async function downloadTwilioRecordingAudio(recordingSid: string): Promise<TwilioRecordingDownloadResult> {
   const config = getTwilioConfig();
   if (!config.sid || !config.token) {
-    return null;
+    return { ok: false, retryable: false, status: null };
   }
 
-  const url = `${config.baseUrl}/2010-04-01/Accounts/${config.sid}/Recordings/${encodeURIComponent(recordingSid)}.mp3`;
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      Authorization: authHeader(config.sid, config.token)
+  const candidates = [
+    { ext: "wav", contentType: "audio/wav", filename: "call.wav" },
+    { ext: "mp3", contentType: "audio/mpeg", filename: "call.mp3" }
+  ] as const;
+
+  for (const candidate of candidates) {
+    const url = `${config.baseUrl}/2010-04-01/Accounts/${config.sid}/Recordings/${encodeURIComponent(recordingSid)}.${candidate.ext}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: authHeader(config.sid, config.token)
+      }
+    });
+
+    if (response.ok) {
+      const arrayBuffer = await response.arrayBuffer();
+      return {
+        ok: true,
+        buffer: Buffer.from(arrayBuffer),
+        contentType: candidate.contentType,
+        filename: candidate.filename
+      };
     }
-  });
 
-  if (!response.ok) {
+    const status = response.status;
     const text = await response.text().catch(() => "");
-    console.warn("[twilio.recordings] download_failed", { recordingSid, status: response.status, text: text.slice(0, 240) });
-    return null;
+    console.warn("[twilio.recordings] download_failed", {
+      recordingSid,
+      status,
+      ext: candidate.ext,
+      text: text.slice(0, 240)
+    });
+
+    if (status === 404) {
+      continue;
+    }
+
+    const retryable = status >= 500 || status === 429;
+    return { ok: false, retryable, status };
   }
 
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  return { ok: false, retryable: true, status: 404 };
 }
 
 export async function deleteTwilioRecording(recordingSid: string): Promise<boolean> {
@@ -119,4 +158,3 @@ export async function deleteTwilioRecording(recordingSid: string): Promise<boole
 
   return true;
 }
-

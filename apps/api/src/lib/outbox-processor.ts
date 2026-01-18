@@ -38,10 +38,10 @@ import {
   nextQuietHoursEnd,
   resolveTemplateForChannel
 } from "@/lib/policy";
-import { analyzeCallTranscript, transcribeAudioMp3 } from "@/lib/call-analysis";
+import { analyzeCallTranscript, transcribeAudio } from "@/lib/call-analysis";
 import {
   deleteTwilioRecording,
-  downloadTwilioRecordingMp3,
+  downloadTwilioRecordingAudio,
   listTwilioRecordingsForCall
 } from "@/lib/twilio-recordings";
 import type { EstimateNotificationPayload, QuoteNotificationPayload } from "@/lib/notifications";
@@ -3291,6 +3291,14 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
 
       const recordings = await listTwilioRecordingsForCall(callSid);
       if (!recordings.length) {
+        const attempts = typeof event.attempts === "number" ? event.attempts : 0;
+        if (attempts < 5) {
+          return {
+            status: "retry",
+            error: "recordings_not_ready",
+            nextAttemptAt: new Date(Date.now() + 60_000)
+          };
+        }
         await db
           .update(callRecords)
           .set({
@@ -3316,12 +3324,22 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "processed" };
       }
 
-      const audio = await downloadTwilioRecordingMp3(best.sid);
-      if (!audio) {
-        return { status: "retry", error: "recording_download_failed" };
+      const audio = await downloadTwilioRecordingAudio(best.sid);
+      if (!audio.ok) {
+        if (audio.retryable) {
+          return {
+            status: "retry",
+            error: "recording_download_failed",
+            nextAttemptAt: new Date(Date.now() + 60_000)
+          };
+        }
+        return { status: "processed" };
       }
 
-      const transcript = await transcribeAudioMp3(audio);
+      const transcript = await transcribeAudio(audio.buffer, {
+        contentType: audio.contentType,
+        filename: audio.filename
+      });
       if (!transcript) {
         const hasKey =
           typeof process.env["OPENAI_API_KEY"] === "string" && process.env["OPENAI_API_KEY"].trim().length > 0;
