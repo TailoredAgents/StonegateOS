@@ -1,10 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc, eq, ilike, isNotNull, sql } from "drizzle-orm";
-import { auditLogs, crmTasks, getDb } from "@/db";
+import { and, desc, eq, ilike, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { auditLogs, callRecords, contacts, crmTasks, getDb, outboxEvents, conversationThreads, leads, properties } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
+import { recordInboundMessage } from "@/lib/inbox";
+import { normalizePhone } from "../../../web/utils";
 
 export const dynamic = "force-dynamic";
+
+const DEFAULT_SERVICES = ["junk_removal_primary"];
 
 function readString(value: FormDataEntryValue | null): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -17,6 +21,113 @@ function readNumber(value: FormDataEntryValue | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isMissedCall(status: string | null, duration: number | null): boolean {
+  if (!status) return false;
+  const normalized = status.toLowerCase();
+  if (["no-answer", "busy", "failed", "canceled"].includes(normalized)) {
+    return true;
+  }
+  if (normalized === "completed" && (duration ?? 0) === 0) {
+    return true;
+  }
+  return false;
+}
+
+async function ensureLeadForThread(input: {
+  threadId: string;
+  callSid: string | null;
+  from: string;
+}): Promise<void> {
+  const db = getDb();
+  const now = new Date();
+
+  await db.transaction(async (tx) => {
+    const [thread] = await tx
+      .select({
+        id: conversationThreads.id,
+        leadId: conversationThreads.leadId,
+        contactId: conversationThreads.contactId,
+        propertyId: conversationThreads.propertyId
+      })
+      .from(conversationThreads)
+      .where(eq(conversationThreads.id, input.threadId))
+      .limit(1);
+
+    if (!thread?.contactId || thread.leadId) {
+      return;
+    }
+
+    const shortId = input.threadId.split("-")[0] ?? input.threadId.slice(0, 8);
+    const [property] = await tx
+      .insert(properties)
+      .values({
+        contactId: thread.contactId,
+        addressLine1: `[Missed Call ${shortId}] Address pending`,
+        city: "Unknown",
+        state: "NA",
+        postalCode: "00000",
+        gated: false,
+        createdAt: now,
+        updatedAt: now
+      })
+      .returning({ id: properties.id });
+
+    if (!property?.id) {
+      throw new Error("missed_call_property_failed");
+    }
+
+    const [lead] = await tx
+      .insert(leads)
+      .values({
+        contactId: thread.contactId,
+        propertyId: property.id,
+        servicesRequested: DEFAULT_SERVICES,
+        status: "new",
+        source: "missed_call",
+        notes: "Missed call auto lead.",
+        formPayload: {
+          source: "missed_call",
+          callSid: input.callSid,
+          from: input.from
+        },
+        createdAt: now,
+        updatedAt: now
+      })
+      .returning({ id: leads.id });
+
+    if (!lead?.id) {
+      throw new Error("missed_call_lead_failed");
+    }
+
+    await tx.insert(outboxEvents).values({
+      type: "lead.alert",
+      payload: {
+        leadId: lead.id,
+        source: "missed_call"
+      },
+      createdAt: now
+    });
+
+    await tx
+      .update(conversationThreads)
+      .set({
+        leadId: lead.id,
+        propertyId: property.id,
+        updatedAt: now
+      })
+      .where(eq(conversationThreads.id, input.threadId));
+  });
+}
+
+function resolveCallDirection(direction: string | null): "inbound" | "outbound" {
+  const normalized = (direction ?? "").toLowerCase();
+  return normalized.startsWith("inbound") ? "inbound" : "outbound";
+}
+
+function parseRecordMeta(meta: unknown): Record<string, unknown> | null {
+  return typeof meta === "object" && meta !== null ? (meta as Record<string, unknown>) : null;
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   let formData: FormData;
   try {
@@ -27,6 +138,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const leg = request.nextUrl.searchParams.get("leg")?.trim() || "unknown";
   const mode = request.nextUrl.searchParams.get("mode")?.trim() || null;
+  const inboundMode = mode === "inbound" || leg === "inbound";
 
   const payload = {
     leg,
@@ -47,6 +159,182 @@ export async function POST(request: NextRequest): Promise<Response> {
   };
 
   console.info("[twilio.call_status]", payload);
+
+  if (inboundMode && payload.from) {
+    const missed = isMissedCall(payload.callStatus, payload.callDuration);
+    if (missed) {
+      try {
+        const result = await recordInboundMessage({
+          channel: "call",
+          body: "Missed call",
+          subject: "Missed call",
+          fromAddress: payload.from,
+          toAddress: payload.to,
+          provider: "twilio",
+          providerMessageId: payload.callSid ?? null,
+          metadata: {
+            callStatus: payload.callStatus ?? null,
+            callDuration: payload.callDuration
+          }
+        });
+
+        if (!result.leadId && result.threadId) {
+          try {
+            await ensureLeadForThread({
+              threadId: result.threadId,
+              callSid: payload.callSid,
+              from: payload.from
+            });
+          } catch (error) {
+            console.warn("[twilio] missed_call_lead_failed", { error: String(error) });
+          }
+        }
+      } catch (error) {
+        console.warn("[twilio] inbound_call_record_failed", { error: String(error) });
+      }
+    }
+  }
+
+  const callSid = payload.callSid;
+  if (callSid) {
+    const db = getDb();
+    const now = new Date();
+    const direction = resolveCallDirection(payload.direction);
+
+    let resolvedContactId: string | null = null;
+    let resolvedAssignedTo: string | null = null;
+
+    if (direction === "inbound" && payload.from) {
+      try {
+        const normalized = normalizePhone(payload.from).e164;
+        const [match] = await db
+          .select({ id: contacts.id })
+          .from(contacts)
+          .where(or(eq(contacts.phoneE164, normalized), eq(contacts.phone, payload.from)))
+          .limit(1);
+        resolvedContactId = match?.id ?? null;
+      } catch {
+        // ignore invalid inbound caller id
+      }
+    } else {
+      const callSidCandidates = [payload.callSid, payload.parentCallSid].filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0
+      );
+
+      if (callSidCandidates.length > 0) {
+        const callSidFilter =
+          callSidCandidates.length === 1
+            ? sql`${auditLogs.meta} ->> 'callSid' = ${callSidCandidates[0]!}`
+            : or(
+                ...callSidCandidates.map(
+                  (candidate) => sql`${auditLogs.meta} ->> 'callSid' = ${candidate}`
+                )
+              );
+
+        const [audit] = await db
+          .select({
+            action: auditLogs.action,
+            entityType: auditLogs.entityType,
+            entityId: auditLogs.entityId,
+            actorId: auditLogs.actorId,
+            meta: auditLogs.meta
+          })
+          .from(auditLogs)
+          .where(
+            and(
+              isNotNull(auditLogs.meta),
+              or(
+                eq(auditLogs.action, "call.started"),
+                eq(auditLogs.action, "sales.escalation.call.started")
+              ),
+              callSidFilter
+            )
+          )
+          .orderBy(desc(auditLogs.createdAt))
+          .limit(1);
+
+        if (audit?.action === "call.started" && audit.entityType === "contact" && audit.entityId) {
+          resolvedContactId = audit.entityId;
+          resolvedAssignedTo = audit.actorId ?? null;
+        }
+
+        if (audit?.action === "sales.escalation.call.started") {
+          const meta = parseRecordMeta(audit.meta);
+          const contactId = typeof meta?.["contactId"] === "string" ? meta["contactId"].trim() : "";
+          const assignedTo = typeof meta?.["assignedTo"] === "string" ? meta["assignedTo"].trim() : "";
+          if (contactId) resolvedContactId = contactId;
+          if (assignedTo) resolvedAssignedTo = assignedTo;
+        }
+      }
+    }
+
+    try {
+      await db
+        .insert(callRecords)
+        .values({
+          callSid,
+          parentCallSid: payload.parentCallSid ?? null,
+          direction,
+          mode,
+          from: payload.from ?? null,
+          to: payload.to ?? null,
+          contactId: resolvedContactId,
+          assignedTo: resolvedAssignedTo,
+          callStatus: payload.callStatus ?? null,
+          callDurationSec: payload.callDuration ?? null,
+          createdAt: now,
+          updatedAt: now
+        })
+        .onConflictDoUpdate({
+          target: callRecords.callSid,
+          set: {
+            parentCallSid: payload.parentCallSid ?? null,
+            direction,
+            mode,
+            from: payload.from ?? null,
+            to: payload.to ?? null,
+            contactId: resolvedContactId,
+            assignedTo: resolvedAssignedTo,
+            callStatus: payload.callStatus ?? null,
+            callDurationSec: payload.callDuration ?? null,
+            updatedAt: now
+          }
+        });
+    } catch (error) {
+      console.warn("[twilio.call_status] call_record_upsert_failed", { callSid, error: String(error) });
+    }
+
+    const shouldQueueRecording =
+      (leg === "agent" || leg === "inbound") &&
+      payload.callStatus === "completed" &&
+      (payload.callDuration ?? 0) > 0;
+
+    if (shouldQueueRecording) {
+      try {
+        const [existing] = await db
+          .select({ id: outboxEvents.id })
+          .from(outboxEvents)
+          .where(
+            and(
+              eq(outboxEvents.type, "call.recording.process"),
+              isNull(outboxEvents.processedAt),
+              sql`(payload->>'callSid') = ${callSid}`
+            )
+          )
+          .limit(1);
+
+        if (!existing?.id) {
+          await db.insert(outboxEvents).values({
+            type: "call.recording.process",
+            payload: { callSid },
+            createdAt: now
+          });
+        }
+      } catch (error) {
+        console.warn("[twilio.call_status] recording_queue_failed", { callSid, error: String(error) });
+      }
+    }
+  }
 
   if (
     mode === "sales_escalation" &&

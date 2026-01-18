@@ -644,6 +644,45 @@ export const appointmentAttachments = pgTable(
   })
 );
 
+export const callRecords = pgTable(
+  "call_records",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    callSid: text("call_sid").notNull(),
+    parentCallSid: text("parent_call_sid"),
+    direction: text("direction").notNull(), // inbound | outbound
+    mode: text("mode"), // inbound | sales_escalation | null
+    from: text("from_number"),
+    to: text("to_number"),
+    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    assignedTo: uuid("assigned_to").references(() => teamMembers.id, { onDelete: "set null" }),
+    callStatus: text("call_status"),
+    callDurationSec: integer("call_duration_sec"),
+    recordingSid: text("recording_sid"),
+    recordingUrl: text("recording_url"),
+    recordingDurationSec: integer("recording_duration_sec"),
+    recordingCreatedAt: timestamp("recording_created_at", { withTimezone: true }),
+    transcript: text("transcript"),
+    extracted: jsonb("extracted").$type<Record<string, unknown> | null>(),
+    summary: text("summary"),
+    coaching: text("coaching"),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    deleteAfter: timestamp("delete_after", { withTimezone: true }),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    callSidIdx: uniqueIndex("call_records_call_sid_key").on(table.callSid),
+    contactIdx: index("call_records_contact_idx").on(table.contactId),
+    assignedIdx: index("call_records_assigned_idx").on(table.assignedTo),
+    deleteIdx: index("call_records_delete_idx").on(table.deleteAfter)
+  })
+);
+
 export const commissionSettings = pgTable("commission_settings", {
   key: text("key").primaryKey(),
   timezone: text("timezone").default("America/New_York").notNull(),

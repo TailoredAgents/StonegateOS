@@ -1676,6 +1676,7 @@ export async function updateCompanyProfilePolicyAction(formData: FormData) {
   const whatWeDontDo = readText("whatWeDontDo");
   const bookingStyle = readText("bookingStyle");
   const agentNotes = readText("agentNotes");
+  const outboundCallRecordingNotice = readText("outboundCallRecordingNotice");
 
   if (!businessName) {
     jar.set({ name: "myst-flash-error", value: "Business name is required", path: "/" });
@@ -1694,7 +1695,8 @@ export async function updateCompanyProfilePolicyAction(formData: FormData) {
       whatWeDo: whatWeDo.length > 0 ? whatWeDo : undefined,
       whatWeDontDo: whatWeDontDo.length > 0 ? whatWeDontDo : undefined,
       bookingStyle: bookingStyle.length > 0 ? bookingStyle : undefined,
-      agentNotes: agentNotes.length > 0 ? agentNotes : undefined
+      agentNotes: agentNotes.length > 0 ? agentNotes : undefined,
+      outboundCallRecordingNotice: outboundCallRecordingNotice.length > 0 ? outboundCallRecordingNotice : ""
     },
     "Company profile updated"
   );

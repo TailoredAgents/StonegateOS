@@ -256,6 +256,10 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
     typeof companyValue["agentNotes"] === "string" && companyValue["agentNotes"].trim().length > 0
       ? companyValue["agentNotes"]
       : "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links.";
+  const companyOutboundCallRecordingNotice =
+    typeof companyValue["outboundCallRecordingNotice"] === "string"
+      ? (companyValue["outboundCallRecordingNotice"] as string)
+      : "This call may be recorded for quality and training.";
 
   const personaSetting = settingsByKey.get("conversation_persona");
   const personaValue = isRecord(personaSetting?.value) ? personaSetting!.value : {};
@@ -556,6 +560,19 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
             <div>
               <label className={LABEL_CLASS}>Agent notes</label>
               <textarea name="agentNotes" rows={3} defaultValue={companyAgentNotes} className={TEXTAREA_CLASS} />
+            </div>
+            <div>
+              <label className={LABEL_CLASS}>Outbound call recording notice</label>
+              <textarea
+                name="outboundCallRecordingNotice"
+                rows={2}
+                defaultValue={companyOutboundCallRecordingNotice}
+                className={TEXTAREA_CLASS}
+                placeholder="Spoken to customers on outbound calls before connecting."
+              />
+              <p className="mt-2 text-[11px] text-slate-500">
+                Leave blank to skip the notice. This is spoken to the customer on CRM initiated outbound calls.
+              </p>
             </div>
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(companySetting?.updatedAt ?? null)}</span>

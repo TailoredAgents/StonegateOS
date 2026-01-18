@@ -120,6 +120,13 @@
       "when": 1768267200000,
       "tag": "0016_expenses_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1768767369687,
+      "tag": "0017_nosy_felicia_hardy",
+      "breakpoints": true
     }
   ]
 }

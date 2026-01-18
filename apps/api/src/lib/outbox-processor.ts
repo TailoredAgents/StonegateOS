@@ -5,6 +5,7 @@ import { DateTime } from "luxon";
 import {
   getDb,
   outboxEvents,
+  callRecords,
   appointments,
   automationSettings,
   leads,
@@ -15,6 +16,7 @@ import {
   quotes,
   crmPipeline,
   auditLogs,
+  teamMembers,
   conversationParticipants,
   conversationMessages,
   conversationThreads,
@@ -24,6 +26,7 @@ import {
 import {
   getBusinessHoursPolicy,
   getConfirmationLoopPolicy,
+  getCompanyProfilePolicy,
   getFollowUpSequencePolicy,
   getInboxAlertsPolicy,
   getQuietHoursPolicy,
@@ -35,6 +38,12 @@ import {
   nextQuietHoursEnd,
   resolveTemplateForChannel
 } from "@/lib/policy";
+import { analyzeCallTranscript, transcribeAudioMp3 } from "@/lib/call-analysis";
+import {
+  deleteTwilioRecording,
+  downloadTwilioRecordingMp3,
+  listTwilioRecordingsForCall
+} from "@/lib/twilio-recordings";
 import type { EstimateNotificationPayload, QuoteNotificationPayload } from "@/lib/notifications";
 import {
   sendEstimateConfirmation,
@@ -3247,6 +3256,295 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           updatedAt: new Date()
         })
         .where(and(eq(leadAutomationStates.leadId, leadId), eq(leadAutomationStates.channel, channel)));
+
+      return { status: "processed" };
+    }
+
+    case "call.recording.process": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const callSid = typeof payload?.["callSid"] === "string" ? payload["callSid"].trim() : "";
+      if (!callSid) {
+        console.warn("[outbox] call.recording.process.missing_call_sid", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const db = getDb();
+      const [call] = await db
+        .select({
+          id: callRecords.id,
+          callSid: callRecords.callSid,
+          contactId: callRecords.contactId,
+          assignedTo: callRecords.assignedTo,
+          processedAt: callRecords.processedAt
+        })
+        .from(callRecords)
+        .where(eq(callRecords.callSid, callSid))
+        .limit(1);
+
+      if (!call?.id) {
+        return { status: "retry", error: "call_record_missing", nextAttemptAt: new Date(Date.now() + 60_000) };
+      }
+
+      if (call.processedAt instanceof Date) {
+        return { status: "processed" };
+      }
+
+      const recordings = await listTwilioRecordingsForCall(callSid);
+      if (!recordings.length) {
+        await db
+          .update(callRecords)
+          .set({
+            processedAt: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(callRecords.id, call.id));
+        return { status: "processed" };
+      }
+
+      const best = recordings
+        .slice()
+        .sort((a, b) => (b.durationSec ?? 0) - (a.durationSec ?? 0))[0];
+
+      if (!best) {
+        await db
+          .update(callRecords)
+          .set({
+            processedAt: new Date(),
+            updatedAt: new Date()
+          })
+          .where(eq(callRecords.id, call.id));
+        return { status: "processed" };
+      }
+
+      const audio = await downloadTwilioRecordingMp3(best.sid);
+      if (!audio) {
+        return { status: "retry", error: "recording_download_failed" };
+      }
+
+      const transcript = await transcribeAudioMp3(audio);
+      if (!transcript) {
+        const hasKey =
+          typeof process.env["OPENAI_API_KEY"] === "string" && process.env["OPENAI_API_KEY"].trim().length > 0;
+        if (!hasKey) {
+          await db
+            .update(callRecords)
+            .set({
+              recordingSid: best.sid,
+              recordingDurationSec: best.durationSec ?? null,
+              recordingCreatedAt: best.dateCreated ? new Date(best.dateCreated) : null,
+              processedAt: new Date(),
+              updatedAt: new Date()
+            })
+            .where(eq(callRecords.id, call.id));
+          return { status: "processed" };
+        }
+        return { status: "retry", error: "transcription_failed" };
+      }
+
+      const companyProfile = await getCompanyProfilePolicy(db);
+      let agentName = "Sales";
+      if (call.assignedTo) {
+        const [member] = await db
+          .select({ name: teamMembers.name })
+          .from(teamMembers)
+          .where(eq(teamMembers.id, call.assignedTo))
+          .limit(1);
+        if (typeof member?.name === "string" && member.name.trim().length > 0) {
+          agentName = member.name.trim();
+        }
+      } else {
+        const autopilot = await getSalesAutopilotPolicy(db);
+        if (typeof autopilot.agentDisplayName === "string" && autopilot.agentDisplayName.trim().length > 0) {
+          agentName = autopilot.agentDisplayName.trim();
+        }
+      }
+
+      const analysis = await analyzeCallTranscript({
+        transcript,
+        agentName,
+        businessName: companyProfile.businessName
+      });
+      if (!analysis) {
+        return { status: "retry", error: "analysis_failed" };
+      }
+
+      const now = new Date();
+      const deleteAfter = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+      const recordingCreatedAt = best.dateCreated ? new Date(best.dateCreated) : null;
+      const coachingText = analysis.coaching.join("\n").trim();
+
+      await db
+        .update(callRecords)
+        .set({
+          recordingSid: best.sid,
+          recordingDurationSec: best.durationSec ?? null,
+          recordingCreatedAt:
+            recordingCreatedAt && !Number.isNaN(recordingCreatedAt.getTime()) ? recordingCreatedAt : null,
+          transcript,
+          extracted: analysis.extracted as unknown as Record<string, unknown>,
+          summary: analysis.summary,
+          coaching: coachingText.length ? coachingText : null,
+          processedAt: now,
+          deleteAfter,
+          updatedAt: now
+        })
+        .where(eq(callRecords.id, call.id));
+
+      if (call.contactId) {
+        const confidence = analysis.extracted.confidence ?? {};
+
+        const [existingContact] = await db
+          .select({
+            firstName: contacts.firstName,
+            lastName: contacts.lastName,
+            email: contacts.email
+          })
+          .from(contacts)
+          .where(eq(contacts.id, call.contactId))
+          .limit(1);
+
+        if (existingContact) {
+          const updates: Record<string, unknown> = {};
+          const firstName = analysis.extracted.firstName ?? null;
+          const lastName = analysis.extracted.lastName ?? null;
+          const email = analysis.extracted.email ?? null;
+
+          const firstConf = typeof confidence["firstName"] === "number" ? confidence["firstName"] : 0;
+          const lastConf = typeof confidence["lastName"] === "number" ? confidence["lastName"] : 0;
+          const emailConf = typeof confidence["email"] === "number" ? confidence["email"] : 0;
+
+          const isPlaceholderName =
+            existingContact.firstName.trim().toLowerCase() === "unknown" ||
+            existingContact.lastName.trim().toLowerCase() === "contact";
+
+          if (isPlaceholderName && firstName && firstConf >= 0.8) {
+            updates["firstName"] = firstName;
+          }
+          if (isPlaceholderName && lastName && lastConf >= 0.8) {
+            updates["lastName"] = lastName;
+          }
+          if (!existingContact.email && email && emailConf >= 0.8) {
+            updates["email"] = email;
+          }
+
+          if (Object.keys(updates).length) {
+            await db.update(contacts).set(updates).where(eq(contacts.id, call.contactId));
+          }
+        }
+
+        const when = DateTime.fromJSDate(now)
+          .setZone((await getBusinessHoursPolicy(db)).timezone)
+          .toFormat("LLL d, yyyy h:mm a");
+        const extractedBits = [
+          analysis.extracted.postalCode ? `ZIP ${analysis.extracted.postalCode}` : null,
+          analysis.extracted.timeframe ? `Timing: ${analysis.extracted.timeframe}` : null,
+          analysis.extracted.items ? `Items: ${analysis.extracted.items}` : null
+        ].filter(Boolean);
+        const note = [`Call ${when}`, analysis.summary, extractedBits.length ? extractedBits.join(" | ") : null]
+          .filter(Boolean)
+          .join("\n");
+
+        const [pipelineRow] = await db
+          .select({ notes: crmPipeline.notes })
+          .from(crmPipeline)
+          .where(eq(crmPipeline.contactId, call.contactId))
+          .limit(1);
+        const existingNotes = typeof pipelineRow?.notes === "string" ? pipelineRow.notes.trim() : "";
+        const combined = [existingNotes, note].filter(Boolean).join("\n\n");
+        const capped = combined.length > 8000 ? combined.slice(combined.length - 8000) : combined;
+
+        await db
+          .insert(crmPipeline)
+          .values({ contactId: call.contactId, stage: "new", notes: capped, createdAt: now, updatedAt: now })
+          .onConflictDoUpdate({
+            target: crmPipeline.contactId,
+            set: { notes: capped, updatedAt: now }
+          });
+      }
+
+      await recordAuditEvent({
+        actor: { type: "worker", label: "outbox" },
+        action: "call.recording.processed",
+        entityType: "call_record",
+        entityId: call.id,
+        meta: { callSid, recordingSid: best.sid, deleteAfter: deleteAfter.toISOString() }
+      });
+
+      const [existingDelete] = await db
+        .select({ id: outboxEvents.id })
+        .from(outboxEvents)
+        .where(
+          and(
+            eq(outboxEvents.type, "call.recording.delete"),
+            isNull(outboxEvents.processedAt),
+            sql`(payload->>'callSid') = ${callSid}`
+          )
+        )
+        .limit(1);
+
+      if (!existingDelete?.id) {
+        await db.insert(outboxEvents).values({
+          type: "call.recording.delete",
+          payload: { callSid, recordingSid: best.sid },
+          nextAttemptAt: deleteAfter,
+          createdAt: now
+        });
+      }
+
+      return { status: "processed" };
+    }
+
+    case "call.recording.delete": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const callSid = typeof payload?.["callSid"] === "string" ? payload["callSid"].trim() : "";
+      const recordingSid = typeof payload?.["recordingSid"] === "string" ? payload["recordingSid"].trim() : "";
+      if (!callSid || !recordingSid) {
+        console.warn("[outbox] call.recording.delete.missing_payload", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const db = getDb();
+      const [call] = await db
+        .select({
+          id: callRecords.id,
+          deleteAfter: callRecords.deleteAfter,
+          deletedAt: callRecords.deletedAt
+        })
+        .from(callRecords)
+        .where(eq(callRecords.callSid, callSid))
+        .limit(1);
+
+      if (!call?.id) {
+        return { status: "processed" };
+      }
+
+      if (call.deletedAt instanceof Date) {
+        return { status: "processed" };
+      }
+
+      const now = new Date();
+      if (call.deleteAfter instanceof Date && call.deleteAfter.getTime() > now.getTime()) {
+        return { status: "retry", error: "not_due_yet", nextAttemptAt: call.deleteAfter };
+      }
+
+      const ok = await deleteTwilioRecording(recordingSid);
+      if (!ok) {
+        const attempts = typeof event.attempts === "number" ? event.attempts : 0;
+        if (attempts >= 5) {
+          console.warn("[outbox] call.recording.delete.failed", { callSid, recordingSid });
+          return { status: "processed" };
+        }
+        return { status: "retry", error: "delete_failed", nextAttemptAt: new Date(now.getTime() + 60 * 60_000) };
+      }
+
+      await db.update(callRecords).set({ deletedAt: now, updatedAt: now }).where(eq(callRecords.id, call.id));
+      await recordAuditEvent({
+        actor: { type: "worker", label: "outbox" },
+        action: "call.recording.deleted",
+        entityType: "call_record",
+        entityId: call.id,
+        meta: { callSid, recordingSid }
+      });
 
       return { status: "processed" };
     }

@@ -57,6 +57,7 @@ export type CompanyProfilePolicy = {
   whatWeDontDo: string;
   bookingStyle: string;
   agentNotes: string;
+  outboundCallRecordingNotice: string;
 };
 
 export type BookingRulesPolicy = {
@@ -153,7 +154,9 @@ export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
   bookingStyle:
     "Offer 2 concrete options and move to booking. Ask for zip code first, then items and timing. If photos are available, request them. If we have enough info, propose a time and book it.",
   agentNotes:
-    "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If ZIP is outside our service area, politely say we can't serve that area."
+    "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If ZIP is outside our service area, politely say we can't serve that area.",
+  outboundCallRecordingNotice:
+    "This call may be recorded for quality and training."
 };
 
 export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
@@ -1047,6 +1050,10 @@ export async function getCompanyProfilePolicy(db: DbExecutor = getDb()): Promise
     return DEFAULT_COMPANY_PROFILE_POLICY;
   }
 
+  const noticeRaw = stored["outboundCallRecordingNotice"];
+  const outboundCallRecordingNotice =
+    typeof noticeRaw === "string" ? noticeRaw.trim() : DEFAULT_COMPANY_PROFILE_POLICY.outboundCallRecordingNotice;
+
   return {
     businessName: coerceString(stored["businessName"], DEFAULT_COMPANY_PROFILE_POLICY.businessName),
     primaryPhone: coerceString(stored["primaryPhone"], DEFAULT_COMPANY_PROFILE_POLICY.primaryPhone),
@@ -1061,7 +1068,8 @@ export async function getCompanyProfilePolicy(db: DbExecutor = getDb()): Promise
     whatWeDo: coerceString(stored["whatWeDo"], DEFAULT_COMPANY_PROFILE_POLICY.whatWeDo),
     whatWeDontDo: coerceString(stored["whatWeDontDo"], DEFAULT_COMPANY_PROFILE_POLICY.whatWeDontDo),
     bookingStyle: coerceString(stored["bookingStyle"], DEFAULT_COMPANY_PROFILE_POLICY.bookingStyle),
-    agentNotes: coerceString(stored["agentNotes"], DEFAULT_COMPANY_PROFILE_POLICY.agentNotes)
+    agentNotes: coerceString(stored["agentNotes"], DEFAULT_COMPANY_PROFILE_POLICY.agentNotes),
+    outboundCallRecordingNotice
   };
 }
 
