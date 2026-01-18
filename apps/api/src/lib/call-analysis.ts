@@ -94,6 +94,14 @@ const AnalysisSchema = z.object({
   })
 });
 
+function capSentences(text: string, maxSentences: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return normalized;
+  const sentences = normalized.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sentences.length <= maxSentences) return normalized;
+  return sentences.slice(0, maxSentences).join(" ").trim();
+}
+
 export async function analyzeCallTranscript(input: {
   transcript: string;
   agentName: string;
@@ -107,6 +115,11 @@ export async function analyzeCallTranscript(input: {
   const systemPrompt = [
     "You are a sales call analyst for a home-services CRM.",
     "Your job is to summarize the call, extract key customer details, and give coaching to improve close rate.",
+    "",
+    "Output rules:",
+    "- summary must be 5 to 7 short sentences, max ~900 characters",
+    "- coaching must be 2 to 6 short bullets",
+    "- extracted fields nullable when unknown",
     "",
     "Return JSON only (no prose)."
   ].join("\n");
@@ -234,5 +247,11 @@ export async function analyzeCallTranscript(input: {
     return null;
   }
 
-  return parsed.data;
+  const normalized: CallAnalysis = {
+    summary: capSentences(parsed.data.summary, 7).slice(0, 900).trim(),
+    coaching: parsed.data.coaching.slice(0, 6),
+    extracted: parsed.data.extracted
+  };
+
+  return normalized;
 }
