@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
+import { InboxAutoScroll } from "./InboxAutoScroll";
 import { InboxMediaGallery } from "./InboxMediaGallery";
 import { TEAM_EMPTY_STATE, TEAM_INPUT_COMPACT, TEAM_SELECT, teamButtonClass } from "./team-ui";
 import {
@@ -374,6 +375,11 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
   const allowedStates = selectedThread ? getAllowedStates(selectedThreadState) : [...THREAD_STATES];
   const activePhone = normalizePhoneLink(activeContact?.phone);
   const canCall = Boolean(activeContactId && activePhone);
+  const showConversation = Boolean(activeContactId);
+  const scrollKey = (() => {
+    const lastId = timelineMessages.length ? timelineMessages[timelineMessages.length - 1]?.id ?? "none" : "none";
+    return `${selectedThreadId ?? "none"}:${timelineMessages.length}:${lastId}`;
+  })();
 
   return (
     <section className="space-y-6">
@@ -441,7 +447,11 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
       </form>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-        <div className="space-y-4 rounded-3xl border border-slate-200 bg-white/90 p-4 shadow-xl shadow-slate-200/50 backdrop-blur">
+        <div
+          className={`space-y-4 rounded-3xl border border-slate-200 bg-white/90 p-4 shadow-xl shadow-slate-200/50 backdrop-blur ${
+            showConversation ? "hidden lg:block" : ""
+          }`}
+        >
           <div className="flex items-center justify-between">
             <h3 className="text-base font-semibold text-slate-900">Threads</h3>
             <span className="text-xs text-slate-500">
@@ -732,11 +742,21 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
           </div>
         </div>
 
-        <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+        <div
+          className={`rounded-3xl border border-slate-200 bg-white/90 shadow-xl shadow-slate-200/50 backdrop-blur ${
+            showConversation ? "" : "hidden lg:block"
+          }`}
+        >
           {activeContactId ? (
-            <div className="space-y-5">
+            <div className="flex max-h-[78dvh] flex-col gap-4 overflow-hidden p-5 lg:max-h-none">
               <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
+                  <a
+                    href={buildInboxHref({ status: activeStatus === "all" ? null : activeStatus })}
+                    className="mb-3 inline-flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-primary-700 lg:hidden"
+                  >
+                    <span aria-hidden>←</span> Threads
+                  </a>
                   <h3 className="text-lg font-semibold text-slate-900">
                     {activeContact?.name ?? "Unknown contact"}
                   </h3>
@@ -905,7 +925,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 </div>
               </div>
 
-              <div className="space-y-3">
+              <div id="inbox-thread-scroll" className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                 {timelineMessages.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-sm text-slate-500">
                     No messages yet. Send the first touch below.
@@ -988,9 +1008,11 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     );
                   })
                 )}
+                <div id="inbox-thread-bottom" />
+                <InboxAutoScroll containerId="inbox-thread-scroll" bottomId="inbox-thread-bottom" depsKey={scrollKey} />
               </div>
 
-              <form action={suggestThreadReplyAction} className="flex justify-end gap-2">
+              <form action={suggestThreadReplyAction} className="flex justify-end gap-2 pt-2">
                 <input type="hidden" name="contactId" value={activeContactId} />
                 <input type="hidden" name="channel" value={requestedChannel} />
                 {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
@@ -1011,7 +1033,10 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 </SubmitButton>
               </form>
 
-              <form action={sendThreadMessageAction} className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+              <form
+                action={sendThreadMessageAction}
+                className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]"
+              >
                 <input type="hidden" name="contactId" value={activeContactId} />
                 <input type="hidden" name="channel" value={requestedChannel} />
                 {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
@@ -1052,8 +1077,8 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
               </form>
             </div>
           ) : (
-            <div className={TEAM_EMPTY_STATE}>
-              Select a thread to view the conversation.
+            <div className="p-5">
+              <div className={TEAM_EMPTY_STATE}>Select a thread to view the conversation.</div>
             </div>
           )}
         </div>
