@@ -173,7 +173,8 @@ export async function POST(request: NextRequest): Promise<Response> {
         eq(crmTasks.contactId, task.contactId),
         eq(crmTasks.status, "open"),
         isNotNull(crmTasks.notes),
-        ilike(crmTasks.notes, "%kind=outbound%")
+        ilike(crmTasks.notes, "%kind=outbound%"),
+        ilike(crmTasks.notes, `%campaign=${campaign}%`)
       )
     )
     .limit(1);
@@ -199,6 +200,19 @@ export async function POST(request: NextRequest): Promise<Response> {
       nextTaskId = created.id;
       nextTaskDueAt = nextDueAt;
     }
+  } else {
+    const nextNotes = upsertField(upsertField(notes, "attempt", String(nextAttempt)), "lastDisposition", disposition);
+    await db
+      .update(crmTasks)
+      .set({
+        title: callbackAt ? "Outbound: Callback" : "Outbound: Follow up",
+        dueAt: nextDueAt,
+        assignedTo: task.assignedTo,
+        notes: nextNotes,
+        updatedAt: now
+      })
+      .where(and(eq(crmTasks.id, nextTaskId), eq(crmTasks.status, "open")));
+    nextTaskDueAt = nextDueAt;
   }
 
   // Nudge only once it becomes due; reminders already handle the salesperson SMS.

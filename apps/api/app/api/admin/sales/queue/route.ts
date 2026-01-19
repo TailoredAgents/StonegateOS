@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lte, notInArray, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lte, notInArray, or, sql } from "drizzle-orm";
 import {
   auditLogs,
   callRecords,
@@ -203,6 +203,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     eq(contacts.salespersonMemberId, memberId),
     gte(contacts.createdAt, recentSince),
     lte(contacts.createdAt, now),
+    // Outbound prospects should never appear in Sales HQ.
+    sql`lower(coalesce(${contacts.source}, '')) not like 'outbound:%'`,
     or(isNull(crmPipeline.stage), notInArray(crmPipeline.stage, ["won", "lost", "quoted"]))
   ];
   if (seenContactIds.length) {
@@ -229,6 +231,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const missingContactIds = missingRows.map((row) => row.id).filter((id): id is string => typeof id === "string" && id.length > 0);
   const missingHasSalesTasks = new Set<string>();
   const missingHasTouch = new Set<string>();
+  const missingDisqualified = missingContactIds.length
+    ? await getDisqualifiedContactIds({ db, contactIds: missingContactIds })
+    : new Set<string>();
 
   const missingPropertyLookup = missingContactIds.filter((contactId) => !postalCodeByContactId.has(contactId));
   if (missingPropertyLookup.length) {
@@ -343,6 +348,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   for (const row of missingRows) {
     if (missingHasSalesTasks.has(row.id)) continue;
     if (missingHasTouch.has(row.id)) continue;
+    if (missingDisqualified.has(row.id)) continue;
 
     const clockStart = getLeadClockStart(row.createdAt, config);
     const withinHours = clockStart.getTime() === row.createdAt.getTime();

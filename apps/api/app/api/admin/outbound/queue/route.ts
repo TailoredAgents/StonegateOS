@@ -1,12 +1,11 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, ilike, isNotNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { contacts, crmTasks, getDb, outboxEvents } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
-import { sql } from "drizzle-orm";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -88,6 +87,24 @@ export async function GET(request: NextRequest): Promise<Response> {
   const hasFilter = parseHas(url.searchParams.get("has"));
   const attemptFilter = parseAttempt(url.searchParams.get("attempt"));
 
+  const now = new Date();
+  const nowLocal = DateTime.fromJSDate(now, { zone: config.timezone || "America/New_York" });
+  const startOfTodayUtcDate = nowLocal.startOf("day").toUTC().toJSDate();
+  const endOfTodayUtcDate = nowLocal.endOf("day").toUTC().toJSDate();
+  const startOfTodayUtcMs = startOfTodayUtcDate.getTime();
+  const endOfTodayUtcMs = endOfTodayUtcDate.getTime();
+
+  const dueFilters: Array<ReturnType<typeof sql>> = [];
+  if (dueFilter === "not_started") {
+    dueFilters.push(isNull(crmTasks.dueAt));
+  } else if (dueFilter === "overdue") {
+    dueFilters.push(isNotNull(crmTasks.dueAt), lt(crmTasks.dueAt, now));
+  } else if (dueFilter === "due_now") {
+    dueFilters.push(isNotNull(crmTasks.dueAt), lte(crmTasks.dueAt, now));
+  } else if (dueFilter === "today") {
+    dueFilters.push(isNotNull(crmTasks.dueAt), gte(crmTasks.dueAt, startOfTodayUtcDate), lte(crmTasks.dueAt, endOfTodayUtcDate));
+  }
+
   const rows = await db
     .select({
       id: crmTasks.id,
@@ -113,16 +130,12 @@ export async function GET(request: NextRequest): Promise<Response> {
         eq(crmTasks.assignedTo, assignedTo),
         isNotNull(crmTasks.notes),
         ilike(crmTasks.notes, "%kind=outbound%"),
-        isNotNull(crmTasks.contactId)
+        isNotNull(crmTasks.contactId),
+        ...dueFilters
       )
     )
     .orderBy(sql`(${crmTasks.dueAt} is null) asc`, asc(crmTasks.dueAt), desc(crmTasks.createdAt))
     .limit(MAX_SCAN);
-
-  const now = new Date();
-  const nowLocal = DateTime.fromJSDate(now, { zone: config.timezone || "America/New_York" });
-  const startOfTodayUtc = nowLocal.startOf("day").toUTC().toJSDate().getTime();
-  const endOfTodayUtc = nowLocal.endOf("day").toUTC().toJSDate().getTime();
 
   const parsedItems = rows.map((row) => {
     const notes = typeof row.notes === "string" ? row.notes : "";
@@ -171,17 +184,6 @@ export async function GET(request: NextRequest): Promise<Response> {
     if (hasFilter === "phone" && !hasPhone) return false;
     if (hasFilter === "email" && !hasEmail) return false;
     if (hasFilter === "both" && !(hasPhone && hasEmail)) return false;
-
-    const dueMs = item.dueAt ? Date.parse(item.dueAt) : null;
-    if (dueFilter === "overdue") {
-      if (dueMs === null || dueMs >= now.getTime()) return false;
-    } else if (dueFilter === "due_now") {
-      if (dueMs === null || dueMs > now.getTime()) return false;
-    } else if (dueFilter === "today") {
-      if (dueMs === null || dueMs < startOfTodayUtc || dueMs > endOfTodayUtc) return false;
-    } else if (dueFilter === "not_started") {
-      if (dueMs !== null) return false;
-    }
 
     if (q) {
       const search = q.toLowerCase();
@@ -235,7 +237,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       if (dueMs !== null && dueMs < now.getTime()) acc.overdue += 1;
       if (dueMs === null) acc.notStarted += 1;
       const isCallback = (item.title ?? "").toLowerCase().includes("callback") || item.lastDisposition === "callback_requested";
-      if (isCallback && dueMs !== null && dueMs >= startOfTodayUtc && dueMs <= endOfTodayUtc) acc.callbacksToday += 1;
+      if (isCallback && dueMs !== null && dueMs >= startOfTodayUtcMs && dueMs <= endOfTodayUtcMs) acc.callbacksToday += 1;
       return acc;
     },
     { dueNow: 0, overdue: 0, callbacksToday: 0, notStarted: 0 }
