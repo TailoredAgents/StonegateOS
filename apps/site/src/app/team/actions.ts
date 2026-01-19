@@ -721,7 +721,7 @@ export async function createCanvassLeadAction(formData: FormData) {
           : null;
       if (existingId) {
         jar.set({ name: "myst-flash-error", value: "Contact already exists. Opening existing record.", path: "/" });
-        redirect(`/team?tab=canvass&contactId=${encodeURIComponent(existingId)}`);
+        redirect(`/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(existingId)}`);
       }
     }
 
@@ -763,7 +763,7 @@ export async function createCanvassLeadAction(formData: FormData) {
 
   jar.set({ name: "myst-flash", value: "Canvass lead created", path: "/" });
   redirect(
-    `/team?tab=canvass&contactId=${encodeURIComponent(contactId)}${
+    `/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(contactId)}${
       assignee ? `&memberId=${encodeURIComponent(assignee)}` : ""
     }`
   );

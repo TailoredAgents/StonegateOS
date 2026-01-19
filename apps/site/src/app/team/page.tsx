@@ -9,11 +9,8 @@ import {
   updatePipelineStageAction
 } from "./actions";
 import { MyDaySection } from "./components/MyDaySection";
-import { QuotesSection } from "./components/QuotesSection";
-import { InstantQuotesSection } from "./components/InstantQuotesSection";
 import { ContactsSection } from "./components/ContactsSection";
 import { PipelineSection } from "./components/PipelineSection";
-import { QuoteBuilderSection } from "./components/QuoteBuilderSection";
 import { ChatSection } from "./components/ChatSection";
 import { CalendarSection } from "./components/CalendarSection";
 import { OwnerSection } from "./components/OwnerSection";
@@ -29,7 +26,7 @@ import { MergeQueueSection } from "./components/MergeQueueSection";
 import { SalesScorecardSection } from "./components/SalesScorecardSection";
 import { OutboundSection } from "./components/OutboundSection";
 import { SeoAgentSection } from "./components/SeoAgentSection";
-import { CanvassSection } from "./components/CanvassSection";
+import { QuotesHubSection } from "./components/QuotesHubSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
@@ -71,6 +68,7 @@ export default async function TeamPage({
     out_disposition?: string;
     out_taskId?: string;
     out_offset?: string;
+    quoteMode?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -79,12 +77,22 @@ export default async function TeamPage({
   const hasCrew = cookieStore.get(CREW_COOKIE)?.value ? true : false;
 
   const requestedTab = params?.tab;
+  const requestedQuoteMode = typeof params?.quoteMode === "string" ? params.quoteMode : undefined;
+  let forcedQuoteMode: string | undefined;
+  let normalizedRequestedTab = requestedTab;
+  if (requestedTab === "quote-builder") {
+    normalizedRequestedTab = "quotes";
+    forcedQuoteMode = "builder";
+  } else if (requestedTab === "canvass") {
+    normalizedRequestedTab = "quotes";
+    forcedQuoteMode = "canvass";
+  }
   const tab =
-    requestedTab === "estimates"
+    normalizedRequestedTab === "estimates"
       ? hasOwner
         ? "inbox"
         : "myday"
-      : requestedTab || (hasCrew && !hasOwner ? "myday" : "inbox");
+      : normalizedRequestedTab || (hasCrew && !hasOwner ? "myday" : "inbox");
   const contactsQuery = typeof params?.q === "string" ? params.q : undefined;
   const contactsIncludeOutbound = params?.includeOutbound === "1";
   let contactsOffset: number | undefined;
@@ -99,6 +107,7 @@ export default async function TeamPage({
   const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
   const memberIdParam = typeof params?.memberId === "string" ? params.memberId : undefined;
+  const quoteModeParam = forcedQuoteMode ?? requestedQuoteMode;
   const outboundFilters = {
     q: typeof params?.out_q === "string" ? params.out_q : undefined,
     campaign: typeof params?.out_campaign === "string" ? params.out_campaign : undefined,
@@ -117,9 +126,7 @@ export default async function TeamPage({
   const tabs: TabNavItem[] = [
     { id: "myday", label: "My Day", href: "/team?tab=myday", requires: "crew" },
     { id: "expenses", label: "Expenses", href: "/team?tab=expenses", requires: "crew" },
-    { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "owner" },
-    { id: "quote-builder", label: "Quote Builder", href: "/team?tab=quote-builder", requires: "crew" },
-    { id: "canvass", label: "Canvass Quote", href: "/team?tab=canvass", requires: "crew" },
+    { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "crew" },
     { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "owner" },
     { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "owner" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
@@ -140,7 +147,7 @@ export default async function TeamPage({
   ];
   const tabGroups: TabNavGroup[] = [
     { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
-    { id: "sales", label: "Sales", itemIds: ["quotes", "quote-builder", "canvass", "pipeline", "sales-hq", "outbound", "contacts", "inbox", "calendar"] },
+    { id: "sales", label: "Sales", itemIds: ["quotes", "pipeline", "sales-hq", "outbound", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
     { id: "control", label: "Control", itemIds: ["commissions", "seo", "policy", "automation", "access", "sales-log", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
@@ -308,22 +315,6 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "quote-builder" && (hasCrew || hasOwner) ? (
-          <React.Suspense
-            fallback={
-              <TeamSkeletonCard title="Loading Quote Builder" />
-            }
-          >
-            <QuoteBuilderSection initialContactId={contactIdParam} />
-          </React.Suspense>
-        ) : null}
-
-        {tab === "canvass" && (hasCrew || hasOwner) ? (
-          <React.Suspense fallback={<TeamSkeletonCard title="Loading Canvass Quote" />}>
-            <CanvassSection initialContactId={contactIdParam} memberId={memberIdParam} />
-          </React.Suspense>
-        ) : null}
-
         {tab === "chat" && hasOwner ? (
           <React.Suspense
             fallback={
@@ -354,16 +345,13 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "quotes" && hasOwner ? (
+        {tab === "quotes" && (hasCrew || hasOwner) ? (
           <React.Suspense
             fallback={
               <TeamSkeletonCard title="Loading Quotes" />
             }
           >
-            <div className="space-y-4">
-              <QuotesSection />
-              <InstantQuotesSection />
-            </div>
+            <QuotesHubSection quoteMode={quoteModeParam} contactId={contactIdParam} memberId={memberIdParam} />
           </React.Suspense>
         ) : null}
 

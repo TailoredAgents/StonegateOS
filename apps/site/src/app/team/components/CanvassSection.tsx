@@ -217,7 +217,10 @@ export async function CanvassSection({
                           <div className="mt-1 text-[11px] text-slate-500">Due {formatDue(item)}</div>
                         </td>
                         <td className="px-4 py-3">
-                          <a href={`/team?tab=canvass&contactId=${encodeURIComponent(item.contact.id)}`} className="block max-w-[320px]">
+                          <a
+                            href={`/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(item.contact.id)}`}
+                            className="block max-w-[320px]"
+                          >
                             <div className="truncate text-sm font-semibold text-slate-900">{item.contact.name}</div>
                             <div className="mt-0.5 truncate text-[11px] text-slate-500">{item.title ?? "Canvass task"}</div>
                           </a>

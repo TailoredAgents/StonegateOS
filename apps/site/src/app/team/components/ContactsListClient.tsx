@@ -754,7 +754,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             </a>
             <a
               className={`${teamButtonClass("secondary", "sm")} gap-2`}
-              href={teamLink("quote-builder", { contactId: contactState.id })}
+              href={teamLink("quotes", { quoteMode: "builder", contactId: contactState.id })}
             >
               <FileText className="h-4 w-4" aria-hidden="true" />
               Create quote

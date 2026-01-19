@@ -231,7 +231,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                           </a>
                           <a
                             className={`${teamButtonClass("secondary", "sm")} gap-2`}
-                            href={`/team?tab=quote-builder&contactId=${encodeURIComponent(contact.id)}`}
+                            href={`/team?tab=quotes&quoteMode=builder&contactId=${encodeURIComponent(contact.id)}`}
                           >
                             <FileText className="h-4 w-4" aria-hidden="true" />
                             Create quote
