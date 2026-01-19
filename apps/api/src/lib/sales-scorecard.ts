@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { and, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import {
   auditLogs,
   callCoaching,
@@ -433,6 +433,33 @@ export async function computeSpeedToLeadForMember(input: {
       .limit(4000);
 
     for (const row of callRows) {
+      if (typeof row.contactId !== "string" || !row.contactId) continue;
+      if (!(row.createdAt instanceof Date)) continue;
+      const current = callTimesByContact.get(row.contactId);
+      if (!current || row.createdAt.getTime() < current.getTime()) {
+        callTimesByContact.set(row.contactId, row.createdAt);
+      }
+    }
+
+    const inboundCallRows = await db
+      .select({ contactId: callRecords.contactId, createdAt: callRecords.createdAt })
+      .from(callRecords)
+      .where(
+        and(
+          eq(callRecords.direction, "inbound"),
+          eq(callRecords.callStatus, "completed"),
+          eq(callRecords.assignedTo, input.memberId),
+          isNotNull(callRecords.contactId),
+          isNotNull(callRecords.callDurationSec),
+          gt(callRecords.callDurationSec, 0),
+          inArray(callRecords.contactId, contactIds),
+          gte(callRecords.createdAt, input.since),
+          lte(callRecords.createdAt, input.until)
+        )
+      )
+      .limit(4000);
+
+    for (const row of inboundCallRows) {
       if (typeof row.contactId !== "string" || !row.contactId) continue;
       if (!(row.createdAt instanceof Date)) continue;
       const current = callTimesByContact.get(row.contactId);

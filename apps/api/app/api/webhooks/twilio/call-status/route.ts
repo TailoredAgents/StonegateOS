@@ -263,6 +263,19 @@ export async function POST(request: NextRequest): Promise<Response> {
           console.warn("[twilio.call_status] inbound_contact_create_failed", { callSid, error: String(error) });
         }
       }
+
+      if (resolvedContactId) {
+        try {
+          const [contactRow] = await db
+            .select({ salespersonMemberId: contacts.salespersonMemberId })
+            .from(contacts)
+            .where(eq(contacts.id, resolvedContactId))
+            .limit(1);
+          resolvedAssignedTo = contactRow?.salespersonMemberId ?? null;
+        } catch {
+          resolvedAssignedTo = null;
+        }
+      }
     } else {
       const callSidCandidates = [payload.callSid, payload.parentCallSid].filter(
         (value): value is string => typeof value === "string" && value.trim().length > 0
@@ -349,6 +362,58 @@ export async function POST(request: NextRequest): Promise<Response> {
         });
     } catch (error) {
       console.warn("[twilio.call_status] call_record_upsert_failed", { callSid, error: String(error) });
+    }
+
+    const isInboundAnsweredCall =
+      mode === "inbound" &&
+      direction === "inbound" &&
+      payload.callStatus === "completed" &&
+      (payload.callDuration ?? 0) > 0 &&
+      resolvedContactId &&
+      resolvedAssignedTo;
+
+    if (isInboundAnsweredCall) {
+      try {
+        const contactId = resolvedContactId;
+        const assignedTo = resolvedAssignedTo;
+        if (!contactId || !assignedTo) {
+          throw new Error("inbound_touch_missing_contact_or_assignee");
+        }
+
+        await db
+          .update(crmTasks)
+          .set({ status: "completed", updatedAt: now })
+          .where(
+            and(
+              eq(crmTasks.contactId, contactId),
+              eq(crmTasks.assignedTo, assignedTo),
+              eq(crmTasks.status, "open"),
+              isNotNull(crmTasks.notes),
+              or(ilike(crmTasks.notes, "%[auto] leadId=%"), ilike(crmTasks.notes, "%[auto] contactId=%")),
+              or(ilike(crmTasks.notes, "%kind=speed_to_lead%"), ilike(crmTasks.notes, "%kind=follow_up%"))
+            )
+          );
+
+        await recordAuditEvent({
+          actor: { type: "system", id: assignedTo, label: "twilio_inbound" },
+          action: "call.answered",
+          entityType: "contact",
+          entityId: contactId,
+          meta: {
+            via: "twilio",
+            mode: "inbound",
+            callSid,
+            callDurationSec: payload.callDuration ?? null
+          }
+        });
+      } catch (error) {
+        console.warn("[twilio.call_status] inbound_touch_failed", {
+          callSid,
+          contactId: resolvedContactId,
+          assignedTo: resolvedAssignedTo,
+          error: String(error)
+        });
+      }
     }
 
     const shouldQueueRecording =

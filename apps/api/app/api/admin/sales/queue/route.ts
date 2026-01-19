@@ -1,7 +1,18 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, notInArray, or } from "drizzle-orm";
-import { auditLogs, contacts, conversationMessages, conversationParticipants, conversationThreads, crmPipeline, crmTasks, getDb, properties } from "@/db";
+import { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lte, notInArray, or } from "drizzle-orm";
+import {
+  auditLogs,
+  callRecords,
+  contacts,
+  conversationMessages,
+  conversationParticipants,
+  conversationThreads,
+  crmPipeline,
+  crmTasks,
+  getDb,
+  properties
+} from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
@@ -299,6 +310,30 @@ export async function GET(request: NextRequest): Promise<Response> {
       .limit(250);
 
     for (const row of outboundTouchRows) {
+      if (typeof row.contactId === "string" && row.contactId.length > 0) {
+        missingHasTouch.add(row.contactId);
+      }
+    }
+
+    const inboundCallTouchRows = await db
+      .select({ contactId: callRecords.contactId })
+      .from(callRecords)
+      .where(
+        and(
+          eq(callRecords.direction, "inbound"),
+          eq(callRecords.callStatus, "completed"),
+          eq(callRecords.assignedTo, memberId),
+          isNotNull(callRecords.contactId),
+          isNotNull(callRecords.callDurationSec),
+          gt(callRecords.callDurationSec, 0),
+          inArray(callRecords.contactId, missingContactIds.slice(0, 250)),
+          gte(callRecords.createdAt, recentSince),
+          lte(callRecords.createdAt, now)
+        )
+      )
+      .limit(250);
+
+    for (const row of inboundCallTouchRows) {
       if (typeof row.contactId === "string" && row.contactId.length > 0) {
         missingHasTouch.add(row.contactId);
       }
