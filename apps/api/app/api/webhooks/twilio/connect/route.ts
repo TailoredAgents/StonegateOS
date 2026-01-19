@@ -4,6 +4,10 @@ import { normalizePhone } from "../../../web/utils";
 
 export const dynamic = "force-dynamic";
 
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 function resolveFallbackOrigin(request: NextRequest): string {
   const proto = (request.headers.get("x-forwarded-proto") ?? "https").split(",")[0]?.trim() || "https";
   const host = (request.headers.get("x-forwarded-host") ?? request.headers.get("host") ?? "")
@@ -91,6 +95,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   const publicApiBaseUrl = resolvePublicApiBaseUrl(resolveFallbackOrigin(request));
   const to = resolveDialTarget(request);
   const callerId = process.env["TWILIO_FROM"] ?? null;
+  const taskIdRaw = request.nextUrl.searchParams.get("taskId")?.trim() ?? "";
+  const taskId = taskIdRaw && isUuid(taskIdRaw) ? taskIdRaw : null;
   if (!to || !callerId) {
     console.warn("[twilio.connect] missing_to_or_from", {
       hasTo: Boolean(to),
@@ -108,8 +114,14 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const statusCallbackUrl = new URL("/api/webhooks/twilio/call-status", publicApiBaseUrl);
   statusCallbackUrl.searchParams.set("leg", "customer");
+  if (taskId) {
+    statusCallbackUrl.searchParams.set("taskId", taskId);
+  }
   const dialActionUrl = new URL("/api/webhooks/twilio/dial-action", publicApiBaseUrl);
   dialActionUrl.searchParams.set("leg", "customer");
+  if (taskId) {
+    dialActionUrl.searchParams.set("taskId", taskId);
+  }
   const noticeUrl = new URL("/api/webhooks/twilio/notice", publicApiBaseUrl);
   noticeUrl.searchParams.set("kind", "outbound");
 

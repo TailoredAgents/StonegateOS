@@ -823,9 +823,12 @@ export async function startContactCallAction(formData: FormData) {
     return;
   }
 
+  const taskId = formData.get("taskId");
+  const resolvedTaskId = typeof taskId === "string" && isUuid(taskId.trim()) ? taskId.trim() : null;
+
   const response = await callAdminApi("/api/admin/calls/start", {
     method: "POST",
-    body: JSON.stringify({ contactId: contactId.trim() })
+    body: JSON.stringify({ contactId: contactId.trim(), ...(resolvedTaskId ? { taskId: resolvedTaskId } : {}) })
   });
 
   if (!response.ok) {

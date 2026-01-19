@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import {
   contacts,
@@ -6,6 +6,7 @@ import {
   conversationParticipants,
   conversationThreads,
   crmPipeline,
+  crmTasks,
   getDb,
   leadAutomationStates,
   leads,
@@ -512,6 +513,64 @@ async function findLatestLeadForContact(
   return row ?? null;
 }
 
+function parseNoteField(notes: string, key: string): string | null {
+  const match = notes.match(new RegExp(`(?:^|\\n)${key}=([^\\n]+)`, "i"));
+  const value = match?.[1]?.trim();
+  return value && value.length ? value : null;
+}
+
+function upsertNoteField(notes: string, key: string, value: string): string {
+  const line = `${key}=${value}`;
+  const re = new RegExp(`(^|\\n)${key}=[^\\n]*`, "i");
+  if (re.test(notes)) {
+    return notes.replace(re, `$1${line}`);
+  }
+  return notes.length ? `${notes}\n${line}` : line;
+}
+
+async function stopOutboundCadenceOnInboundReply(input: {
+  db: DatabaseClient;
+  contactId: string;
+  now: Date;
+  channel: InboundChannel;
+}): Promise<void> {
+  if (!input.contactId) return;
+  if (input.channel === "call") return;
+
+  const [probe] = await input.db
+    .select({ id: crmTasks.id })
+    .from(crmTasks)
+    .where(and(eq(crmTasks.contactId, input.contactId), eq(crmTasks.status, "open"), isNotNull(crmTasks.notes), ilike(crmTasks.notes, "%kind=outbound%")))
+    .limit(1);
+
+  if (!probe?.id) return;
+
+  const rows = await input.db
+    .select({ id: crmTasks.id, notes: crmTasks.notes })
+    .from(crmTasks)
+    .where(and(eq(crmTasks.contactId, input.contactId), eq(crmTasks.status, "open"), isNotNull(crmTasks.notes), ilike(crmTasks.notes, "%kind=outbound%")));
+
+  const nowIso = input.now.toISOString();
+  for (const row of rows) {
+    const rowNotes = typeof row.notes === "string" ? row.notes : "";
+    let nextNotes = rowNotes;
+    if (!parseNoteField(nextNotes, "startedAt")) {
+      nextNotes = upsertNoteField(nextNotes, "startedAt", nowIso);
+    }
+    nextNotes = upsertNoteField(upsertNoteField(nextNotes, "lastDisposition", "replied"), "completedAt", nowIso);
+    await input.db.update(crmTasks).set({ status: "completed", notes: nextNotes, updatedAt: input.now }).where(eq(crmTasks.id, row.id));
+  }
+
+  await input.db.insert(crmTasks).values({
+    contactId: input.contactId,
+    title: "Note",
+    status: "completed",
+    dueAt: null,
+    assignedTo: null,
+    notes: "Outbound reply received (cadence stopped)"
+  });
+}
+
 export async function recordInboundMessage(input: InboundMessageInput): Promise<{
   threadId: string;
   messageId: string;
@@ -928,6 +987,12 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         to: input.toAddress ?? null
       }
     });
+
+    try {
+      await stopOutboundCadenceOnInboundReply({ db, contactId: result.contactId, now, channel });
+    } catch {
+      // Best-effort; do not fail inbound ingestion.
+    }
   }
 
   return result;

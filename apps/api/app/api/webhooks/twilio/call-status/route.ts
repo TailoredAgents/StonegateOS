@@ -10,6 +10,26 @@ import { normalizePhone } from "../../../web/utils";
 export const dynamic = "force-dynamic";
 
 const DEFAULT_SERVICES = ["junk_removal_primary"];
+const OUTBOUND_CONNECTED_MIN_DURATION_SEC = 12;
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function parseNoteField(notes: string, key: string): string | null {
+  const match = notes.match(new RegExp(`(?:^|\\n)${key}=([^\\n]+)`, "i"));
+  const value = match?.[1]?.trim();
+  return value && value.length ? value : null;
+}
+
+function upsertNoteField(notes: string, key: string, value: string): string {
+  const line = `${key}=${value}`;
+  const re = new RegExp(`(^|\\n)${key}=[^\\n]*`, "i");
+  if (re.test(notes)) {
+    return notes.replace(re, `$1${line}`);
+  }
+  return notes.length ? `${notes}\n${line}` : line;
+}
 
 function readString(value: FormDataEntryValue | null): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -177,6 +197,8 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const leg = request.nextUrl.searchParams.get("leg")?.trim() || "unknown";
   const mode = request.nextUrl.searchParams.get("mode")?.trim() || null;
+  const taskIdRaw = request.nextUrl.searchParams.get("taskId")?.trim() || "";
+  const taskId = taskIdRaw && isUuid(taskIdRaw) ? taskIdRaw : null;
   const inboundMode = mode === "inbound" || leg === "inbound";
 
   const payload = {
@@ -413,6 +435,82 @@ export async function POST(request: NextRequest): Promise<Response> {
           assignedTo: resolvedAssignedTo,
           error: String(error)
         });
+      }
+    }
+
+    const shouldAutoStopOutboundOnAnswered =
+      Boolean(taskId) &&
+      leg === "customer" &&
+      payload.callStatus === "completed" &&
+      (payload.callDuration ?? 0) >= OUTBOUND_CONNECTED_MIN_DURATION_SEC;
+
+    if (shouldAutoStopOutboundOnAnswered && taskId) {
+      try {
+        const [task] = await db
+          .select({
+            id: crmTasks.id,
+            contactId: crmTasks.contactId,
+            assignedTo: crmTasks.assignedTo,
+            status: crmTasks.status,
+            notes: crmTasks.notes
+          })
+          .from(crmTasks)
+          .where(eq(crmTasks.id, taskId))
+          .limit(1);
+
+        const notes = typeof task?.notes === "string" ? task.notes : "";
+        const isOutboundTask = typeof task?.id === "string" && task.status === "open" && notes.toLowerCase().includes("kind=outbound");
+        if (isOutboundTask && task?.contactId) {
+          const campaign = parseNoteField(notes, "campaign");
+          const nowIso = now.toISOString();
+
+          const openOutboundTasks = await db
+            .select({ id: crmTasks.id, notes: crmTasks.notes })
+            .from(crmTasks)
+            .where(
+              and(
+                eq(crmTasks.contactId, task.contactId),
+                eq(crmTasks.status, "open"),
+                isNotNull(crmTasks.notes),
+                ilike(crmTasks.notes, "%kind=outbound%"),
+                campaign ? ilike(crmTasks.notes, `%campaign=${campaign}%`) : sql`true`
+              )
+            );
+
+          for (const row of openOutboundTasks) {
+            const rowNotes = typeof row.notes === "string" ? row.notes : "";
+            let nextNotes = rowNotes;
+            if (!parseNoteField(nextNotes, "startedAt")) {
+              nextNotes = upsertNoteField(nextNotes, "startedAt", nowIso);
+            }
+            nextNotes = upsertNoteField(upsertNoteField(nextNotes, "lastDisposition", "connected"), "completedAt", nowIso);
+            await db.update(crmTasks).set({ status: "completed", notes: nextNotes, updatedAt: now }).where(eq(crmTasks.id, row.id));
+          }
+
+          await db.insert(crmTasks).values({
+            contactId: task.contactId,
+            title: "Note",
+            status: "completed",
+            dueAt: null,
+            assignedTo: null,
+            notes: "Outbound connected via call (cadence stopped)"
+          });
+
+          await recordAuditEvent({
+            actor: { type: "system", id: task.assignedTo ?? undefined, label: "twilio_outbound" },
+            action: "outbound.connected_auto",
+            entityType: "crm_task",
+            entityId: taskId,
+            meta: {
+              contactId: task.contactId,
+              campaign: campaign ?? null,
+              callSid,
+              callDurationSec: payload.callDuration ?? null
+            }
+          });
+        }
+      } catch (error) {
+        console.warn("[twilio.call_status] outbound_auto_stop_failed", { taskId, callSid, error: String(error) });
       }
     }
 

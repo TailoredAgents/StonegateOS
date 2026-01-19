@@ -10,6 +10,7 @@ import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
 
 type StartCallPayload = {
   contactId?: string;
+  taskId?: string;
   agentPhone?: string;
   toPhone?: string;
 };
@@ -18,6 +19,10 @@ function readString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -80,7 +85,7 @@ function resolveApiBaseUrl(request: NextRequest): string {
   return request.nextUrl.origin.replace(/\/$/, "");
 }
 
-async function createTwilioCall(input: { agentPhone: string; toPhone: string; request: NextRequest }) {
+async function createTwilioCall(input: { agentPhone: string; toPhone: string; request: NextRequest; taskId?: string | null }) {
   const sid = process.env["TWILIO_ACCOUNT_SID"];
   const token = process.env["TWILIO_AUTH_TOKEN"];
   const from = process.env["TWILIO_FROM"];
@@ -92,6 +97,9 @@ async function createTwilioCall(input: { agentPhone: string; toPhone: string; re
 
   const callbackUrl = new URL(`${resolveApiBaseUrl(input.request)}/api/webhooks/twilio/connect`);
   callbackUrl.searchParams.set("to", input.toPhone);
+  if (input.taskId) {
+    callbackUrl.searchParams.set("taskId", input.taskId);
+  }
 
   const statusCallbackUrl = new URL(`${resolveApiBaseUrl(input.request)}/api/webhooks/twilio/call-status`);
   statusCallbackUrl.searchParams.set("leg", "agent");
@@ -166,8 +174,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const contactId = readString(json.contactId);
+  const taskIdRaw = readString(json.taskId);
   const agentPhoneRaw = readString(json.agentPhone);
   const toPhoneRaw = readString(json.toPhone);
+  const taskId = taskIdRaw && isUuid(taskIdRaw) ? taskIdRaw : null;
 
   const db = getDb();
 
@@ -262,7 +272,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     };
   }
 
-  const result = await createTwilioCall({ agentPhone, toPhone, request });
+  const result = await createTwilioCall({ agentPhone, toPhone, request, taskId });
   if (!result.ok) {
     console.warn("[calls.start] twilio_call_failed", {
       contactId: resolvedContactId ?? contactId ?? null,
@@ -283,7 +293,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     meta: {
       agentPhone,
       toPhone,
-      callSid: result.callSid
+      callSid: result.callSid,
+      taskId
     }
   });
 

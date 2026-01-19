@@ -450,6 +450,7 @@ export async function OutboundSection({
                           <div className="flex flex-wrap justify-end gap-2">
                             <form action={startContactCallAction}>
                               <input type="hidden" name="contactId" value={item.contact.id} />
+                              <input type="hidden" name="taskId" value={item.id} />
                               <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
                                 Call
                               </SubmitButton>
@@ -498,6 +499,7 @@ export async function OutboundSection({
                   <div className="flex flex-wrap gap-2">
                     <form action={startContactCallAction}>
                       <input type="hidden" name="contactId" value={selected.contact.id} />
+                      <input type="hidden" name="taskId" value={selected.id} />
                       <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
                         Call
                       </SubmitButton>
