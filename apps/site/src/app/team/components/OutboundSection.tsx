@@ -416,10 +416,10 @@ export async function OutboundSection({
                     <th className="px-4 py-3">Due</th>
                     <th className="px-4 py-3">Attempt</th>
                     <th className="px-4 py-3">Prospect</th>
-                    <th className="px-4 py-3">Phone</th>
-                    <th className="px-4 py-3">Email</th>
-                    <th className="px-4 py-3">Last</th>
-                    <th className="px-4 py-3 text-right">Actions</th>
+                    <th className="hidden px-4 py-3 lg:table-cell">Phone</th>
+                    <th className="hidden px-4 py-3 lg:table-cell">Email</th>
+                    <th className="hidden px-4 py-3 md:table-cell">Last</th>
+                    <th className="hidden px-4 py-3 text-right md:table-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -441,12 +441,18 @@ export async function OutboundSection({
                           <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { taskId: item.id } })} className="block max-w-[320px]">
                             <div className="truncate text-sm font-semibold text-slate-900">{item.company ? item.company : item.contact.name}</div>
                             <div className="mt-0.5 truncate text-[11px] text-slate-500">{item.company ? item.contact.name : item.campaign ? item.campaign : "Outbound"}</div>
+                            <div className="mt-1 text-[11px] text-slate-500 lg:hidden">
+                              {(item.contact.phone ?? "No phone") + " / " + (item.contact.email ?? "No email")}
+                            </div>
+                            <div className="mt-1 text-[11px] text-slate-500 md:hidden">
+                              {item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}
+                            </div>
                           </a>
                         </td>
-                        <td className="px-4 py-3 text-slate-600">{item.contact.phone ?? "-"}</td>
-                        <td className="px-4 py-3 text-slate-600">{item.contact.email ?? "-"}</td>
-                        <td className="px-4 py-3 text-slate-600">{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "-"}</td>
-                        <td className="px-4 py-3">
+                        <td className="hidden px-4 py-3 text-slate-600 lg:table-cell">{item.contact.phone ?? "-"}</td>
+                        <td className="hidden px-4 py-3 text-slate-600 lg:table-cell">{item.contact.email ?? "-"}</td>
+                        <td className="hidden px-4 py-3 text-slate-600 md:table-cell">{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "-"}</td>
+                        <td className="hidden px-4 py-3 md:table-cell">
                           <div className="flex flex-wrap justify-end gap-2">
                             <form action={startContactCallAction}>
                               <input type="hidden" name="contactId" value={item.contact.id} />
@@ -494,6 +500,22 @@ export async function OutboundSection({
                         <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{selected.noteSnippet}</p>
                       ) : null}
                     </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <form action={startContactCallAction}>
+                      <input type="hidden" name="contactId" value={selected.contact.id} />
+                      <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
+                        Call
+                      </SubmitButton>
+                    </form>
+                    <form action={openContactThreadAction}>
+                      <input type="hidden" name="contactId" value={selected.contact.id} />
+                      <input type="hidden" name="channel" value={selected.contact.email ? "email" : "sms"} />
+                      <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
+                        Message
+                      </SubmitButton>
+                    </form>
+                  </div>
 
                   {!selected.dueAt ? (
                     <form action={startOutboundCadenceAction} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
