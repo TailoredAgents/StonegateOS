@@ -115,11 +115,16 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "not_outbound_task" }, { status: 400 });
   }
 
+  let baseNotes = notes;
+  if (!parseField(baseNotes, "startedAt")) {
+    baseNotes = upsertField(baseNotes, "startedAt", now.toISOString());
+  }
+
   const attempt = Number(parseField(notes, "attempt") ?? "1");
   const normalizedAttempt = Number.isFinite(attempt) && attempt > 0 ? Math.floor(attempt) : 1;
   const campaign = parseField(notes, "campaign") ?? "property_management";
 
-  const completedNotes = upsertField(upsertField(notes, "lastDisposition", disposition), "completedAt", now.toISOString());
+  const completedNotes = upsertField(upsertField(baseNotes, "lastDisposition", disposition), "completedAt", now.toISOString());
 
   await db
     .update(crmTasks)
@@ -183,7 +188,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   let nextTaskDueAt = nextExisting?.dueAt instanceof Date ? nextExisting.dueAt : null;
 
   if (!nextTaskId) {
-    const nextNotes = upsertField(upsertField(notes, "attempt", String(nextAttempt)), "lastDisposition", disposition);
+    const nextNotes = upsertField(upsertField(baseNotes, "attempt", String(nextAttempt)), "lastDisposition", disposition);
     const [created] = await db
       .insert(crmTasks)
       .values({
@@ -201,7 +206,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       nextTaskDueAt = nextDueAt;
     }
   } else {
-    const nextNotes = upsertField(upsertField(notes, "attempt", String(nextAttempt)), "lastDisposition", disposition);
+    const nextNotes = upsertField(upsertField(baseNotes, "attempt", String(nextAttempt)), "lastDisposition", disposition);
     await db
       .update(crmTasks)
       .set({

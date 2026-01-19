@@ -5,8 +5,7 @@ import {
   bulkOutboundAction,
   openContactThreadAction,
   setOutboundDispositionAction,
-  startContactCallAction,
-  startOutboundCadenceAction
+  startContactCallAction
 } from "../actions";
 import {
   TEAM_CARD_PADDED,
@@ -369,10 +368,10 @@ export async function OutboundSection({
               <div className="grid w-full gap-3 sm:grid-cols-3">
                 <label className="flex flex-col gap-1 text-xs text-slate-600">
                   <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Bulk action</span>
-                  <select name="action" defaultValue="assign_start" className={TEAM_INPUT_COMPACT}>
-                    <option value="assign_start">Assign + start cadence</option>
-                    <option value="assign">Assign only</option>
-                    <option value="start">Start cadence only</option>
+                  <select name="action" defaultValue="assign" className={TEAM_INPUT_COMPACT}>
+                    <option value="assign">Assign</option>
+                    <option value="assign_start">Assign + start cadence (override)</option>
+                    <option value="start">Start cadence (override)</option>
                     <option value="snooze">Snooze</option>
                   </select>
                 </label>
@@ -513,18 +512,13 @@ export async function OutboundSection({
                   </div>
 
                   {!selected.dueAt ? (
-                    <form action={startOutboundCadenceAction} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                      <input type="hidden" name="taskId" value={selected.id} />
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Kickoff</p>
                       <p className="mt-1 text-xs text-slate-600">
-                        Start the cadence when you&apos;re ready. After your first touch, follow-ups will schedule automatically.
+                        Make your first outreach (call/email), then click a disposition below (Connected / No answer / Left VM / Emailed). That first
+                        disposition starts the cadence and schedules the follow-ups.
                       </p>
-                      <div className="mt-2">
-                        <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Starting...">
-                          Start cadence
-                        </SubmitButton>
-                      </div>
-                    </form>
+                    </div>
                   ) : null}
 
                   <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
