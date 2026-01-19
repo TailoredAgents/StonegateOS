@@ -3,7 +3,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 import { callAdminApi } from "../lib/api";
-import { markSalesTouchAction, resetSalesHqAction, setSalesDispositionAction } from "../actions";
+import { deleteCallCoachingAction, markSalesTouchAction, resetSalesHqAction, setSalesDispositionAction } from "../actions";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type ScorecardPayload = {
@@ -16,6 +16,7 @@ type ScorecardPayload = {
       speedToLead?: number;
       followupCompliance?: number;
       conversion?: number;
+      callQuality?: number;
       responseTime?: number;
     };
   };
@@ -24,13 +25,14 @@ type ScorecardPayload = {
     speedToLead: number;
     followupCompliance: number;
     conversion: number;
-    responseTime: number;
+    callQuality?: number;
+    responseTime?: number;
   };
   metrics: {
     speedToLead: { totalLeads: number; met: number; missed: number };
     followups: { totalDue: number; completedOnTime: number; completedLate: number; stillOpen: number };
     conversion: { totalLeads: number; booked: number; won: number };
-    responseTime: { medianMinutes: number | null; label: string };
+    callQuality?: { avgScore: number | null; effectiveAvg: number; counted: boolean; count: number };
   };
 };
 
@@ -203,14 +205,14 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
     speedToLead: scorecard?.config?.weights?.speedToLead ?? 45,
     followupCompliance: scorecard?.config?.weights?.followupCompliance ?? 35,
     conversion: scorecard?.config?.weights?.conversion ?? 10,
-    responseTime: scorecard?.config?.weights?.responseTime ?? 10
+    callQuality: scorecard?.config?.weights?.callQuality ?? 10
   };
 
   const subScores = {
     speedToLead: normalizeScore(scorecard?.score.speedToLead ?? 0, weights.speedToLead),
     followups: normalizeScore(scorecard?.score.followupCompliance ?? 0, weights.followupCompliance),
     conversion: normalizeScore(scorecard?.score.conversion ?? 0, weights.conversion),
-    response: normalizeScore(scorecard?.score.responseTime ?? 0, weights.responseTime)
+    callQuality: normalizeScore(scorecard?.score.callQuality ?? 0, weights.callQuality)
   };
 
   const speed = scorecard?.metrics.speedToLead;
@@ -265,8 +267,8 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
               <span className="font-semibold text-slate-900">{subScores.conversion}</span>
             </div>
             <div className="flex items-center justify-between gap-6">
-              <span className="text-slate-600">Response</span>
-              <span className="font-semibold text-slate-900">{subScores.response}</span>
+              <span className="text-slate-600">Call quality</span>
+              <span className="font-semibold text-slate-900">{subScores.callQuality}</span>
             </div>
           </div>
         </div>
@@ -348,30 +350,30 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
           {coachingItems.length ? (
             <div className="divide-y divide-slate-200">
               {coachingItems.map((item) => {
-              const createdAt = new Date(item.createdAt);
-              const primary = item.primary;
-              const secondary = item.secondary;
-              return (
-                <details key={item.callRecordId} className="group px-4 py-3">
-                  <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">{item.contact.name}</p>
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        {createdAt.toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
-                        {item.durationSec ? ` • ${item.durationSec}s` : ""}
-                      </p>
-                    </div>
-                    <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center">
-                      <Pill tone={scoreTone(primary?.scoreOverall ?? null)}>
-                        {item.primaryRubric === "outbound" ? "Outbound" : "Inbound"}: {primary?.scoreOverall ?? "—"}
-                      </Pill>
-                      <Pill tone="neutral">
-                        {item.primaryRubric === "outbound" ? "Inbound" : "Outbound"}: {secondary?.scoreOverall ?? "—"}
-                      </Pill>
-                    </div>
-                  </summary>
+                const createdAt = new Date(item.createdAt);
+                const primary = item.primary;
+                const secondary = item.secondary;
+                return (
+                  <details key={item.callRecordId} className="group px-4 py-3">
+                    <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{item.contact.name}</p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {createdAt.toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
+                          {item.durationSec ? ` • ${item.durationSec}s` : ""}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center">
+                        <Pill tone={scoreTone(primary?.scoreOverall ?? null)}>
+                          {item.primaryRubric === "outbound" ? "Outbound" : "Inbound"}: {primary?.scoreOverall ?? "—"}
+                        </Pill>
+                        <Pill tone="neutral">
+                          {item.primaryRubric === "outbound" ? "Inbound" : "Outbound"}: {secondary?.scoreOverall ?? "—"}
+                        </Pill>
+                      </div>
+                    </summary>
 
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                       <p className="text-xs font-semibold text-slate-700">Primary ({item.primaryRubric})</p>
                       {primary ? (
@@ -433,9 +435,21 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                         <p className="mt-2 text-xs text-slate-600">No score yet.</p>
                       )}
                     </div>
-                  </div>
-                </details>
-              );
+                    </div>
+
+                    {isOwnerSession ? (
+                      <form action={deleteCallCoachingAction} className="mt-3 flex justify-end">
+                        <input type="hidden" name="callRecordId" value={item.callRecordId} />
+                        <SubmitButton
+                          className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:border-rose-300"
+                          pendingLabel="Deleting..."
+                        >
+                          Delete coaching (test)
+                        </SubmitButton>
+                      </form>
+                    ) : null}
+                  </details>
+                );
               })}
             </div>
           ) : (

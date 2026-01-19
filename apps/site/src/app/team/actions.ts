@@ -2579,6 +2579,32 @@ export async function resetSalesHqAction() {
   revalidatePath("/team");
 }
 
+export async function deleteCallCoachingAction(formData: FormData) {
+  const jar = await cookies();
+  const callRecordIdRaw = formData.get("callRecordId");
+
+  if (typeof callRecordIdRaw !== "string" || callRecordIdRaw.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Missing call id", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const callRecordId = callRecordIdRaw.trim();
+  const response = await callAdminApi(`/api/admin/calls/coaching/${encodeURIComponent(callRecordId)}`, {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to delete call coaching");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Call coaching deleted.", path: "/" });
+  revalidatePath("/team?tab=sales-hq");
+}
+
 export async function markSalesTouchAction(formData: FormData) {
   const jar = await cookies();
   const contactIdRaw = formData.get("contactId");

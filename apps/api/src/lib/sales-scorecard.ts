@@ -2,6 +2,8 @@ import { DateTime } from "luxon";
 import { and, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import {
   auditLogs,
+  callCoaching,
+  callRecords,
   contacts,
   conversationMessages,
   conversationParticipants,
@@ -37,8 +39,9 @@ export type SalesScorecardConfig = {
   weights: {
     speedToLead: number;
     followupCompliance: number;
-    responseTime: number;
     conversion: number;
+    callQuality: number;
+    responseTime: number;
   };
 };
 
@@ -60,8 +63,9 @@ const DEFAULT_CONFIG: SalesScorecardConfig = {
   weights: {
     speedToLead: 45,
     followupCompliance: 35,
-    responseTime: 10,
-    conversion: 10
+    conversion: 10,
+    callQuality: 10,
+    responseTime: 0
   }
 };
 
@@ -118,9 +122,19 @@ function coerceWeights(value: unknown, fallback: SalesScorecardConfig["weights"]
   if (!isRecord(value)) return fallback;
   const speedToLead = clampInt(value["speedToLead"], fallback.speedToLead, { min: 0, max: 100 });
   const followupCompliance = clampInt(value["followupCompliance"], fallback.followupCompliance, { min: 0, max: 100 });
-  const responseTime = clampInt(value["responseTime"], fallback.responseTime, { min: 0, max: 100 });
   const conversion = clampInt(value["conversion"], fallback.conversion, { min: 0, max: 100 });
-  return { speedToLead, followupCompliance, responseTime, conversion };
+  const callQuality = clampInt(value["callQuality"], fallback.callQuality, { min: 0, max: 100 });
+  const responseTime = clampInt(value["responseTime"], fallback.responseTime, { min: 0, max: 100 });
+
+  // Migration shim: older configs used responseTime weight. If callQuality is missing/0 but responseTime exists,
+  // treat responseTime as callQuality and disable responseTime in scoring.
+  const hasCallQualityKey = Object.prototype.hasOwnProperty.call(value, "callQuality");
+  const hasResponseKey = Object.prototype.hasOwnProperty.call(value, "responseTime");
+  if (!hasCallQualityKey && hasResponseKey && callQuality === 0 && responseTime > 0) {
+    return { speedToLead, followupCompliance, conversion, callQuality: responseTime, responseTime: 0 };
+  }
+
+  return { speedToLead, followupCompliance, conversion, callQuality, responseTime };
 }
 
 async function resolveFallbackDefaultAssigneeMemberId(db: DbExecutor): Promise<string> {
@@ -225,6 +239,39 @@ export function getLeadClockStart(createdAt: Date, config: SalesScorecardConfig)
   }
 
   return start.plus({ days: 1 }).toUTC().toJSDate();
+}
+
+export async function computeCallQualityForMember(params: {
+  db: DbExecutor;
+  memberId: string;
+  since: Date;
+  until: Date;
+}): Promise<{ avgScore: number | null; count: number }> {
+  const db = params.db;
+
+  const rows = await db
+    .select({
+      avgScore: sql<number | null>`avg(${callCoaching.scoreOverall})`,
+      count: sql<number>`count(*)`
+    })
+    .from(callCoaching)
+    .innerJoin(callRecords, eq(callRecords.id, callCoaching.callRecordId))
+    .leftJoin(contacts, eq(contacts.id, callRecords.contactId))
+    .where(
+      and(
+        eq(callCoaching.memberId, params.memberId),
+        eq(callCoaching.version, 1),
+        gte(callCoaching.createdAt, params.since),
+        lte(callCoaching.createdAt, params.until),
+        sql`${callCoaching.rubric} = (case when lower(coalesce(${contacts.source}, '')) like 'outbound:%' then 'outbound' else 'inbound' end)`
+      )
+    );
+
+  const row = rows[0];
+  const count = typeof row?.count === "number" && Number.isFinite(row.count) ? Math.round(row.count) : 0;
+  const avgScoreRaw = typeof row?.avgScore === "number" && Number.isFinite(row.avgScore) ? row.avgScore : null;
+  const avgScore = avgScoreRaw === null ? null : Math.max(0, Math.min(100, Math.round(avgScoreRaw)));
+  return { avgScore, count };
 }
 
 export function getSpeedToLeadDeadline(createdAt: Date, config: SalesScorecardConfig): Date {

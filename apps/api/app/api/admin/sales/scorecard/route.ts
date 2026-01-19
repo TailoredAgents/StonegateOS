@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import {
   computeConversionForMember,
+  computeCallQualityForMember,
   computeFollowupComplianceForMember,
   computeSpeedToLeadForMember,
   getSalesScorecardConfig
@@ -18,27 +19,15 @@ function clampInt(value: string | null, fallback: number, { min, max }: { min: n
   return Math.min(max, Math.max(min, rounded));
 }
 
-function computeResponseTimeScore(params: {
-  weight: number;
-  medianMinutes: number | null;
-}): { score: number; label: string } {
+function computeCallQualityScore(params: { weight: number; avgScore: number | null; count: number }): { score: number; effectiveAvg: number; counted: boolean } {
   const weight = params.weight;
-  const median = params.medianMinutes;
-  if (median === null) return { score: weight, label: "no inbound messages" };
-  if (median <= 5) return { score: weight, label: "excellent" };
-  if (median <= 15) return { score: Math.round(weight * 0.7), label: "good" };
-  if (median <= 60) return { score: Math.round(weight * 0.4), label: "slow" };
-  return { score: 0, label: "very slow" };
-}
+  const avg = params.avgScore;
+  const count = params.count;
 
-function median(values: number[]): number | null {
-  if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) return sorted[mid] ?? null;
-  const a = sorted[mid - 1];
-  const b = sorted[mid];
-  return typeof a === "number" && typeof b === "number" ? (a + b) / 2 : null;
+  const counted = count >= 3 && avg !== null;
+  const effectiveAvg = counted ? avg : 85;
+  const ratio = effectiveAvg / 100;
+  return { score: Math.round(weight * ratio), effectiveAvg, counted };
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -87,27 +76,16 @@ export async function GET(request: NextRequest): Promise<Response> {
       : 1;
   const conversionScore = Math.round(config.weights.conversion * convRatio);
 
-  // Lightweight response time: computed from speed records that have message timestamps (outbound reply).
-  // We intentionally avoid expensive deep joins here; the queue view surfaces per-contact response needs.
-  const responseSamples = speed
-    .map((row) => {
-      if (!row.firstOutboundMessageAt) return null;
-      const createdAt = Date.parse(row.createdAt);
-      const firstOutbound = Date.parse(row.firstOutboundMessageAt);
-      if (!Number.isFinite(createdAt) || !Number.isFinite(firstOutbound)) return null;
-      const minutes = (firstOutbound - createdAt) / 60_000;
-      return minutes >= 0 ? minutes : null;
-    })
-    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
-  const responseMedian = median(responseSamples);
-  const responseScoreDetails = computeResponseTimeScore({
-    weight: config.weights.responseTime,
-    medianMinutes: responseMedian
+  const callQuality = await computeCallQualityForMember({ db, memberId, since, until });
+  const callQualityScoreDetails = computeCallQualityScore({
+    weight: config.weights.callQuality ?? 0,
+    avgScore: callQuality.avgScore,
+    count: callQuality.count
   });
 
   const totalScore = Math.min(
     100,
-    speedScore + followupScore + conversionScore + responseScoreDetails.score
+    speedScore + followupScore + conversionScore + callQualityScoreDetails.score
   );
 
   return NextResponse.json({
@@ -128,7 +106,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       speedToLead: speedScore,
       followupCompliance: followupScore,
       conversion: conversionScore,
-      responseTime: responseScoreDetails.score
+      callQuality: callQualityScoreDetails.score,
+      responseTime: 0
     },
     metrics: {
       speedToLead: {
@@ -138,9 +117,11 @@ export async function GET(request: NextRequest): Promise<Response> {
       },
       followups,
       conversion,
-      responseTime: {
-        medianMinutes: responseMedian,
-        label: responseScoreDetails.label
+      callQuality: {
+        avgScore: callQuality.avgScore,
+        effectiveAvg: callQualityScoreDetails.effectiveAvg,
+        counted: callQualityScoreDetails.counted,
+        count: callQuality.count
       }
     }
   });
