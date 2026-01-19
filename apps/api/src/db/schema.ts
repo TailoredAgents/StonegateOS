@@ -102,6 +102,7 @@ export const partnerStatusEnum = pgEnum("partner_status", [
   "inactive"
 ]);
 
+
 export const contacts = pgTable(
   "contacts",
   {
@@ -481,6 +482,113 @@ export const conversationMessages = pgTable(
   })
 );
 
+export const partnerUsers = pgTable(
+  "partner_users",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgContactId: uuid("org_contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    name: text("name").notNull(),
+    active: boolean("active").default(true).notNull(),
+    passwordHash: text("password_hash"),
+    passwordSetAt: timestamp("password_set_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    emailIdx: uniqueIndex("partner_users_email_key").on(table.email),
+    orgContactIdx: index("partner_users_org_contact_idx").on(table.orgContactId)
+  })
+);
+
+export const partnerLoginTokens = pgTable(
+  "partner_login_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerUserId: uuid("partner_user_id")
+      .notNull()
+      .references(() => partnerUsers.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    requestedIp: text("requested_ip"),
+    userAgent: text("user_agent"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    tokenHashIdx: uniqueIndex("partner_login_tokens_hash_key").on(table.tokenHash),
+    userIdx: index("partner_login_tokens_user_idx").on(table.partnerUserId),
+    expiresIdx: index("partner_login_tokens_expires_idx").on(table.expiresAt)
+  })
+);
+
+export const partnerSessions = pgTable(
+  "partner_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    partnerUserId: uuid("partner_user_id")
+      .notNull()
+      .references(() => partnerUsers.id, { onDelete: "cascade" }),
+    sessionHash: text("session_hash").notNull(),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    sessionHashIdx: uniqueIndex("partner_sessions_hash_key").on(table.sessionHash),
+    userIdx: index("partner_sessions_user_idx").on(table.partnerUserId),
+    expiresIdx: index("partner_sessions_expires_idx").on(table.expiresAt)
+  })
+);
+
+export const partnerRateCards = pgTable(
+  "partner_rate_cards",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgContactId: uuid("org_contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    currency: text("currency").default("USD").notNull(),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    orgIdx: uniqueIndex("partner_rate_cards_org_key").on(table.orgContactId)
+  })
+);
+
+export const partnerRateItems = pgTable(
+  "partner_rate_items",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    rateCardId: uuid("rate_card_id")
+      .notNull()
+      .references(() => partnerRateCards.id, { onDelete: "cascade" }),
+    serviceKey: text("service_key").notNull(),
+    tierKey: text("tier_key").notNull(),
+    label: text("label"),
+    amountCents: integer("amount_cents").notNull(),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    cardIdx: index("partner_rate_items_card_idx").on(table.rateCardId),
+    serviceIdx: index("partner_rate_items_service_idx").on(table.serviceKey)
+  })
+);
+
 export const inboxMediaUploads = pgTable(
   "inbox_media_uploads",
   {
@@ -685,6 +793,29 @@ export const appointmentAttachments = pgTable(
   },
   (table) => ({
     appointmentIdx: index("appointment_attachments_appointment_idx").on(table.appointmentId)
+  })
+);
+
+export const partnerBookings = pgTable(
+  "partner_bookings",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgContactId: uuid("org_contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    partnerUserId: uuid("partner_user_id").references(() => partnerUsers.id, { onDelete: "set null" }),
+    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    serviceKey: text("service_key"),
+    tierKey: text("tier_key"),
+    amountCents: integer("amount_cents"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    orgIdx: index("partner_bookings_org_idx").on(table.orgContactId),
+    appointmentIdx: index("partner_bookings_appointment_idx").on(table.appointmentId)
   })
 );
 

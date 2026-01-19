@@ -3159,3 +3159,123 @@ export async function partnerLogReferralAction(formData: FormData) {
   jar.set({ name: "myst-flash", value: "Partner referral logged.", path: "/" });
   revalidatePath("/team");
 }
+
+function parseRatesCsv(raw: string): Array<{
+  serviceKey: string;
+  tierKey: string;
+  label: string | null;
+  amountCents: number;
+  sortOrder: number;
+}> {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+
+  const rows: Array<{
+    serviceKey: string;
+    tierKey: string;
+    label: string | null;
+    amountCents: number;
+    sortOrder: number;
+  }> = [];
+
+  let sortOrder = 0;
+  for (const line of lines) {
+    const parts = line.split(",").map((p) => p.trim());
+    if (parts.length < 3) continue;
+
+    const serviceKey = (parts[0] ?? "").toLowerCase();
+    const tierKey = parts[1] ?? "";
+    const label = parts.length >= 4 ? (parts[2] ?? "") || null : null;
+    const amountRaw = parts.length >= 4 ? parts[3] ?? "" : parts[2] ?? "";
+
+    const amount = Number(String(amountRaw).replace(/[^0-9.]/g, ""));
+    if (!serviceKey || !tierKey || !Number.isFinite(amount)) continue;
+
+    rows.push({
+      serviceKey,
+      tierKey,
+      label,
+      amountCents: Math.max(0, Math.round(amount * 100)),
+      sortOrder
+    });
+    sortOrder += 1;
+  }
+
+  return rows;
+}
+
+export async function partnerPortalInviteUserAction(formData: FormData) {
+  const jar = await cookies();
+  const orgContactIdRaw = formData.get("orgContactId");
+  const orgContactId = typeof orgContactIdRaw === "string" ? orgContactIdRaw.trim() : "";
+
+  const emailRaw = formData.get("email");
+  const email = typeof emailRaw === "string" ? emailRaw.trim() : "";
+
+  const nameRaw = formData.get("name");
+  const name = typeof nameRaw === "string" ? nameRaw.trim() : "";
+
+  if (!orgContactId || !email || !name) {
+    jar.set({ name: "myst-flash-error", value: "Partner + email + name are required.", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/partners/users", {
+    method: "POST",
+    body: JSON.stringify({ orgContactId, email, name })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to invite partner user");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: `Invite sent to ${email}.`, path: "/" });
+  revalidatePath("/team");
+}
+
+export async function partnerPortalSaveRatesAction(formData: FormData) {
+  const jar = await cookies();
+  const orgContactIdRaw = formData.get("orgContactId");
+  const orgContactId = typeof orgContactIdRaw === "string" ? orgContactIdRaw.trim() : "";
+
+  const csvRaw = formData.get("ratesCsv");
+  const csv = typeof csvRaw === "string" ? csvRaw : "";
+
+  if (!orgContactId) {
+    jar.set({ name: "myst-flash-error", value: "Partner missing.", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const items = parseRatesCsv(csv);
+  if (!items.length) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "No valid rates found. Format: serviceKey,tierKey,label,amount (or serviceKey,tierKey,amount).",
+      path: "/"
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/partners/rates", {
+    method: "POST",
+    body: JSON.stringify({ orgContactId, currency: "USD", items })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to save rates");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Partner rates saved.", path: "/" });
+  revalidatePath("/team");
+}

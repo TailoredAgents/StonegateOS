@@ -1,6 +1,14 @@
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
-import { partnerLogReferralAction, partnerLogTouchAction, partnerScheduleCheckinAction, openContactThreadAction, startContactCallAction } from "../actions";
+import {
+  openContactThreadAction,
+  partnerLogReferralAction,
+  partnerLogTouchAction,
+  partnerPortalInviteUserAction,
+  partnerPortalSaveRatesAction,
+  partnerScheduleCheckinAction,
+  startContactCallAction
+} from "../actions";
 import { TEAM_CARD_PADDED, TEAM_EMPTY_STATE, TEAM_INPUT_COMPACT, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE, teamButtonClass } from "./team-ui";
 
 type TeamMember = { id: string; name: string; active?: boolean };
@@ -36,6 +44,7 @@ type PartnerFilters = {
   type?: string;
   q?: string;
   offset?: string;
+  selectedId?: string;
 };
 
 function normalizeFilter(value: unknown): string {
@@ -77,6 +86,7 @@ function buildPartnersHref(args: { filters: PartnerFilters; patch?: Partial<Part
   setIf("p_type", merged.type);
   setIf("p_q", merged.q);
   setIf("p_offset", merged.offset);
+  setIf("p_selected", merged.selectedId);
   return `/team?${qs.toString()}`;
 }
 
@@ -99,6 +109,7 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
   const type = normalizeFilter(resolvedFilters.type);
   const q = normalizeFilter(resolvedFilters.q);
   const offset = normalizeFilter(resolvedFilters.offset);
+  const selectedId = normalizeFilter(resolvedFilters.selectedId);
 
   const apiQs = new URLSearchParams({ limit: "50", status });
   if (ownerId) apiQs.set("ownerId", ownerId);
@@ -123,6 +134,52 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
   const prevOffset = Math.max(0, currentOffset - limit);
   const nextOffset = currentOffset + partners.length < total ? currentOffset + limit : null;
 
+  type PortalUserRow = {
+    id: string;
+    email: string;
+    name: string;
+    active: boolean;
+    passwordSetAt: string | null;
+  };
+
+  type RateItemRow = {
+    id: string;
+    serviceKey: string;
+    tierKey: string;
+    label: string | null;
+    amountCents: number;
+    sortOrder: number;
+  };
+
+  let portalUsers: PortalUserRow[] = [];
+  let rateItems: RateItemRow[] = [];
+  let rateCurrency = "USD";
+
+  if (selectedId) {
+    try {
+      const [usersRes, ratesRes] = await Promise.all([
+        callAdminApi(`/api/admin/partners/users?orgContactId=${encodeURIComponent(selectedId)}`),
+        callAdminApi(`/api/admin/partners/rates?orgContactId=${encodeURIComponent(selectedId)}`)
+      ]);
+
+      if (usersRes.ok) {
+        const usersPayload = (await usersRes.json().catch(() => ({}))) as { users?: PortalUserRow[] };
+        portalUsers = usersPayload.users ?? [];
+      }
+
+      if (ratesRes.ok) {
+        const ratesPayload = (await ratesRes.json().catch(() => ({}))) as { currency?: string; items?: RateItemRow[] };
+        rateCurrency =
+          typeof ratesPayload.currency === "string" && ratesPayload.currency.trim().length
+            ? ratesPayload.currency.trim()
+            : "USD";
+        rateItems = ratesPayload.items ?? [];
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   return (
     <section className="space-y-6">
       <header className={TEAM_CARD_PADDED}>
@@ -145,9 +202,122 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
         </div>
       </header>
 
+      {selectedId ? (
+        <div className={`${TEAM_CARD_PADDED} space-y-6`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">Partner Portal Access</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Invite portal users and configure negotiated rates for this partner.
+              </p>
+            </div>
+            <a
+              className={teamButtonClass("secondary", "sm")}
+              href={buildPartnersHref({ filters: resolvedFilters, patch: { selectedId: "" } })}
+            >
+              Close
+            </a>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <h4 className="text-sm font-semibold text-slate-900">Invite user</h4>
+              <p className="mt-1 text-xs text-slate-500">
+                Sends a magic link. They can set a password after logging in.
+              </p>
+              <form action={partnerPortalInviteUserAction} className="mt-3 space-y-3">
+                <input type="hidden" name="orgContactId" value={selectedId} />
+                <label className="block">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Name</div>
+                  <input name="name" className={TEAM_INPUT_COMPACT} placeholder="Jane Doe" />
+                </label>
+                <label className="block">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Email</div>
+                  <input name="email" type="email" className={TEAM_INPUT_COMPACT} placeholder="jane@example.com" />
+                </label>
+                <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Sending...">
+                  Send invite
+                </SubmitButton>
+              </form>
+
+              <div className="mt-4 border-t border-slate-100 pt-4">
+                <h5 className="text-xs font-semibold text-slate-700">Existing users</h5>
+                {portalUsers.length === 0 ? (
+                  <div className="mt-2 text-xs text-slate-500">No portal users yet.</div>
+                ) : (
+                  <ul className="mt-2 space-y-2 text-xs text-slate-600">
+                    {portalUsers.map((user) => (
+                      <li key={user.id} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-semibold text-slate-900">{user.name}</div>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                              user.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {user.active ? "active" : "inactive"}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-500">{user.email}</div>
+                        <div className="mt-1 text-[11px] text-slate-500">
+                          Password: {user.passwordSetAt ? `set (${formatDateTime(user.passwordSetAt)})` : "not set"}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <h4 className="text-sm font-semibold text-slate-900">Partner rates</h4>
+              <p className="mt-1 text-xs text-slate-500">
+                Explicit dollar tiers per service (currency: {rateCurrency}). Format:{" "}
+                <span className="font-mono">serviceKey,tierKey,label,amount</span>
+              </p>
+
+              {rateItems.length ? (
+                <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Current</div>
+                  <ul className="mt-2 space-y-1">
+                    {rateItems.map((item) => (
+                      <li key={item.id}>
+                        <span className="font-semibold">{item.serviceKey}</span> / {item.tierKey}
+                        {" — "}
+                        {item.label ? `${item.label} — ` : ""}${(item.amountCents / 100).toFixed(2)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <div className="mt-3 text-xs text-slate-500">No negotiated rates set yet.</div>
+              )}
+
+              <form action={partnerPortalSaveRatesAction} className="mt-3 space-y-3">
+                <input type="hidden" name="orgContactId" value={selectedId} />
+                <textarea
+                  name="ratesCsv"
+                  className="min-h-[160px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  placeholder={
+                    "junk-removal,quarter,Quarter load,150\\n" +
+                    "junk-removal,half,Half load,300\\n" +
+                    "junk-removal,full,Full load,600\\n" +
+                    "junk-removal,mattress_fee,Mattress fee,40"
+                  }
+                />
+                <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
+                  Save rates
+                </SubmitButton>
+              </form>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className={TEAM_CARD_PADDED}>
         <form method="get" action="/team" className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4">
           <input type="hidden" name="tab" value="partners" />
+          {selectedId ? <input type="hidden" name="p_selected" value={selectedId} /> : null}
 
           <div className="grid gap-3 md:grid-cols-4">
             <label className="flex flex-col gap-1 text-xs text-slate-600">
@@ -254,6 +424,12 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
                       </td>
                       <td className="px-4 py-4 align-top text-right">
                         <div className="flex flex-wrap justify-end gap-2">
+                          <a
+                            className={teamButtonClass("secondary", "sm")}
+                            href={buildPartnersHref({ filters: resolvedFilters, patch: { selectedId: partner.id } })}
+                          >
+                            Portal
+                          </a>
                           <form action={startContactCallAction}>
                             <input type="hidden" name="contactId" value={partner.id} />
                             <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">

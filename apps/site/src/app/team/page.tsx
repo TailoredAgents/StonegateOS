@@ -74,6 +74,7 @@ export default async function TeamPage({
     p_type?: string;
     p_q?: string;
     p_offset?: string;
+    p_selected?: string;
     quoteMode?: string;
     view?: string;
     onlyOutbound?: string;
@@ -134,7 +135,8 @@ export default async function TeamPage({
     ownerId: typeof params?.p_owner === "string" ? params.p_owner : undefined,
     type: typeof params?.p_type === "string" ? params.p_type : undefined,
     q: typeof params?.p_q === "string" ? params.p_q : undefined,
-    offset: typeof params?.p_offset === "string" ? params.p_offset : undefined
+    offset: typeof params?.p_offset === "string" ? params.p_offset : undefined,
+    selectedId: typeof params?.p_selected === "string" ? params.p_selected : undefined
   };
 
   const flash = cookieStore.get("myst-flash")?.value ?? null;
