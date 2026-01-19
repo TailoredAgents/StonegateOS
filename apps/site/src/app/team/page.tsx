@@ -69,6 +69,8 @@ export default async function TeamPage({
     out_taskId?: string;
     out_offset?: string;
     quoteMode?: string;
+    view?: string;
+    onlyOutbound?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -94,7 +96,9 @@ export default async function TeamPage({
         : "myday"
       : normalizedRequestedTab || (hasCrew && !hasOwner ? "myday" : "inbox");
   const contactsQuery = typeof params?.q === "string" ? params.q : undefined;
-  const contactsIncludeOutbound = params?.includeOutbound === "1";
+  const contactsView = typeof params?.view === "string" ? params.view.trim().toLowerCase() : "";
+  const contactsOnlyOutbound = contactsView === "outbound" || params?.onlyOutbound === "1";
+  const contactsIncludeOutbound = contactsView === "all" || params?.includeOutbound === "1";
   let contactsOffset: number | undefined;
   if (typeof params?.offset === "string") {
     const parsed = Number(params.offset);
@@ -391,7 +395,8 @@ export default async function TeamPage({
               search={contactsQuery}
               offset={contactsOffset}
               contactId={contactIdParam}
-              excludeOutbound={!contactsIncludeOutbound}
+              excludeOutbound={contactsOnlyOutbound ? false : !contactsIncludeOutbound}
+              onlyOutbound={contactsOnlyOutbound}
             />
           </React.Suspense>
         ) : null}

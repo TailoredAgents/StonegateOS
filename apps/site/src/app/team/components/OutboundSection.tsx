@@ -406,8 +406,8 @@ export async function OutboundSection({
             </form>
 
             <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-              <table className="min-w-full text-left text-xs">
+            <div className="rounded-2xl border border-slate-200 bg-white">
+              <table className="w-full text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                   <tr>
                     <th className="px-4 py-3">
@@ -416,9 +416,6 @@ export async function OutboundSection({
                     <th className="px-4 py-3">Due</th>
                     <th className="px-4 py-3">Attempt</th>
                     <th className="px-4 py-3">Prospect</th>
-                    <th className="hidden px-4 py-3 lg:table-cell">Phone</th>
-                    <th className="hidden px-4 py-3 lg:table-cell">Email</th>
-                    <th className="hidden px-4 py-3 md:table-cell">Last</th>
                     <th className="hidden px-4 py-3 text-right md:table-cell">Actions</th>
                   </tr>
                 </thead>
@@ -441,17 +438,15 @@ export async function OutboundSection({
                           <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { taskId: item.id } })} className="block max-w-[320px]">
                             <div className="truncate text-sm font-semibold text-slate-900">{item.company ? item.company : item.contact.name}</div>
                             <div className="mt-0.5 truncate text-[11px] text-slate-500">{item.company ? item.contact.name : item.campaign ? item.campaign : "Outbound"}</div>
-                            <div className="mt-1 text-[11px] text-slate-500 lg:hidden">
-                              {(item.contact.phone ?? "No phone") + " / " + (item.contact.email ?? "No email")}
-                            </div>
-                            <div className="mt-1 text-[11px] text-slate-500 md:hidden">
-                              {item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}
+                            <div className="mt-1 text-[11px] text-slate-500">
+                              <span>{item.contact.phone ?? "No phone"}</span>
+                              <span className="mx-1">•</span>
+                              <span>{item.contact.email ?? "No email"}</span>
+                              <span className="mx-1">•</span>
+                              <span>{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}</span>
                             </div>
                           </a>
                         </td>
-                        <td className="hidden px-4 py-3 text-slate-600 lg:table-cell">{item.contact.phone ?? "-"}</td>
-                        <td className="hidden px-4 py-3 text-slate-600 lg:table-cell">{item.contact.email ?? "-"}</td>
-                        <td className="hidden px-4 py-3 text-slate-600 md:table-cell">{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "-"}</td>
                         <td className="hidden px-4 py-3 md:table-cell">
                           <div className="flex flex-wrap justify-end gap-2">
                             <form action={startContactCallAction}>

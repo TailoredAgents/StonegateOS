@@ -83,6 +83,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const contactIdFilter = contactIdRaw && contactIdRaw.trim().length > 0 ? contactIdRaw.trim() : null;
   const searchTerm = rawSearch ? sanitizeSearchTerm(rawSearch) : null;
   const excludeOutbound = searchParams.get("excludeOutbound") === "1";
+  const onlyOutbound = searchParams.get("onlyOutbound") === "1";
   const limit = contactIdFilter ? 1 : parseLimit(searchParams.get("limit"));
   const offset = contactIdFilter ? 0 : parseOffset(searchParams.get("offset"));
 
@@ -127,7 +128,9 @@ export async function GET(request: NextRequest): Promise<Response> {
     filters.push(or(...searchFilters)!);
   }
 
-  if (excludeOutbound && !contactIdFilter) {
+  if (onlyOutbound && !contactIdFilter) {
+    filters.push(sql`coalesce(${contacts.source}, '') ilike ${"outbound:%"}`);
+  } else if (excludeOutbound && !contactIdFilter) {
     filters.push(sql`coalesce(${contacts.source}, '') not ilike ${"outbound:%"}`);
   }
 

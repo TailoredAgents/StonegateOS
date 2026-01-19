@@ -8,7 +8,15 @@ import { TEAM_CARD_PADDED, TEAM_EMPTY_STATE, TEAM_INPUT, teamButtonClass } from 
 
 const PAGE_SIZE = 25;
 
-function buildHref(args: { search?: string; offset?: number; includeOutbound?: boolean }): string {
+type ContactsView = "inbound" | "all" | "outbound";
+
+function normalizeView(args: { includeOutbound?: boolean; onlyOutbound?: boolean }): ContactsView {
+  if (args.onlyOutbound) return "outbound";
+  if (args.includeOutbound) return "all";
+  return "inbound";
+}
+
+function buildHref(args: { search?: string; offset?: number; view?: ContactsView }): string {
   const query = new URLSearchParams();
   query.set("tab", "contacts");
   if (args.search && args.search.trim().length > 0) {
@@ -17,8 +25,8 @@ function buildHref(args: { search?: string; offset?: number; includeOutbound?: b
   if (typeof args.offset === "number" && args.offset > 0) {
     query.set("offset", String(args.offset));
   }
-  if (args.includeOutbound) {
-    query.set("includeOutbound", "1");
+  if (args.view && args.view !== "inbound") {
+    query.set("view", args.view);
   }
   return `/team?${query.toString()}`;
 }
@@ -37,17 +45,21 @@ type ContactsSectionProps = {
   offset?: number;
   contactId?: string;
   excludeOutbound?: boolean;
+  onlyOutbound?: boolean;
 };
 
 export async function ContactsSection({
   search,
   offset,
   contactId,
-  excludeOutbound
+  excludeOutbound,
+  onlyOutbound
 }: ContactsSectionProps): Promise<ReactElement> {
   const safeOffset = typeof offset === "number" && offset > 0 ? offset : 0;
-  const shouldExcludeOutbound = excludeOutbound !== false;
+  const shouldOnlyOutbound = onlyOutbound === true;
+  const shouldExcludeOutbound = shouldOnlyOutbound ? false : excludeOutbound !== false;
   const includeOutbound = !shouldExcludeOutbound;
+  const view = normalizeView({ includeOutbound, onlyOutbound: shouldOnlyOutbound });
 
   let teamMembers: Array<{ id: string; name: string }> = [];
   try {
@@ -65,7 +77,11 @@ export async function ContactsSection({
   if (safeOffset > 0) params.set("offset", String(safeOffset));
   if (search && search.trim().length > 0) params.set("q", search.trim());
   if (contactId) params.set("contactId", contactId);
-  if (shouldExcludeOutbound) params.set("excludeOutbound", "1");
+  if (shouldOnlyOutbound) {
+    params.set("onlyOutbound", "1");
+  } else if (shouldExcludeOutbound) {
+    params.set("excludeOutbound", "1");
+  }
 
   const response = await callAdminApi(`/api/admin/contacts?${params.toString()}`);
   if (!response.ok) {
@@ -230,16 +246,21 @@ export async function ContactsSection({
           placeholder="Search name, email, address"
           className="min-w-[220px] flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
         />
-        <label className="inline-flex items-center gap-2 text-xs text-slate-600">
-          <input
-            type="checkbox"
-            name="includeOutbound"
-            value="1"
-            defaultChecked={includeOutbound}
-            className="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-200"
-          />
-          Show outbound prospects
-        </label>
+        <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">View</span>
+          <label className="inline-flex items-center gap-1">
+            <input type="radio" name="view" value="inbound" defaultChecked={view === "inbound"} className="text-primary-600" />
+            Inbound
+          </label>
+          <label className="inline-flex items-center gap-1">
+            <input type="radio" name="view" value="all" defaultChecked={view === "all"} className="text-primary-600" />
+            All
+          </label>
+          <label className="inline-flex items-center gap-1">
+            <input type="radio" name="view" value="outbound" defaultChecked={view === "outbound"} className="text-primary-600" />
+            Outbound
+          </label>
+        </div>
         <button
           type="submit"
           className={teamButtonClass("secondary")}
@@ -262,7 +283,7 @@ export async function ContactsSection({
                 className={`rounded-full border border-slate-200 px-4 py-1.5 ${
                   hasPrev ? "text-slate-600 hover:border-primary-300 hover:text-primary-700" : "pointer-events-none opacity-40"
                 }`}
-                href={hasPrev ? buildHref({ search, offset: prevOffset, includeOutbound }) : "#"}
+                href={hasPrev ? buildHref({ search, offset: prevOffset, view }) : "#"}
               >
                 Previous
               </a>
@@ -271,7 +292,7 @@ export async function ContactsSection({
                 className={`rounded-full border border-slate-200 px-4 py-1.5 ${
                   hasNext ? "text-slate-600 hover:border-primary-300 hover:text-primary-700" : "pointer-events-none opacity-40"
                 }`}
-                href={hasNext ? buildHref({ search, offset: nextOffset, includeOutbound }) : "#"}
+                href={hasNext ? buildHref({ search, offset: nextOffset, view }) : "#"}
               >
                 Next
               </a>
@@ -288,7 +309,7 @@ export async function ContactsSection({
                 className={`rounded-full border border-slate-200 px-4 py-1.5 ${
                   hasPrev ? "text-slate-600 hover:border-primary-300 hover:text-primary-700" : "pointer-events-none opacity-40"
                 }`}
-                href={hasPrev ? buildHref({ search, offset: prevOffset }) : "#"}
+                href={hasPrev ? buildHref({ search, offset: prevOffset, view }) : "#"}
               >
                 Previous
               </a>
@@ -297,7 +318,7 @@ export async function ContactsSection({
                 className={`rounded-full border border-slate-200 px-4 py-1.5 ${
                   hasNext ? "text-slate-600 hover:border-primary-300 hover:text-primary-700" : "pointer-events-none opacity-40"
                 }`}
-                href={hasNext ? buildHref({ search, offset: nextOffset }) : "#"}
+                href={hasNext ? buildHref({ search, offset: nextOffset, view }) : "#"}
               >
                 Next
               </a>
