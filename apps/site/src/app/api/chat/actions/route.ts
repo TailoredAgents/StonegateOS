@@ -30,6 +30,19 @@ type CreateTaskPayload = {
   note?: string | null;
 };
 
+type AddContactNotePayload = {
+  contactId: string;
+  body: string;
+};
+
+type CreateReminderPayload = {
+  contactId: string;
+  title?: string | null;
+  dueAt: string;
+  notes?: string | null;
+  assignedTo?: string | null;
+};
+
 type BookAppointmentPayload = {
   contactId: string;
   propertyId: string;
@@ -48,6 +61,8 @@ type ActionRequest =
   | { type: "create_contact"; payload: CreateContactPayload }
   | { type: "create_quote"; payload: CreateQuotePayload }
   | { type: "create_task"; payload: CreateTaskPayload }
+  | { type: "add_contact_note"; payload: AddContactNotePayload }
+  | { type: "create_reminder"; payload: CreateReminderPayload }
   | { type: "book_appointment"; payload: BookAppointmentPayload }
   | { type: "cancel_appointment"; payload: CancelAppointmentPayload };
 
@@ -200,6 +215,92 @@ export async function POST(request: NextRequest) {
     const data = await res.json().catch(() => ({}));
     console.info("[chat-actions] task created", { result: data });
     return NextResponse.json({ ok: true, type: payload.type, result: data });
+  }
+
+  if (payload.type === "add_contact_note") {
+    const body = payload.payload;
+    if (!body || typeof body.contactId !== "string" || typeof body.body !== "string") {
+      return NextResponse.json({ error: "missing_note_fields" }, { status: 400 });
+    }
+
+    const noteBody = body.body.trim();
+    if (!noteBody.length) {
+      return NextResponse.json({ error: "note_body_required" }, { status: 400 });
+    }
+
+    const title = noteBody.length <= 60 ? noteBody : `${noteBody.slice(0, 57)}...`;
+
+    const res = await fetch(`${apiBase}/api/admin/crm/tasks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        contactId: body.contactId,
+        title,
+        notes: noteBody,
+        status: "completed"
+      })
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return NextResponse.json({ error: "note_create_failed", detail: detail.slice(0, 200) }, { status: res.status });
+    }
+
+    const data = await res.json().catch(() => ({}));
+    console.info("[chat-actions] note created", { result: data });
+    return NextResponse.json({
+      ok: true,
+      type: payload.type,
+      result: { summary: "Note added", ...(data && typeof data === "object" ? data : {}) }
+    });
+  }
+
+  if (payload.type === "create_reminder") {
+    const body = payload.payload;
+    if (!body || typeof body.contactId !== "string" || typeof body.dueAt !== "string") {
+      return NextResponse.json({ error: "missing_reminder_fields" }, { status: 400 });
+    }
+
+    const title = typeof body.title === "string" && body.title.trim().length ? body.title.trim() : "Call back";
+    const dueAt = body.dueAt.trim();
+    const parsed = new Date(dueAt);
+    if (Number.isNaN(parsed.getTime())) {
+      return NextResponse.json({ error: "invalid_due_at" }, { status: 400 });
+    }
+
+    const res = await fetch(`${apiBase}/api/admin/crm/reminders`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        contactId: body.contactId,
+        title,
+        dueAt,
+        notes: typeof body.notes === "string" && body.notes.trim().length ? body.notes.trim() : undefined,
+        assignedTo: typeof body.assignedTo === "string" && body.assignedTo.trim().length ? body.assignedTo.trim() : undefined
+      })
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return NextResponse.json(
+        { error: "reminder_create_failed", detail: detail.slice(0, 200) },
+        { status: res.status }
+      );
+    }
+
+    const data = await res.json().catch(() => ({}));
+    console.info("[chat-actions] reminder created", { result: data });
+    return NextResponse.json({
+      ok: true,
+      type: payload.type,
+      result: { summary: "Reminder created", ...(data && typeof data === "object" ? data : {}) }
+    });
   }
 
   if (payload.type === "book_appointment") {

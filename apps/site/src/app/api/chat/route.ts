@@ -176,7 +176,37 @@ type CreateBookingAction = {
   };
 };
 
-type ActionSuggestion = (CreateContactAction | CreateQuoteAction | CreateTaskAction | CreateBookingAction) & {
+type AddContactNoteAction = {
+  id: string;
+  type: "add_contact_note";
+  summary: string;
+  payload: {
+    contactId: string;
+    body: string;
+  };
+};
+
+type CreateReminderAction = {
+  id: string;
+  type: "create_reminder";
+  summary: string;
+  payload: {
+    contactId: string;
+    title: string;
+    dueAt: string;
+    notes?: string | null;
+    assignedTo?: string | null;
+  };
+};
+
+type ActionSuggestion = (
+  | CreateContactAction
+  | CreateQuoteAction
+  | CreateTaskAction
+  | CreateBookingAction
+  | AddContactNoteAction
+  | CreateReminderAction
+) & {
   note?: string | null;
 };
 
@@ -190,6 +220,7 @@ type IntentClassification = {
 };
 
 const CLASSIFIER_ENABLED = process.env["CHAT_CLASSIFIER_ENABLED"] !== "false";
+const CHAT_ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
 
 function getAdminContext() {
   const apiBase =
@@ -948,10 +979,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const buildChatPayload = (modelName: string) => ({
+    const teamContext = isTeamChat
+      ? await buildTeamChatContext({
+          contactId,
+          propertyId,
+          property
+        })
+      : null;
+
+    const buildChatPayload = (modelName: string, extraSystem?: string | null) => ({
       model: modelName,
       input: [
         { role: "system" as const, content: SYSTEM_PROMPT },
+        ...(extraSystem ? ([{ role: "system" as const, content: extraSystem }] as const) : []),
         { role: "user" as const, content: trimmedMessage }
       ],
       reasoning: { effort: "low" as const },
@@ -971,7 +1011,7 @@ export async function POST(request: NextRequest) {
         }
 
         console.warn("[chat] public pricing draft failed; falling back to brain model response");
-        const res = await fetchOpenAIText(apiKey, buildChatPayload(brainModel), brainModel);
+        const res = await fetchOpenAIText(apiKey, buildChatPayload(brainModel, null), brainModel);
         if (!res.ok) {
           return NextResponse.json(
             {
@@ -984,13 +1024,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ok: true, reply: res.text.trim() });
       }
 
-      const voiceRes = await fetchOpenAIText(apiKey, buildChatPayload(PUBLIC_VOICE_MODEL), PUBLIC_VOICE_MODEL);
+      const voiceRes = await fetchOpenAIText(apiKey, buildChatPayload(PUBLIC_VOICE_MODEL, null), PUBLIC_VOICE_MODEL);
       if (voiceRes.ok) {
         return NextResponse.json({ ok: true, reply: voiceRes.text.trim() });
       }
 
       console.warn("[chat] public voice model failed; falling back to brain model");
-      const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel), brainModel);
+      const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel, null), brainModel);
       if (!brainRes.ok) {
         return NextResponse.json(
           {
@@ -1003,7 +1043,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, reply: brainRes.text.trim() });
     }
 
-    const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel), brainModel);
+    const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel, teamContext), brainModel);
     if (!brainRes.ok) {
       return NextResponse.json(
         {
@@ -1027,20 +1067,22 @@ export async function POST(request: NextRequest) {
     const range = wantsSchedule || wantsRevenue ? pickRange(trimmedMessage) : "this_week";
 
     const [scheduleText, revenueText] = await Promise.all([
-      wantsSchedule ? fetchScheduleSummary(range) : Promise.resolve(null),
+      wantsSchedule ? fetchScheduleSummary(range, { statuses: ["confirmed"] }) : Promise.resolve(null),
       wantsRevenue ? fetchRevenueForecast(range) : Promise.resolve(null)
     ]);
 
-    const actions = await buildActionSuggestions(
-      trimmedMessage,
-      {
-        contactId,
-        propertyId,
-        property
-      },
-      booking,
-      classification
-    );
+    const actions = CHAT_ACTIONS_ENABLED
+      ? await buildActionSuggestions(
+          trimmedMessage,
+          {
+            contactId,
+            propertyId,
+            property
+          },
+          booking,
+          classification
+        )
+      : [];
     const actionNote = actions.length ? actions.map((action) => `Action: ${action.summary}`).join("\n") : null;
 
     const replyParts = [reply];
@@ -1198,14 +1240,153 @@ function pickRange(message: string): "today" | "tomorrow" | "this_week" | "next_
   return "this_week";
 }
 
-async function fetchScheduleSummary(range: string): Promise<string | null> {
+function truncateText(value: string, maxLen: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLen) return trimmed;
+  return `${trimmed.slice(0, Math.max(0, maxLen - 1))}…`;
+}
+
+type TeamChatContext = {
+  contactId?: string;
+  propertyId?: string;
+  property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+};
+
+async function buildTeamChatContext(ctx: TeamChatContext): Promise<string | null> {
+  const { apiBase, adminKey } = getAdminContext();
+  const hdrs = await headers();
+  const apiKey = adminKey ?? hdrs.get("x-api-key");
+  if (!apiKey) return null;
+
+  if (!ctx.contactId) {
+    return [
+      "You are assisting internal ops and office staff.",
+      "Use the company policies and existing system behavior. If you are unsure, ask a clarifying question.",
+      "Only discuss confirmed appointments when asked about scheduling."
+    ].join("\n");
+  }
+
+  const contactId = ctx.contactId;
+  const propertyLabel =
+    ctx.property?.addressLine1 && ctx.property?.city && ctx.property?.state && ctx.property?.postalCode
+      ? `${ctx.property.addressLine1}, ${ctx.property.city}, ${ctx.property.state} ${ctx.property.postalCode}`
+      : null;
+
+  const [taskRes, inboxRes, appt] = await Promise.all([
+    fetch(`${apiBase}/api/admin/crm/tasks?contactId=${encodeURIComponent(contactId)}&status=all`, {
+      headers: { "x-api-key": apiKey }
+    }).catch(() => null),
+    fetch(`${apiBase}/api/admin/inbox/threads?contactId=${encodeURIComponent(contactId)}&limit=3`, {
+      headers: { "x-api-key": apiKey }
+    }).catch(() => null),
+    findAppointmentForContext(contactId, ctx.propertyId)
+  ]);
+
+  const notes: Array<{ body: string; createdAt?: string | null }> = [];
+  const reminders: Array<{ title: string; dueAt: string | null; notes?: string | null }> = [];
+  if (taskRes && taskRes.ok) {
+    const data = (await taskRes.json().catch(() => null)) as { tasks?: Array<Record<string, unknown>> } | null;
+    const tasks = Array.isArray(data?.tasks) ? data!.tasks : [];
+    for (const task of tasks) {
+      const status = typeof task["status"] === "string" ? task["status"] : null;
+      const dueAt = typeof task["dueAt"] === "string" ? task["dueAt"] : null;
+      const title = typeof task["title"] === "string" ? task["title"] : "";
+      const body = typeof task["notes"] === "string" ? task["notes"] : null;
+
+      if (status === "completed" && !dueAt && body && body.trim().length) {
+        if (body.includes("[auto]")) continue;
+        const createdAt = typeof task["createdAt"] === "string" ? task["createdAt"] : null;
+        notes.push({ body: body.trim(), createdAt });
+      }
+
+      if (status === "open" && dueAt) {
+        reminders.push({
+          title: title.trim().length ? title.trim() : "Reminder",
+          dueAt,
+          notes: typeof task["notes"] === "string" ? task["notes"] : null
+        });
+      }
+    }
+  }
+
+  notes.sort((a, b) => ((a.createdAt ?? "") > (b.createdAt ?? "") ? -1 : 1));
+  reminders.sort((a, b) => (a.dueAt ?? "").localeCompare(b.dueAt ?? ""));
+
+  const inboxSnippets: string[] = [];
+  if (inboxRes && inboxRes.ok) {
+    const data = (await inboxRes.json().catch(() => null)) as { threads?: Array<Record<string, unknown>> } | null;
+    const threads = Array.isArray(data?.threads) ? data!.threads : [];
+    for (const thread of threads.slice(0, 3)) {
+      const channel = typeof thread["channel"] === "string" ? thread["channel"] : "unknown";
+      const status = typeof thread["status"] === "string" ? thread["status"] : "unknown";
+      const subject = typeof thread["subject"] === "string" ? thread["subject"] : null;
+      const preview =
+        typeof thread["lastMessagePreview"] === "string"
+          ? thread["lastMessagePreview"]
+          : typeof thread["resolvedLastMessagePreview"] === "string"
+            ? thread["resolvedLastMessagePreview"]
+            : null;
+      const lastActivityAt = typeof thread["lastActivityAt"] === "string" ? thread["lastActivityAt"] : null;
+      const prefix = `[${channel}/${status}]`;
+      const subjectPart = subject && subject.trim().length ? ` ${truncateText(subject, 60)}` : "";
+      const previewPart = preview && preview.trim().length ? ` — ${truncateText(preview, 120)}` : "";
+      const atPart = lastActivityAt ? ` (${lastActivityAt})` : "";
+      inboxSnippets.push(`${prefix}${subjectPart}${previewPart}${atPart}`.trim());
+    }
+  }
+
+  const contextLines: string[] = [
+    "You are assisting internal ops and office staff.",
+    "Use the CRM context below. Be concise, actionable, and specific.",
+    "Only use confirmed appointments for scheduling."
+  ];
+
+  contextLines.push(`Context contactId=${contactId}${propertyLabel ? ` property=${propertyLabel}` : ""}`);
+
+  if (appt?.startAt) {
+    contextLines.push(`Next confirmed appointment: ${appt.startAt}`);
+  }
+
+  if (notes.length) {
+    contextLines.push("Recent notes:");
+    for (const note of notes.slice(0, 3)) {
+      contextLines.push(`- ${truncateText(note.body, 220)}`);
+    }
+  }
+
+  if (reminders.length) {
+    contextLines.push("Open reminders:");
+    for (const reminder of reminders.slice(0, 3)) {
+      const due = reminder.dueAt ? reminder.dueAt : "unscheduled";
+      contextLines.push(`- ${truncateText(reminder.title, 60)} (due ${due})`);
+    }
+  }
+
+  if (inboxSnippets.length) {
+    contextLines.push("Recent inbox activity:");
+    for (const snippet of inboxSnippets) {
+      contextLines.push(`- ${snippet}`);
+    }
+  }
+
+  return contextLines.join("\n");
+}
+
+async function fetchScheduleSummary(
+  range: string,
+  opts?: { statuses?: string[] }
+): Promise<string | null> {
   const { apiBase, adminKey } = getAdminContext();
   const hdrs = await headers();
   const apiKey = adminKey ?? hdrs.get("x-api-key");
   if (!apiKey) return null;
 
   try {
-    const res = await fetch(`${apiBase}/api/admin/schedule/summary?range=${encodeURIComponent(range)}`, {
+    const search = new URLSearchParams({ range });
+    if (opts?.statuses?.length) {
+      search.set("statuses", opts.statuses.join(","));
+    }
+    const res = await fetch(`${apiBase}/api/admin/schedule/summary?${search.toString()}`, {
       headers: {
         "x-api-key": apiKey
       }
@@ -1284,6 +1465,16 @@ async function buildActionSuggestions(
   const taskAction = await extractTaskSuggestion(message, ctx, note);
   if (taskAction) {
     actions.push(taskAction);
+  }
+
+  const reminderAction = extractReminderSuggestion(message, ctx, note);
+  if (reminderAction) {
+    actions.push(reminderAction);
+  }
+
+  const contactNoteAction = extractContactNoteSuggestion(message, ctx, note);
+  if (contactNoteAction) {
+    actions.push(contactNoteAction);
   }
 
   if (booking) {
@@ -1589,11 +1780,8 @@ async function extractTaskSuggestion(
   const hasIntent =
     lower.includes("task") ||
     lower.includes("todo") ||
-    lower.includes("remind") ||
-    lower.includes("follow up") ||
-    lower.includes("follow-up") ||
-    lower.includes("call back") ||
-    lower.includes("call-back");
+    lower.includes("to do") ||
+    lower.includes("checklist");
   if (!hasIntent) return null;
 
   if (!ctx.contactId || !ctx.propertyId) return null;
@@ -1628,7 +1816,7 @@ async function findAppointmentForContext(
   if (!apiKey || !contactId || !propertyId) return null;
 
   try {
-    const res = await fetch(`${apiBase}/api/appointments?status=confirmed,requested`, {
+    const res = await fetch(`${apiBase}/api/appointments?status=confirmed`, {
       headers: { "x-api-key": apiKey }
     });
     if (!res.ok) return null;
@@ -1664,6 +1852,82 @@ function buildTaskTitle(message: string, note?: string | null): string {
     return `${base} - ${note.trim()}`;
   }
   return base;
+}
+
+function looksLikeExplicitReminderTime(message: string): boolean {
+  const lower = message.toLowerCase();
+  if (lower.includes("tomorrow") || lower.includes("today") || lower.includes("morning") || lower.includes("afternoon") || lower.includes("evening")) {
+    return true;
+  }
+  if (/\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(message)) return true;
+  return false;
+}
+
+function extractReminderSuggestion(
+  message: string,
+  ctx: { contactId?: string },
+  note?: string | null
+): CreateReminderAction | null {
+  if (!ctx.contactId) return null;
+  const lower = message.toLowerCase();
+  const hasIntent =
+    lower.includes("remind") ||
+    lower.includes("reminder") ||
+    lower.includes("follow up") ||
+    lower.includes("follow-up") ||
+    lower.includes("call back") ||
+    lower.includes("call-back") ||
+    lower.includes("callback");
+  if (!hasIntent) return null;
+  if (!looksLikeExplicitReminderTime(message)) return null;
+
+  const when = parseWhen(message);
+  if (!when) return null;
+
+  const title =
+    lower.includes("call") ? "Call back" : lower.includes("text") || lower.includes("sms") ? "Text follow-up" : "Follow up";
+
+  return {
+    id: newActionId(),
+    type: "create_reminder",
+    summary: `Create reminder (${title})`,
+    payload: {
+      contactId: ctx.contactId,
+      title,
+      dueAt: when.iso,
+      ...(note && note.trim().length ? { notes: note.trim() } : {})
+    }
+  };
+}
+
+function extractContactNoteSuggestion(
+  message: string,
+  ctx: { contactId?: string },
+  note?: string | null
+): AddContactNoteAction | null {
+  if (!ctx.contactId) return null;
+  const lower = message.toLowerCase();
+  const hasIntent =
+    lower.includes("add note") ||
+    lower.includes("log note") ||
+    lower.includes("save note") ||
+    lower.includes("note:") ||
+    lower.startsWith("note ");
+  if (!hasIntent) return null;
+
+  const fallbackMatch = message.match(/(?:note|notes)\s*[:\-]\s*(.+)$/i);
+  const body = (note ?? fallbackMatch?.[1] ?? "").trim();
+  if (!body.length) return null;
+
+  return {
+    id: newActionId(),
+    type: "add_contact_note",
+    summary: "Add note to contact",
+    payload: {
+      contactId: ctx.contactId,
+      body
+    }
+  };
 }
 
 async function classifyIntent(message: string): Promise<IntentClassification | null> {

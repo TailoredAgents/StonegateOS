@@ -1,10 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, gte, lt } from "drizzle-orm";
+import { and, gte, inArray, lt } from "drizzle-orm";
 import { getDb, appointments } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 
 type RangeKey = "today" | "tomorrow" | "this_week" | "next_week";
+type AppointmentStatus = "requested" | "confirmed" | "completed" | "no_show" | "canceled";
+const STATUS_OPTIONS = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
 
 type SummaryResponse = {
   ok: boolean;
@@ -18,6 +20,21 @@ type SummaryResponse = {
 function parseRange(value: string | null): RangeKey {
   if (value === "today" || value === "tomorrow" || value === "next_week") return value;
   return "this_week";
+}
+
+function parseStatusFilter(value: string | null): AppointmentStatus[] | null {
+  if (!value) return null;
+  const parts = value
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length > 0);
+  const valid: AppointmentStatus[] = [];
+  for (const part of parts) {
+    if ((STATUS_OPTIONS as readonly string[]).includes(part)) {
+      valid.push(part as AppointmentStatus);
+    }
+  }
+  return valid.length ? valid : null;
 }
 
 function startOfDay(date: Date): Date {
@@ -72,6 +89,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<SummaryRes
 
   const range = parseRange(request.nextUrl.searchParams.get("range"));
   const { start, end } = computeRange(range);
+  const statusFilter = parseStatusFilter(request.nextUrl.searchParams.get("statuses"));
 
   const db = getDb();
   const rows = await db
@@ -80,7 +98,15 @@ export async function GET(request: NextRequest): Promise<NextResponse<SummaryRes
       startAt: appointments.startAt
     })
     .from(appointments)
-    .where(and(gte(appointments.startAt, start), lt(appointments.startAt, end)));
+    .where(
+      statusFilter
+        ? and(
+            gte(appointments.startAt, start),
+            lt(appointments.startAt, end),
+            inArray(appointments.status, statusFilter)
+          )
+        : and(gte(appointments.startAt, start), lt(appointments.startAt, end))
+    );
 
   const byStatus: Record<string, number> = {};
   const byDayMap = new Map<string, number>();

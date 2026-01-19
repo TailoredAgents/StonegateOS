@@ -10,7 +10,7 @@ type BookingOption = BookingSuggestion & { services?: string[]; selectedService?
 
 type ActionSuggestion = {
   id: string;
-  type: "create_contact" | "create_quote" | "create_task" | "book_appointment";
+  type: "create_contact" | "create_quote" | "create_task" | "book_appointment" | "create_reminder" | "add_contact_note";
   summary: string;
   payload: Record<string, any>;
   context?: {
@@ -137,6 +137,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const [actionTravel, setActionTravel] = React.useState<Record<string, number>>({});
   const [actionStartDate, setActionStartDate] = React.useState<Record<string, string>>({});
   const [actionStartTime, setActionStartTime] = React.useState<Record<string, string>>({});
+  const [actionReminderDate, setActionReminderDate] = React.useState<Record<string, string>>({});
+  const [actionReminderTime, setActionReminderTime] = React.useState<Record<string, string>>({});
+  const [actionReminderTitle, setActionReminderTitle] = React.useState<Record<string, string>>({});
   const [actionHistory, setActionHistory] = React.useState<
     Array<{ id: string; summary: string; status: ActionStatus["state"]; message?: string }>
   >([]);
@@ -224,8 +227,61 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           const next = { ...prev };
           for (const action of actions) {
             if (!next[action.id]) {
-              next[action.id] = action.note ?? "";
+              const prefill =
+                typeof action.note === "string"
+                  ? action.note
+                  : typeof action.payload?.["notes"] === "string"
+                    ? action.payload["notes"]
+                    : typeof action.payload?.["note"] === "string"
+                      ? action.payload["note"]
+                      : typeof action.payload?.["body"] === "string"
+                        ? action.payload["body"]
+                        : "";
+              next[action.id] = prefill ?? "";
             }
+          }
+          return next;
+        });
+        setActionReminderTitle((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (action.type !== "create_reminder" || next[action.id]) continue;
+            const title =
+              typeof action.payload?.["title"] === "string" && action.payload["title"].trim().length
+                ? action.payload["title"].trim()
+                : "Call back";
+            next[action.id] = title;
+          }
+          return next;
+        });
+        setActionReminderDate((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (action.type !== "create_reminder" || next[action.id]) continue;
+            const dueAt = typeof action.payload?.["dueAt"] === "string" ? action.payload["dueAt"] : "";
+            const date = dueAt ? new Date(dueAt) : null;
+            next[action.id] =
+              date && !Number.isNaN(date.getTime())
+                ? date.toLocaleDateString("en-CA", { timeZone: TEAM_TIME_ZONE })
+                : "";
+          }
+          return next;
+        });
+        setActionReminderTime((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (action.type !== "create_reminder" || next[action.id]) continue;
+            const dueAt = typeof action.payload?.["dueAt"] === "string" ? action.payload["dueAt"] : "";
+            const date = dueAt ? new Date(dueAt) : null;
+            next[action.id] =
+              date && !Number.isNaN(date.getTime())
+                ? date.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                    timeZone: TEAM_TIME_ZONE
+                  })
+                : "";
           }
           return next;
         });
@@ -476,9 +532,27 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         const payload = { ...action.payload };
         const note = actionNotes[action.id]?.trim();
         if (note && note.length > 0) {
-          payload["note"] = note;
-          if (action.type === "create_quote") {
+          if (action.type === "add_contact_note") {
+            payload["body"] = note;
+          } else if (action.type === "create_reminder") {
             payload["notes"] = note;
+          } else {
+            payload["note"] = note;
+            if (action.type === "create_quote") {
+              payload["notes"] = note;
+            }
+          }
+        }
+        if (action.type === "create_reminder") {
+          const title = actionReminderTitle[action.id]?.trim();
+          if (title && title.length) {
+            payload["title"] = title;
+          }
+          const datePart = actionReminderDate[action.id];
+          const timePart = actionReminderTime[action.id];
+          if (datePart) {
+            const iso = timePart ? `${datePart}T${timePart}:00` : `${datePart}T09:00:00`;
+            payload["dueAt"] = new Date(iso).toISOString();
           }
         }
         if (action.type === "book_appointment") {
@@ -560,7 +634,17 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         ]);
       }
     },
-    [actionNotes, actionDurations, actionServices, actionTravel, actionStartDate, actionStartTime]
+    [
+      actionNotes,
+      actionDurations,
+      actionServices,
+      actionTravel,
+      actionStartDate,
+      actionStartTime,
+      actionReminderDate,
+      actionReminderTime,
+      actionReminderTitle
+    ]
   );
 
   const handleUndoBooking = React.useCallback(async () => {
@@ -856,6 +940,85 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                   placeholder="Add a short note for this booking"
                                 />
                               </label>
+                            </div>
+                          ) : null}
+                          {action.type === "create_reminder" ? (
+                            <div className="grid gap-2 text-[11px] text-slate-600 sm:grid-cols-3">
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Due date</span>
+                                <input
+                                  type="date"
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionReminderDate[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionReminderDate((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value
+                                    }))
+                                  }
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Due time</span>
+                                <input
+                                  type="time"
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionReminderTime[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionReminderTime((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value
+                                    }))
+                                  }
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Title</span>
+                                <input
+                                  type="text"
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionReminderTitle[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionReminderTitle((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value
+                                    }))
+                                  }
+                                  placeholder="Call back"
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1 sm:col-span-3">
+                                <span className="font-semibold text-slate-700">Notes (optional)</span>
+                                <textarea
+                                  rows={2}
+                                  className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionNotes[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionNotes((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value
+                                    }))
+                                  }
+                                  placeholder="Add context for the reminder"
+                                />
+                              </label>
+                            </div>
+                          ) : null}
+                          {action.type === "add_contact_note" ? (
+                            <div className="flex flex-col gap-1 text-[11px] text-slate-600">
+                              <span className="font-semibold text-slate-700">Note (required)</span>
+                              <textarea
+                                rows={3}
+                                className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                value={actionNotes[action.id] ?? ""}
+                                onChange={(e) =>
+                                  setActionNotes((prev) => ({
+                                    ...prev,
+                                    [action.id]: e.target.value
+                                  }))
+                                }
+                                placeholder="Add a note to this contact"
+                              />
                             </div>
                           ) : null}
                           {action.type === "create_quote" || action.type === "create_task" ? (
