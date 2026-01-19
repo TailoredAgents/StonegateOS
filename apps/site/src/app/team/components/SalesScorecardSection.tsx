@@ -75,6 +75,8 @@ type CallCoachingPayload = {
     callRecordId: string;
     createdAt: string;
     durationSec: number | null;
+    summary?: string | null;
+    note?: { title: string | null; body: string } | null;
     contact: { id: string | null; name: string; source: string | null };
     primaryRubric: "inbound" | "outbound";
     primary: { rubric: "inbound" | "outbound"; scoreOverall: number; wins: string[]; improvements: string[] } | null;
@@ -153,6 +155,10 @@ function scoreTone(value: number | null): "good" | "warn" | "bad" | "neutral" {
   if (value >= 90) return "good";
   if (value >= 80) return "warn";
   return "bad";
+}
+
+function stripCallSid(text: string): string {
+  return text.replace(/\s*\(Call SID:\s*[A-Za-z0-9]+\)\s*/g, " ").replace(/\s{2,}/g, " ").trim();
 }
 
 export async function SalesScorecardSection(): Promise<React.ReactElement> {
@@ -353,6 +359,12 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                 const createdAt = new Date(item.createdAt);
                 const primary = item.primary;
                 const secondary = item.secondary;
+                const callNoteBody =
+                  item.note && typeof item.note.body === "string" && item.note.body.trim().length
+                    ? stripCallSid(item.note.body)
+                    : null;
+                const callSummary =
+                  typeof item.summary === "string" && item.summary.trim().length ? stripCallSid(item.summary) : null;
                 return (
                   <details key={item.callRecordId} className="group px-4 py-3">
                     <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
@@ -372,6 +384,31 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
                         </Pill>
                       </div>
                     </summary>
+
+                    {callNoteBody || callSummary ? (
+                      <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-semibold text-slate-700">
+                              {item.note?.title && item.note.title.trim().length ? item.note.title : "Call notes"}
+                            </p>
+                            {callNoteBody ? (
+                              <p className="mt-1 whitespace-pre-wrap text-xs text-slate-700">{callNoteBody}</p>
+                            ) : callSummary ? (
+                              <p className="mt-1 whitespace-pre-wrap text-xs text-slate-700">{callSummary}</p>
+                            ) : null}
+                          </div>
+                          {item.contact.id ? (
+                            <a
+                              className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-300"
+                              href={`/team?tab=contacts&contactId=${encodeURIComponent(item.contact.id)}`}
+                            >
+                              Open contact
+                            </a>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
 
                     <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">

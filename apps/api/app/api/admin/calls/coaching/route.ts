@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
-import { callCoaching, callRecords, contacts, getDb } from "@/db";
+import { callCoaching, callRecords, contacts, crmTasks, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -104,13 +104,17 @@ export async function GET(request: NextRequest): Promise<Response> {
       id: callRecords.id,
       createdAt: callRecords.createdAt,
       durationSec: callRecords.callDurationSec,
+      summary: callRecords.summary,
       contactId: callRecords.contactId,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
-      contactSource: contacts.source
+      contactSource: contacts.source,
+      noteTitle: crmTasks.title,
+      noteBody: crmTasks.notes
     })
     .from(callRecords)
     .leftJoin(contacts, eq(callRecords.contactId, contacts.id))
+    .leftJoin(crmTasks, eq(callRecords.noteTaskId, crmTasks.id))
     .where(and(gte(callRecords.createdAt, since), inArray(callRecords.id, uniqueCallIds)))
     .orderBy(desc(callRecords.createdAt))
     .limit(50)
@@ -150,6 +154,14 @@ export async function GET(request: NextRequest): Promise<Response> {
         callRecordId: row.id,
         createdAt: row.createdAt.toISOString(),
         durationSec: row.durationSec ?? null,
+        summary: typeof row.summary === "string" && row.summary.trim().length ? row.summary.trim() : null,
+        note:
+          typeof row.noteBody === "string" && row.noteBody.trim().length
+            ? {
+                title: typeof row.noteTitle === "string" ? row.noteTitle : null,
+                body: row.noteBody.trim()
+              }
+            : null,
         contact: { id: contactId, name, source },
         primaryRubric,
         primary,
