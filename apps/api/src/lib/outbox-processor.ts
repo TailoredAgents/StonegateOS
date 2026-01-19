@@ -3275,6 +3275,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         .select({
           id: callRecords.id,
           callSid: callRecords.callSid,
+          parentCallSid: callRecords.parentCallSid,
           contactId: callRecords.contactId,
           assignedTo: callRecords.assignedTo,
           noteTaskId: callRecords.noteTaskId,
@@ -3292,7 +3293,11 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "processed" };
       }
 
-      const recordings = await listTwilioRecordingsForCall(callSid);
+      let recordings = await listTwilioRecordingsForCall(callSid);
+      if (!recordings.length && typeof call.parentCallSid === "string" && call.parentCallSid.trim().length > 0) {
+        recordings = await listTwilioRecordingsForCall(call.parentCallSid.trim());
+      }
+
       if (!recordings.length) {
         const attempts = typeof event.attempts === "number" ? event.attempts : 0;
         if (attempts < 5) {
