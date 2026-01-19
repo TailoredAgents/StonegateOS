@@ -406,16 +406,16 @@ export async function OutboundSection({
 
             <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
             <div className="rounded-2xl border border-slate-200 bg-white">
-              <table className="w-full text-left text-xs">
+              <table className="w-full table-fixed text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                   <tr>
-                    <th className="px-4 py-3">
+                    <th className="w-[52px] px-4 py-3">
                       <span className="sr-only">Select</span>
                     </th>
-                    <th className="px-4 py-3">Due</th>
-                    <th className="px-4 py-3">Attempt</th>
+                    <th className="w-[150px] px-4 py-3">Due</th>
+                    <th className="w-[86px] px-4 py-3">Attempt</th>
                     <th className="px-4 py-3">Prospect</th>
-                    <th className="hidden px-4 py-3 text-right md:table-cell">Actions</th>
+                    <th className="hidden w-[128px] px-4 py-3 text-right md:table-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -433,11 +433,18 @@ export async function OutboundSection({
                           </span>
                         </td>
                         <td className="px-4 py-3 text-slate-600">{item.attempt}</td>
-                        <td className="px-4 py-3">
-                          <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { taskId: item.id } })} className="block max-w-[320px]">
+                        <td className="min-w-0 px-4 py-3">
+                          <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { taskId: item.id } })} className="block min-w-0">
                             <div className="truncate text-sm font-semibold text-slate-900">{item.company ? item.company : item.contact.name}</div>
                             <div className="mt-0.5 truncate text-[11px] text-slate-500">{item.company ? item.contact.name : item.campaign ? item.campaign : "Outbound"}</div>
-                            <div className="mt-1 text-[11px] text-slate-500">
+                            <div className="mt-1 truncate text-[11px] text-slate-500">
+                              <span>{item.contact.phone ?? "No phone"}</span>
+                              <span className="mx-1">{"\u2022"}</span>
+                              <span>{item.contact.email ?? "No email"}</span>
+                              <span className="mx-1">{"\u2022"}</span>
+                              <span>{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}</span>
+                            </div>
+                            <div className="mt-1 hidden text-[11px] text-slate-500">
                               <span>{item.contact.phone ?? "No phone"}</span>
                               <span className="mx-1">•</span>
                               <span>{item.contact.email ?? "No email"}</span>
