@@ -67,7 +67,36 @@ function computeOverallFromBreakdown(breakdown: Record<string, number> | null | 
 
   const bucketsAverage = (qualifying + pricing + bookingPush + professionalism + nextSteps) / 5;
   const overall = 0.4 * vibe + 0.6 * bucketsAverage;
-  return Math.max(0, Math.min(100, Math.round(overall)));
+  const rounded = Math.max(0, Math.min(100, Math.round(overall)));
+
+  // Calibration guardrail:
+  // - 70–85 = "good" typical call
+  // - 86–89 = strong
+  // - 90+ = near-perfect and should be rare
+  // Enforce that high scores require consistently strong buckets (especially vibe).
+  if (rounded >= 95) {
+    const ok =
+      vibe >= 94 &&
+      qualifying >= 92 &&
+      pricing >= 92 &&
+      bookingPush >= 92 &&
+      professionalism >= 94 &&
+      nextSteps >= 92;
+    return ok ? rounded : 94;
+  }
+
+  if (rounded >= 90) {
+    const ok =
+      vibe >= 90 &&
+      qualifying >= 88 &&
+      pricing >= 85 &&
+      bookingPush >= 85 &&
+      professionalism >= 90 &&
+      nextSteps >= 88;
+    return ok ? rounded : 89;
+  }
+
+  return rounded;
 }
 
 function normalizeCoachingOutput(raw: z.infer<typeof CoachingSchema>): Omit<CallCoachingResult, "model"> {
@@ -99,7 +128,13 @@ function buildRubricPrompt(rubric: CallCoachingRubric): { rubricLabel: string; r
         "Score the salesperson's performance for cold outbound commercial outreach.",
         "Focus on: opener + permission to talk, value proposition, qualifying questions, handling objections/gatekeeper, clear next step (meeting/callback), professionalism and brevity.",
         "Do NOT judge based on whether the prospect was interested; judge the rep's process.",
-        "A perfect call is concise, confident, and ends with a clear next step."
+        "A perfect call is concise, confident, and ends with a clear next step.",
+        "",
+        "Scoring calibration (be strict):",
+        "- 70–85 = good, typical call that does the job but has minor friction.",
+        "- 86–89 = strong call with only minor rough edges.",
+        "- 90+ = near-perfect and should be rare (smooth flow, no rambling, crisp value, clean objection handling, clear next step).",
+        "- 95+ = exceptional and extremely rare."
       ].join("\n")
     };
   }
@@ -110,7 +145,13 @@ function buildRubricPrompt(rubric: CallCoachingRubric): { rubricLabel: string; r
       "Score the salesperson's performance for an inbound lead calling for junk removal / services.",
       "Focus on: fast qualification (items, access, timeframe, ZIP), clear pricing/anchoring, booking push, handling objections, and setting the next step.",
       "Do NOT judge based on whether the customer booked; judge the rep's process.",
-      "A perfect call ends with a scheduled appointment or a clear follow-up time with a reason."
+      "A perfect call ends with a scheduled appointment or a clear follow-up time with a reason.",
+      "",
+      "Scoring calibration (be strict):",
+      "- 70–85 = good, typical call that gets the basics but has minor friction.",
+      "- 86–89 = strong call with only minor rough edges.",
+      "- 90+ = near-perfect and should be rare (smooth flow, no awkwardness, no repeating, clear anchor, confident booking push, clean next steps).",
+      "- 95+ = exceptional and extremely rare."
     ].join("\n")
   };
 }
@@ -157,6 +198,10 @@ export async function scoreCallTranscript(input: {
     "",
     "Scorecard buckets (required):",
     bucketDefinitions,
+    "",
+    "Important: Penalize roughness inside the vibe bucket.",
+    "- Lower 'vibe' when the flow isn't smooth: awkward transitions, talking over, rambling, unclear phrasing, filler, repeating, or missing empathy.",
+    "- Even if the rep collects all info, a rough delivery should not earn 90+.",
     "",
     "Output rules:",
     "- score_overall: integer 0-100",
