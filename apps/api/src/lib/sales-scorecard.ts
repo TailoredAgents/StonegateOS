@@ -263,7 +263,7 @@ export async function computeCallQualityForMember(params: {
         eq(callCoaching.version, 1),
         gte(callCoaching.createdAt, params.since),
         lte(callCoaching.createdAt, params.until),
-        sql`${callCoaching.rubric} = (case when lower(coalesce(${contacts.source}, '')) like 'outbound:%' then 'outbound' else 'inbound' end)`
+        sql`${callCoaching.rubric} = cast((case when lower(coalesce(${contacts.source}, '')) like 'outbound:%' then 'outbound' else 'inbound' end) as call_coaching_rubric)`
       )
     );
 
