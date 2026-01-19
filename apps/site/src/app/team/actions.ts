@@ -2324,10 +2324,15 @@ export async function sendThreadMessageAction(formData: FormData) {
   const body = formData.get("body");
   const subject = formData.get("subject");
 
+  const resolvedChannel = typeof channel === "string" ? channel.trim() : "";
+  const attachments = formData
+    .getAll("attachments")
+    .filter((value): value is File => value instanceof File && value.size > 0);
+
   let resolvedThreadId = typeof threadId === "string" ? threadId.trim() : "";
   if (resolvedThreadId.length === 0) {
     const ensuredContactId = typeof contactId === "string" ? contactId.trim() : "";
-    const ensuredChannel = typeof channel === "string" ? channel.trim() : "";
+    const ensuredChannel = resolvedChannel;
 
     if (!ensuredContactId || !ensuredChannel) {
       jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
@@ -2361,18 +2366,59 @@ export async function sendThreadMessageAction(formData: FormData) {
       return;
     }
   }
-  if (typeof body !== "string" || body.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Message body required", path: "/" });
+  const trimmedBody = typeof body === "string" ? body.trim() : "";
+  if (trimmedBody.length === 0 && attachments.length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Add a message or attach photos first", path: "/" });
     revalidatePath("/team");
     return;
   }
 
   const payload: Record<string, unknown> = {
-    body: body.trim(),
-    direction: "outbound"
+    body: trimmedBody,
+    direction: "outbound",
+    ...(resolvedChannel ? { channel: resolvedChannel } : {})
   };
   if (typeof subject === "string" && subject.trim().length > 0) {
     payload["subject"] = subject.trim();
+  }
+
+  if (attachments.length > 0) {
+    if (resolvedChannel !== "sms" && resolvedChannel !== "dm") {
+      jar.set({ name: "myst-flash-error", value: "Attachments are only supported for SMS and Messenger right now.", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    const uploadForm = new FormData();
+    for (const file of attachments) {
+      uploadForm.append("file", file, file.name);
+    }
+
+    const uploadRes = await callAdminApi("/api/admin/inbox/uploads", {
+      method: "POST",
+      body: uploadForm
+    });
+
+    if (!uploadRes.ok) {
+      const message = await readErrorMessage(uploadRes, "Unable to upload attachments");
+      jar.set({ name: "myst-flash-error", value: message, path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    const uploadPayload = (await uploadRes.json().catch(() => null)) as { uploads?: { url?: unknown }[] } | null;
+    const mediaUrls =
+      uploadPayload?.uploads
+        ?.map((item) => (item && typeof item.url === "string" ? item.url.trim() : ""))
+        .filter((url) => url.length > 0) ?? [];
+
+    if (mediaUrls.length === 0) {
+      jar.set({ name: "myst-flash-error", value: "Unable to upload attachments", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    payload["mediaUrls"] = mediaUrls;
   }
 
   const response = await callAdminApi(`/api/admin/inbox/threads/${resolvedThreadId}/messages`, {
@@ -2387,7 +2433,7 @@ export async function sendThreadMessageAction(formData: FormData) {
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "Message queued", path: "/" });
+  jar.set({ name: "myst-flash", value: attachments.length ? "Message + photos queued" : "Message queued", path: "/" });
   revalidatePath("/team");
 }
 

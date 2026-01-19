@@ -13,9 +13,16 @@ import {
   index,
   uniqueIndex,
   jsonb,
-  integer
+  integer,
+  customType
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  }
+});
 
 export const leadStatusEnum = pgEnum("lead_status", ["new", "contacted", "quoted", "scheduled"]);
 export const quoteStatusEnum = pgEnum("quote_status", [
@@ -471,6 +478,23 @@ export const conversationMessages = pgTable(
     threadIdx: index("conversation_messages_thread_idx").on(table.threadId),
     statusIdx: index("conversation_messages_status_idx").on(table.deliveryStatus),
     sentIdx: index("conversation_messages_sent_idx").on(table.sentAt)
+  })
+);
+
+export const inboxMediaUploads = pgTable(
+  "inbox_media_uploads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    token: text("token").notNull(),
+    filename: text("filename"),
+    contentType: text("content_type").notNull(),
+    bytes: bytea("bytes").notNull(),
+    byteLength: integer("byte_length").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+  },
+  (table) => ({
+    expiresIdx: index("inbox_media_uploads_expires_idx").on(table.expiresAt)
   })
 );
 

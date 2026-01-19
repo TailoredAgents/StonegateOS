@@ -938,7 +938,8 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     const isDraft = isDraftMessage(message.metadata ?? null);
                     const statusLabel = isDraft ? "draft" : message.deliveryStatus;
                     const hasMedia = Array.isArray(message.mediaUrls) && message.mediaUrls.length > 0;
-                    const showBody = !(hasMedia && message.body === "Media message");
+                    const trimmedBody = typeof message.body === "string" ? message.body.trim() : "";
+                    const showBody = trimmedBody.length > 0 && !(hasMedia && trimmedBody === "Media message");
                     return (
                       <div key={message.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                         <div
@@ -1055,10 +1056,24 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                   <textarea
                     name="body"
                     rows={3}
-                    required
                     className={TEAM_INPUT_COMPACT}
                   />
                 </label>
+                {requestedChannel === "sms" || requestedChannel === "dm" ? (
+                  <label className="flex flex-col gap-1 text-xs text-slate-600">
+                    <span>Attach photos (optional)</span>
+                    <input
+                      type="file"
+                      name="attachments"
+                      accept="image/*,video/*"
+                      multiple
+                      className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
+                    />
+                    <span className="text-[11px] text-slate-500">
+                      You can send photos with or without text. (Max 5 files, 5MB each.)
+                    </span>
+                  </label>
+                ) : null}
                 <SubmitButton
                   className={teamButtonClass("primary", "sm")}
                   pendingLabel="Sending..."

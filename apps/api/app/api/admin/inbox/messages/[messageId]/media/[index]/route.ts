@@ -25,6 +25,34 @@ function isAllowedTwilioMediaUrl(value: string): boolean {
   }
 }
 
+function isAllowedPublicMediaUrl(value: string, request: NextRequest): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return false;
+
+    const host = url.hostname.toLowerCase();
+    const requestHost = request.nextUrl.hostname.toLowerCase();
+    if (host === requestHost) return true;
+
+    const envBase = (process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"] ?? "").trim();
+    if (envBase) {
+      const withScheme = /^https?:\/\//i.test(envBase) ? envBase : `https://${envBase}`;
+      try {
+        const envUrl = new URL(withScheme);
+        if (envUrl.hostname.toLowerCase() === host) return true;
+      } catch {
+        // ignore
+      }
+    }
+
+    if (host.endsWith("fbcdn.net") || host.endsWith("fbsbx.com")) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 async function resolveMedia(request: NextRequest, context: RouteContext): Promise<{
   mediaUrl: string;
   provider: string | null;
@@ -116,21 +144,58 @@ async function fetchTwilioHead(mediaUrl: string, auth: string): Promise<Response
   });
 }
 
+async function fetchPublicHead(mediaUrl: string): Promise<Response> {
+  const headResponse = await fetch(mediaUrl, { method: "HEAD" }).catch(() => null);
+
+  const response = headResponse?.ok
+    ? headResponse
+    : await fetch(mediaUrl, {
+        method: "GET",
+        headers: { Range: "bytes=0-0" }
+      }).catch(() => null);
+
+  if (!response?.ok) {
+    const status = response?.status ?? 502;
+    const text = response ? await response.text().catch(() => "") : "";
+    return NextResponse.json({ error: "media_fetch_failed", detail: `public:${status}:${text}` }, { status: 502 });
+  }
+
+  const contentType = response.headers.get("content-type") ?? "application/octet-stream";
+  const contentLength = response.headers.get("content-length");
+
+  try {
+    await response.arrayBuffer();
+  } catch {
+    // ignore
+  }
+
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      ...(contentLength ? { "Content-Length": contentLength } : {}),
+      "Cache-Control": "private, max-age=60"
+    }
+  });
+}
+
 export async function HEAD(request: NextRequest, context: RouteContext): Promise<Response> {
   const resolved = await resolveMedia(request, context);
   if (resolved instanceof Response) return resolved;
 
   const { mediaUrl, provider } = resolved;
-  if (provider !== "twilio" || !isAllowedTwilioMediaUrl(mediaUrl)) {
-    return NextResponse.json({ error: "media_provider_unsupported" }, { status: 400 });
-  }
+  if (provider === "twilio" && isAllowedTwilioMediaUrl(mediaUrl)) {
+    const auth = readTwilioAuth();
+    if (!auth) {
+      return NextResponse.json({ error: "twilio_not_configured" }, { status: 500 });
+    }
 
-  const auth = readTwilioAuth();
-  if (!auth) {
-    return NextResponse.json({ error: "twilio_not_configured" }, { status: 500 });
+    return fetchTwilioHead(mediaUrl, auth);
   }
-
-  return fetchTwilioHead(mediaUrl, auth);
+  if (isAllowedPublicMediaUrl(mediaUrl, request)) {
+    return fetchPublicHead(mediaUrl);
+  }
+  return NextResponse.json({ error: "media_provider_unsupported" }, { status: 400 });
 }
 
 export async function GET(request: NextRequest, context: RouteContext): Promise<Response> {
@@ -138,36 +203,56 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   if (resolved instanceof Response) return resolved;
 
   const { mediaUrl, provider } = resolved;
-  if (provider !== "twilio" || !isAllowedTwilioMediaUrl(mediaUrl)) {
-    return NextResponse.json({ error: "media_provider_unsupported" }, { status: 400 });
-  }
-
-  const auth = readTwilioAuth();
-  if (!auth) {
-    return NextResponse.json({ error: "twilio_not_configured" }, { status: 500 });
-  }
-
-  const upstream = await fetch(mediaUrl, {
-    method: "GET",
-    headers: { Authorization: `Basic ${auth}` }
-  });
-
-  if (!upstream.ok) {
-    const text = await upstream.text().catch(() => "");
-    return NextResponse.json(
-      { error: "media_fetch_failed", detail: `twilio:${upstream.status}:${text}` },
-      { status: 502 }
-    );
-  }
-
-  const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
-  const bytes = await upstream.arrayBuffer();
-
-  return new NextResponse(bytes, {
-    status: 200,
-    headers: {
-      "Content-Type": contentType,
-      "Cache-Control": "private, max-age=60"
+  if (provider === "twilio" && isAllowedTwilioMediaUrl(mediaUrl)) {
+    const auth = readTwilioAuth();
+    if (!auth) {
+      return NextResponse.json({ error: "twilio_not_configured" }, { status: 500 });
     }
-  });
+
+    const upstream = await fetch(mediaUrl, {
+      method: "GET",
+      headers: { Authorization: `Basic ${auth}` }
+    });
+
+    if (!upstream.ok) {
+      const text = await upstream.text().catch(() => "");
+      return NextResponse.json(
+        { error: "media_fetch_failed", detail: `twilio:${upstream.status}:${text}` },
+        { status: 502 }
+      );
+    }
+
+    const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
+    const bytes = await upstream.arrayBuffer();
+
+    return new NextResponse(bytes, {
+      status: 200,
+      headers: {
+        "Content-Type": contentType,
+        "Cache-Control": "private, max-age=60"
+      }
+    });
+  }
+  if (isAllowedPublicMediaUrl(mediaUrl, request)) {
+    const upstream = await fetch(mediaUrl, { method: "GET" });
+    if (!upstream.ok) {
+      const text = await upstream.text().catch(() => "");
+      return NextResponse.json(
+        { error: "media_fetch_failed", detail: `public:${upstream.status}:${text}` },
+        { status: 502 }
+      );
+    }
+
+    const contentType = upstream.headers.get("content-type") ?? "application/octet-stream";
+    const bytes = await upstream.arrayBuffer();
+
+    return new NextResponse(bytes, {
+      status: 200,
+      headers: {
+        "Content-Type": contentType,
+        "Cache-Control": "private, max-age=60"
+      }
+    });
+  }
+  return NextResponse.json({ error: "media_provider_unsupported" }, { status: 400 });
 }

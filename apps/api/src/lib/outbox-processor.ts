@@ -3755,6 +3755,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
             channel: conversationMessages.channel,
             body: conversationMessages.body,
             subject: conversationMessages.subject,
+            mediaUrls: conversationMessages.mediaUrls,
             toAddress: conversationMessages.toAddress,
             metadata: conversationMessages.metadata,
             deliveryStatus: conversationMessages.deliveryStatus,
@@ -3783,6 +3784,9 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       const channel = message.channel ?? "sms";
       const subject = message.subject ?? "Stonegate message";
       const body = message.body ?? "";
+      const mediaUrls = Array.isArray(message.mediaUrls)
+        ? message.mediaUrls.filter((url): url is string => typeof url === "string" && url.trim().length > 0)
+        : [];
       let toAddress = message.toAddress ?? null;
       let metadata = isRecord(message.metadata) ? message.metadata : null;
 
@@ -3883,11 +3887,11 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
 
       let result: Awaited<ReturnType<typeof sendSmsMessage>>;
       if (channel === "sms") {
-        result = await sendSmsMessage(toAddress, body);
+        result = await sendSmsMessage(toAddress, body, mediaUrls);
       } else if (channel === "email") {
         result = await sendEmailMessage(toAddress, subject, body);
       } else if (channel === "dm") {
-        result = await sendDmMessage(toAddress, body, metadata);
+        result = await sendDmMessage(toAddress, body, metadata, mediaUrls);
       } else {
         result = { ok: false, provider: "unknown", detail: "unsupported_channel" };
       }

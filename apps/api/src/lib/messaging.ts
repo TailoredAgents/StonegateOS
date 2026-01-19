@@ -56,7 +56,11 @@ function getTransport(): nodemailer.Transporter | null {
   return cachedTransporter;
 }
 
-export async function sendSmsMessage(to: string, body: string): Promise<SendResult> {
+export async function sendSmsMessage(
+  to: string,
+  body: string,
+  mediaUrls?: string[] | null
+): Promise<SendResult> {
   const sid = process.env["TWILIO_ACCOUNT_SID"];
   const token = process.env["TWILIO_AUTH_TOKEN"];
   const from = process.env["TWILIO_FROM"];
@@ -69,7 +73,14 @@ export async function sendSmsMessage(to: string, body: string): Promise<SendResu
 
   try {
     const auth = Buffer.from(`${sid}:${token}`).toString("base64");
-    const form = new URLSearchParams({ From: from, To: to, Body: body }).toString();
+    const formParams = new URLSearchParams({ From: from, To: to });
+    formParams.set("Body", body ?? "");
+    const urls = Array.isArray(mediaUrls)
+      ? mediaUrls.filter((url): url is string => typeof url === "string" && url.trim().length > 0)
+      : [];
+    for (const url of urls) {
+      formParams.append("MediaUrl", url.trim());
+    }
 
     const response = await fetch(`${baseUrl}/2010-04-01/Accounts/${sid}/Messages.json`, {
       method: "POST",
@@ -77,7 +88,7 @@ export async function sendSmsMessage(to: string, body: string): Promise<SendResu
         "Content-Type": "application/x-www-form-urlencoded",
         Authorization: `Basic ${auth}`
       },
-      body: form
+      body: formParams.toString()
     });
 
     if (!response.ok) {
@@ -219,7 +230,12 @@ async function fetchFacebookPageAccessToken(pageId: string, systemUserToken: str
 
 async function sendFacebookDm(
   action: "message" | "typing_on" | "typing_off",
-  input: { pageId: string; recipientId: string; body?: string }
+  input: {
+    pageId: string;
+    recipientId: string;
+    body?: string;
+    attachment?: { type: "image" | "video"; url: string; isReusable?: boolean };
+  }
 ): Promise<SendResult> {
   const systemUserToken = getFacebookSystemUserToken();
   if (!systemUserToken) {
@@ -236,7 +252,19 @@ async function sendFacebookDm(
 
   if (action === "message") {
     payload["messaging_type"] = "RESPONSE";
-    payload["message"] = { text: input.body ?? "" };
+    if (input.attachment) {
+      payload["message"] = {
+        attachment: {
+          type: input.attachment.type,
+          payload: {
+            url: input.attachment.url,
+            is_reusable: Boolean(input.attachment.isReusable)
+          }
+        }
+      };
+    } else {
+      payload["message"] = { text: input.body ?? "" };
+    }
   } else {
     payload["sender_action"] = action;
   }
@@ -318,7 +346,8 @@ async function postDmWebhook(
 export async function sendDmMessage(
   to: string,
   body: string,
-  metadata?: Record<string, unknown> | null
+  metadata?: Record<string, unknown> | null,
+  mediaUrls?: string[] | null
 ): Promise<SendResult> {
   const config = readDmWebhookConfig();
   if (config) {
@@ -326,7 +355,8 @@ export async function sendDmMessage(
       action: "message",
       to,
       body,
-      metadata: metadata ?? null
+      metadata: metadata ?? null,
+      mediaUrls: Array.isArray(mediaUrls) ? mediaUrls : []
     };
     if (config.from) {
       payload["from"] = config.from;
@@ -345,7 +375,34 @@ export async function sendDmMessage(
   }
 
   try {
-    return await sendFacebookDm("message", { pageId, recipientId: to, body });
+    const trimmed = typeof body === "string" ? body.trim() : "";
+    const urls = Array.isArray(mediaUrls)
+      ? mediaUrls.filter((url): url is string => typeof url === "string" && url.trim().length > 0)
+      : [];
+
+    let last: SendResult | null = null;
+    if (trimmed.length > 0 || urls.length === 0) {
+      last = await sendFacebookDm("message", { pageId, recipientId: to, body: trimmed });
+      if (!last.ok) return last;
+    }
+
+    const guessType = (url: string): "image" | "video" => {
+      const lower = url.toLowerCase();
+      if (lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm")) return "video";
+      return "image";
+    };
+
+    for (const url of urls) {
+      const res = await sendFacebookDm("message", {
+        pageId,
+        recipientId: to,
+        attachment: { type: guessType(url), url, isReusable: true }
+      });
+      if (!res.ok) return res;
+      last = res;
+    }
+
+    return last ?? { ok: true, provider: "facebook", providerMessageId: null };
   } catch (error) {
     return { ok: false, provider: "facebook", detail: `facebook_dm_error:${String(error)}` };
   }

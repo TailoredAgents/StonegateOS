@@ -266,6 +266,13 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const normalizeIsoTimestamp = (value: unknown): string | null => {
     if (value instanceof Date) return value.toISOString();
+    if (value && typeof (value as { toISOString?: unknown }).toISOString === "function") {
+      try {
+        return (value as { toISOString: () => string }).toISOString();
+      } catch {
+        // ignore
+      }
+    }
     if (typeof value === "string") {
       const parsed = Date.parse(value);
       return Number.isFinite(parsed) ? new Date(parsed).toISOString() : value;
@@ -280,6 +287,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
     const lastActivityIso = normalizeIsoTimestamp(row.lastActivityAt as unknown);
     const lastInboundIso = normalizeIsoTimestamp(row.lastInboundAt as unknown);
+    const updatedAtIso = normalizeIsoTimestamp(row.updatedAt as unknown);
+    const stateUpdatedAtIso = normalizeIsoTimestamp(row.stateUpdatedAt as unknown);
+    const nextFollowupIso = normalizeIsoTimestamp(row.nextFollowupAt as unknown);
     return {
       id: row.id,
       status: row.status,
@@ -288,8 +298,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       subject: row.subject ?? null,
       lastMessagePreview: row.resolvedLastMessagePreview ?? null,
       lastMessageAt: lastActivityIso,
-      updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
-      stateUpdatedAt: row.stateUpdatedAt ? row.stateUpdatedAt.toISOString() : null,
+      updatedAt: updatedAtIso,
+      stateUpdatedAt: stateUpdatedAtIso,
       lastInboundAt: lastInboundIso,
       contact: row.contactId
         ? {
@@ -321,7 +331,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         ? {
             state: row.followupState ?? null,
             step: typeof row.followupStep === "number" ? row.followupStep : null,
-            nextAt: row.nextFollowupAt ? row.nextFollowupAt.toISOString() : null
+            nextAt: nextFollowupIso
           }
         : null
     };

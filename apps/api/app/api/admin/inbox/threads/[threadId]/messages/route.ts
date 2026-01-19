@@ -62,10 +62,6 @@ export async function POST(
   }
 
   const body = typeof payload.body === "string" ? payload.body.trim() : "";
-  if (!body) {
-    return NextResponse.json({ error: "body_required" }, { status: 400 });
-  }
-
   const subject = typeof payload.subject === "string" && payload.subject.trim().length > 0 ? payload.subject.trim() : null;
   const direction = isDirection(payload.direction ?? null) ? (payload.direction as Direction) : "outbound";
   const channel = isChannel(payload.channel ?? null) ? (payload.channel as Channel) : null;
@@ -80,6 +76,10 @@ export async function POST(
 
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
+
+  if (!body && mediaUrls.length === 0) {
+    return NextResponse.json({ error: "body_required" }, { status: 400 });
+  }
 
   let result: { message: typeof conversationMessages.$inferSelect; messageChannel: string; contactId: string | null; salespersonMemberId: string | null };
   try {
@@ -266,7 +266,7 @@ export async function POST(
     await tx
       .update(conversationThreads)
       .set({
-        lastMessagePreview: body.slice(0, 140),
+        lastMessagePreview: (body || (mediaUrls.length ? "Media message" : "")).slice(0, 140),
         lastMessageAt: now,
         updatedAt: now
       })
