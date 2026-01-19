@@ -10,7 +10,9 @@ import { normalizePhone } from "../../../web/utils";
 export const dynamic = "force-dynamic";
 
 const DEFAULT_SERVICES = ["junk_removal_primary"];
-const OUTBOUND_CONNECTED_MIN_DURATION_SEC = 12;
+// "Connected" detection for outbound calls is imperfect without Answering Machine Detection (AMD).
+// We intentionally require a longer duration to avoid voicemail pickups prematurely stopping the cadence.
+const OUTBOUND_CONNECTED_MIN_DURATION_SEC = 60;
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -438,11 +440,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
     }
 
+    const effectiveDurationSec = payload.dialCallDuration ?? payload.callDuration ?? 0;
     const shouldAutoStopOutboundOnAnswered =
       Boolean(taskId) &&
       leg === "customer" &&
       payload.callStatus === "completed" &&
-      (payload.callDuration ?? 0) >= OUTBOUND_CONNECTED_MIN_DURATION_SEC;
+      effectiveDurationSec >= OUTBOUND_CONNECTED_MIN_DURATION_SEC;
 
     if (shouldAutoStopOutboundOnAnswered && taskId) {
       try {
@@ -505,7 +508,7 @@ export async function POST(request: NextRequest): Promise<Response> {
               contactId: task.contactId,
               campaign: campaign ?? null,
               callSid,
-              callDurationSec: payload.callDuration ?? null
+              callDurationSec: effectiveDurationSec
             }
           });
         }
