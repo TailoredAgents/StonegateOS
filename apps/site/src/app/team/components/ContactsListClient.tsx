@@ -94,7 +94,6 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [assigneeSaving, setAssigneeSaving] = useState(false);
   const [assigneeError, setAssigneeError] = useState<string | null>(null);
   const [showBookingForm, setShowBookingForm] = useState(false);
-  const [bookingStartAtIso, setBookingStartAtIso] = useState<string>("");
   const [addingProperty, setAddingProperty] = useState(false);
   const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
   const [showNoteForm, setShowNoteForm] = useState(false);
@@ -847,13 +846,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
           <form
             action={bookAppointmentAction}
             className="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-xs text-slate-600 shadow-inner"
-            onSubmit={() => {
-              setShowBookingForm(false);
-              setBookingStartAtIso("");
-            }}
           >
             <input type="hidden" name="contactId" value={contactState.id} />
-            <input type="hidden" name="startAt" value={bookingStartAtIso} />
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
@@ -877,17 +871,10 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 <span>Start time</span>
                 <input
                   type="datetime-local"
+                  name="startAt"
                   required
+                  step={300}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    if (!value) {
-                      setBookingStartAtIso("");
-                      return;
-                    }
-                    const parsed = new Date(value);
-                    setBookingStartAtIso(Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString());
-                  }}
                 />
               </label>
               <label className="flex flex-col gap-1">
@@ -950,7 +937,6 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 className="rounded-full border border-slate-200 px-4 py-2 font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800"
                 onClick={() => {
                   setShowBookingForm(false);
-                  setBookingStartAtIso("");
                 }}
               >
                 Cancel

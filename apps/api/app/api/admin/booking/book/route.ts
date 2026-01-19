@@ -1,15 +1,22 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { sql } from "drizzle-orm";
 import { appointmentNotes, appointments, crmTasks, getDb, outboxEvents, properties, teamMembers } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { getBusinessHoursPolicy } from "@/lib/policy";
 import { isAdminRequest } from "../../../web/admin";
 
-function parseDate(value: string): Date | null {
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
+function parseStartAt(value: string, timezone: string): Date | null {
+  const trimmed = value.trim();
+  const hasTimezone = /[zZ]$/.test(trimmed) || /[+-]\d{2}:\d{2}$/.test(trimmed);
+  const dt = hasTimezone
+    ? DateTime.fromISO(trimmed, { setZone: true })
+    : DateTime.fromISO(trimmed, { zone: timezone });
+  if (!dt.isValid) return null;
+  return dt.toUTC().toJSDate();
 }
 
 type BookRequest = {
@@ -89,17 +96,18 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "contact_and_start_required" }, { status: 400 });
   }
 
-  const startAt = parseDate(startAtIso);
-  if (!startAt) {
-    return NextResponse.json({ error: "invalid_startAt" }, { status: 400 });
-  }
-
   const services =
     Array.isArray(payload.services) && payload.services.length
       ? payload.services.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
       : [];
 
   const db = getDb();
+  const businessHours = await getBusinessHoursPolicy(db);
+  const timezone = businessHours.timezone || process.env["APPOINTMENT_TIMEZONE"] || "America/New_York";
+  const startAt = parseStartAt(startAtIso, timezone);
+  if (!startAt) {
+    return NextResponse.json({ error: "invalid_startAt" }, { status: 400 });
+  }
   const actor = getAuditActorFromRequest(request);
   const now = new Date();
 
