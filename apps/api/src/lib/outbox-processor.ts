@@ -835,6 +835,9 @@ async function ensureSalesFollowupsForContact(input: {
   const existingFlag = input.payload?.["scheduledSalesFollowups"] === true;
   if (existingFlag) return;
 
+  const source = typeof input.payload?.["source"] === "string" ? input.payload["source"].trim() : "";
+  const allowInstantCallEscalation = source.length > 0 ? source === "lead" : false;
+
   const config = await getSalesScorecardConfig(input.db);
   const [contactRow] = await input.db
     .select({
@@ -983,6 +986,7 @@ async function ensureSalesFollowupsForContact(input: {
       }
 
       if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
+        if (!allowInstantCallEscalation) continue;
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
           payload: { taskId: created.id, mode: "instant" },
