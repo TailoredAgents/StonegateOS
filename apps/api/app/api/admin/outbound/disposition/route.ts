@@ -144,13 +144,15 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
   });
 
-  const stop =
+  const hardStop =
     disposition === "dnc" ||
     disposition === "not_interested" ||
     disposition === "wrong_number" ||
     disposition === "spam";
 
-  if (stop) {
+  const softStop = disposition === "connected";
+
+  if (hardStop) {
     // Mark the contact as disqualified for automated queues (keeps it visible in Contacts).
     await db.insert(crmTasks).values({
       contactId: task.contactId,
@@ -159,6 +161,44 @@ export async function POST(request: NextRequest): Promise<Response> {
       dueAt: null,
       assignedTo: null,
       notes: `disqualify=outbound_${disposition}`
+    });
+
+    return NextResponse.json({ ok: true, taskId, contactId: task.contactId, stopped: true });
+  }
+
+  if (softStop) {
+    // A successful connection means the salesperson can take it from here (manual reminders / callbacks).
+    // Ensure we don't leave any other open outbound tasks for this contact + campaign hanging around.
+    const openTasks = await db
+      .select({ id: crmTasks.id, notes: crmTasks.notes })
+      .from(crmTasks)
+      .where(
+        and(
+          eq(crmTasks.contactId, task.contactId),
+          eq(crmTasks.status, "open"),
+          isNotNull(crmTasks.notes),
+          ilike(crmTasks.notes, "%kind=outbound%"),
+          ilike(crmTasks.notes, `%campaign=${campaign}%`)
+        )
+      );
+
+    for (const row of openTasks) {
+      const rowNotes = typeof row.notes === "string" ? row.notes : "";
+      let nextRowNotes = rowNotes;
+      if (!parseField(nextRowNotes, "startedAt")) {
+        nextRowNotes = upsertField(nextRowNotes, "startedAt", now.toISOString());
+      }
+      nextRowNotes = upsertField(upsertField(nextRowNotes, "lastDisposition", disposition), "completedAt", now.toISOString());
+      await db.update(crmTasks).set({ status: "completed", notes: nextRowNotes, updatedAt: now }).where(eq(crmTasks.id, row.id));
+    }
+
+    await db.insert(crmTasks).values({
+      contactId: task.contactId,
+      title: "Note",
+      status: "completed",
+      dueAt: null,
+      assignedTo: null,
+      notes: "Outbound connected (cadence stopped)"
     });
 
     return NextResponse.json({ ok: true, taskId, contactId: task.contactId, stopped: true });
