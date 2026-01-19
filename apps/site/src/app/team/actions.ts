@@ -2561,6 +2561,7 @@ export async function updateDefaultSalesAssigneeAction(formData: FormData) {
 
   jar.set({ name: "myst-flash", value: "Default salesperson updated", path: "/" });
   revalidatePath("/team");
+  redirect("/team?tab=access");
 }
 
 export async function resetSalesHqAction() {
