@@ -1,10 +1,13 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, eq, ilike, isNotNull, isNull, sql } from "drizzle-orm";
-import { crmTasks, getDb, outboxEvents } from "@/db";
+import { contacts, crmTasks, getDb, outboxEvents } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { DateTime } from "luxon";
+import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
+import { upsertPartnerCheckinTask } from "@/lib/partner-checkins";
 
 function parseField(notes: string, key: string): string | null {
   const match = notes.match(new RegExp(`(?:^|\\n)${key}=([^\\n]+)`, "i"));
@@ -150,7 +153,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     disposition === "wrong_number" ||
     disposition === "spam";
 
-  const softStop = disposition === "connected";
+  const softStop = disposition === "connected" || disposition === "partner";
 
   if (hardStop) {
     // Mark the contact as disqualified for automated queues (keeps it visible in Contacts).
@@ -198,8 +201,41 @@ export async function POST(request: NextRequest): Promise<Response> {
       status: "completed",
       dueAt: null,
       assignedTo: null,
-      notes: "Outbound connected (cadence stopped)"
+      notes: disposition === "partner" ? "Outbound converted to partner (cadence stopped)" : "Outbound connected (cadence stopped)"
     });
+
+    if (disposition === "partner") {
+      const config = await getSalesScorecardConfig(db as any);
+      const zone = config.timezone || "America/New_York";
+      const dueAt = DateTime.fromJSDate(now, { zone })
+        .plus({ days: 30 })
+        .set({ hour: 9, minute: 0, second: 0, millisecond: 0 })
+        .toUTC()
+        .toJSDate();
+
+      await db.update(contacts).set({
+        partnerStatus: "partner",
+        partnerOwnerMemberId: task.assignedTo ?? null,
+        partnerSince: sql`coalesce(${contacts.partnerSince}, ${now})`,
+        partnerLastTouchAt: now,
+        partnerNextTouchAt: dueAt,
+        updatedAt: now
+      }).where(eq(contacts.id, task.contactId));
+
+      await upsertPartnerCheckinTask(db as any, {
+        contactId: task.contactId,
+        assignedTo: task.assignedTo ?? null,
+        dueAt
+      });
+
+      await recordAuditEvent({
+        actor,
+        action: "partner.converted",
+        entityType: "contact",
+        entityId: task.contactId,
+        meta: { from: "outbound", campaign }
+      });
+    }
 
     return NextResponse.json({ ok: true, taskId, contactId: task.contactId, stopped: true });
   }

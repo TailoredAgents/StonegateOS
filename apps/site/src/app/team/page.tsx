@@ -25,6 +25,7 @@ import { SalesActivityLogSection } from "./components/SalesActivityLogSection";
 import { MergeQueueSection } from "./components/MergeQueueSection";
 import { SalesScorecardSection } from "./components/SalesScorecardSection";
 import { OutboundSection } from "./components/OutboundSection";
+import { PartnersSection } from "./components/PartnersSection";
 import { SeoAgentSection } from "./components/SeoAgentSection";
 import { QuotesHubSection } from "./components/QuotesHubSection";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
@@ -68,6 +69,11 @@ export default async function TeamPage({
     out_disposition?: string;
     out_taskId?: string;
     out_offset?: string;
+    p_status?: string;
+    p_owner?: string;
+    p_type?: string;
+    p_q?: string;
+    p_offset?: string;
     quoteMode?: string;
     view?: string;
     onlyOutbound?: string;
@@ -123,6 +129,14 @@ export default async function TeamPage({
     offset: typeof params?.out_offset === "string" ? params.out_offset : undefined
   };
 
+  const partnerFilters = {
+    status: typeof params?.p_status === "string" ? params.p_status : undefined,
+    ownerId: typeof params?.p_owner === "string" ? params.p_owner : undefined,
+    type: typeof params?.p_type === "string" ? params.p_type : undefined,
+    q: typeof params?.p_q === "string" ? params.p_q : undefined,
+    offset: typeof params?.p_offset === "string" ? params.p_offset : undefined
+  };
+
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
   const dismissedNewLeadId = cookieStore.get("myst-new-lead-dismissed")?.value ?? null;
@@ -136,6 +150,7 @@ export default async function TeamPage({
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
     { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "owner" },
     { id: "outbound", label: "Outbound", href: "/team?tab=outbound", requires: "owner" },
+    { id: "partners", label: "Partners", href: "/team?tab=partners", requires: "owner" },
     { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
@@ -151,7 +166,7 @@ export default async function TeamPage({
   ];
   const tabGroups: TabNavGroup[] = [
     { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
-    { id: "sales", label: "Sales", itemIds: ["quotes", "pipeline", "sales-hq", "outbound", "contacts", "inbox", "calendar"] },
+    { id: "sales", label: "Sales", itemIds: ["quotes", "pipeline", "sales-hq", "outbound", "partners", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
     { id: "control", label: "Control", itemIds: ["commissions", "seo", "policy", "automation", "access", "sales-log", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
@@ -382,6 +397,12 @@ export default async function TeamPage({
         {tab === "outbound" && hasOwner ? (
           <React.Suspense fallback={<TeamSkeletonCard title="Loading outbound prospects" />}>
             <OutboundSection memberId={memberIdParam} filters={outboundFilters} />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "partners" && hasOwner ? (
+          <React.Suspense fallback={<TeamSkeletonCard title="Loading partners" />}>
+            <PartnersSection filters={partnerFilters} />
           </React.Suspense>
         ) : null}
 

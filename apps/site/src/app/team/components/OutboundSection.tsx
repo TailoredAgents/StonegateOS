@@ -540,6 +540,7 @@ export async function OutboundSection({
                   <div className="flex flex-wrap gap-2">
                     {[
                       { key: "connected", label: "Connected" },
+                      { key: "partner", label: "Partner" },
                       { key: "no_answer", label: "No answer" },
                       { key: "left_voicemail", label: "Left VM" },
                       { key: "email_sent", label: "Emailed" },

@@ -87,16 +87,33 @@ export const automationChannelEnum = pgEnum("automation_channel", [
 ]);
 export const automationModeEnum = pgEnum("automation_mode", ["draft", "assist", "auto"]);
 
+export const partnerStatusEnum = pgEnum("partner_status", [
+  "none",
+  "prospect",
+  "contacted",
+  "partner",
+  "inactive"
+]);
+
 export const contacts = pgTable(
   "contacts",
   {
     id: uuid("id").defaultRandom().primaryKey(),
     firstName: text("first_name").notNull(),
     lastName: text("last_name").notNull(),
+    company: text("company"),
     email: text("email"),
     phone: varchar("phone", { length: 32 }),
     phoneE164: varchar("phone_e164", { length: 32 }),
     salespersonMemberId: uuid("salesperson_member_id"),
+    partnerStatus: partnerStatusEnum("partner_status").default("none").notNull(),
+    partnerType: text("partner_type"),
+    partnerOwnerMemberId: uuid("partner_owner_member_id"),
+    partnerSince: timestamp("partner_since", { withTimezone: true }),
+    partnerLastTouchAt: timestamp("partner_last_touch_at", { withTimezone: true }),
+    partnerNextTouchAt: timestamp("partner_next_touch_at", { withTimezone: true }),
+    partnerReferralCount: integer("partner_referral_count").default(0).notNull(),
+    partnerLastReferralAt: timestamp("partner_last_referral_at", { withTimezone: true }),
     preferredContactMethod: text("preferred_contact_method").default("phone"),
     source: text("source"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -108,7 +125,10 @@ export const contacts = pgTable(
   (table) => ({
     emailIdx: uniqueIndex("contacts_email_key").on(table.email),
     phoneIdx: uniqueIndex("contacts_phone_key").on(table.phone),
-    phoneE164Idx: uniqueIndex("contacts_phone_e164_key").on(table.phoneE164)
+    phoneE164Idx: uniqueIndex("contacts_phone_e164_key").on(table.phoneE164),
+    partnerStatusIdx: index("contacts_partner_status_idx").on(table.partnerStatus),
+    partnerOwnerIdx: index("contacts_partner_owner_idx").on(table.partnerOwnerMemberId),
+    partnerNextTouchIdx: index("contacts_partner_next_touch_idx").on(table.partnerNextTouchAt)
   })
 );
 

@@ -3011,3 +3011,105 @@ export async function bulkOutboundAction(formData: FormData) {
   });
   revalidatePath("/team");
 }
+
+export async function partnerScheduleCheckinAction(formData: FormData) {
+  const jar = await cookies();
+  const contactIdRaw = formData.get("contactId");
+  const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
+
+  const daysRaw = formData.get("daysFromNow");
+  const daysFromNow = typeof daysRaw === "string" && daysRaw.trim().length ? Number(daysRaw.trim()) : null;
+
+  const dueAtRaw = formData.get("dueAt");
+  const dueAt = typeof dueAtRaw === "string" && dueAtRaw.trim().length ? dueAtRaw.trim() : null;
+
+  const assignedToRaw = formData.get("assignedToMemberId");
+  const assignedToMemberId = typeof assignedToRaw === "string" && assignedToRaw.trim().length ? assignedToRaw.trim() : null;
+
+  if (!contactId) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/partners/checkin", {
+    method: "POST",
+    body: JSON.stringify({
+      contactId,
+      ...(dueAt ? { dueAt } : {}),
+      ...(daysFromNow !== null && Number.isFinite(daysFromNow) ? { daysFromNow } : {}),
+      ...(assignedToMemberId ? { assignedToMemberId } : {})
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to schedule check-in");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Partner check-in scheduled.", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function partnerLogTouchAction(formData: FormData) {
+  const jar = await cookies();
+  const contactIdRaw = formData.get("contactId");
+  const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
+
+  const nextTouchDaysRaw = formData.get("nextTouchDays");
+  const nextTouchDays =
+    typeof nextTouchDaysRaw === "string" && nextTouchDaysRaw.trim().length ? Number(nextTouchDaysRaw.trim()) : null;
+
+  if (!contactId) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/partners/touch", {
+    method: "POST",
+    body: JSON.stringify({
+      contactId,
+      ...(nextTouchDays !== null && Number.isFinite(nextTouchDays) ? { nextTouchDays } : {})
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to log touch");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Partner touch logged.", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function partnerLogReferralAction(formData: FormData) {
+  const jar = await cookies();
+  const contactIdRaw = formData.get("contactId");
+  const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
+
+  if (!contactId) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/partners/referral", {
+    method: "POST",
+    body: JSON.stringify({ contactId })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to log referral");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Partner referral logged.", path: "/" });
+  revalidatePath("/team");
+}

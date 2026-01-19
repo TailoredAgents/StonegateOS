@@ -130,10 +130,13 @@ export async function POST(request: NextRequest): Promise<Response> {
             id: string;
             firstName: string;
             lastName: string;
+            company: string | null;
             email: string | null;
             phone: string | null;
             phoneE164: string | null;
             source: string | null;
+            partnerStatus: string;
+            partnerOwnerMemberId: string | null;
           }
         | null = null;
 
@@ -143,10 +146,13 @@ export async function POST(request: NextRequest): Promise<Response> {
             id: contacts.id,
             firstName: contacts.firstName,
             lastName: contacts.lastName,
+            company: contacts.company,
             email: contacts.email,
             phone: contacts.phone,
             phoneE164: contacts.phoneE164,
-            source: contacts.source
+            source: contacts.source,
+            partnerStatus: contacts.partnerStatus,
+            partnerOwnerMemberId: contacts.partnerOwnerMemberId
           })
           .from(contacts)
           .where(eq(contacts.email, email))
@@ -160,10 +166,13 @@ export async function POST(request: NextRequest): Promise<Response> {
             id: contacts.id,
             firstName: contacts.firstName,
             lastName: contacts.lastName,
+            company: contacts.company,
             email: contacts.email,
             phone: contacts.phone,
             phoneE164: contacts.phoneE164,
-            source: contacts.source
+            source: contacts.source,
+            partnerStatus: contacts.partnerStatus,
+            partnerOwnerMemberId: contacts.partnerOwnerMemberId
           })
           .from(contacts)
           .where(eq(contacts.phoneE164, phone.e164))
@@ -177,10 +186,13 @@ export async function POST(request: NextRequest): Promise<Response> {
             id: contacts.id,
             firstName: contacts.firstName,
             lastName: contacts.lastName,
+            company: contacts.company,
             email: contacts.email,
             phone: contacts.phone,
             phoneE164: contacts.phoneE164,
-            source: contacts.source
+            source: contacts.source,
+            partnerStatus: contacts.partnerStatus,
+            partnerOwnerMemberId: contacts.partnerOwnerMemberId
           })
           .from(contacts)
           .where(eq(contacts.phone, phone.raw))
@@ -204,7 +216,12 @@ export async function POST(request: NextRequest): Promise<Response> {
         if ((!existing.lastName || existing.lastName.toLowerCase() === "unknown") && baseName.lastName) {
           nextValues.lastName = baseName.lastName;
         }
+        if (!existing.company && company) nextValues.company = company;
         if (!existing.source) nextValues.source = source;
+        if ((existing.source ?? "").startsWith("outbound:") || !existing.source) {
+          if (existing.partnerStatus === "none") nextValues.partnerStatus = "prospect";
+          if (!existing.partnerOwnerMemberId) nextValues.partnerOwnerMemberId = assignee ?? null;
+        }
         if (Object.keys(nextValues).length) {
           await tx.update(contacts).set({ ...nextValues, updatedAt: now }).where(eq(contacts.id, existing.id));
           updated += 1;
@@ -225,10 +242,13 @@ export async function POST(request: NextRequest): Promise<Response> {
         .values({
           firstName: baseName.firstName,
           lastName: baseName.lastName,
+          company: company ?? null,
           email: email ?? null,
           phone: phone?.e164 ?? phone?.raw ?? null,
           phoneE164: phone?.e164 ?? null,
           salespersonMemberId: assignee,
+          partnerStatus: "prospect",
+          partnerOwnerMemberId: assignee ?? null,
           source,
           createdAt: now,
           updatedAt: now
