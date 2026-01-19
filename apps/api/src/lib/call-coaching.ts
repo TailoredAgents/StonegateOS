@@ -29,15 +29,57 @@ const CoachingSchema = z.object({
   improvements: z.array(z.string().min(3).max(220)).max(5).optional()
 });
 
+type BreakdownKeys = "vibe" | "qualifying" | "pricing_clarity" | "booking_push" | "professionalism" | "next_steps";
+const REQUIRED_BREAKDOWN_KEYS: BreakdownKeys[] = [
+  "vibe",
+  "qualifying",
+  "pricing_clarity",
+  "booking_push",
+  "professionalism",
+  "next_steps"
+];
+
+function getBreakdownValue(breakdown: Record<string, number> | null | undefined, key: BreakdownKeys): number | null {
+  if (!breakdown) return null;
+  const value = breakdown[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, value));
+}
+
+function computeOverallFromBreakdown(breakdown: Record<string, number> | null | undefined): number | null {
+  const vibe = getBreakdownValue(breakdown, "vibe");
+  const qualifying = getBreakdownValue(breakdown, "qualifying");
+  const pricing = getBreakdownValue(breakdown, "pricing_clarity");
+  const bookingPush = getBreakdownValue(breakdown, "booking_push");
+  const professionalism = getBreakdownValue(breakdown, "professionalism");
+  const nextSteps = getBreakdownValue(breakdown, "next_steps");
+
+  if (
+    vibe === null ||
+    qualifying === null ||
+    pricing === null ||
+    bookingPush === null ||
+    professionalism === null ||
+    nextSteps === null
+  ) {
+    return null;
+  }
+
+  const bucketsAverage = (qualifying + pricing + bookingPush + professionalism + nextSteps) / 5;
+  const overall = 0.4 * vibe + 0.6 * bucketsAverage;
+  return Math.max(0, Math.min(100, Math.round(overall)));
+}
+
 function normalizeCoachingOutput(raw: z.infer<typeof CoachingSchema>): Omit<CallCoachingResult, "model"> {
-  const scoreOverall = Math.max(0, Math.min(100, Math.round(raw.score_overall)));
+  const computedOverall = computeOverallFromBreakdown(raw.score_breakdown ?? null);
+  const scoreOverall = computedOverall ?? Math.max(0, Math.min(100, Math.round(raw.score_overall)));
 
   const wins = raw.wins.slice(0, 3);
   const maxFixes = scoreOverall >= 90 ? 0 : scoreOverall >= 80 ? 1 : 3;
   const improvements = (raw.improvements ?? []).slice(0, maxFixes);
 
   if (scoreOverall >= 90 && wins.length === 0) {
-    wins.push("Great job — keep doing what you're doing.");
+    wins.push("Great job - keep doing what you're doing.");
   }
 
   const scoreBreakdown = raw.score_breakdown ?? null;
@@ -87,6 +129,25 @@ export async function scoreCallTranscript(input: {
 
   const { rubricLabel, rubricCriteria } = buildRubricPrompt(input.rubric);
 
+  const bucketDefinitions =
+    input.rubric === "outbound"
+      ? [
+          "vibe: Overall confidence, tone, and control of the call.",
+          "qualifying: Identified decision maker / fit (type of property, volume/frequency, current vendor, needs).",
+          "pricing_clarity: Clear offer/value framing (not necessarily price), avoids rambling, sets expectations.",
+          "booking_push: For outbound, this means asking for the next step (meeting/callback/email intro) at the right time.",
+          "professionalism: Polite, concise, handles objections without arguing, respects time.",
+          "next_steps: Ends with a concrete next step and timeframe (e.g., 'Can I call you Tuesday at 2pm?' or 'I'll email X and follow up tomorrow')."
+        ].join("\n")
+      : [
+          "vibe: Overall confidence, friendliness, and control of the call.",
+          "qualifying: Captures the essentials quickly (items, access, timeframe, ZIP/location).",
+          "pricing_clarity: Gives a clear anchor/range and what it's based on; avoids confusing or contradictory pricing.",
+          "booking_push: Appropriately moves toward booking when possible (offers slots or asks a booking question).",
+          "professionalism: Polite, concise, doesn't repeat, listens and responds to what was said.",
+          "next_steps: Ends with either a booked appointment OR a specific follow-up time + reason."
+        ].join("\n");
+
   const systemPrompt = [
     "You are a strict call coach for a CRM.",
     "Return JSON only (no prose).",
@@ -94,9 +155,13 @@ export async function scoreCallTranscript(input: {
     rubricLabel,
     rubricCriteria,
     "",
+    "Scorecard buckets (required):",
+    bucketDefinitions,
+    "",
     "Output rules:",
     "- score_overall: integer 0-100",
-    "- score_breakdown: 4-6 categories with 0-100 scores (optional)",
+    `- score_breakdown: required object with EXACTLY these keys: ${REQUIRED_BREAKDOWN_KEYS.join(", ")} (0-100 each)`,
+    "- score_overall should be consistent with the breakdown (roughly a weighted blend of the buckets).",
     "- wins: 1-3 short bullets (what went well)",
     "- improvements: 0-3 short bullets (only if score_overall < 90)",
     "- Do not include any personally identifying info beyond first names."
@@ -119,7 +184,16 @@ export async function scoreCallTranscript(input: {
         anyOf: [
           {
             type: "object",
-            additionalProperties: { type: "number" }
+            additionalProperties: false,
+            properties: {
+              vibe: { type: "number" },
+              qualifying: { type: "number" },
+              pricing_clarity: { type: "number" },
+              booking_push: { type: "number" },
+              professionalism: { type: "number" },
+              next_steps: { type: "number" }
+            },
+            required: REQUIRED_BREAKDOWN_KEYS
           },
           { type: "null" }
         ]
@@ -127,7 +201,7 @@ export async function scoreCallTranscript(input: {
       wins: { type: "array", items: { type: "string" } },
       improvements: { type: "array", items: { type: "string" } }
     },
-    required: ["score_overall", "wins", "improvements"]
+    required: ["score_overall", "score_breakdown", "wins", "improvements"]
   };
 
   const payload: Record<string, unknown> = {
@@ -201,4 +275,3 @@ export async function scoreCallTranscript(input: {
   const normalized = normalizeCoachingOutput(parsed.data);
   return { model, ...normalized };
 }
-
