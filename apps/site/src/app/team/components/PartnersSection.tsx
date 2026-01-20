@@ -10,6 +10,7 @@ import {
   startContactCallAction
 } from "../actions";
 import { TEAM_CARD_PADDED, TEAM_EMPTY_STATE, TEAM_INPUT_COMPACT, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE, teamButtonClass } from "./team-ui";
+import { PartnerRatesEditor } from "./PartnerRatesEditor";
 
 type TeamMember = { id: string; name: string; active?: boolean };
 
@@ -281,8 +282,7 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <h4 className="text-sm font-semibold text-slate-900">Partner rates</h4>
               <p className="mt-1 text-xs text-slate-500">
-                Explicit dollar tiers per service (currency: {rateCurrency}). Format:{" "}
-                <span className="font-mono">serviceKey,tierKey,label,amount</span>
+                Explicit dollar tiers per service (currency: {rateCurrency}). Add/edit tiers below.
               </p>
 
               {rateItems.length ? (
@@ -304,16 +304,7 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
 
               <form action={partnerPortalSaveRatesAction} className="mt-3 space-y-3">
                 <input type="hidden" name="orgContactId" value={selectedId} />
-                <textarea
-                  name="ratesCsv"
-                  className="min-h-[160px] w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                  placeholder={
-                    "junk-removal,quarter,Quarter load,150\\n" +
-                    "junk-removal,half,Half load,300\\n" +
-                    "junk-removal,full,Full load,600\\n" +
-                    "junk-removal,mattress_fee,Mattress fee,40"
-                  }
-                />
+                <PartnerRatesEditor currency={rateCurrency} initialItems={rateItems} />
                 <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
                   Save rates
                 </SubmitButton>
