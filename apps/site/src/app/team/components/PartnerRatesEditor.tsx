@@ -80,6 +80,13 @@ export function PartnerRatesEditor({
             amount: "300.00"
           },
           {
+            id: "seed_three_quarter",
+            serviceKey: "junk-removal",
+            tierKey: "three_quarter",
+            label: "3/4 load",
+            amount: "450.00"
+          },
+          {
             id: "seed_full",
             serviceKey: "junk-removal",
             tierKey: "full",
