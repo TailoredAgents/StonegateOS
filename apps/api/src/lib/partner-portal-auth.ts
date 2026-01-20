@@ -34,12 +34,10 @@ export function resolvePublicSiteBaseUrl(): string | null {
   const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   try {
     const url = new URL(withScheme);
-    // Treat anything that's not explicitly development as production-like, since this value can be used
-    // in links sent via SMS/email. Never allow bind/private hosts in those links.
-    if (process.env["NODE_ENV"] !== "development") {
-      const lowered = url.hostname.toLowerCase();
-      if (lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0") return null;
-    }
+    // This value is used in links sent via SMS/email. Never allow bind/private hosts,
+    // even if NODE_ENV is accidentally misconfigured in production.
+    const lowered = url.hostname.toLowerCase();
+    if (lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0") return null;
     return url.toString().replace(/\/$/, "");
   } catch {
     return process.env["NODE_ENV"] === "development" ? "http://localhost:3000" : null;
