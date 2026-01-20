@@ -114,17 +114,26 @@ export function PartnerRatesEditor({
           </button>
         </div>
 
-        <div className="grid grid-cols-12 gap-2 px-3 py-3 text-xs">
-          <div className="col-span-4 font-semibold uppercase tracking-[0.18em] text-slate-500">Service</div>
-          <div className="col-span-3 font-semibold uppercase tracking-[0.18em] text-slate-500">Tier key</div>
-          <div className="col-span-3 font-semibold uppercase tracking-[0.18em] text-slate-500">Label</div>
-          <div className="col-span-2 text-right font-semibold uppercase tracking-[0.18em] text-slate-500">
+        <div className="grid grid-cols-1 gap-2 px-3 py-3 text-xs sm:grid-cols-12">
+          <div className="hidden sm:block sm:col-span-4 font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Service
+          </div>
+          <div className="hidden sm:block sm:col-span-2 font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Tier key
+          </div>
+          <div className="hidden sm:block sm:col-span-3 font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Label
+          </div>
+          <div className="hidden sm:block sm:col-span-3 text-right font-semibold uppercase tracking-[0.18em] text-slate-500">
             Amount
           </div>
 
           {rows.map((row) => (
             <React.Fragment key={row.id}>
-              <div className="col-span-4">
+              <div className="sm:col-span-4">
+                <div className="mb-1 sm:hidden text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Service
+                </div>
                 <input
                   value={row.serviceKey}
                   onChange={(e) =>
@@ -136,7 +145,10 @@ export function PartnerRatesEditor({
                   placeholder="junk-removal"
                 />
               </div>
-              <div className="col-span-3">
+              <div className="sm:col-span-2">
+                <div className="mb-1 sm:hidden text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Tier key
+                </div>
                 <input
                   value={row.tierKey}
                   onChange={(e) =>
@@ -148,7 +160,10 @@ export function PartnerRatesEditor({
                   placeholder="quarter"
                 />
               </div>
-              <div className="col-span-3">
+              <div className="sm:col-span-3">
+                <div className="mb-1 sm:hidden text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Label
+                </div>
                 <input
                   value={row.label}
                   onChange={(e) =>
@@ -160,8 +175,12 @@ export function PartnerRatesEditor({
                   placeholder="Quarter load"
                 />
               </div>
-              <div className="col-span-2 flex items-center justify-end gap-2">
-                <div className="text-xs text-slate-500">$</div>
+              <div className="sm:col-span-3">
+                <div className="mb-1 sm:hidden text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Amount
+                </div>
+                <div className="flex items-center justify-start gap-2 sm:justify-end">
+                  <div className="shrink-0 text-xs text-slate-500">$</div>
                 <input
                   value={row.amount}
                   onChange={(e) =>
@@ -169,19 +188,20 @@ export function PartnerRatesEditor({
                       prev.map((r) => (r.id === row.id ? { ...r, amount: e.target.value } : r))
                     )
                   }
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  className="min-w-[96px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                   placeholder="150.00"
                   inputMode="decimal"
                 />
                 <button
                   type="button"
-                  className="rounded-full border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-600 hover:border-rose-300 hover:text-rose-700"
+                  className="shrink-0 rounded-full border border-slate-200 bg-white px-2 py-2 text-xs font-semibold text-slate-600 hover:border-rose-300 hover:text-rose-700"
                   onClick={() => setRows((prev) => prev.filter((r) => r.id !== row.id))}
                   aria-label="Remove tier"
                   title="Remove tier"
                 >
                   ×
                 </button>
+                </div>
               </div>
             </React.Fragment>
           ))}
