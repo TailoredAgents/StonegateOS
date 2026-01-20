@@ -20,15 +20,20 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
 }
 
 export async function requestPartnerMagicLinkAction(formData: FormData) {
-  const emailRaw = formData.get("email");
-  const email = typeof emailRaw === "string" ? emailRaw.trim() : "";
-  if (!email) {
-    redirect("/partners/login?error=email_required");
+  const identifierRaw = formData.get("identifier");
+  const identifier = typeof identifierRaw === "string" ? identifierRaw.trim() : "";
+  if (!identifier) {
+    redirect("/partners/login?error=email_or_phone_required");
   }
+
+  const isEmail = identifier.includes("@");
 
   await callPartnerPublicApi("/api/public/partners/request-link", {
     method: "POST",
-    body: JSON.stringify({ email })
+    body: JSON.stringify({
+      email: isEmail ? identifier : undefined,
+      phone: isEmail ? undefined : identifier
+    })
   });
 
   redirect("/partners/login?sent=1");
@@ -152,4 +157,3 @@ export async function partnerCreateBookingAction(formData: FormData) {
 
   redirect("/partners/bookings?created=1");
 }
-

@@ -137,6 +137,8 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
   type PortalUserRow = {
     id: string;
     email: string;
+    phone: string | null;
+    phoneE164: string | null;
     name: string;
     active: boolean;
     passwordSetAt: string | null;
@@ -235,6 +237,10 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Email</div>
                   <input name="email" type="email" className={TEAM_INPUT_COMPACT} placeholder="jane@example.com" />
                 </label>
+                <label className="block">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Phone (optional)</div>
+                  <input name="phone" className={TEAM_INPUT_COMPACT} placeholder="+1 404-555-1234" />
+                </label>
                 <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Sending...">
                   Send invite
                 </SubmitButton>
@@ -259,6 +265,9 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
                           </span>
                         </div>
                         <div className="mt-1 text-[11px] text-slate-500">{user.email}</div>
+                        {user.phoneE164 || user.phone ? (
+                          <div className="mt-1 text-[11px] text-slate-500">{user.phoneE164 ?? user.phone}</div>
+                        ) : null}
                         <div className="mt-1 text-[11px] text-slate-500">
                           Password: {user.passwordSetAt ? `set (${formatDateTime(user.passwordSetAt)})` : "not set"}
                         </div>

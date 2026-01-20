@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDb, partnerLoginTokens, partnerSessions, partnerUsers } from "@/db";
+import { normalizePhone } from "../../app/api/web/utils";
 
 function readString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -13,6 +14,16 @@ export function normalizeEmail(value: unknown): string | null {
   const raw = readString(value);
   if (!raw) return null;
   return raw.toLowerCase();
+}
+
+export function normalizePhoneE164(value: unknown): string | null {
+  const raw = readString(value);
+  if (!raw) return null;
+  try {
+    return normalizePhone(raw).e164;
+  } catch {
+    return null;
+  }
 }
 
 export function resolvePublicSiteBaseUrl(): string | null {
@@ -58,6 +69,7 @@ export async function findActivePartnerUserByEmail(email: string): Promise<{
   orgContactId: string;
   name: string;
   email: string;
+  phoneE164: string | null;
   active: boolean;
   passwordHash: string | null;
 } | null> {
@@ -68,6 +80,7 @@ export async function findActivePartnerUserByEmail(email: string): Promise<{
       orgContactId: partnerUsers.orgContactId,
       name: partnerUsers.name,
       email: partnerUsers.email,
+      phoneE164: partnerUsers.phoneE164,
       active: partnerUsers.active,
       passwordHash: partnerUsers.passwordHash
     })
@@ -81,6 +94,43 @@ export async function findActivePartnerUserByEmail(email: string): Promise<{
     orgContactId: row.orgContactId,
     name: row.name,
     email: row.email,
+    phoneE164: row.phoneE164 ?? null,
+    active: row.active ?? true,
+    passwordHash: row.passwordHash ?? null
+  };
+}
+
+export async function findActivePartnerUserByPhone(phoneE164: string): Promise<{
+  id: string;
+  orgContactId: string;
+  name: string;
+  email: string;
+  phoneE164: string | null;
+  active: boolean;
+  passwordHash: string | null;
+} | null> {
+  const db = getDb();
+  const [row] = await db
+    .select({
+      id: partnerUsers.id,
+      orgContactId: partnerUsers.orgContactId,
+      name: partnerUsers.name,
+      email: partnerUsers.email,
+      phoneE164: partnerUsers.phoneE164,
+      active: partnerUsers.active,
+      passwordHash: partnerUsers.passwordHash
+    })
+    .from(partnerUsers)
+    .where(eq(partnerUsers.phoneE164, phoneE164))
+    .limit(1);
+
+  if (!row?.id || !row.active) return null;
+  return {
+    id: row.id,
+    orgContactId: row.orgContactId,
+    name: row.name,
+    email: row.email,
+    phoneE164: row.phoneE164 ?? null,
     active: row.active ?? true,
     passwordHash: row.passwordHash ?? null
   };
@@ -320,4 +370,3 @@ export async function loginWithPassword(
 
   return { sessionToken, partnerUserId: userRow.id, orgContactId: userRow.orgContactId };
 }
-

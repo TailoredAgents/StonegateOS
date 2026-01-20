@@ -490,6 +490,8 @@ export const partnerUsers = pgTable(
       .notNull()
       .references(() => contacts.id, { onDelete: "cascade" }),
     email: text("email").notNull(),
+    phone: text("phone"),
+    phoneE164: text("phone_e164"),
     name: text("name").notNull(),
     active: boolean("active").default(true).notNull(),
     passwordHash: text("password_hash"),
@@ -502,6 +504,7 @@ export const partnerUsers = pgTable(
   },
   (table) => ({
     emailIdx: uniqueIndex("partner_users_email_key").on(table.email),
+    phoneE164Idx: uniqueIndex("partner_users_phone_e164_key").on(table.phoneE164),
     orgContactIdx: index("partner_users_org_contact_idx").on(table.orgContactId)
   })
 );

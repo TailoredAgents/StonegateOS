@@ -3253,6 +3253,9 @@ export async function partnerPortalInviteUserAction(formData: FormData) {
   const emailRaw = formData.get("email");
   const email = typeof emailRaw === "string" ? emailRaw.trim() : "";
 
+  const phoneRaw = formData.get("phone");
+  const phone = typeof phoneRaw === "string" ? phoneRaw.trim() : "";
+
   const nameRaw = formData.get("name");
   const name = typeof nameRaw === "string" ? nameRaw.trim() : "";
 
@@ -3264,7 +3267,7 @@ export async function partnerPortalInviteUserAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/partners/users", {
     method: "POST",
-    body: JSON.stringify({ orgContactId, email, name })
+    body: JSON.stringify({ orgContactId, email, name, phone: phone.length ? phone : null })
   });
 
   if (!response.ok) {

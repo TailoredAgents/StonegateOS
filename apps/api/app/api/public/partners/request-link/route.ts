@@ -1,22 +1,30 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { sendEmailMessage } from "@/lib/messaging";
+import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
 import {
   createPartnerLoginToken,
   findActivePartnerUserByEmail,
+  findActivePartnerUserByPhone,
   normalizeEmail,
+  normalizePhoneE164,
   resolvePublicSiteBaseUrl
 } from "@/lib/partner-portal-auth";
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const payload = (await request.json().catch(() => null)) as { email?: unknown } | null;
+  const payload = (await request.json().catch(() => null)) as { email?: unknown; phone?: unknown } | null;
+
   const email = normalizeEmail(payload?.email);
-  if (!email) {
-    return NextResponse.json({ ok: false, error: "email_required" }, { status: 400 });
+  const phoneE164 = normalizePhoneE164(payload?.phone);
+  if (!email && !phoneE164) {
+    return NextResponse.json({ ok: false, error: "email_or_phone_required" }, { status: 400 });
   }
 
   const siteBaseUrl = resolvePublicSiteBaseUrl();
-  const user = await findActivePartnerUserByEmail(email);
+  const user = email
+    ? await findActivePartnerUserByEmail(email)
+    : phoneE164
+      ? await findActivePartnerUserByPhone(phoneE164)
+      : null;
 
   if (user?.id && siteBaseUrl) {
     try {
@@ -28,7 +36,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       const body = [
         `Hi ${user.name},`,
         "",
-        "Here’s your secure login link for the Stonegate Partner Portal:",
+        "Here's your secure login link for the Stonegate Partner Portal:",
         url.toString(),
         "",
         `This link expires at ${expiresAt.toISOString()}.`,
@@ -36,13 +44,17 @@ export async function POST(request: NextRequest): Promise<Response> {
         "If you didn't request this, you can ignore this email."
       ].join("\n");
 
-      await sendEmailMessage(email, subject, body);
+      const smsBody = `Stonegate Partner Portal login link: ${url.toString()} (expires ${expiresAt.toISOString()})`;
+
+      await Promise.allSettled([
+        sendEmailMessage(user.email, subject, body),
+        user.phoneE164 ? sendSmsMessage(user.phoneE164, smsBody) : Promise.resolve()
+      ]);
     } catch {
-      // Intentionally ignore to avoid leaking whether an email exists.
+      // Intentionally ignore to avoid leaking whether an account exists.
     }
   }
 
-  // Always return ok to avoid email enumeration.
+  // Always return ok to avoid account enumeration.
   return NextResponse.json({ ok: true });
 }
-
