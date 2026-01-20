@@ -164,13 +164,16 @@ export async function EstimatesSection(): Promise<ReactElement> {
                           Assign / Confirm
                         </SubmitButton>
                       </form>
-                      <form action={updateApptStatus}>
-                        <input type="hidden" name="appointmentId" value={a.id} />
-                        <input type="hidden" name="status" value="canceled" />
-                        <SubmitButton className="rounded-full border border-neutral-300 px-3 py-1 text-xs text-neutral-600" pendingLabel="Saving...">
-                          Cancel
-                        </SubmitButton>
-                      </form>
+                      <details className="rounded-full border border-rose-200 bg-rose-50/50 px-3 py-1 text-xs text-rose-700">
+                        <summary className="cursor-pointer select-none font-semibold">Cancel</summary>
+                        <form action={updateApptStatus} className="mt-2">
+                          <input type="hidden" name="appointmentId" value={a.id} />
+                          <input type="hidden" name="status" value="canceled" />
+                          <SubmitButton className="rounded-full bg-rose-600 px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-rose-500" pendingLabel="Saving...">
+                            Confirm cancel
+                          </SubmitButton>
+                        </form>
+                      </details>
                     </>
                   ) : null}
                   {status === "confirmed" ? (
@@ -189,6 +192,16 @@ export async function EstimatesSection(): Promise<ReactElement> {
                           No-show
                         </SubmitButton>
                       </form>
+                      <details className="rounded-full border border-rose-200 bg-rose-50/50 px-3 py-1 text-xs text-rose-700">
+                        <summary className="cursor-pointer select-none font-semibold">Cancel</summary>
+                        <form action={updateApptStatus} className="mt-2">
+                          <input type="hidden" name="appointmentId" value={a.id} />
+                          <input type="hidden" name="status" value="canceled" />
+                          <SubmitButton className="rounded-full bg-rose-600 px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-rose-500" pendingLabel="Saving...">
+                            Confirm cancel
+                          </SubmitButton>
+                        </form>
+                      </details>
                     </>
                   ) : null}
                 </div>

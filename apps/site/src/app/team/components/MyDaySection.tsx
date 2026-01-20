@@ -236,6 +236,16 @@ export async function MyDaySection(): Promise<ReactElement> {
                   No-show
                 </SubmitButton>
               </form>
+              <details className="rounded-md border border-rose-200 bg-rose-50/50 px-2 py-1">
+                <summary className="cursor-pointer select-none text-xs font-semibold text-rose-700">Cancel</summary>
+                <form action="/api/team/appointments/status" method="post" className="mt-2">
+                  <input type="hidden" name="appointmentId" value={a.id} />
+                  <input type="hidden" name="status" value="canceled" />
+                  <SubmitButton className={teamButtonClass("danger", "sm")} pendingLabel="Saving...">
+                    Confirm cancel
+                  </SubmitButton>
+                </form>
+              </details>
               <a
                 href={`/schedule?appointmentId=${encodeURIComponent(a.id)}&token=${encodeURIComponent(a.rescheduleToken)}`}
                 className={teamButtonClass("secondary", "sm")}
