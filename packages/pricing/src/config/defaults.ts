@@ -43,6 +43,12 @@ export const serviceRates: ServiceBaseRate[] = [
   },
   // Junk removal catalog (additive; keep legacy wash services for compatibility)
   {
+    service: "junk-removal",
+    label: "Junk Removal (Trailer Pricing)",
+    description: "Trailer-based pricing tiers (quarter/half/3/4/full).",
+    basePrice: 0
+  },
+  {
     service: "single-item",
     label: "Rubbish",
     description: "Common household waste hauled away.",

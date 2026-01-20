@@ -27,7 +27,7 @@ export default async function PartnerBookPage({
 }) {
   const params = (await searchParams) ?? {};
   const propertyId = typeof params.propertyId === "string" ? params.propertyId.trim() : "";
-  const serviceKey = typeof params.serviceKey === "string" ? params.serviceKey.trim().toLowerCase() : "";
+  const serviceKeyParam = typeof params.serviceKey === "string" ? params.serviceKey.trim().toLowerCase() : "";
   const error = typeof params.error === "string" && params.error.trim().length ? params.error.trim() : null;
 
   const [propertiesRes, ratesRes] = await Promise.all([
@@ -60,6 +60,13 @@ export default async function PartnerBookPage({
   const services = serviceRates
     .map((r) => ({ service: r.service.toLowerCase(), label: r.label }))
     .sort((a, b) => a.label.localeCompare(b.label));
+
+  const serviceKey =
+    serviceKeyParam.length > 0
+      ? serviceKeyParam
+      : services.some((s) => s.service === "junk-removal")
+        ? "junk-removal"
+        : "";
 
   const selectedProperty = properties.find((p) => p.id === propertyId) ?? null;
   const selectedService = services.find((s) => s.service === serviceKey) ?? null;

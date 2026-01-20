@@ -6,6 +6,7 @@ export type ServiceCategory =
   | "gutter"
   | "commercial"
   // Junk removal catalog (non-breaking additions)
+  | "junk-removal"
   | "single-item"
   | "furniture"
   | "appliances"

@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
-import { contacts, getDb, partnerUsers } from "@/db";
+import { and, eq, sql } from "drizzle-orm";
+import { contacts, getDb, partnerRateCards, partnerRateItems, partnerUsers } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import {
@@ -150,6 +150,122 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   if (!userId) {
     return NextResponse.json({ ok: false, error: "create_failed" }, { status: 500 });
+  }
+
+  // Ensure a baseline rate card exists so the portal can show tiers instead of "call for pricing".
+  // Does not overwrite existing negotiated rates.
+  try {
+    const [existingCard] = await db
+      .select({ id: partnerRateCards.id })
+      .from(partnerRateCards)
+      .where(eq(partnerRateCards.orgContactId, orgContactId))
+      .limit(1);
+
+    const cardId = existingCard?.id ?? null;
+    const [countRow] = cardId
+      ? await db
+          .select({ cnt: sql<number>`count(*)` })
+          .from(partnerRateItems)
+          .where(eq(partnerRateItems.rateCardId, cardId))
+      : [{ cnt: 0 } as { cnt: number }];
+
+    if (!cardId) {
+      const [createdCard] = await db
+        .insert(partnerRateCards)
+        .values({ orgContactId, currency: "USD", active: true, createdAt: now, updatedAt: now })
+        .returning({ id: partnerRateCards.id });
+
+      const newCardId = createdCard?.id ?? null;
+      if (newCardId) {
+        await db.insert(partnerRateItems).values([
+          {
+            rateCardId: newCardId,
+            serviceKey: "junk-removal",
+            tierKey: "quarter",
+            label: "Quarter load",
+            amountCents: 15000,
+            sortOrder: 1
+          },
+          {
+            rateCardId: newCardId,
+            serviceKey: "junk-removal",
+            tierKey: "half",
+            label: "Half load",
+            amountCents: 30000,
+            sortOrder: 2
+          },
+          {
+            rateCardId: newCardId,
+            serviceKey: "junk-removal",
+            tierKey: "three_quarter",
+            label: "3/4 load",
+            amountCents: 45000,
+            sortOrder: 3
+          },
+          {
+            rateCardId: newCardId,
+            serviceKey: "junk-removal",
+            tierKey: "full",
+            label: "Full load",
+            amountCents: 60000,
+            sortOrder: 4
+          },
+          {
+            rateCardId: newCardId,
+            serviceKey: "junk-removal",
+            tierKey: "mattress_fee",
+            label: "Mattress fee",
+            amountCents: 4000,
+            sortOrder: 50
+          }
+        ]);
+      }
+    } else if ((countRow?.cnt ?? 0) === 0) {
+      await db.insert(partnerRateItems).values([
+        {
+          rateCardId: cardId,
+          serviceKey: "junk-removal",
+          tierKey: "quarter",
+          label: "Quarter load",
+          amountCents: 15000,
+          sortOrder: 1
+        },
+        {
+          rateCardId: cardId,
+          serviceKey: "junk-removal",
+          tierKey: "half",
+          label: "Half load",
+          amountCents: 30000,
+          sortOrder: 2
+        },
+        {
+          rateCardId: cardId,
+          serviceKey: "junk-removal",
+          tierKey: "three_quarter",
+          label: "3/4 load",
+          amountCents: 45000,
+          sortOrder: 3
+        },
+        {
+          rateCardId: cardId,
+          serviceKey: "junk-removal",
+          tierKey: "full",
+          label: "Full load",
+          amountCents: 60000,
+          sortOrder: 4
+        },
+        {
+          rateCardId: cardId,
+          serviceKey: "junk-removal",
+          tierKey: "mattress_fee",
+          label: "Mattress fee",
+          amountCents: 4000,
+          sortOrder: 50
+        }
+      ]);
+    }
+  } catch {
+    // ignore
   }
 
   const siteBaseUrl = resolvePublicSiteBaseUrl() ?? resolveRequestOriginBaseUrl(request);
