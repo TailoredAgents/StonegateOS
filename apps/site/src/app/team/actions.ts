@@ -968,6 +968,45 @@ export async function updateContactAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function updateContactNameAction(formData: FormData) {
+  const jar = await cookies();
+  const contactId = formData.get("contactId");
+  if (typeof contactId !== "string" || contactId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const firstNameRaw = formData.get("firstName");
+  const lastNameRaw = formData.get("lastName");
+  const firstName = typeof firstNameRaw === "string" ? firstNameRaw.trim() : "";
+  const lastName = typeof lastNameRaw === "string" ? lastNameRaw.trim() : "";
+
+  if (!firstName.length) {
+    jar.set({ name: "myst-flash-error", value: "First name is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload: Record<string, unknown> = { firstName };
+  if (lastName.length) payload["lastName"] = lastName;
+
+  const response = await callAdminApi(`/api/admin/contacts/${contactId.trim()}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update contact name");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Contact updated", path: "/" });
+  revalidatePath("/team");
+}
+
 export async function deleteContactAction(formData: FormData) {
   const jar = await cookies();
   const contactId = formData.get("contactId");

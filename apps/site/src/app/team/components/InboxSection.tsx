@@ -16,7 +16,8 @@ import {
   updateThreadAction,
   startContactCallAction,
   markSalesTouchAction,
-  setSalesDispositionAction
+  setSalesDispositionAction,
+  updateContactNameAction
 } from "../actions";
 
 type ThreadSummary = {
@@ -221,6 +222,14 @@ function formatFailureDetail(detail: string | null): string {
   return detail.replace(/_/g, " ");
 }
 
+function splitName(fullName: string): { firstName: string; lastName: string } {
+  const normalized = fullName.trim().replace(/\s+/g, " ");
+  if (!normalized) return { firstName: "", lastName: "" };
+  const parts = normalized.split(" ");
+  if (parts.length === 1) return { firstName: parts[0] ?? "", lastName: "" };
+  return { firstName: parts[0] ?? "", lastName: parts.slice(1).join(" ") };
+}
+
 function isDmExpired(thread: ThreadSummary, nowMs: number): boolean {
   if (thread.channel !== "dm") return false;
   if (!thread.lastInboundAt) return false;
@@ -376,6 +385,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
   const activePhone = normalizePhoneLink(activeContact?.phone);
   const canCall = Boolean(activeContactId && activePhone);
   const showConversation = Boolean(activeContactId);
+  const initialName = splitName(activeContact?.name ?? "");
   const scrollKey = (() => {
     const lastId = timelineMessages.length ? timelineMessages[timelineMessages.length - 1]?.id ?? "none" : "none";
     return `${selectedThreadId ?? "none"}:${timelineMessages.length}:${lastId}`;
@@ -758,7 +768,44 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     <span aria-hidden>←</span> Threads
                   </a>
                   <h3 className="text-lg font-semibold text-slate-900">
-                    {activeContact?.name ?? "Unknown contact"}
+                    <span className="inline-flex flex-wrap items-center gap-2">
+                      <span>{activeContact?.name ?? "Unknown contact"}</span>
+                      {activeContactId ? (
+                        <details className="relative">
+                          <summary className="cursor-pointer list-none rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700">
+                            Edit name
+                          </summary>
+                          <div className="absolute left-0 z-20 mt-2 w-80 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+                            <form action={updateContactNameAction} className="space-y-3">
+                              <input type="hidden" name="contactId" value={activeContactId} />
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <label className="text-xs font-semibold text-slate-600">
+                                  First
+                                  <input
+                                    name="firstName"
+                                    defaultValue={initialName.firstName}
+                                    className={`mt-1 w-full ${TEAM_INPUT_COMPACT}`}
+                                    required
+                                  />
+                                </label>
+                                <label className="text-xs font-semibold text-slate-600">
+                                  Last
+                                  <input
+                                    name="lastName"
+                                    defaultValue={initialName.lastName}
+                                    className={`mt-1 w-full ${TEAM_INPUT_COMPACT}`}
+                                  />
+                                </label>
+                              </div>
+                              <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
+                                Save
+                              </SubmitButton>
+                              <p className="text-[11px] text-slate-500">Updates the contact name everywhere (Inbox, Contacts, Sales HQ).</p>
+                            </form>
+                          </div>
+                        </details>
+                      ) : null}
+                    </span>
                   </h3>
                   <p className="text-xs text-slate-500">
                     {(requestedChannel === "dm" ? "Messenger" : requestedChannel.toUpperCase())}{" "}
