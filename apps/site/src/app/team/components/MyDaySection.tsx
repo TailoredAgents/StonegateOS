@@ -1,5 +1,5 @@
 ﻿import React, { type ReactElement } from "react";
-import { availabilityWindows, zones } from "@myst-os/pricing/src/config/defaults";
+import { zones } from "@myst-os/pricing/src/config/defaults";
 import { CopyButton } from "@/components/CopyButton";
 import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
@@ -21,6 +21,22 @@ function fmtUsdCents(value: number | null | undefined) {
     return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value / 100);
   } catch {
     return `$${(value / 100).toFixed(2)}`;
+  }
+}
+
+function fmtTimeInputValue(startAtIso: string | null): string {
+  if (!startAtIso) return "";
+  const dt = new Date(startAtIso);
+  if (Number.isNaN(dt.getTime())) return "";
+  try {
+    return dt.toLocaleTimeString("en-GB", {
+      timeZone: TEAM_TIME_ZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    });
+  } catch {
+    return "";
   }
 }
 
@@ -243,17 +259,16 @@ export async function MyDaySection(): Promise<ReactElement> {
                   />
                 </label>
                 <label className="flex flex-col gap-1">
-                  <span>Time window</span>
-                  <select name="timeWindow" defaultValue="" className="rounded-md border border-neutral-300 px-2 py-1" required>
-                    <option value="" disabled>
-                      Select window
-                    </option>
-                    {availabilityWindows.map((window) => (
-                      <option key={window.id} value={window.id}>
-                        {window.label}
-                      </option>
-                    ))}
-                  </select>
+                  <span>Time</span>
+                  <input
+                    type="time"
+                    name="startTime"
+                    defaultValue={fmtTimeInputValue(a.startAt)}
+                    step={900}
+                    required
+                    className="rounded-md border border-neutral-300 px-2 py-1"
+                  />
+                  <span className="text-[11px] text-neutral-500">Times are saved in Eastern time.</span>
                 </label>
                 <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
                   Save new time

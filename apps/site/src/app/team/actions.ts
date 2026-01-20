@@ -216,6 +216,7 @@ export async function rescheduleAppointmentAction(formData: FormData) {
   const id = formData.get("appointmentId");
   const preferredDate = formData.get("preferredDate");
   const timeWindow = formData.get("timeWindow");
+  const startTime = formData.get("startTime");
 
   const jar = await cookies();
 
@@ -230,9 +231,22 @@ export async function rescheduleAppointmentAction(formData: FormData) {
     return;
   }
 
-  const payload: Record<string, unknown> = { preferredDate };
-  if (typeof timeWindow === "string" && timeWindow.length > 0) {
-    payload["timeWindow"] = timeWindow;
+  const payload: Record<string, unknown> = {};
+
+  if (typeof startTime === "string" && startTime.trim().length > 0) {
+    payload["preferredDate"] = preferredDate;
+    payload["startTime"] = startTime.trim();
+  } else {
+    payload["preferredDate"] = preferredDate;
+    if (typeof timeWindow === "string" && timeWindow.length > 0) {
+      payload["timeWindow"] = timeWindow;
+    }
+  }
+
+  if (!payload["startAt"] && !payload["preferredDate"]) {
+    jar.set({ name: "myst-flash-error", value: "Missing time", path: "/" });
+    revalidatePath("/team");
+    return;
   }
 
   const response = await callAdminApi(`/api/web/appointments/${id}/reschedule`, {

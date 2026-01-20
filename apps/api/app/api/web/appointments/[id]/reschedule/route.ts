@@ -24,6 +24,7 @@ const RescheduleSchema = z
     startAt: z.string().datetime().optional(),
     preferredDate: z.string().optional(),
     timeWindow: z.string().optional(),
+    startTime: z.string().regex(/^\d{1,2}:\d{2}$/).optional(),
     durationMinutes: z.number().int().min(15).max(8 * 60).optional(),
     travelBufferMinutes: z.number().int().min(0).max(6 * 60).optional(),
     rescheduleToken: z.string().min(8).optional()
@@ -122,6 +123,14 @@ export async function POST(
       return NextResponse.json({ error: "invalid_start_at" }, { status: 400 });
     }
     startAt = dt.toJSDate();
+  } else if (input.startTime && input.preferredDate) {
+    const dt = DateTime.fromISO(`${input.preferredDate}T${input.startTime}`, {
+      zone: APPOINTMENT_TIME_ZONE
+    });
+    if (!dt.isValid) {
+      return NextResponse.json({ error: "invalid_start_time" }, { status: 400 });
+    }
+    startAt = dt.toUTC().toJSDate();
   } else {
     const timing = resolveAppointmentTiming(input.preferredDate ?? null, input.timeWindow ?? null);
     startAt = timing.startAt;

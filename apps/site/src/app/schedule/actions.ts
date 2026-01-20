@@ -24,6 +24,7 @@ export async function rescheduleAction(
   const token = formData.get("token");
   const preferredDate = formData.get("preferredDate");
   const timeWindow = formData.get("timeWindow");
+  const startTime = formData.get("startTime");
   const next = formData.get("next");
 
   if (typeof appointmentId !== "string" || appointmentId.trim().length === 0) {
@@ -36,11 +37,15 @@ export async function rescheduleAction(
     return { error: "Pick a date." };
   }
 
-  const body = {
-    preferredDate: preferredDate,
-    timeWindow: typeof timeWindow === "string" && timeWindow ? timeWindow : undefined,
-    rescheduleToken: token
-  } as Record<string, unknown>;
+  const body: Record<string, unknown> = { rescheduleToken: token };
+
+  if (typeof startTime === "string" && startTime.trim().length > 0) {
+    body["preferredDate"] = preferredDate;
+    body["startTime"] = startTime.trim();
+  } else {
+    body["preferredDate"] = preferredDate;
+    body["timeWindow"] = typeof timeWindow === "string" && timeWindow ? timeWindow : undefined;
+  }
 
   const base = API_BASE_URL.replace(/\/$/, "");
   const response = await fetch(`${base}/api/web/appointments/${encodeURIComponent(appointmentId)}/reschedule`, {

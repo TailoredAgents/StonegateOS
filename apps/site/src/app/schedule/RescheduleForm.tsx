@@ -2,7 +2,6 @@
 
 import { useFormState } from "react-dom";
 import { rescheduleAction, type RescheduleState } from "./actions";
-import { availabilityWindows } from "@myst-os/pricing";
 
 export function RescheduleForm({
   appointmentId,
@@ -35,30 +34,35 @@ export function RescheduleForm({
       </div>
 
       <div className="space-y-2">
-        <label htmlFor="timeWindow" className="block text-sm font-medium text-neutral-700">
-          Time window
+        <label htmlFor="startTime" className="block text-sm font-medium text-neutral-700">
+          Time
         </label>
-        <select
-          id="timeWindow"
-          name="timeWindow"
+        <input
+          id="startTime"
+          name="startTime"
+          type="time"
+          required
+          step={900}
           className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-base text-neutral-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
-          defaultValue=""
-        >
-          <option value="" disabled>
-            Select a window
-          </option>
-          {availabilityWindows.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.label}
-            </option>
-          ))}
-        </select>
+        />
+        <p className="text-xs text-neutral-500">Times are in Eastern time.</p>
       </div>
 
       {state?.error ? <p className="text-sm text-rose-600">{state.error}</p> : null}
       {state?.ok ? (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-          Rescheduled. We\'ll see you {state.preferredDate} ({state.timeWindow || "time TBD"}).
+          Rescheduled. We&apos;ll see you{" "}
+          {state.startAt
+            ? new Date(state.startAt).toLocaleString("en-US", {
+                timeZone: "America/New_York",
+                weekday: "short",
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit"
+              })
+            : state.preferredDate ?? "soon"}
+          .
         </div>
       ) : null}
 

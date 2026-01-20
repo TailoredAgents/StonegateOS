@@ -1,5 +1,5 @@
 import React, { type ReactElement } from "react";
-import { availabilityWindows, zones } from "@myst-os/pricing/src/config/defaults";
+import { zones } from "@myst-os/pricing/src/config/defaults";
 import { SubmitButton } from "@/components/SubmitButton";
 import {
   createQuoteAction,
@@ -12,6 +12,22 @@ import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { labelForPipelineStage } from "./pipeline.stages";
 
 type AppointmentStatus = "requested" | "confirmed" | "completed" | "no_show" | "canceled";
+
+function fmtTimeInputValue(startAtIso: string | null): string {
+  if (!startAtIso) return "";
+  const dt = new Date(startAtIso);
+  if (Number.isNaN(dt.getTime())) return "";
+  try {
+    return dt.toLocaleTimeString("en-GB", {
+      timeZone: TEAM_TIME_ZONE,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    });
+  } catch {
+    return "";
+  }
+}
 
 interface AppointmentDto {
   id: string;
@@ -268,17 +284,16 @@ export async function EstimatesSection(): Promise<ReactElement> {
                       />
                     </label>
                     <label className="flex flex-col gap-1">
-                      <span>Time window</span>
-                      <select name="timeWindow" defaultValue="" className="rounded-md border border-neutral-300 px-2 py-1" required>
-                        <option value="" disabled>
-                          Select window
-                        </option>
-                        {availabilityWindows.map((window) => (
-                          <option key={window.id} value={window.id}>
-                            {window.label}
-                          </option>
-                        ))}
-                      </select>
+                      <span>Time</span>
+                      <input
+                        type="time"
+                        name="startTime"
+                        defaultValue={fmtTimeInputValue(a.startAt)}
+                        step={900}
+                        required
+                        className="rounded-md border border-neutral-300 px-2 py-1"
+                      />
+                      <span className="text-[11px] text-neutral-500">Times are saved in Eastern time.</span>
                     </label>
                     <SubmitButton className="self-start rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white" pendingLabel="Saving...">
                       Save new time
