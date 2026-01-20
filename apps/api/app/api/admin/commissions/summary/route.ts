@@ -6,7 +6,7 @@ import { requirePermission } from "@/lib/permissions";
 import {
   defaultPayPeriodForCutoff,
   getOrCreateCommissionSettings,
-  resolveCurrentPayoutCutoff
+  resolveUpcomingPayoutCutoff
 } from "@/lib/commissions";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const db = getDb();
   try {
     const settings = await getOrCreateCommissionSettings(db);
-    const { cutoffAt, timezone } = resolveCurrentPayoutCutoff(new Date(), settings);
+    const { cutoffAt, timezone } = resolveUpcomingPayoutCutoff(new Date(), settings);
     const period = defaultPayPeriodForCutoff(cutoffAt, timezone);
 
     const rows = await db
@@ -82,4 +82,3 @@ export async function GET(request: NextRequest): Promise<Response> {
     throw error;
   }
 }
-

@@ -133,6 +133,26 @@ export function resolveCurrentPayoutCutoff(now: Date, settings: Pick<CommissionS
   };
 }
 
+export function resolveUpcomingPayoutCutoff(
+  now: Date,
+  settings: Pick<CommissionSettingsRow, "timezone" | "payoutWeekday" | "payoutHour" | "payoutMinute">
+) {
+  const zoned = DateTime.fromJSDate(now).setZone(settings.timezone);
+  const thisWeekCutoff = zoned.set({
+    weekday: settings.payoutWeekday,
+    hour: settings.payoutHour,
+    minute: settings.payoutMinute,
+    second: 0,
+    millisecond: 0
+  });
+
+  const cutoff = zoned < thisWeekCutoff ? thisWeekCutoff : thisWeekCutoff.plus({ weeks: 1 });
+  return {
+    timezone: settings.timezone,
+    cutoffAt: cutoff.toJSDate()
+  };
+}
+
 export function defaultPayPeriodForCutoff(cutoffAt: Date, timezone: string): { start: Date; end: Date } {
   const cutoff = DateTime.fromJSDate(cutoffAt).setZone(timezone);
   const start = cutoff.minus({ days: 6, hours: 12 }).set({ second: 0, millisecond: 0 });
