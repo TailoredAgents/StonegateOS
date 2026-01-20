@@ -155,6 +155,20 @@
       "when": 1768845480000,
       "tag": "0021_inbox_media_uploads",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1768852800000,
+      "tag": "0022_partner_portal",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1768856400000,
+      "tag": "0023_partner_portal_sms",
+      "breakpoints": true
     }
   ]
 }
