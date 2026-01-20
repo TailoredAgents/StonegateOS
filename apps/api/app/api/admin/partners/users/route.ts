@@ -8,6 +8,7 @@ import {
   createPartnerLoginToken,
   normalizeEmail,
   normalizePhoneE164,
+  resolveRequestOriginBaseUrl,
   resolvePublicSiteBaseUrl
 } from "@/lib/partner-portal-auth";
 import { sendEmailMessage, sendSmsMessage } from "@/lib/messaging";
@@ -151,7 +152,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "create_failed" }, { status: 500 });
   }
 
-  const siteBaseUrl = resolvePublicSiteBaseUrl();
+  const siteBaseUrl = resolvePublicSiteBaseUrl() ?? resolveRequestOriginBaseUrl(request);
   if (siteBaseUrl) {
     try {
       const { rawToken, expiresAt } = await createPartnerLoginToken(userId, request, 30);
@@ -208,4 +209,3 @@ export async function POST(request: NextRequest): Promise<Response> {
       : null
   });
 }
-

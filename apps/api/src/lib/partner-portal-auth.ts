@@ -29,18 +29,35 @@ export function normalizePhoneE164(value: unknown): string | null {
 export function resolvePublicSiteBaseUrl(): string | null {
   const raw = (process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "").trim();
   if (!raw) {
-    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
+    return process.env["NODE_ENV"] === "development" ? "http://localhost:3000" : null;
   }
   const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   try {
     const url = new URL(withScheme);
-    if (process.env["NODE_ENV"] === "production") {
+    // Treat anything that's not explicitly development as production-like, since this value can be used
+    // in links sent via SMS/email. Never allow bind/private hosts in those links.
+    if (process.env["NODE_ENV"] !== "development") {
       const lowered = url.hostname.toLowerCase();
       if (lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0") return null;
     }
     return url.toString().replace(/\/$/, "");
   } catch {
-    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
+    return process.env["NODE_ENV"] === "development" ? "http://localhost:3000" : null;
+  }
+}
+
+export function resolveRequestOriginBaseUrl(request: NextRequest): string | null {
+  const origin = (request.headers.get("origin") ?? "").trim();
+  if (!origin) return null;
+  try {
+    const url = new URL(origin);
+    const lowered = url.hostname.toLowerCase();
+    if (lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0") return null;
+    // Only allow http in development; otherwise require https.
+    if (process.env["NODE_ENV"] !== "development" && url.protocol !== "https:") return null;
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return null;
   }
 }
 
