@@ -17,7 +17,19 @@ export function SiteStructuredData(): React.ReactElement {
   const phoneE164 = "+14047772631";
   const email = "austin@stonegatejunkremoval.com";
 
+  const sameAs = [
+    process.env["NEXT_PUBLIC_GOOGLE_BUSINESS_PROFILE_URL"],
+    process.env["NEXT_PUBLIC_FACEBOOK_PAGE_URL"],
+    process.env["NEXT_PUBLIC_INSTAGRAM_URL"]
+  ]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+
+  const businessId = `${siteUrl}/#business`;
+  const organizationId = `${siteUrl}/#organization`;
+
   const organization = {
+    "@id": organizationId,
     "@type": "Organization",
     name: businessName,
     url: siteUrl,
@@ -27,6 +39,7 @@ export function SiteStructuredData(): React.ReactElement {
   const localBusiness = {
     "@context": "https://schema.org",
     "@type": "WasteRemovalService",
+    "@id": businessId,
     name: businessName,
     url: siteUrl,
     telephone: phoneE164,
@@ -41,7 +54,7 @@ export function SiteStructuredData(): React.ReactElement {
     image: [absoluteUrl("/opengraph-image")],
     logo: absoluteUrl("/images/brand/Stonegatelogo.png"),
     priceRange: "$$",
-    sameAs: []
+    sameAs: sameAs.length ? sameAs : undefined
   };
 
   const website = {
@@ -63,6 +76,7 @@ export function ServiceStructuredData(props: {
 }): React.ReactElement {
   const businessName = "Stonegate Junk Removal";
   const phoneE164 = "+14047772631";
+  const businessId = `${siteUrl}/#business`;
 
   const service = {
     "@context": "https://schema.org",
@@ -72,7 +86,8 @@ export function ServiceStructuredData(props: {
     url: absoluteUrl(props.path),
     areaServed: [{ "@type": "State", name: "Georgia" }],
     provider: {
-      "@type": "LocalBusiness",
+      "@id": businessId,
+      "@type": "WasteRemovalService",
       name: businessName,
       url: siteUrl,
       telephone: phoneE164
