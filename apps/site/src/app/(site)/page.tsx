@@ -96,7 +96,7 @@ export default function HomePage() {
       </Section>
       <Section className="relative" containerClassName="">
         <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
-          {resultTiles.map((tile) => (
+          {resultTiles.map((tile, index) => (
             <article
               key={tile.title}
               className="group relative overflow-hidden rounded-3xl border border-neutral-200 bg-white shadow-soft transition hover:-translate-y-1 hover:shadow-float"
@@ -108,7 +108,8 @@ export default function HomePage() {
                   fill
                   className="object-cover transition duration-700 group-hover:scale-105"
                   sizes="(min-width: 1280px) 400px, (min-width: 768px) 50vw, 100vw"
-                  priority={false}
+                  priority={index === 0}
+                  quality={70}
                 />
                 {tile.beforeImage ? (
                   <>
