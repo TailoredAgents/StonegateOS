@@ -6,7 +6,7 @@ import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
 import { normalizeName, normalizePhone } from "../web/utils";
 
-const DISCOUNT = Number(process.env["INSTANT_QUOTE_DISCOUNT"] ?? 0.25);
+const DISCOUNT = Number(process.env["INSTANT_QUOTE_DISCOUNT"] ?? 0.15);
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
 
