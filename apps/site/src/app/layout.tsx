@@ -49,11 +49,6 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://connect.facebook.net" crossOrigin="anonymous" />
-        <link rel="preconnect" href="https://www.facebook.com" crossOrigin="anonymous" />
-        <link rel="preconnect" href="https://mpc-prod-27-s6uit34pua-uk.a.run.app" crossOrigin="anonymous" />
-      </head>
       <body className="antialiased bg-neutral-100 text-neutral-900 font-sans">
         {children}
       </body>
