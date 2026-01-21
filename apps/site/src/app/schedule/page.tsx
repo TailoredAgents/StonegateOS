@@ -1,7 +1,8 @@
 import { RescheduleForm } from "./RescheduleForm";
 
 export const metadata = {
-  title: "Reschedule your visit"
+  title: "Reschedule your visit",
+  robots: { index: false, follow: false }
 };
 
 export default async function SchedulePage({

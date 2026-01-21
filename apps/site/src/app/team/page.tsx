@@ -37,7 +37,10 @@ import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE, teamButton
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
 
-export const metadata = { title: "Stonegate Team Console" };
+export const metadata = {
+  title: "Stonegate Team Console",
+  robots: { index: false, follow: false }
+};
 
 type LeadContactSummary = {
   id: string;

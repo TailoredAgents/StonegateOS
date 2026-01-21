@@ -62,7 +62,13 @@ export const Area = defineDocumentType(() => ({
   computedFields: {
     slug: {
       type: "string",
-      resolve: (doc) => doc._raw.flattenedPath.replace(/^areas\//, "")
+      resolve: (doc) => {
+        const flattened = doc._raw.flattenedPath;
+        if (!flattened.startsWith("areas/")) {
+          return "index";
+        }
+        return flattened.replace(/^areas\//, "");
+      }
     }
   }
 }));

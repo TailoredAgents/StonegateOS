@@ -5,6 +5,12 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true
   },
+  async redirects() {
+    return [
+      { source: "/areas/areas", destination: "/areas", permanent: true },
+      { source: "/areas/index", destination: "/areas", permanent: true }
+    ];
+  },
   experimental: {
     // Allow larger uploads for Team Console (e.g., photo attachments).
     serverActions: {

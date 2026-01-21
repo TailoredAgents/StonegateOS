@@ -1,5 +1,10 @@
 import Link from "next/link";
 
+export const metadata = {
+  title: "Stonegate Partner Portal",
+  robots: { index: false, follow: false }
+};
+
 export default function PartnersLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-white to-white">
@@ -33,4 +38,3 @@ export default function PartnersLayout({ children }: { children: React.ReactNode
     </div>
   );
 }
-

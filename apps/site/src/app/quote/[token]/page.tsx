@@ -2,6 +2,11 @@
 import { notFound, redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
+export const metadata = {
+  title: "Quote",
+  robots: { index: false, follow: false }
+};
+
 const API_BASE_URL =
   process.env["API_BASE_URL"] ??
   process.env["NEXT_PUBLIC_API_BASE_URL"] ??
