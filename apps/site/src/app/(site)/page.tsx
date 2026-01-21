@@ -108,8 +108,8 @@ export default function HomePage() {
                   fill
                   className="object-cover transition duration-700 group-hover:scale-105"
                   sizes="(min-width: 1280px) 400px, (min-width: 768px) 50vw, 100vw"
-                  priority={index === 0}
-                  quality={70}
+                  priority
+                  quality={60}
                 />
                 {tile.beforeImage ? (
                   <>
@@ -124,6 +124,7 @@ export default function HomePage() {
                         className="object-cover"
                         sizes="(min-width: 1280px) 400px, (min-width: 768px) 50vw, 100vw"
                         priority={false}
+                        quality={60}
                       />
                     </div>
                     <div className="pointer-events-none absolute inset-y-0 left-[48%] w-px bg-white/80 shadow-[0_0_12px_rgba(15,23,42,0.35)]" />
@@ -190,7 +191,7 @@ export default function HomePage() {
                     <p className="mt-2 text-body text-neutral-600">{service.description}</p>
                   ) : null}
               </div>
-              <Button variant="ghost" asChild className="mt-auto w-fit px-0 text-accent-600">
+              <Button variant="ghost" asChild className="mt-auto w-fit px-0 text-accent-700 hover:text-accent-800">
                   <Link href={isCommercial ? "/contact?type=commercial" : `/services/${service.slug}`}>
                     {isCommercial ? "Request commercial quote ->" : "Learn more ->"}
                   </Link>
@@ -251,7 +252,7 @@ export default function HomePage() {
             <Card key={area.slug} className="flex h-full flex-col gap-3">
               <h3 className="text-lg font-semibold text-primary-800">{area.title}</h3>
               {area.city ? <p className="text-sm text-neutral-500">{area.city}</p> : null}
-              <Button variant="ghost" asChild className="mt-auto w-fit px-0 text-accent-600">
+              <Button variant="ghost" asChild className="mt-auto w-fit px-0 text-accent-700 hover:text-accent-800">
                 <Link href={`/areas/${area.slug}`}>Explore area{" ->"}</Link>
               </Button>
             </Card>

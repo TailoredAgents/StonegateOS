@@ -46,7 +46,7 @@ export function Header() {
     <header className="sticky top-0 z-50 border-b border-neutral-300/50 bg-white/95">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4 md:px-10">
         <Link href="/" className="flex items-center gap-2 text-primary-800">
-          <Image src="/images/brand/Stonegatelogo.png" alt="Stonegate Junk Removal" width={80} height={41} priority />
+          <Image src="/images/brand/Stonegatelogo.png" alt="" aria-hidden="true" width={80} height={41} priority />
           <span className="sr-only">Stonegate Junk Removal</span>
         </Link>
         <nav className="hidden items-center gap-6 md:flex">

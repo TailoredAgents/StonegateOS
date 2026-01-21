@@ -47,7 +47,7 @@ export default function ServicesIndex() {
                   <p className="mt-2 text-body text-neutral-600">{service.short}</p>
                 ) : null}
               </div>
-              <Button variant="ghost" asChild className="mt-auto w-fit px-0 text-accent-600">
+              <Button variant="ghost" asChild className="mt-auto w-fit px-0 text-accent-700 hover:text-accent-800">
                 <Link href={`/services/${service.slug}`}>View details{" ->"}</Link>
               </Button>
             </Card>
@@ -59,7 +59,7 @@ export default function ServicesIndex() {
                 Jobsite debris haul‑off and light demo support for remodels, siding, roofing, and build‑outs.
               </p>
             </div>
-            <Button variant="ghost" asChild className="mt-auto w-fit px-0 text-accent-600">
+            <Button variant="ghost" asChild className="mt-auto w-fit px-0 text-accent-700 hover:text-accent-800">
               <Link href="/contractors">Contractor haul‑off details{" ->"}</Link>
             </Button>
           </Card>

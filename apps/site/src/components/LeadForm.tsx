@@ -740,9 +740,12 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-neutral-800">Add 1-4 photos for the most accurate quote</label>
+              <label htmlFor="lead-photos" className="text-sm font-semibold text-neutral-800">
+                Add 1-4 photos for the most accurate quote
+              </label>
               <p className="text-xs text-neutral-500">Most people just snap a quick photo with their phone.</p>
               <input
+                id="lead-photos"
                 type="file"
                 accept="image/*"
                 multiple
