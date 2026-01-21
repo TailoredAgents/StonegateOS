@@ -1,8 +1,17 @@
 import { Badge, Section } from "@myst-os/ui";
 import { LeadForm } from "@/components/LeadForm";
+import { absoluteUrl } from "@/lib/metadata";
 
 export const metadata = {
-  title: "Book your pickup"
+  title: "Book your pickup",
+  description: "Get an instant quote, choose a time, and book your junk removal pickup online in minutes.",
+  alternates: { canonical: absoluteUrl("/book") },
+  openGraph: {
+    title: "Book your pickup",
+    description: "Get an instant quote, choose a time, and book your junk removal pickup online in minutes.",
+    url: absoluteUrl("/book"),
+    type: "website"
+  }
 };
 
 export default function BookPage() {
@@ -27,4 +36,3 @@ export default function BookPage() {
     </Section>
   );
 }
-

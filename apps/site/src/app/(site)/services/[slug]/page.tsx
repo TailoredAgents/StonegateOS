@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Badge, Button, Card, Section } from "@myst-os/ui";
 import { MdxContent } from "@/components/MdxContent";
+import { ServiceStructuredData } from "@/components/StructuredData";
 import { getOrderedServices, getServiceBySlug } from "@/lib/content";
 import { createServiceMetadata } from "@/lib/metadata";
 
@@ -38,6 +39,12 @@ export default async function ServicePage({ params }: ServicePageProps) {
   return (
     <Section>
       <div className="mx-auto max-w-5xl space-y-8">
+        <ServiceStructuredData
+          title={service.title}
+          description={service.short ?? null}
+          path={`/services/${service.slug}`}
+          faqs={faqs}
+        />
         <header className="space-y-3">
           <Badge tone="default">Stonegate Service</Badge>
           <h1 className="font-display text-display text-primary-800">{service.title}</h1>

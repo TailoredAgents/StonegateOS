@@ -42,6 +42,12 @@ export function createPageMetadata(slug: string): Metadata {
       images: image ? [{ url: image }] : undefined,
       type: "website"
     },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: image ? [image] : undefined
+    },
     alternates: {
       canonical: absoluteUrl(path)
     }
@@ -71,6 +77,12 @@ export function createServiceMetadata(slug: string): Metadata {
       images: image ? [{ url: image }] : undefined,
       type: "article"
     },
+    twitter: {
+      card: "summary_large_image",
+      title: service.title,
+      description,
+      images: image ? [image] : undefined
+    },
     alternates: {
       canonical: absoluteUrl(path)
     }
@@ -99,6 +111,11 @@ export function createAreaMetadata(slug: string): Metadata {
       description,
       url: absoluteUrl(path),
       type: "article"
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description
     },
     alternates: {
       canonical: absoluteUrl(path)

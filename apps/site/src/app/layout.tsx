@@ -22,6 +22,16 @@ export const metadata: Metadata = {
     images: [{ url: absoluteUrl("/images/hero/home.jpg") }],
     type: "website"
   },
+  twitter: {
+    card: "summary_large_image",
+    title: defaultTitle,
+    description: defaultDescription,
+    images: [absoluteUrl("/images/hero/home.jpg")]
+  },
+  robots: {
+    index: true,
+    follow: true
+  },
   icons: {
     icon: "/favicon.png",
     shortcut: "/favicon.png",
