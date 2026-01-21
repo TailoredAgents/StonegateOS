@@ -417,7 +417,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 provider.lastFailureAt ? `Last issue: ${formatTimestamp(provider.lastFailureAt)}` : null,
                 provider.lastFailureDetail ? `Detail: ${provider.lastFailureDetail}` : null
               ].filter(Boolean);
-              const title = titleParts.length > 0 ? titleParts.join(" â€¢ ") : undefined;
+              const title = titleParts.length > 0 ? titleParts.join(" • ") : undefined;
               return (
                 <span
                   key={provider.provider}

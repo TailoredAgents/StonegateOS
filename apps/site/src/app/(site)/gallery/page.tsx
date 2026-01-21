@@ -14,7 +14,7 @@ const galleryItems = [
     caption: "Garage cleanout — before and after"
   },
   {
-    src: "/images/gallery/trailer_16x9.png",
+    src: "/images/gallery/trailer_16x9.jpg",
     alt: "Stonegate 7x16 dumpster trailer ready for junk removal service",
     caption: "7x16 dumpster trailer — ready for your pickup"
   }

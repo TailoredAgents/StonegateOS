@@ -19,23 +19,26 @@ export const metadata: Metadata = {
     description: defaultDescription,
     url: siteUrl,
     siteName: defaultTitle,
-    images: [{ url: absoluteUrl("/images/hero/home.jpg") }],
+    images: [{ url: absoluteUrl("/opengraph-image") }],
     type: "website"
   },
   twitter: {
     card: "summary_large_image",
     title: defaultTitle,
     description: defaultDescription,
-    images: [absoluteUrl("/images/hero/home.jpg")]
+    images: [absoluteUrl("/twitter-image")]
   },
   robots: {
     index: true,
     follow: true
   },
   icons: {
-    icon: "/favicon.png",
-    shortcut: "/favicon.png",
-    apple: "/favicon.png"
+    icon: [
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon.png", sizes: "256x256", type: "image/png" }
+    ],
+    shortcut: "/favicon-32.png",
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }]
   }
 };
 

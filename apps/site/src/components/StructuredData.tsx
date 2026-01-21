@@ -38,7 +38,7 @@ export function SiteStructuredData(): React.ReactElement {
       addressRegion: "GA",
       addressCountry: "US"
     },
-    image: [absoluteUrl("/images/hero/home.jpg")],
+    image: [absoluteUrl("/opengraph-image")],
     logo: absoluteUrl("/images/brand/Stonegatelogo.png"),
     priceRange: "$$",
     sameAs: []
@@ -102,4 +102,3 @@ export function ServiceStructuredData(props: {
   const data = faqPage ? [service, faqPage] : [service];
   return <JsonLdScript data={data} />;
 }
-
