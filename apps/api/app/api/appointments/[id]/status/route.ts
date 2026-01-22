@@ -104,6 +104,11 @@ export async function POST(
 
   const becameCompleted = existing.status !== "completed" && status === "completed";
   const leavingCompleted = existing.status === "completed" && status !== "completed";
+  const becameFinalTotalKnown =
+    status === "completed" &&
+    finalTotalCentsToSet !== undefined &&
+    existing.finalTotalCents == null &&
+    finalTotalCentsToSet != null;
 
   const completedAtToSet =
     leavingCompleted ? null : becameCompleted ? new Date() : undefined;
@@ -260,6 +265,15 @@ export async function POST(
       status
     }
   });
+
+  if ((becameCompleted || becameFinalTotalKnown) && finalTotalCentsToSet != null) {
+    await db.insert(outboxEvents).values({
+      type: "review.request",
+      payload: {
+        appointmentId: updated.id
+      }
+    });
+  }
 
   await recordAuditEvent({
     actor: getAuditActorFromRequest(request),

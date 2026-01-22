@@ -1846,6 +1846,37 @@ export async function updateTemplatesPolicyAction(formData: FormData) {
   );
 }
 
+export async function updateReviewRequestPolicyAction(formData: FormData) {
+  const jar = await cookies();
+  const enabled = formData.get("enabled") === "on";
+  const rawUrl = formData.get("reviewUrl");
+  const reviewUrl = typeof rawUrl === "string" ? rawUrl.trim() : "";
+
+  if (!reviewUrl) {
+    jar.set({ name: "myst-flash-error", value: "Review link is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  try {
+    // Allow either g.page, https://, etc. If missing scheme, assume https.
+    const normalized = /^https?:\/\//i.test(reviewUrl) ? reviewUrl : `https://${reviewUrl}`;
+    // eslint-disable-next-line no-new
+    new URL(normalized);
+  } catch {
+    jar.set({ name: "myst-flash-error", value: "Review link must be a valid URL", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  await submitPolicyUpdate(
+    jar,
+    "review_request",
+    { enabled, reviewUrl },
+    "Review request settings updated"
+  );
+}
+
 export async function updateConfirmationLoopPolicyAction(formData: FormData) {
   const jar = await cookies();
   const enabled = formData.get("enabled") === "on";

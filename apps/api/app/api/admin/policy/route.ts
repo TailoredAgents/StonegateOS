@@ -11,6 +11,7 @@ import {
   DEFAULT_FOLLOW_UP_SEQUENCE_POLICY,
   DEFAULT_INBOX_ALERTS_POLICY,
   DEFAULT_QUIET_HOURS_POLICY,
+  DEFAULT_REVIEW_REQUEST_POLICY,
   DEFAULT_SERVICE_AREA_POLICY,
   DEFAULT_ITEM_POLICIES,
   DEFAULT_STANDARD_JOB_POLICY,
@@ -32,6 +33,7 @@ const POLICY_KEYS = [
   "follow_up_sequence",
   "standard_job",
   "item_policies",
+  "review_request",
   "templates"
 ] as const;
 
@@ -49,6 +51,7 @@ const DEFAULT_POLICY_VALUES: Record<PolicyKey, Record<string, unknown>> = {
   follow_up_sequence: DEFAULT_FOLLOW_UP_SEQUENCE_POLICY,
   standard_job: DEFAULT_STANDARD_JOB_POLICY,
   item_policies: DEFAULT_ITEM_POLICIES,
+  review_request: DEFAULT_REVIEW_REQUEST_POLICY,
   templates: DEFAULT_TEMPLATES_POLICY
 };
 

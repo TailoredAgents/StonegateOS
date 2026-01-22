@@ -48,6 +48,11 @@ export type TemplatesPolicy = {
   out_of_area: TemplateGroup;
 };
 
+export type ReviewRequestPolicy = {
+  enabled: boolean;
+  reviewUrl: string;
+};
+
 export type CompanyProfilePolicy = {
   businessName: string;
   primaryPhone: string;
@@ -173,6 +178,11 @@ export const DEFAULT_INBOX_ALERTS_POLICY: InboxAlertsPolicy = {
   sms: true,
   dm: false,
   email: false
+};
+
+export const DEFAULT_REVIEW_REQUEST_POLICY: ReviewRequestPolicy = {
+  enabled: true,
+  reviewUrl: "https://g.page/r/Ce6kQH50C8_dEAI/review"
 };
 
 export const DEFAULT_CONVERSATION_PERSONA_POLICY: ConversationPersonaPolicy = {
@@ -771,6 +781,21 @@ export async function getTemplatesPolicy(db: DbExecutor = getDb()): Promise<Temp
     confirmations: coerceTemplateGroup(stored["confirmations"], DEFAULT_TEMPLATES_POLICY.confirmations),
     reviews: coerceTemplateGroup(stored["reviews"], DEFAULT_TEMPLATES_POLICY.reviews),
     out_of_area: coerceTemplateGroup(stored["out_of_area"], DEFAULT_TEMPLATES_POLICY.out_of_area)
+  };
+}
+
+export async function getReviewRequestPolicy(db: DbExecutor = getDb()): Promise<ReviewRequestPolicy> {
+  const stored = await getPolicySetting(db, "review_request");
+  if (!stored) {
+    return DEFAULT_REVIEW_REQUEST_POLICY;
+  }
+
+  return {
+    enabled: stored["enabled"] !== false,
+    reviewUrl:
+      typeof stored["reviewUrl"] === "string" && stored["reviewUrl"].trim().length > 0
+        ? stored["reviewUrl"].trim()
+        : DEFAULT_REVIEW_REQUEST_POLICY.reviewUrl
   };
 }
 

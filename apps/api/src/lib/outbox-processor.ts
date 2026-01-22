@@ -31,6 +31,7 @@ import {
   getFollowUpSequencePolicy,
   getInboxAlertsPolicy,
   getQuietHoursPolicy,
+  getReviewRequestPolicy,
   getSalesAutopilotPolicy,
   getServiceAreaPolicy,
   getTemplatesPolicy,
@@ -2335,6 +2336,114 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           status: status ?? null
         });
       }
+      return { status: "processed" };
+    }
+
+    case "review.request": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const appointmentId = typeof payload?.["appointmentId"] === "string" ? payload["appointmentId"] : null;
+      if (!appointmentId) {
+        console.warn("[outbox] review.request.missing_appointment", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const db = getDb();
+      const policy = await getReviewRequestPolicy(db);
+      if (!policy.enabled) {
+        return { status: "processed" };
+      }
+
+      const reviewUrl = policy.reviewUrl.trim();
+      if (!reviewUrl) {
+        console.warn("[outbox] review.request.missing_url", { id: event.id, appointmentId });
+        return { status: "skipped" };
+      }
+
+      const [row] = await db
+        .select({
+          appointmentId: appointments.id,
+          contactId: appointments.contactId,
+          contactPhoneE164: contacts.phoneE164,
+          threadSmsId: conversationThreads.id
+        })
+        .from(appointments)
+        .innerJoin(contacts, eq(appointments.contactId, contacts.id))
+        .leftJoin(
+          conversationThreads,
+          and(eq(conversationThreads.contactId, contacts.id), eq(conversationThreads.channel, "sms"))
+        )
+        .where(eq(appointments.id, appointmentId))
+        .limit(1);
+
+      if (!row) {
+        console.warn("[outbox] review.request.not_found", { id: event.id, appointmentId });
+        return { status: "skipped" };
+      }
+
+      const contactPhone = typeof row.contactPhoneE164 === "string" ? row.contactPhoneE164.trim() : "";
+      if (!contactPhone) {
+        console.info("[outbox] review.request.no_phone", { id: event.id, appointmentId, contactId: row.contactId });
+        return { status: "skipped" };
+      }
+
+      const [alreadyQueued] = await db
+        .select({ id: conversationMessages.id })
+        .from(conversationMessages)
+        .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+        .where(
+          and(
+            eq(conversationThreads.contactId, row.contactId),
+            eq(conversationMessages.direction, "outbound"),
+            sql`${conversationMessages.metadata} ->> 'reviewRequestAppointmentId' = ${appointmentId}`
+          )
+        )
+        .limit(1);
+
+      if (alreadyQueued?.id) {
+        return { status: "processed" };
+      }
+
+      const templates = await getTemplatesPolicy(db);
+      const base =
+        resolveTemplateForChannel(templates.reviews, { inboundChannel: "sms", replyChannel: "sms" }) ??
+        "Thanks for choosing Stonegate! Would you leave a quick review?";
+      const body = base.includes(reviewUrl) ? base : `${base} ${reviewUrl}`;
+
+      const threadId =
+        (typeof row.threadSmsId === "string" && row.threadSmsId.length > 0
+          ? row.threadSmsId
+          : await ensureThreadForContactChannel(db, { contactId: row.contactId, channel: "sms" })) ?? null;
+
+      if (!threadId) {
+        console.warn("[outbox] review.request.no_thread", { id: event.id, appointmentId, contactId: row.contactId });
+        return { status: "skipped" };
+      }
+
+      const messageId = await queueOutboundMessage({
+        db,
+        threadId,
+        channel: "sms",
+        toAddress: contactPhone,
+        body,
+        metadata: {
+          reviewRequestAppointmentId: appointmentId,
+          system: "reviews"
+        }
+      });
+
+      if (!messageId) {
+        console.warn("[outbox] review.request.queue_failed", { id: event.id, appointmentId, contactId: row.contactId });
+        return { status: "skipped" };
+      }
+
+      await recordAuditEvent({
+        actor: { type: "worker", label: "outbox" },
+        action: "review.request.queued",
+        entityType: "appointment",
+        entityId: appointmentId,
+        meta: { contactId: row.contactId, messageId }
+      });
+
       return { status: "processed" };
     }
 

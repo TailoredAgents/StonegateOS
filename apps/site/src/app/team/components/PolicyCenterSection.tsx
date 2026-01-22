@@ -13,6 +13,7 @@ import {
   updateItemPoliciesAction,
   updatePolicyAction,
   updateQuietHoursPolicyAction,
+  updateReviewRequestPolicyAction,
   updateServiceAreaPolicyAction,
   updateStandardJobPolicyAction,
   updateTemplatesPolicyAction
@@ -36,6 +37,7 @@ type PolicyKey =
   | "follow_up_sequence"
   | "standard_job"
   | "item_policies"
+  | "review_request"
   | "templates";
 
 const POLICY_LABELS: Record<PolicyKey, { title: string; description: string }> = {
@@ -82,6 +84,10 @@ const POLICY_LABELS: Record<PolicyKey, { title: string; description: string }> =
   item_policies: {
     title: "Item policies",
     description: "Items declined or extra fees applied."
+  },
+  review_request: {
+    title: "Review requests",
+    description: "Automatically send a Google review request after a job is completed (SMS-first)."
   },
   templates: {
     title: "Templates",
@@ -310,6 +316,14 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
   const templatesConfirmations = readGroup(templatesValue, "confirmations");
   const templatesReviews = readGroup(templatesValue, "reviews");
   const templatesOutOfArea = readGroup(templatesValue, "out_of_area");
+
+  const reviewRequestSetting = settingsByKey.get("review_request");
+  const reviewRequestValue = isRecord(reviewRequestSetting?.value) ? reviewRequestSetting!.value : {};
+  const reviewRequestEnabled = reviewRequestValue["enabled"] !== false;
+  const reviewRequestUrl =
+    typeof reviewRequestValue["reviewUrl"] === "string" && reviewRequestValue["reviewUrl"].trim().length > 0
+      ? reviewRequestValue["reviewUrl"]
+      : "https://g.page/r/Ce6kQH50C8_dEAI/review";
 
   return (
     <section className="space-y-6">
@@ -1013,6 +1027,34 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
             </div>
           </form>
           <AdvancedJsonEditor setting={templatesSetting} />
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold text-slate-900">{POLICY_LABELS.review_request.title}</h3>
+            <p className="text-xs text-slate-500">{POLICY_LABELS.review_request.description}</p>
+          </div>
+          <form action={updateReviewRequestPolicyAction} className="mt-4 space-y-4">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" name="enabled" defaultChecked={reviewRequestEnabled} />
+              Send review request after completion
+            </label>
+            <div>
+              <label className={LABEL_CLASS}>Google review link</label>
+              <input name="reviewUrl" defaultValue={reviewRequestUrl} className={INPUT_CLASS} />
+              <p className="mt-1 text-xs text-slate-500">Example: https://g.page/r/Ce6kQH50C8_dEAI/review</p>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-500">
+              <span>Last updated {formatUpdatedAt(reviewRequestSetting?.updatedAt ?? null)}</span>
+              <SubmitButton
+                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                pendingLabel="Saving..."
+              >
+                Save review settings
+              </SubmitButton>
+            </div>
+          </form>
+          <AdvancedJsonEditor setting={reviewRequestSetting} />
         </div>
       </div>
     </section>
