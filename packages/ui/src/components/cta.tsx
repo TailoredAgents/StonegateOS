@@ -29,7 +29,7 @@ export function Cta({
       <div className="relative z-10 flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
         <div className="max-w-xl">
           {eyebrow ? (
-            <span className="text-overline uppercase tracking-[0.22em] text-accent-200">
+            <span className="text-overline uppercase tracking-[0.22em] text-neutral-100/85">
               {eyebrow}
             </span>
           ) : null}

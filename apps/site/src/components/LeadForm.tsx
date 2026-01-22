@@ -677,7 +677,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         <span className="text-[10px] font-medium normal-case tracking-normal">Takes &lt; 1 minute. No spam.</span>
       </div>
 
-      <h3 className="font-display text-2xl text-primary-800">Show us what you need gone</h3>
+      <h2 className="font-display text-2xl text-primary-800">Show us what you need gone</h2>
       <p className="mt-1 text-sm text-neutral-600">Photos + a few quick answers = an instant quote.</p>
 
       {error ? (
