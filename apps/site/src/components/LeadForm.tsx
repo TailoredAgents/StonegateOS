@@ -4,6 +4,7 @@ import * as React from "react";
 import { Button, cn } from "@myst-os/ui";
 import { Check } from "lucide-react";
 import { useUTM } from "../lib/use-utm";
+import { trackGoogleAdsConversion } from "../lib/google-ads";
 
 declare global {
   interface Window {
@@ -65,6 +66,8 @@ const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
   { id: "this_week", label: "This week" },
   { id: "flexible", label: "Flexible" }
 ];
+
+const GOOGLE_ADS_CONTACT_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO"] ?? "";
 
 export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   const utm = useUTM();
@@ -178,6 +181,11 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     } catch {
       // ignore
     }
+  }, []);
+
+  const trackGoogleContactConversion = React.useCallback(() => {
+    if (!GOOGLE_ADS_CONTACT_SEND_TO) return;
+    trackGoogleAdsConversion(GOOGLE_ADS_CONTACT_SEND_TO, { value: 1, currency: "USD" });
   }, []);
 
   const formatSlotLabel = React.useCallback(
@@ -646,6 +654,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       if (!trackedScheduleRef.current) {
         trackedScheduleRef.current = true;
         trackMetaEvent("Schedule", { content_name: "Book pickup", content_category: "junk_removal" });
+        trackGoogleContactConversion();
       }
     } catch (err) {
       setBookingStatus("error");

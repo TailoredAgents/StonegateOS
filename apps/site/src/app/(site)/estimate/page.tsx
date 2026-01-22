@@ -37,7 +37,7 @@ export default function EstimatePage({
           <Badge tone="highlight">Schedule</Badge>
           <h1 className="font-display text-display text-primary-800">Request an on-site estimate</h1>
           <p className="text-body text-neutral-600">
-            Choose a preferred date/time window and we’ll follow up to confirm the exact time.
+            Choose a preferred date/time window and we'll follow up to confirm the exact time.
           </p>
         </header>
         <EstimateRequestForm context={context} initialServices={initialServices} />

@@ -5,6 +5,7 @@ import { availabilityWindows } from "@myst-os/pricing";
 import { Button, cn } from "@myst-os/ui";
 import { Check } from "lucide-react";
 import { DEFAULT_LEAD_SERVICE_OPTIONS } from "@/lib/lead-services";
+import { trackGoogleAdsConversion } from "@/lib/google-ads";
 import { useUTM } from "@/lib/use-utm";
 
 type EstimateFormContext = "default" | "contractor";
@@ -78,6 +79,7 @@ export function EstimateRequestForm({
   context?: EstimateFormContext;
 }) {
   const utm = useUTM();
+  const trackedSubmitRef = React.useRef(false);
   const resolvedInitialServices =
     context === "contractor" && (!initialServices || initialServices.length === 0)
       ? ["construction-debris"]
@@ -186,19 +188,27 @@ export function EstimateRequestForm({
       if (data?.ok === false) {
         const message =
           (typeof data?.message === "string" && data.message.trim().length > 0 ? data.message : null) ??
-          "We couldn’t submit your request. Please call or text us.";
+          "We couldn't submit your request. Please call or text us.";
         setSubmitState({ status: "error", message });
         return;
       }
 
+      if (!trackedSubmitRef.current) {
+        const sendTo = process.env["NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO"];
+        if (typeof sendTo === "string" && sendTo.trim().length > 0) {
+          trackedSubmitRef.current = true;
+          trackGoogleAdsConversion(sendTo, { value: 1, currency: "USD" });
+        }
+      }
+
       setSubmitState({
         status: "success",
-        message: "Request received. We’ll follow up to confirm the exact time."
+        message: "Request received. We'll follow up to confirm the exact time."
       });
     } catch (error) {
       setSubmitState({
         status: "error",
-        message: error instanceof Error ? error.message : "We couldn’t submit your request. Please try again."
+        message: error instanceof Error ? error.message : "We couldn't submit your request. Please try again."
       });
     }
   };
@@ -211,10 +221,10 @@ export function EstimateRequestForm({
             <Check className="h-5 w-5" strokeWidth={3} />
           </span>
           <div>
-            <h2 className="font-display text-xl text-primary-900">You’re all set</h2>
+            <h2 className="font-display text-xl text-primary-900">You're all set</h2>
             <p className="mt-1 text-sm text-neutral-600">{submitState.message}</p>
             <p className="mt-2 text-xs text-neutral-500">
-              We’ll usually respond quickly by text/call. If you need help right now, call (404) 777-2631.
+              We'll usually respond quickly by text/call. If you need help right now, call (404) 777-2631.
             </p>
           </div>
         </div>
