@@ -49,6 +49,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <link rel="dns-prefetch" href="https://connect.facebook.net" />
+        <link rel="preconnect" href="https://connect.facebook.net" />
+        <link rel="dns-prefetch" href="https://www.facebook.com" />
+        <link rel="preconnect" href="https://www.facebook.com" />
+        <link rel="dns-prefetch" href="https://mpc-prod-27-s6uit34pua-uk.a.run.app" />
+        <link rel="preconnect" href="https://mpc-prod-27-s6uit34pua-uk.a.run.app" />
+      </head>
       <body className="antialiased bg-neutral-100 text-neutral-900 font-sans">
         {children}
       </body>
