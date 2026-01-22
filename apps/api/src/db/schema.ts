@@ -687,6 +687,64 @@ export const metaAdsInsightsDaily = pgTable(
   })
 );
 
+export const googleAdsInsightsDaily = pgTable(
+  "google_ads_insights_daily",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    customerId: text("customer_id").notNull(),
+    dateStart: text("date_start").notNull(),
+    campaignId: text("campaign_id").notNull(),
+    campaignName: text("campaign_name"),
+    impressions: integer("impressions").notNull(),
+    clicks: integer("clicks").notNull(),
+    cost: numeric("cost", { precision: 12, scale: 2 }).notNull(),
+    conversions: numeric("conversions", { precision: 12, scale: 2 }).notNull(),
+    conversionValue: numeric("conversion_value", { precision: 12, scale: 2 }).notNull(),
+    raw: jsonb("raw").$type<Record<string, unknown>>().notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    uniqueIdx: uniqueIndex("google_ads_insights_daily_unique_idx").on(
+      table.customerId,
+      table.dateStart,
+      table.campaignId
+    ),
+    dateIdx: index("google_ads_insights_daily_date_idx").on(table.dateStart),
+    campaignIdx: index("google_ads_insights_daily_campaign_idx").on(table.campaignId)
+  })
+);
+
+export const googleAdsSearchTermsDaily = pgTable(
+  "google_ads_search_terms_daily",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    customerId: text("customer_id").notNull(),
+    dateStart: text("date_start").notNull(),
+    campaignId: text("campaign_id").notNull(),
+    adGroupId: text("ad_group_id").notNull(),
+    searchTerm: text("search_term").notNull(),
+    impressions: integer("impressions").notNull(),
+    clicks: integer("clicks").notNull(),
+    cost: numeric("cost", { precision: 12, scale: 2 }).notNull(),
+    conversions: numeric("conversions", { precision: 12, scale: 2 }).notNull(),
+    conversionValue: numeric("conversion_value", { precision: 12, scale: 2 }).notNull(),
+    raw: jsonb("raw").$type<Record<string, unknown>>().notNull(),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    uniqueIdx: uniqueIndex("google_ads_search_terms_daily_unique_idx").on(
+      table.customerId,
+      table.dateStart,
+      table.campaignId,
+      table.adGroupId,
+      table.searchTerm
+    ),
+    dateIdx: index("google_ads_search_terms_daily_date_idx").on(table.dateStart),
+    campaignIdx: index("google_ads_search_terms_daily_campaign_idx").on(table.campaignId),
+    adGroupIdx: index("google_ads_search_terms_daily_ad_group_idx").on(table.adGroupId)
+  })
+);
+
 export const calendarSyncState = pgTable("calendar_sync_state", {
   calendarId: text("calendar_id").primaryKey(),
   syncToken: text("sync_token"),

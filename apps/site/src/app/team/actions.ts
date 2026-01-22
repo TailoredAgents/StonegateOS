@@ -2831,6 +2831,24 @@ export async function runSeoAutopublishAction() {
   redirect("/team?tab=seo");
 }
 
+export async function runGoogleAdsSyncAction() {
+  const jar = await cookies();
+
+  const response = await callAdminApi("/api/admin/google/ads/sync", {
+    method: "POST",
+    body: JSON.stringify({ days: 14 })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to sync Google Ads");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  jar.set({ name: "myst-flash", value: "Google Ads sync queued.", path: "/" });
+  redirect("/team?tab=marketing");
+}
+
 type OutboundImportRow = {
   company?: string;
   contactName?: string;

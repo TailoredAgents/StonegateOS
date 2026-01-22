@@ -144,6 +144,24 @@ services:
         sync: false
       - key: GOOGLE_CALENDAR_WEBHOOK_URL
         sync: false
+      - key: GOOGLE_ADS_DEVELOPER_TOKEN
+        sync: false
+      - key: GOOGLE_ADS_CLIENT_ID
+        sync: false
+      - key: GOOGLE_ADS_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_ADS_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_ADS_CUSTOMER_ID
+        sync: false
+      - key: GOOGLE_ADS_LOGIN_CUSTOMER_ID
+        sync: false
+      - key: GOOGLE_ADS_API_VERSION
+        sync: false
+      - key: GOOGLE_ADS_SYNC_INTERVAL_MS
+        sync: false
+      - key: GOOGLE_ADS_SYNC_DISABLED
+        sync: false
       - key: GA4_MEASUREMENT_ID
         sync: false
       - key: GA4_API_SECRET
@@ -246,6 +264,24 @@ services:
       - key: GOOGLE_REFRESH_TOKEN
         sync: false
       - key: GOOGLE_CALENDAR_ID
+        sync: false
+      - key: GOOGLE_ADS_DEVELOPER_TOKEN
+        sync: false
+      - key: GOOGLE_ADS_CLIENT_ID
+        sync: false
+      - key: GOOGLE_ADS_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_ADS_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_ADS_CUSTOMER_ID
+        sync: false
+      - key: GOOGLE_ADS_LOGIN_CUSTOMER_ID
+        sync: false
+      - key: GOOGLE_ADS_API_VERSION
+        sync: false
+      - key: GOOGLE_ADS_SYNC_INTERVAL_MS
+        sync: false
+      - key: GOOGLE_ADS_SYNC_DISABLED
         sync: false
 databases:
   - name: stonegate-db

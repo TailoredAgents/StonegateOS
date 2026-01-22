@@ -69,6 +69,7 @@ import { handleInboundSalesAutopilot, handleSalesAutopilotAutosend } from "@/lib
 import { recordAuditEvent } from "@/lib/audit";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import { MetaGraphApiError, syncMetaAdsInsightsDaily } from "@/lib/meta-ads-insights";
+import { GoogleAdsApiError, syncGoogleAdsInsightsDaily } from "@/lib/google-ads-insights";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -154,7 +155,9 @@ function isRetryableSendFailure(detail: string | null): boolean {
   return true;
 }
 
-async function recordProviderSuccessSafe(provider: "sms" | "email" | "calendar" | "meta_ads"): Promise<void> {
+async function recordProviderSuccessSafe(
+  provider: "sms" | "email" | "calendar" | "meta_ads" | "google_ads"
+): Promise<void> {
   try {
     await recordProviderSuccess(provider);
   } catch (error) {
@@ -163,7 +166,7 @@ async function recordProviderSuccessSafe(provider: "sms" | "email" | "calendar" 
 }
 
 async function recordProviderFailureSafe(
-  provider: "sms" | "email" | "calendar" | "meta_ads",
+  provider: "sms" | "email" | "calendar" | "meta_ads" | "google_ads",
   detail: string | null
 ): Promise<void> {
   try {
@@ -3181,6 +3184,55 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
 
         const retryable =
           error instanceof MetaGraphApiError ? error.status === 429 || error.status >= 500 : true;
+
+        return retryable ? { status: "retry", error: detail } : { status: "processed", error: detail };
+      }
+    }
+
+    case "google.ads_insights.sync": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const daysRaw = payload?.["days"];
+      const days =
+        typeof daysRaw === "number"
+          ? daysRaw
+          : typeof daysRaw === "string"
+            ? Number(daysRaw)
+            : NaN;
+      const sinceRaw = typeof payload?.["since"] === "string" ? payload["since"] : null;
+      const untilRaw = typeof payload?.["until"] === "string" ? payload["until"] : null;
+
+      const isoDate = (date: Date): string => date.toISOString().slice(0, 10);
+      const isIsoDateString = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+      let since = sinceRaw && isIsoDateString(sinceRaw) ? sinceRaw : null;
+      let until = untilRaw && isIsoDateString(untilRaw) ? untilRaw : null;
+
+      if (!since || !until || since > until) {
+        const windowDays = Number.isFinite(days) && days > 0 ? Math.min(Math.floor(days), 30) : 14;
+        const now = new Date();
+        const end = isoDate(now);
+        const startDate = new Date(now);
+        startDate.setDate(startDate.getDate() - (windowDays - 1));
+        const start = isoDate(startDate);
+        since = start;
+        until = end;
+      }
+
+      try {
+        const result = await syncGoogleAdsInsightsDaily({ since, until });
+        await recordProviderSuccessSafe("google_ads");
+        console.info("[outbox] google.ads_insights.sync.ok", { id: event.id, since, until, ...result });
+        return { status: "processed" };
+      } catch (error) {
+        const detail =
+          error instanceof GoogleAdsApiError
+            ? `google_ads_failed:${error.status}:${error.body}`
+            : `google_ads_error:${String(error)}`;
+
+        await recordProviderFailureSafe("google_ads", detail);
+
+        const retryable =
+          error instanceof GoogleAdsApiError ? error.status === 429 || error.status >= 500 : true;
 
         return retryable ? { status: "retry", error: detail } : { status: "processed", error: detail };
       }

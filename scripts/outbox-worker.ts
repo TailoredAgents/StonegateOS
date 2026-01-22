@@ -35,12 +35,24 @@ async function runSeoOnce() {
   console.log(JSON.stringify({ ok: true, seo: result }, null, 2));
 }
 
+async function runGoogleAdsQueueOnce() {
+  const { queueGoogleAdsSyncIfNeeded } = await import("../apps/api/src/lib/google-ads-scheduler");
+  const result = await queueGoogleAdsSyncIfNeeded({ invokedBy: "worker" });
+  if (result.queued) {
+    console.log(JSON.stringify({ ok: true, googleAds: result }, null, 2));
+  }
+}
+
 async function main() {
   registerAliases();
   const limit = Number(process.env["OUTBOX_BATCH_SIZE"] ?? 10);
   const pollIntervalMs = Number(process.env["OUTBOX_POLL_INTERVAL_MS"] ?? 0);
   const seoIntervalMs = Number(process.env["SEO_AUTOPUBLISH_INTERVAL_MS"] ?? 6 * 60 * 60 * 1000);
+  const googleAdsIntervalMs = Number(
+    process.env["GOOGLE_ADS_SYNC_INTERVAL_MS"] ?? 24 * 60 * 60 * 1000
+  );
   let nextSeoAt = Date.now();
+  let nextGoogleAdsAt = Date.now();
 
   if (pollIntervalMs > 0) {
     // Continuous polling loop
@@ -54,6 +66,18 @@ async function main() {
         }
         nextSeoAt = Date.now() + (Number.isFinite(seoIntervalMs) && seoIntervalMs > 60_000 ? seoIntervalMs : 6 * 60 * 60 * 1000);
       }
+      if (Date.now() >= nextGoogleAdsAt) {
+        try {
+          await runGoogleAdsQueueOnce();
+        } catch (error) {
+          console.warn("[google_ads] sync.loop_failed", String(error));
+        }
+        nextGoogleAdsAt =
+          Date.now() +
+          (Number.isFinite(googleAdsIntervalMs) && googleAdsIntervalMs > 60_000
+            ? googleAdsIntervalMs
+            : 24 * 60 * 60 * 1000);
+      }
       if (stats.total === 0) {
         await sleep(pollIntervalMs);
       }
@@ -61,6 +85,7 @@ async function main() {
   } else {
     await runOnce(limit);
     await runSeoOnce();
+    await runGoogleAdsQueueOnce();
   }
 }
 

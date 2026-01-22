@@ -169,6 +169,13 @@
       "when": 1768856400000,
       "tag": "0023_partner_portal_sms",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1769216400000,
+      "tag": "0024_google_ads_insights_daily",
+      "breakpoints": true
     }
   ]
 }

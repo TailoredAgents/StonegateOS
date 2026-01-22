@@ -17,6 +17,7 @@ import { OwnerSection } from "./components/OwnerSection";
 import { InboxSection } from "./components/InboxSection";
 import { ExpensesSection } from "./components/ExpensesSection";
 import { CommissionsSection } from "./components/CommissionsSection";
+import { MarketingSection } from "./components/MarketingSection";
 import { PolicyCenterSection } from "./components/PolicyCenterSection";
 import { AutomationSection } from "./components/AutomationSection";
 import { AccessSection } from "./components/AccessSection";
@@ -161,6 +162,7 @@ export default async function TeamPage({
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
     { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "owner" },
     { id: "commissions", label: "Commissions", href: "/team?tab=commissions", requires: "owner" },
+    { id: "marketing", label: "Marketing", href: "/team?tab=marketing", requires: "owner" },
     { id: "seo", label: "SEO Agent", href: "/team?tab=seo", requires: "owner" },
     { id: "automation", label: "Messaging Automation", href: "/team?tab=automation", requires: "owner" },
     { id: "access", label: "Access", href: "/team?tab=access", requires: "owner" },
@@ -173,7 +175,7 @@ export default async function TeamPage({
     { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
     { id: "sales", label: "Sales", itemIds: ["quotes", "pipeline", "sales-hq", "outbound", "partners", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
-    { id: "control", label: "Control", itemIds: ["commissions", "seo", "policy", "automation", "access", "sales-log", "audit", "merge"] },
+    { id: "control", label: "Control", itemIds: ["commissions", "marketing", "seo", "policy", "automation", "access", "sales-log", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
@@ -450,6 +452,12 @@ export default async function TeamPage({
         {tab === "commissions" && hasOwner ? (
           <React.Suspense fallback={<TeamSkeletonCard title="Loading commissions" />}>
             <CommissionsSection />
+          </React.Suspense>
+        ) : null}
+
+        {tab === "marketing" && hasOwner ? (
+          <React.Suspense fallback={<TeamSkeletonCard title="Loading marketing" />}>
+            <MarketingSection />
           </React.Suspense>
         ) : null}
 
