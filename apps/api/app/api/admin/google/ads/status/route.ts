@@ -2,7 +2,12 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import { getDb, googleAdsInsightsDaily, providerHealth } from "@/db";
-import { GoogleAdsApiError, getGoogleAdsAccessToken } from "@/lib/google-ads-insights";
+import {
+  GoogleAdsApiError,
+  getGoogleAdsAccessToken,
+  getGoogleAdsConfiguredIds,
+  listGoogleAdsAccessibleCustomers
+} from "@/lib/google-ads-insights";
 import { isAdminRequest } from "../../../../web/admin";
 
 function isConfigured(): boolean {
@@ -22,14 +27,22 @@ export async function GET(request: NextRequest): Promise<Response> {
   const configured = isConfigured();
   let authOk: boolean | null = null;
   let authError: { status?: number; error?: string; description?: string } | null = null;
+  let accessibleCustomers: string[] | null = null;
+  const ids = getGoogleAdsConfiguredIds();
 
   if (configured) {
     try {
-      await Promise.race([
+      const token = (await Promise.race([
         getGoogleAdsAccessToken(),
         new Promise((_, reject) => setTimeout(() => reject(new Error("google_ads_auth_timeout")), 8000))
-      ]);
+      ])) as string;
       authOk = true;
+
+      const url = new URL(request.url);
+      const debug = url.searchParams.get("debug");
+      if (debug === "1") {
+        accessibleCustomers = await listGoogleAdsAccessibleCustomers({ accessToken: token });
+      }
     } catch (error) {
       authOk = false;
       if (error instanceof GoogleAdsApiError) {
@@ -75,6 +88,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     configured,
     authOk,
     authError,
+    customerId: ids.customerId,
+    loginCustomerId: ids.loginCustomerId,
+    apiVersion: ids.apiVersion,
+    accessibleCustomers,
     lastSuccessAt: healthRow?.lastSuccessAt ? healthRow.lastSuccessAt.toISOString() : null,
     lastFailureAt: healthRow?.lastFailureAt ? healthRow.lastFailureAt.toISOString() : null,
     lastFailureDetail: healthRow?.lastFailureDetail ?? null,

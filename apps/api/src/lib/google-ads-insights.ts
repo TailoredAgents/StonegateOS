@@ -21,6 +21,27 @@ function normalizeCustomerId(value: string): string {
   return value.replace(/[^\d]/g, "");
 }
 
+export function getGoogleAdsConfiguredIds(): {
+  customerId: string | null;
+  loginCustomerId: string | null;
+  apiVersion: string;
+} {
+  const customerIdRaw = process.env["GOOGLE_ADS_CUSTOMER_ID"] ?? "";
+  const customerId = normalizeCustomerId(customerIdRaw);
+
+  const loginCustomerIdRaw = process.env["GOOGLE_ADS_LOGIN_CUSTOMER_ID"] ?? "";
+  const loginCustomerId = loginCustomerIdRaw ? normalizeCustomerId(loginCustomerIdRaw) : null;
+
+  const apiVersionRaw = (process.env["GOOGLE_ADS_API_VERSION"] ?? "v20").trim();
+  const apiVersion = apiVersionRaw.startsWith("v") ? apiVersionRaw : `v${apiVersionRaw}`;
+
+  return {
+    customerId: customerId || null,
+    loginCustomerId,
+    apiVersion
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -90,6 +111,40 @@ export async function getGoogleAdsAccessToken(): Promise<string> {
   return token;
 }
 
+export async function listGoogleAdsAccessibleCustomers(input: { accessToken: string }): Promise<string[]> {
+  const developerToken = process.env["GOOGLE_ADS_DEVELOPER_TOKEN"] ?? "";
+  if (!developerToken) {
+    throw new Error("google_ads_not_configured");
+  }
+
+  const { apiVersion, loginCustomerId } = getGoogleAdsConfiguredIds();
+
+  const url = `https://googleads.googleapis.com/${apiVersion}/customers:listAccessibleCustomers`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${input.accessToken}`,
+      "developer-token": developerToken,
+      ...(loginCustomerId ? { "login-customer-id": loginCustomerId } : {})
+    }
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new GoogleAdsApiError(response.status, text);
+  }
+
+  let json: any = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = null;
+  }
+
+  const names = Array.isArray(json?.resourceNames) ? json.resourceNames : [];
+  return names.filter((value: unknown): value is string => typeof value === "string");
+}
+
 async function googleAdsSearchStream(input: {
   customerId: string;
   accessToken: string;
@@ -102,11 +157,7 @@ async function googleAdsSearchStream(input: {
 
   // As of Jan 2026, googleads.googleapis.com no longer serves v17 (returns 404 HTML).
   // Default to a currently served version; still overrideable via env var.
-  const apiVersionRaw = (process.env["GOOGLE_ADS_API_VERSION"] ?? "v20").trim();
-  const apiVersion = apiVersionRaw.startsWith("v") ? apiVersionRaw : `v${apiVersionRaw}`;
-
-  const loginCustomerIdRaw = process.env["GOOGLE_ADS_LOGIN_CUSTOMER_ID"] ?? "";
-  const loginCustomerId = loginCustomerIdRaw ? normalizeCustomerId(loginCustomerIdRaw) : null;
+  const { apiVersion, loginCustomerId } = getGoogleAdsConfiguredIds();
 
   const url = `https://googleads.googleapis.com/${apiVersion}/customers/${input.customerId}/googleAds:searchStream`;
   const response = await fetch(url, {
@@ -161,10 +212,12 @@ function isIsoDateString(value: string): boolean {
 }
 
 export async function syncGoogleAdsInsightsDaily(input: { since: string; until: string }): Promise<SyncResult> {
-  const customerIdRaw = process.env["GOOGLE_ADS_CUSTOMER_ID"] ?? "";
-  const customerId = normalizeCustomerId(customerIdRaw);
+  const { customerId } = getGoogleAdsConfiguredIds();
   if (!customerId) {
     throw new Error("google_ads_not_configured");
+  }
+  if (customerId.length !== 10) {
+    throw new Error(`google_ads_invalid_customer_id:${customerId}`);
   }
 
   if (!isIsoDateString(input.since) || !isIsoDateString(input.until) || input.since > input.until) {
