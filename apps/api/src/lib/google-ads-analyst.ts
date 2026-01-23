@@ -75,12 +75,11 @@ function getOpenAIConfig(): { apiKey: string; model: string } | null {
 }
 
 function extractOutputText(data: any): string | null {
-  if (typeof data?.output_text === "string" && data.output_text.trim()) return data.output_text.trim();
+  // Prefer structured outputs if present; `output_text` can include non-JSON text in some failure modes.
   const output = Array.isArray(data?.output) ? data.output : [];
   for (const item of output) {
     const content = Array.isArray(item?.content) ? item.content : [];
     for (const chunk of content) {
-      if (typeof chunk?.text === "string" && chunk.text.trim()) return chunk.text.trim();
       if (chunk?.json && typeof chunk.json === "object") {
         try {
           return JSON.stringify(chunk.json);
@@ -88,9 +87,63 @@ function extractOutputText(data: any): string | null {
           // ignore
         }
       }
+      if (typeof chunk?.text === "string" && chunk.text.trim()) return chunk.text.trim();
     }
   }
+  if (typeof data?.output_text === "string" && data.output_text.trim()) return data.output_text.trim();
   return null;
+}
+
+function extractOutputObject(data: any): unknown | null {
+  const output = Array.isArray(data?.output) ? data.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    for (const chunk of content) {
+      if (chunk?.json && typeof chunk.json === "object") return chunk.json;
+      if (chunk?.type && typeof chunk.type === "string" && chunk.type.toLowerCase().includes("json")) {
+        if (chunk?.parsed && typeof chunk.parsed === "object") return chunk.parsed;
+        if (chunk?.value && typeof chunk.value === "object") return chunk.value;
+      }
+    }
+  }
+  if (data?.output_parsed && typeof data.output_parsed === "object") return data.output_parsed;
+  return null;
+}
+
+function parsePossiblyWrappedJson(raw: string): unknown | null {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Try to recover common cases like ```json ...``` or leading/trailing text.
+    const first = raw.indexOf("{");
+    const last = raw.lastIndexOf("}");
+    if (first >= 0 && last > first) {
+      const slice = raw.slice(first, last + 1);
+      try {
+        return JSON.parse(slice);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function clampString(value: unknown, maxLen: number): string {
+  const raw = typeof value === "string" ? value : String(value ?? "");
+  return raw.trim().slice(0, maxLen);
+}
+
+function normalizeStringArray(value: unknown, maxItems: number, maxLen: number): string[] {
+  const arr = Array.isArray(value) ? value : [];
+  const out: string[] = [];
+  for (const item of arr) {
+    const s = clampString(item, maxLen);
+    if (s.length === 0) continue;
+    out.push(s);
+    if (out.length >= maxItems) break;
+  }
+  return out;
 }
 
 async function callOpenAIAnalystJson(input: {
@@ -116,11 +169,24 @@ async function callOpenAIAnalystJson(input: {
           type: "object",
           additionalProperties: false,
           properties: {
-            summary: { type: "string" },
-            top_actions: { type: "array", items: { type: "string" } },
-            negatives_to_review: { type: "array", items: { type: "string" } },
-            pause_candidates_to_review: { type: "array", items: { type: "string" } },
-            notes: { type: "string" }
+            summary: { type: "string", minLength: 20, maxLength: 1600 },
+            top_actions: {
+              type: "array",
+              minItems: 3,
+              maxItems: 10,
+              items: { type: "string", minLength: 5, maxLength: 220 }
+            },
+            negatives_to_review: {
+              type: "array",
+              maxItems: 50,
+              items: { type: "string", minLength: 1, maxLength: 140 }
+            },
+            pause_candidates_to_review: {
+              type: "array",
+              maxItems: 50,
+              items: { type: "string", minLength: 1, maxLength: 140 }
+            },
+            notes: { type: "string", maxLength: 1200 }
           },
           required: ["summary", "top_actions", "negatives_to_review", "pause_candidates_to_review", "notes"]
         }
@@ -147,17 +213,36 @@ async function callOpenAIAnalystJson(input: {
   }
 
   const data = (await response.json().catch(() => ({}))) as any;
-  const raw = extractOutputText(data);
-  if (!raw) return { ok: false, error: "openai_empty" };
 
-  let json: unknown = null;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    return { ok: false, error: "openai_parse_failed" };
+  let json: unknown = extractOutputObject(data);
+  if (!json) {
+    const raw = extractOutputText(data);
+    if (!raw) return { ok: false, error: "openai_empty" };
+    json = parsePossiblyWrappedJson(raw);
+    if (!json) return { ok: false, error: "openai_parse_failed" };
   }
 
-  const parsed = AnalystReportSchema.safeParse(json);
+  // Clamp to reduce avoidable schema failures (the report is operator-facing suggestions).
+  const normalized: Record<string, unknown> =
+    json && typeof json === "object" && !Array.isArray(json) ? (json as Record<string, unknown>) : {};
+  const repaired = {
+    summary: clampString(normalized["summary"], 1600),
+    top_actions: normalizeStringArray(normalized["top_actions"], 10, 220),
+    negatives_to_review: normalizeStringArray(normalized["negatives_to_review"], 50, 140),
+    pause_candidates_to_review: normalizeStringArray(normalized["pause_candidates_to_review"], 50, 140),
+    notes: clampString(normalized["notes"], 1200)
+  };
+
+  if (repaired.top_actions.length < 3) {
+    repaired.top_actions.push(
+      "Review the highest spend search terms and add obvious negatives that have 0 conversions.",
+      "Tighten locations to your target cities and exclude out-of-area search terms.",
+      "Test 1 new headline and 1 new description focused on fast availability and transparent pricing."
+    );
+    repaired.top_actions.splice(10);
+  }
+
+  const parsed = AnalystReportSchema.safeParse(repaired);
   if (!parsed.success) {
     return { ok: false, error: "schema_parse_failed", detail: JSON.stringify(parsed.error.issues).slice(0, 400) };
   }
