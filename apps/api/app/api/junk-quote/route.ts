@@ -42,7 +42,7 @@ const RequestSchema = z.object({
   contact: z.object({
     name: z.string().min(2),
     phone: z.string().min(7),
-    timeframe: z.enum(["today", "tomorrow", "this_week", "flexible"])
+    timeframe: z.enum(["today", "tomorrow", "this_week", "flexible"]).optional().default("flexible")
   }),
   job: z.object({
     types: z
@@ -57,11 +57,16 @@ const RequestSchema = z.object({
           "business_commercial"
         ])
       )
-      .min(0),
-    perceivedSize: z.enum(["few_items", "small_area", "one_room_or_half_garage", "big_cleanout", "not_sure"]),
+      .optional()
+      .default([]),
+    perceivedSize: z
+      .enum(["few_items", "small_area", "one_room_or_half_garage", "big_cleanout", "not_sure"])
+      .optional()
+      .default("not_sure"),
     notes: z.string().optional().nullable(),
     zip: z.string().min(3),
-    photoUrls: z.array(z.string().url()).max(4).default([])
+    photoUrls: z
+      .preprocess((value) => (value == null ? undefined : value), z.array(z.string().url()).max(10).default([]))
   }),
   utm: z
     .object({
@@ -339,6 +344,7 @@ export async function POST(request: NextRequest) {
     const requestOrigin = request.headers.get("origin");
     const parsed = RequestSchema.safeParse(await request.json());
       if (!parsed.success) {
+        console.warn("[junk-quote] invalid_payload", parsed.error.flatten());
         return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
       }
       const body = parsed.data;
