@@ -50,7 +50,7 @@ function floatToNumeric(value: unknown): string {
   return Number.isFinite(num) ? num.toFixed(2) : "0.00";
 }
 
-async function getGoogleAdsAccessToken(): Promise<string> {
+export async function getGoogleAdsAccessToken(): Promise<string> {
   const clientId = process.env["GOOGLE_ADS_CLIENT_ID"] ?? "";
   const clientSecret = process.env["GOOGLE_ADS_CLIENT_SECRET"] ?? "";
   const refreshToken = process.env["GOOGLE_ADS_REFRESH_TOKEN"] ?? "";
@@ -317,4 +317,3 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
 
   return { campaigns: campaignValues.length, searchTerms: searchTermValues.length };
 }
-
