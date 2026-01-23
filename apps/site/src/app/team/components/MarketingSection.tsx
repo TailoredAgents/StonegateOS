@@ -1,7 +1,12 @@
 import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
-import { runGoogleAdsAnalystAction, runGoogleAdsSyncAction, saveGoogleAdsAnalystSettingsAction } from "../actions";
+import {
+  runGoogleAdsAnalystAction,
+  runGoogleAdsSyncAction,
+  saveGoogleAdsAnalystSettingsAction,
+  updateGoogleAdsAnalystRecommendationAction
+} from "../actions";
 import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE } from "./team-ui";
 
 type GoogleAdsStatusPayload = {
@@ -77,6 +82,24 @@ type GoogleAdsAnalystStatusPayload = {
   } | null;
 };
 
+type GoogleAdsAnalystRecommendationStatus = "proposed" | "approved" | "ignored" | "applied";
+
+type GoogleAdsAnalystRecommendation = {
+  id: string;
+  kind: string;
+  status: GoogleAdsAnalystRecommendationStatus;
+  payload: Record<string, unknown>;
+  decidedAt: string | null;
+  appliedAt: string | null;
+  createdAt: string;
+};
+
+type GoogleAdsAnalystRecommendationsPayload = {
+  ok: true;
+  reportId: string | null;
+  items: GoogleAdsAnalystRecommendation[];
+};
+
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -118,13 +141,15 @@ export async function MarketingSection(): Promise<React.ReactElement> {
   let status: GoogleAdsStatusPayload | null = null;
   let summary: GoogleAdsSummaryPayload | null = null;
   let analyst: GoogleAdsAnalystStatusPayload | null = null;
+  let recs: GoogleAdsAnalystRecommendationsPayload | null = null;
   let error: string | null = null;
 
   try {
-    const [statusRes, summaryRes, analystRes] = await Promise.all([
+    const [statusRes, summaryRes, analystRes, recsRes] = await Promise.all([
       callAdminApi("/api/admin/google/ads/status"),
       callAdminApi("/api/admin/google/ads/summary?rangeDays=7"),
-      callAdminApi("/api/admin/google/ads/analyst/status")
+      callAdminApi("/api/admin/google/ads/analyst/status"),
+      callAdminApi("/api/admin/google/ads/analyst/recommendations")
     ]);
 
     if (statusRes.ok) {
@@ -139,6 +164,10 @@ export async function MarketingSection(): Promise<React.ReactElement> {
 
     if (analystRes.ok) {
       analyst = (await analystRes.json()) as GoogleAdsAnalystStatusPayload;
+    }
+
+    if (recsRes.ok) {
+      recs = (await recsRes.json()) as GoogleAdsAnalystRecommendationsPayload;
     }
   } catch {
     error = "Google Ads status unavailable.";
@@ -161,13 +190,19 @@ export async function MarketingSection(): Promise<React.ReactElement> {
   const safeCallWeight = weightSum > 0 ? callWeight / weightSum : 0.7;
   const safeBookingWeight = weightSum > 0 ? bookingWeight / weightSum : 0.3;
 
+  const recommendations = recs?.items ?? [];
+  const approvedNegatives = recommendations
+    .filter((item) => item.kind === "negative_keyword" && item.status === "approved")
+    .map((item) => String(item.payload["term"] ?? "").trim())
+    .filter((term) => term.length > 0);
+
   return (
     <section className="space-y-4">
       <header className={TEAM_CARD_PADDED}>
         <h2 className={TEAM_SECTION_TITLE}>Marketing</h2>
         <p className={TEAM_SECTION_SUBTITLE}>
-          Google Ads sync and AI analysis. Default behavior is safe: nothing changes in Google Ads unless you explicitly
-          turn on autonomous mode (and even then, we only generate recommendations today).
+          Google Ads sync and AI analysis. Default behavior is safe: the CRM never auto-applies changes to Google Ads.
+          You can optionally enable auto-run to refresh reports on a schedule.
         </p>
       </header>
 
@@ -256,7 +291,7 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                 <div className="text-sm font-semibold text-slate-900">AI Marketing Analyst</div>
                 <div className="mt-1 text-xs text-slate-500">
                   Calls are weighted higher than bookings ({Math.round(safeCallWeight * 100)}% /{" "}
-                  {Math.round(safeBookingWeight * 100)}%). Autonomous mode is off by default.
+                  {Math.round(safeBookingWeight * 100)}%). Auto-run is off by default.
                 </div>
                 <div className="mt-1 text-xs text-slate-500">
                   Last run:{" "}
@@ -275,7 +310,7 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                   <form action={saveGoogleAdsAnalystSettingsAction}>
                     <input type="hidden" name="autonomous" value={policy.autonomous ? "false" : "true"} />
                     <SubmitButton className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50">
-                      {policy.autonomous ? "Disable autonomous" : "Enable autonomous"}
+                      {policy.autonomous ? "Disable auto-run" : "Enable auto-run"}
                     </SubmitButton>
                   </form>
                 ) : null}
@@ -297,7 +332,7 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                   <span className="font-semibold text-slate-900">
                     Mode:{" "}
                     {policy.autonomous ? (
-                      <span className="text-amber-700">autonomous</span>
+                      <span className="text-amber-700">auto-run</span>
                     ) : (
                       <span className="text-slate-700">manual</span>
                     )}
@@ -310,8 +345,8 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                   </span>
                 </div>
                 <div className="mt-1 text-[11px] text-slate-500">
-                  Manual mode: only runs when you click Generate report. Autonomous mode: the worker runs the report
-                  daily (still no auto-changes to ads).
+                  Manual mode: only runs when you click Generate report. Auto-run: the worker runs the report daily
+                  (still no auto-changes to ads).
                 </div>
               </div>
             ) : null}
@@ -349,6 +384,115 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                     </div>
                   </div>
                 ) : null}
+
+                <div className="rounded-xl border border-slate-200 bg-white/80 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recommendations</div>
+                      <div className="mt-1 text-xs text-slate-500">Approve items you want to apply. Nothing auto-applies.</div>
+                    </div>
+                  </div>
+
+                  {recommendations.length === 0 ? (
+                    <div className="mt-2 text-sm text-slate-600">No recommendations yet.</div>
+                  ) : (
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="min-w-full text-left text-sm">
+                        <thead>
+                          <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <th className="py-2 pr-4">Item</th>
+                            <th className="py-2 pr-4">Status</th>
+                            <th className="py-2 pr-4 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200/70">
+                          {recommendations.slice(0, 50).map((item) => {
+                            const term = String(item.payload["term"] ?? "");
+                            const campaignName = String(item.payload["campaignName"] ?? "");
+                            const campaignId = String(item.payload["campaignId"] ?? "");
+                            const cost = item.payload["cost"];
+                            const clicks = item.payload["clicks"];
+
+                            const label =
+                              item.kind === "negative_keyword"
+                                ? `Negative keyword: ${term}`
+                                : item.kind === "pause_candidate"
+                                  ? `Review campaign: ${campaignName || campaignId}`
+                                  : item.kind;
+
+                            const subtitleParts: string[] = [];
+                            if (campaignId) subtitleParts.push(`campaign ${campaignId}`);
+                            if (typeof clicks === "number") subtitleParts.push(`${clicks} clicks`);
+                            if (typeof cost === "number") subtitleParts.push(`$${cost.toFixed(2)} spend`);
+
+                            return (
+                              <tr key={item.id} className="align-top">
+                                <td className="py-2 pr-4">
+                                  <div className="font-semibold text-slate-900">{label}</div>
+                                  {subtitleParts.length > 0 ? (
+                                    <div className="text-xs text-slate-500">{subtitleParts.join(" • ")}</div>
+                                  ) : null}
+                                </td>
+                                <td className="py-2 pr-4">
+                                  <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700">
+                                    {item.status}
+                                  </span>
+                                </td>
+                                <td className="py-2 pr-4">
+                                  <div className="flex justify-end gap-2">
+                                    {item.status !== "approved" ? (
+                                      <form action={updateGoogleAdsAnalystRecommendationAction}>
+                                        <input type="hidden" name="id" value={item.id} />
+                                        <input type="hidden" name="status" value="approved" />
+                                        <SubmitButton className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800">
+                                          Approve
+                                        </SubmitButton>
+                                      </form>
+                                    ) : null}
+
+                                    {item.status !== "ignored" ? (
+                                      <form action={updateGoogleAdsAnalystRecommendationAction}>
+                                        <input type="hidden" name="id" value={item.id} />
+                                        <input type="hidden" name="status" value="ignored" />
+                                        <SubmitButton className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50">
+                                          Ignore
+                                        </SubmitButton>
+                                      </form>
+                                    ) : null}
+
+                                    {item.status === "approved" ? (
+                                      <form action={updateGoogleAdsAnalystRecommendationAction}>
+                                        <input type="hidden" name="id" value={item.id} />
+                                        <input type="hidden" name="status" value="applied" />
+                                        <SubmitButton className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-100">
+                                          Mark applied
+                                        </SubmitButton>
+                                      </form>
+                                    ) : null}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {approvedNegatives.length > 0 ? (
+                    <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Approved negatives (copy/paste)
+                      </div>
+                      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-xs text-slate-900">
+                        {approvedNegatives.join("\n")}
+                      </pre>
+                      <div className="mt-2 text-[11px] text-slate-500">
+                        Apply these manually in Google Ads, then click “Mark applied” for each item.
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : (
               <div className="mt-3 text-sm text-slate-600">
@@ -443,4 +587,3 @@ export async function MarketingSection(): Promise<React.ReactElement> {
     </section>
   );
 }
-

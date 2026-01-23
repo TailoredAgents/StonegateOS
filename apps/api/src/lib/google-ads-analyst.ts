@@ -3,6 +3,7 @@ import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import {
   getDb,
+  googleAdsAnalystRecommendations,
   googleAdsAnalystReports,
   googleAdsCampaignConversionsDaily,
   googleAdsConversionActions,
@@ -301,7 +302,7 @@ export async function runGoogleAdsAnalystReport(input: {
     };
   });
 
-  const suggestedNegatives = searchTerms
+  const negativeCandidates = searchTerms
     .filter((row) => {
       const cost = Number(row.cost);
       const conversions = Number(row.conversions);
@@ -313,7 +314,24 @@ export async function runGoogleAdsAnalystReport(input: {
       );
     })
     .slice(0, 25)
-    .map((row) => row.searchTerm);
+    .map((row) => ({
+      searchTerm: row.searchTerm,
+      campaignId: row.campaignId,
+      cost: Number(row.cost) || 0,
+      clicks: row.clicks
+    }));
+
+  const suggestedNegatives = negativeCandidates.map((row) => row.searchTerm);
+
+  const pauseCandidates = enrichedCampaigns
+    .filter((row) => row.cost >= 150 && row.weightedConversions <= 0 && row.clicks >= 20)
+    .slice(0, 10)
+    .map((row) => ({
+      campaignId: row.campaignId,
+      campaignName: row.campaignName,
+      cost: row.cost,
+      clicks: row.clicks
+    }));
 
   const systemPrompt = [
     "You are a Google Ads marketing analyst for a local junk removal company (Stonegate Junk Removal).",
@@ -370,10 +388,63 @@ export async function runGoogleAdsAnalystReport(input: {
     })
     .returning({ id: googleAdsAnalystReports.id, createdAt: googleAdsAnalystReports.createdAt });
 
+  const reportId = row?.id ?? "";
+
+  if (reportId) {
+    const recRows: Array<{
+      reportId: string;
+      kind: string;
+      status: string;
+      payload: Record<string, unknown>;
+      decidedBy: string | null;
+      decidedAt: Date | null;
+      appliedAt: Date | null;
+    }> = [];
+
+    for (const candidate of negativeCandidates) {
+      recRows.push({
+        reportId,
+        kind: "negative_keyword",
+        status: "proposed",
+        payload: {
+          term: candidate.searchTerm,
+          campaignId: candidate.campaignId,
+          clicks: candidate.clicks,
+          cost: candidate.cost,
+          reason: "High spend + clicks with 0 conversions"
+        },
+        decidedBy: null,
+        decidedAt: null,
+        appliedAt: null
+      });
+    }
+
+    for (const candidate of pauseCandidates) {
+      recRows.push({
+        reportId,
+        kind: "pause_candidate",
+        status: "proposed",
+        payload: {
+          campaignId: candidate.campaignId,
+          campaignName: candidate.campaignName,
+          clicks: candidate.clicks,
+          cost: candidate.cost,
+          reason: "High spend with 0 weighted conversions"
+        },
+        decidedBy: null,
+        decidedAt: null,
+        appliedAt: null
+      });
+    }
+
+    if (recRows.length > 0) {
+      await db.insert(googleAdsAnalystRecommendations).values(recRows);
+    }
+  }
+
   return {
     ok: true,
-    reportId: row?.id ?? "",
+    reportId,
     createdAt: row?.createdAt ? row.createdAt.toISOString() : new Date().toISOString()
   };
 }
-

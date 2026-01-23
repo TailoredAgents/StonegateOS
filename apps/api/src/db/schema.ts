@@ -810,6 +810,31 @@ export const googleAdsAnalystReports = pgTable(
   })
 );
 
+export const googleAdsAnalystRecommendations = pgTable(
+  "google_ads_analyst_recommendations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => googleAdsAnalystReports.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    status: text("status").default("proposed").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    decidedBy: uuid("decided_by").references(() => teamMembers.id, { onDelete: "set null" }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    reportIdx: index("google_ads_analyst_recs_report_idx").on(table.reportId, table.createdAt),
+    statusIdx: index("google_ads_analyst_recs_status_idx").on(table.status, table.createdAt)
+  })
+);
+
 export const calendarSyncState = pgTable("calendar_sync_state", {
   calendarId: text("calendar_id").primaryKey(),
   syncToken: text("sync_token"),

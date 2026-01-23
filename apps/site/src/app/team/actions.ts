@@ -2870,10 +2870,12 @@ export async function runGoogleAdsAnalystAction() {
 export async function saveGoogleAdsAnalystSettingsAction(formData: FormData) {
   const jar = await cookies();
   const autonomous = formData.get("autonomous");
+  const autonomousEnabled =
+    autonomous === "on" || autonomous === "true";
 
   const response = await callAdminApi("/api/admin/google/ads/analyst/settings", {
     method: "POST",
-    body: JSON.stringify({ autonomous: autonomous === "on" })
+    body: JSON.stringify({ autonomous: autonomousEnabled })
   });
 
   if (!response.ok) {
@@ -2883,6 +2885,31 @@ export async function saveGoogleAdsAnalystSettingsAction(formData: FormData) {
   }
 
   jar.set({ name: "myst-flash", value: "Marketing analyst settings updated.", path: "/" });
+  redirect("/team?tab=marketing");
+}
+
+export async function updateGoogleAdsAnalystRecommendationAction(formData: FormData) {
+  const jar = await cookies();
+  const id = formData.get("id");
+  const status = formData.get("status");
+
+  if (typeof id !== "string" || typeof status !== "string") {
+    jar.set({ name: "myst-flash-error", value: "Missing recommendation update", path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations", {
+    method: "POST",
+    body: JSON.stringify({ id, status })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update recommendation");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  jar.set({ name: "myst-flash", value: "Recommendation updated.", path: "/" });
   redirect("/team?tab=marketing");
 }
 
