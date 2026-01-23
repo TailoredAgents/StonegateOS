@@ -144,7 +144,8 @@ function fmtDate(iso: string | null): string {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
+    second: "2-digit"
   }).format(d);
 }
 
@@ -383,7 +384,7 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
                   {Math.round(safeBookingWeight * 100)}%). Auto-run is off by default.
                 </div>
                 <div className="mt-1 text-xs text-slate-500">
-                  Last run:{" "}
+                  Last successful report:{" "}
                   <span className="font-semibold text-slate-900">{fmtDate(analyst?.latest?.createdAt ?? null)}</span>
                 </div>
                 {activeReport ? (
@@ -446,6 +447,9 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
             {analystFailure && analyst?.health.lastFailureDetail ? (
               <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">
                 <div className="font-semibold">Last error</div>
+                <div className="mt-1 text-[11px] font-semibold text-rose-700">
+                  Last attempt failed: {fmtDate(analyst?.health.lastFailureAt ?? null)}
+                </div>
                 <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] leading-snug">
                   {analyst.health.lastFailureDetail}
                 </div>

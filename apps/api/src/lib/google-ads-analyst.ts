@@ -152,7 +152,7 @@ async function callOpenAIAnalystJson(input: {
   systemPrompt: string;
   userPrompt: string;
 }): Promise<{ ok: true; report: z.infer<typeof AnalystReportSchema> } | { ok: false; error: string; detail?: string | null }> {
-  const payload: Record<string, unknown> = {
+  const basePayload: Record<string, unknown> = {
     model: input.model,
     input: [
       { role: "system", content: input.systemPrompt },
@@ -195,59 +195,98 @@ async function callOpenAIAnalystJson(input: {
   };
 
   if (input.model.trim().toLowerCase().startsWith("gpt-5")) {
-    payload["reasoning"] = { effort: "low" };
+    basePayload["reasoning"] = { effort: "low" };
   }
 
-  const response = await fetch(OPENAI_RESPONSES_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${input.apiKey}`
-    },
-    body: JSON.stringify(payload)
-  });
+  const errorTrail: string[] = [];
+  const maxAttempts = 3;
 
-  if (!response.ok) {
-    const bodyText = await response.text().catch(() => "");
-    return { ok: false, error: "openai_request_failed", detail: bodyText.slice(0, 400) };
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const payload: Record<string, unknown> = {
+      ...basePayload,
+      input:
+        attempt === 1
+          ? basePayload["input"]
+          : [
+              { role: "system", content: input.systemPrompt },
+              {
+                role: "system",
+                content:
+                  "Output ONLY the JSON object that matches the schema. No markdown, no extra commentary, no code fences."
+              },
+              { role: "user", content: input.userPrompt }
+            ]
+    };
+
+    const response = await fetch(OPENAI_RESPONSES_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${input.apiKey}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => "");
+      const snippet = bodyText.slice(0, 400);
+      errorTrail.push(`attempt_${attempt}:openai_request_failed:${snippet}`);
+      // If OpenAI returns a 4xx (except rate limits), retrying won't help.
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        return { ok: false, error: "openai_request_failed", detail: snippet };
+      }
+      continue;
+    }
+
+    const data = (await response.json().catch(() => ({}))) as any;
+
+    let json: unknown = extractOutputObject(data);
+    if (!json) {
+      const raw = extractOutputText(data);
+      if (!raw) {
+        errorTrail.push(`attempt_${attempt}:openai_empty`);
+        continue;
+      }
+      json = parsePossiblyWrappedJson(raw);
+      if (!json) {
+        errorTrail.push(`attempt_${attempt}:openai_parse_failed:${raw.slice(0, 240)}`);
+        continue;
+      }
+    }
+
+    // Clamp to reduce avoidable schema failures (the report is operator-facing suggestions).
+    const normalized: Record<string, unknown> =
+      json && typeof json === "object" && !Array.isArray(json) ? (json as Record<string, unknown>) : {};
+    const repaired = {
+      summary: clampString(normalized["summary"], 1600),
+      top_actions: normalizeStringArray(normalized["top_actions"], 10, 220),
+      negatives_to_review: normalizeStringArray(normalized["negatives_to_review"], 50, 140),
+      pause_candidates_to_review: normalizeStringArray(normalized["pause_candidates_to_review"], 50, 140),
+      notes: clampString(normalized["notes"], 1200)
+    };
+
+    if (repaired.top_actions.length < 3) {
+      repaired.top_actions.push(
+        "Review the highest spend search terms and add obvious negatives that have 0 conversions.",
+        "Tighten locations to your target cities and exclude out-of-area search terms.",
+        "Test 1 new headline and 1 new description focused on fast availability and transparent pricing."
+      );
+      repaired.top_actions.splice(10);
+    }
+
+    const parsed = AnalystReportSchema.safeParse(repaired);
+    if (!parsed.success) {
+      const issues = JSON.stringify(parsed.error.issues).slice(0, 400);
+      errorTrail.push(`attempt_${attempt}:schema_parse_failed:${issues}`);
+      continue;
+    }
+
+    return { ok: true, report: parsed.data };
   }
 
-  const data = (await response.json().catch(() => ({}))) as any;
-
-  let json: unknown = extractOutputObject(data);
-  if (!json) {
-    const raw = extractOutputText(data);
-    if (!raw) return { ok: false, error: "openai_empty" };
-    json = parsePossiblyWrappedJson(raw);
-    if (!json) return { ok: false, error: "openai_parse_failed" };
-  }
-
-  // Clamp to reduce avoidable schema failures (the report is operator-facing suggestions).
-  const normalized: Record<string, unknown> =
-    json && typeof json === "object" && !Array.isArray(json) ? (json as Record<string, unknown>) : {};
-  const repaired = {
-    summary: clampString(normalized["summary"], 1600),
-    top_actions: normalizeStringArray(normalized["top_actions"], 10, 220),
-    negatives_to_review: normalizeStringArray(normalized["negatives_to_review"], 50, 140),
-    pause_candidates_to_review: normalizeStringArray(normalized["pause_candidates_to_review"], 50, 140),
-    notes: clampString(normalized["notes"], 1200)
-  };
-
-  if (repaired.top_actions.length < 3) {
-    repaired.top_actions.push(
-      "Review the highest spend search terms and add obvious negatives that have 0 conversions.",
-      "Tighten locations to your target cities and exclude out-of-area search terms.",
-      "Test 1 new headline and 1 new description focused on fast availability and transparent pricing."
-    );
-    repaired.top_actions.splice(10);
-  }
-
-  const parsed = AnalystReportSchema.safeParse(repaired);
-  if (!parsed.success) {
-    return { ok: false, error: "schema_parse_failed", detail: JSON.stringify(parsed.error.issues).slice(0, 400) };
-  }
-
-  return { ok: true, report: parsed.data };
+  const detail = errorTrail.join(" | ").slice(0, 400);
+  // Prefer a stable error key so provider health is easy to interpret.
+  return { ok: false, error: detail.includes("openai_request_failed") ? "openai_request_failed" : "openai_parse_failed", detail };
 }
 
 export async function runGoogleAdsAnalystReport(input: {
