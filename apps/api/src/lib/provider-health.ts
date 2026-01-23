@@ -11,12 +11,16 @@ export async function recordProviderSuccess(provider: ProviderName): Promise<voi
     .values({
       provider,
       lastSuccessAt: now,
+      lastFailureAt: null,
+      lastFailureDetail: null,
       updatedAt: now
     })
     .onConflictDoUpdate({
       target: providerHealth.provider,
       set: {
         lastSuccessAt: now,
+        lastFailureAt: null,
+        lastFailureDetail: null,
         updatedAt: now
       }
     });

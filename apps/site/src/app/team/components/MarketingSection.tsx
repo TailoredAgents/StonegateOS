@@ -90,6 +90,16 @@ export async function MarketingSection(): Promise<React.ReactElement> {
   }
 
   const configured = status?.configured ?? false;
+  const lastSyncAt = status?.lastFetchedAt ?? status?.lastSuccessAt ?? null;
+
+  const hasActiveFailure = (() => {
+    if (!status?.lastFailureAt) return false;
+    if (!status?.lastSuccessAt) return true;
+    const failureAt = new Date(status.lastFailureAt).getTime();
+    const successAt = new Date(status.lastSuccessAt).getTime();
+    if (Number.isNaN(failureAt) || Number.isNaN(successAt)) return true;
+    return failureAt >= successAt;
+  })();
 
   return (
     <section className="space-y-4">
@@ -108,14 +118,14 @@ export async function MarketingSection(): Promise<React.ReactElement> {
               <div>
                 <div className="text-sm font-semibold text-slate-900">Google Ads sync</div>
                 <div className="mt-1 text-sm text-slate-600">
-                  Last fetched: <span className="font-semibold">{fmtDate(status?.lastFetchedAt ?? null)}</span>
+                  Last sync: <span className="font-semibold">{fmtDate(lastSyncAt)}</span>
                 </div>
                 <div className="mt-1 text-xs text-slate-500">
                   Provider health:{" "}
-                  {status?.lastSuccessAt ? (
-                    <span className="font-semibold text-emerald-700">healthy</span>
-                  ) : status?.lastFailureAt ? (
+                  {hasActiveFailure ? (
                     <span className="font-semibold text-rose-700">degraded</span>
+                  ) : status?.lastSuccessAt ? (
+                    <span className="font-semibold text-emerald-700">healthy</span>
                   ) : (
                     <span className="font-semibold text-slate-600">unknown</span>
                   )}
@@ -135,7 +145,7 @@ export async function MarketingSection(): Promise<React.ReactElement> {
               </div>
             ) : null}
 
-            {status?.lastFailureDetail ? (
+            {hasActiveFailure && status?.lastFailureDetail ? (
               <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-900">
                 Last error: {status.lastFailureDetail.slice(0, 200)}
               </div>
@@ -273,4 +283,3 @@ export async function MarketingSection(): Promise<React.ReactElement> {
     </section>
   );
 }
-
