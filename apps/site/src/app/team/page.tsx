@@ -175,7 +175,8 @@ export default async function TeamPage({
     { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
     { id: "sales", label: "Sales", itemIds: ["quotes", "pipeline", "sales-hq", "outbound", "partners", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
-    { id: "control", label: "Control", itemIds: ["commissions", "marketing", "seo", "policy", "automation", "access", "sales-log", "audit", "merge"] },
+    { id: "marketing", label: "Marketing", itemIds: ["marketing", "seo"] },
+    { id: "control", label: "Control", itemIds: ["commissions", "policy", "automation", "access", "sales-log", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
