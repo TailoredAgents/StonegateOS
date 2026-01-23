@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import {
@@ -8,6 +8,7 @@ import {
   updateGoogleAdsAnalystRecommendationAction
 } from "../actions";
 import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE } from "./team-ui";
+import { GoogleAdsRecommendationsPanel } from "./GoogleAdsRecommendationsPanel";
 
 type GoogleAdsStatusPayload = {
   ok: true;
@@ -101,9 +102,9 @@ type GoogleAdsAnalystRecommendationsPayload = {
 };
 
 function fmtDate(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "\u2014";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "\u2014";
   return new Intl.DateTimeFormat("en-US", {
     year: "numeric",
     month: "short",
@@ -385,7 +386,13 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                   </div>
                 ) : null}
 
-                <div className="rounded-xl border border-slate-200 bg-white/80 p-3">
+                <GoogleAdsRecommendationsPanel
+                  recommendations={recommendations}
+                  updateAction={updateGoogleAdsAnalystRecommendationAction}
+                />
+
+                {false ? (
+                  <div className="rounded-xl border border-slate-200 bg-white/80 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recommendations</div>
@@ -430,7 +437,7 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                                 <td className="py-2 pr-4">
                                   <div className="font-semibold text-slate-900">{label}</div>
                                   {subtitleParts.length > 0 ? (
-                                    <div className="text-xs text-slate-500">{subtitleParts.join(" • ")}</div>
+                                    <div className="text-xs text-slate-500">{subtitleParts.join(" â€¢ ")}</div>
                                   ) : null}
                                 </td>
                                 <td className="py-2 pr-4">
@@ -488,11 +495,12 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                         {approvedNegatives.join("\n")}
                       </pre>
                       <div className="mt-2 text-[11px] text-slate-500">
-                        Apply these manually in Google Ads, then click “Mark applied” for each item.
+                        Apply these manually in Google Ads, then click â€œMark appliedâ€ for each item.
                       </div>
                     </div>
                   ) : null}
-                </div>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="mt-3 text-sm text-slate-600">

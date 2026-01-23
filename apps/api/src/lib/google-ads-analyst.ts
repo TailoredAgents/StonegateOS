@@ -387,7 +387,12 @@ export async function runGoogleAdsAnalystReport(input: {
     };
   });
 
-  const negativeCandidates = searchTerms
+  const totalSpend = enrichedCampaigns.reduce((sum, row) => sum + (Number.isFinite(row.cost) ? row.cost : 0), 0);
+  const totalClicks = enrichedCampaigns.reduce((sum, row) => sum + (Number.isFinite(row.clicks) ? row.clicks : 0), 0);
+  const hasEnoughDataForHeuristicRecs =
+    totalSpend >= policy.minSpendForNegatives && totalClicks >= policy.minClicksForNegatives;
+
+  const negativeCandidates = (hasEnoughDataForHeuristicRecs ? searchTerms : [])
     .filter((row) => {
       const cost = Number(row.cost);
       const conversions = Number(row.conversions);
@@ -408,7 +413,7 @@ export async function runGoogleAdsAnalystReport(input: {
 
   const suggestedNegatives = negativeCandidates.map((row) => row.searchTerm);
 
-  const pauseCandidates = enrichedCampaigns
+  const pauseCandidates = (hasEnoughDataForHeuristicRecs ? enrichedCampaigns : [])
     .filter((row) => row.cost >= 150 && row.weightedConversions <= 0 && row.clicks >= 20)
     .slice(0, 10)
     .map((row) => ({
@@ -433,6 +438,9 @@ export async function runGoogleAdsAnalystReport(input: {
   const userPrompt = [
     `Time window: ${since} to ${until} (${rangeDays} days)`,
     `Weights: calls=${weights.callWeight.toFixed(2)} bookings=${weights.bookingWeight.toFixed(2)}`,
+    `Heuristics enabled: ${hasEnoughDataForHeuristicRecs ? "yes" : "no"} (total spend=${totalSpend.toFixed(
+      2
+    )}, total clicks=${totalClicks})`,
     "",
     "Campaigns (sorted by spend):",
     JSON.stringify(enrichedCampaigns.slice(0, 15), null, 2),
