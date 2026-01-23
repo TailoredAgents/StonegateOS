@@ -344,8 +344,22 @@ export async function POST(request: NextRequest) {
     const requestOrigin = request.headers.get("origin");
     const parsed = RequestSchema.safeParse(await request.json());
       if (!parsed.success) {
-        console.warn("[junk-quote] invalid_payload", parsed.error.flatten());
-        return corsJson({ error: "invalid_payload", details: parsed.error.flatten() }, requestOrigin, { status: 400 });
+        const details = parsed.error.flatten();
+        console.warn("[junk-quote] invalid_payload", details);
+
+        let message = "Invalid request. Please check the form and try again.";
+        const contactErrors = details.fieldErrors.contact ?? [];
+        const jobErrors = details.fieldErrors.job ?? [];
+
+        if (contactErrors.some((err) => /at least 7 character/u.test(err))) {
+          message = "Please enter a valid phone number.";
+        } else if (contactErrors.some((err) => /at least 2 character/u.test(err))) {
+          message = "Please enter your name.";
+        } else if (jobErrors.some((err) => /at least 3 character/u.test(err))) {
+          message = "Please enter a valid ZIP code.";
+        }
+
+        return corsJson({ ok: false, error: "invalid_payload", message, details }, requestOrigin, { status: 400 });
       }
       const body = parsed.data;
 
