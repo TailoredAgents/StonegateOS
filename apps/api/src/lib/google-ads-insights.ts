@@ -1,5 +1,11 @@
 import { sql } from "drizzle-orm";
-import { getDb, googleAdsInsightsDaily, googleAdsSearchTermsDaily } from "@/db";
+import {
+  getDb,
+  googleAdsCampaignConversionsDaily,
+  googleAdsConversionActions,
+  googleAdsInsightsDaily,
+  googleAdsSearchTermsDaily
+} from "@/db";
 
 export class GoogleAdsApiError extends Error {
   readonly status: number;
@@ -15,6 +21,8 @@ export class GoogleAdsApiError extends Error {
 type SyncResult = {
   campaigns: number;
   searchTerms: number;
+  conversionActions: number;
+  campaignConversions: number;
 };
 
 function normalizeCustomerId(value: string): string {
@@ -69,6 +77,15 @@ function microsToDollars(micros: number): string {
 function floatToNumeric(value: unknown): string {
   const num = readNumber(value);
   return Number.isFinite(num) ? num.toFixed(2) : "0.00";
+}
+
+function parseConversionActionIdFromResourceName(resourceName: string): string | null {
+  // customers/{customerId}/conversionActions/{conversionActionId}
+  const parts = resourceName.split("/").filter((part) => part.length > 0);
+  const idx = parts.findIndex((part) => part === "conversionActions");
+  if (idx < 0) return null;
+  const actionId = parts[idx + 1];
+  return actionId && /^\d+$/.test(actionId) ? actionId : null;
 }
 
 export async function getGoogleAdsAccessToken(): Promise<string> {
@@ -228,6 +245,70 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
   const db = getDb();
   const fetchedAt = new Date();
 
+  // 1) Conversion actions (used to label conversions later as calls vs bookings).
+  const conversionActionQuery = `
+    SELECT
+      conversion_action.resource_name,
+      conversion_action.id,
+      conversion_action.name,
+      conversion_action.category,
+      conversion_action.type,
+      conversion_action.status
+    FROM conversion_action
+    WHERE conversion_action.status != 'REMOVED'
+  `.trim();
+
+  const conversionActionRows = await googleAdsSearchStream({
+    customerId,
+    accessToken,
+    query: conversionActionQuery
+  });
+
+  const conversionActionValues = conversionActionRows
+    .map((row) => {
+      const conversionAction = isRecord(row["conversionAction"])
+        ? (row["conversionAction"] as Record<string, unknown>)
+        : isRecord(row["conversion_action"])
+          ? (row["conversion_action"] as Record<string, unknown>)
+          : null;
+
+      const resourceName = readString(conversionAction?.["resourceName"] ?? conversionAction?.["resource_name"]);
+      const actionId = readString(conversionAction?.["id"]);
+      const name = readString(conversionAction?.["name"]);
+      if (!resourceName || !actionId || !name) return null;
+
+      return {
+        customerId,
+        resourceName,
+        actionId,
+        name,
+        category: readString(conversionAction?.["category"]),
+        type: readString(conversionAction?.["type"]),
+        status: readString(conversionAction?.["status"]),
+        raw: row,
+        fetchedAt
+      };
+    })
+    .filter((value): value is NonNullable<typeof value> => Boolean(value));
+
+  if (conversionActionValues.length > 0) {
+    await db
+      .insert(googleAdsConversionActions)
+      .values(conversionActionValues)
+      .onConflictDoUpdate({
+        target: [googleAdsConversionActions.customerId, googleAdsConversionActions.actionId],
+        set: {
+          resourceName: sql`excluded.resource_name`,
+          name: sql`excluded.name`,
+          category: sql`excluded.category`,
+          type: sql`excluded.type`,
+          status: sql`excluded.status`,
+          raw: sql`excluded.raw`,
+          fetchedAt
+        }
+      });
+  }
+
   const campaignQuery = `
     SELECT
       segments.date,
@@ -375,5 +456,86 @@ export async function syncGoogleAdsInsightsDaily(input: { since: string; until: 
       });
   }
 
-  return { campaigns: campaignValues.length, searchTerms: searchTermValues.length };
+  // 2) Campaign conversions broken down by conversion action.
+  const campaignConversionsQuery = `
+    SELECT
+      segments.date,
+      campaign.id,
+      segments.conversion_action,
+      segments.conversion_action_name,
+      metrics.conversions,
+      metrics.conversions_value
+    FROM campaign
+    WHERE
+      segments.date BETWEEN '${input.since}' AND '${input.until}'
+      AND campaign.status != 'REMOVED'
+  `.trim();
+
+  const campaignConversionRows = await googleAdsSearchStream({
+    customerId,
+    accessToken,
+    query: campaignConversionsQuery
+  });
+
+  const campaignConversionValues = campaignConversionRows
+    .map((row) => {
+      const segments = isRecord(row["segments"]) ? (row["segments"] as Record<string, unknown>) : null;
+      const metrics = isRecord(row["metrics"]) ? (row["metrics"] as Record<string, unknown>) : null;
+      const campaign = isRecord(row["campaign"]) ? (row["campaign"] as Record<string, unknown>) : null;
+
+      const dateStart = readString(segments?.["date"]);
+      const campaignId = readString(campaign?.["id"]);
+
+      const conversionActionResource = readString(
+        segments?.["conversionAction"] ?? segments?.["conversion_action"]
+      );
+      const conversionActionName = readString(
+        segments?.["conversionActionName"] ?? segments?.["conversion_action_name"]
+      );
+
+      if (!dateStart || !campaignId || !conversionActionResource) return null;
+      const conversionActionId = parseConversionActionIdFromResourceName(conversionActionResource);
+      if (!conversionActionId) return null;
+
+      return {
+        customerId,
+        dateStart,
+        campaignId,
+        conversionActionId,
+        conversionActionName,
+        conversions: floatToNumeric(metrics?.["conversions"]),
+        conversionValue: floatToNumeric(metrics?.["conversionsValue"] ?? metrics?.["conversions_value"]),
+        raw: row,
+        fetchedAt
+      };
+    })
+    .filter((value): value is NonNullable<typeof value> => Boolean(value));
+
+  if (campaignConversionValues.length > 0) {
+    await db
+      .insert(googleAdsCampaignConversionsDaily)
+      .values(campaignConversionValues)
+      .onConflictDoUpdate({
+        target: [
+          googleAdsCampaignConversionsDaily.customerId,
+          googleAdsCampaignConversionsDaily.dateStart,
+          googleAdsCampaignConversionsDaily.campaignId,
+          googleAdsCampaignConversionsDaily.conversionActionId
+        ],
+        set: {
+          conversionActionName: sql`excluded.conversion_action_name`,
+          conversions: sql`excluded.conversions`,
+          conversionValue: sql`excluded.conversion_value`,
+          raw: sql`excluded.raw`,
+          fetchedAt
+        }
+      });
+  }
+
+  return {
+    campaigns: campaignValues.length,
+    searchTerms: searchTermValues.length,
+    conversionActions: conversionActionValues.length,
+    campaignConversions: campaignConversionValues.length
+  };
 }

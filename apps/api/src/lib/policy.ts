@@ -110,6 +110,15 @@ export type InboxAlertsPolicy = {
   email: boolean;
 };
 
+export type GoogleAdsAnalystPolicy = {
+  enabled: boolean;
+  autonomous: boolean;
+  callWeight: number;
+  bookingWeight: number;
+  minSpendForNegatives: number;
+  minClicksForNegatives: number;
+};
+
 export type ConversationPersonaPolicy = {
   systemPrompt: string;
 };
@@ -178,6 +187,15 @@ export const DEFAULT_INBOX_ALERTS_POLICY: InboxAlertsPolicy = {
   sms: true,
   dm: false,
   email: false
+};
+
+export const DEFAULT_GOOGLE_ADS_ANALYST_POLICY: GoogleAdsAnalystPolicy = {
+  enabled: true,
+  autonomous: false,
+  callWeight: 0.7,
+  bookingWeight: 0.3,
+  minSpendForNegatives: 25,
+  minClicksForNegatives: 12
 };
 
 export const DEFAULT_REVIEW_REQUEST_POLICY: ReviewRequestPolicy = {
@@ -1051,6 +1069,12 @@ function coerceInt(value: unknown, fallback: number, { min, max }: { min: number
   return Math.min(max, Math.max(min, rounded));
 }
 
+function coerceFloat(value: unknown, fallback: number, { min, max }: { min: number; max: number }): number {
+  const num = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, num));
+}
+
 function coerceString(value: unknown, fallback: string): string {
   if (typeof value !== "string") return fallback;
   const trimmed = value.trim();
@@ -1144,5 +1168,35 @@ export async function getInboxAlertsPolicy(db: DbExecutor = getDb()): Promise<In
     dm: typeof stored["dm"] === "boolean" ? (stored["dm"] as boolean) : DEFAULT_INBOX_ALERTS_POLICY.dm,
     email:
       typeof stored["email"] === "boolean" ? (stored["email"] as boolean) : DEFAULT_INBOX_ALERTS_POLICY.email
+  };
+}
+
+export async function getGoogleAdsAnalystPolicy(db: DbExecutor = getDb()): Promise<GoogleAdsAnalystPolicy> {
+  const stored = await getPolicySetting(db, "google_ads_analyst");
+  if (!stored) {
+    return DEFAULT_GOOGLE_ADS_ANALYST_POLICY;
+  }
+
+  return {
+    enabled: stored["enabled"] !== false,
+    autonomous: stored["autonomous"] === true,
+    callWeight: coerceFloat(stored["callWeight"], DEFAULT_GOOGLE_ADS_ANALYST_POLICY.callWeight, {
+      min: 0,
+      max: 1
+    }),
+    bookingWeight: coerceFloat(stored["bookingWeight"], DEFAULT_GOOGLE_ADS_ANALYST_POLICY.bookingWeight, {
+      min: 0,
+      max: 1
+    }),
+    minSpendForNegatives: coerceInt(
+      stored["minSpendForNegatives"],
+      DEFAULT_GOOGLE_ADS_ANALYST_POLICY.minSpendForNegatives,
+      { min: 0, max: 1000 }
+    ),
+    minClicksForNegatives: coerceInt(
+      stored["minClicksForNegatives"],
+      DEFAULT_GOOGLE_ADS_ANALYST_POLICY.minClicksForNegatives,
+      { min: 0, max: 1000 }
+    )
   };
 }

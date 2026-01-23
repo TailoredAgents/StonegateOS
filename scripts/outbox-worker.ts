@@ -43,6 +43,14 @@ async function runGoogleAdsQueueOnce() {
   }
 }
 
+async function runGoogleAdsAnalystQueueOnce() {
+  const { queueGoogleAdsAnalystIfNeeded } = await import("../apps/api/src/lib/google-ads-analyst-scheduler");
+  const result = await queueGoogleAdsAnalystIfNeeded({ invokedBy: "worker" });
+  if (result.queued) {
+    console.log(JSON.stringify({ ok: true, googleAdsAnalyst: result }, null, 2));
+  }
+}
+
 async function main() {
   registerAliases();
   const limit = Number(process.env["OUTBOX_BATCH_SIZE"] ?? 10);
@@ -69,6 +77,7 @@ async function main() {
       if (Date.now() >= nextGoogleAdsAt) {
         try {
           await runGoogleAdsQueueOnce();
+          await runGoogleAdsAnalystQueueOnce();
         } catch (error) {
           console.warn("[google_ads] sync.loop_failed", String(error));
         }

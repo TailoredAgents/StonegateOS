@@ -176,6 +176,20 @@
       "when": 1769216400000,
       "tag": "0024_google_ads_insights_daily",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1769216410000,
+      "tag": "0025_google_ads_conversions",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1769216420000,
+      "tag": "0026_google_ads_analyst_reports",
+      "breakpoints": true
     }
   ]
 }

@@ -2849,6 +2849,43 @@ export async function runGoogleAdsSyncAction() {
   redirect("/team?tab=marketing");
 }
 
+export async function runGoogleAdsAnalystAction() {
+  const jar = await cookies();
+
+  const response = await callAdminApi("/api/admin/google/ads/analyst/run", {
+    method: "POST",
+    body: JSON.stringify({ rangeDays: 7 })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to run marketing analyst");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  jar.set({ name: "myst-flash", value: "Marketing analyst queued.", path: "/" });
+  redirect("/team?tab=marketing");
+}
+
+export async function saveGoogleAdsAnalystSettingsAction(formData: FormData) {
+  const jar = await cookies();
+  const autonomous = formData.get("autonomous");
+
+  const response = await callAdminApi("/api/admin/google/ads/analyst/settings", {
+    method: "POST",
+    body: JSON.stringify({ autonomous: autonomous === "on" })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to save marketing analyst settings");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  jar.set({ name: "myst-flash", value: "Marketing analyst settings updated.", path: "/" });
+  redirect("/team?tab=marketing");
+}
+
 type OutboundImportRow = {
   company?: string;
   contactName?: string;

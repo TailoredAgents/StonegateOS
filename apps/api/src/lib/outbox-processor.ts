@@ -70,6 +70,7 @@ import { recordAuditEvent } from "@/lib/audit";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
 import { MetaGraphApiError, syncMetaAdsInsightsDaily } from "@/lib/meta-ads-insights";
 import { GoogleAdsApiError, syncGoogleAdsInsightsDaily } from "@/lib/google-ads-insights";
+import { runGoogleAdsAnalystReport } from "@/lib/google-ads-analyst";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -156,7 +157,7 @@ function isRetryableSendFailure(detail: string | null): boolean {
 }
 
 async function recordProviderSuccessSafe(
-  provider: "sms" | "email" | "calendar" | "meta_ads" | "google_ads"
+  provider: "sms" | "email" | "calendar" | "meta_ads" | "google_ads" | "google_ads_analyst"
 ): Promise<void> {
   try {
     await recordProviderSuccess(provider);
@@ -166,7 +167,7 @@ async function recordProviderSuccessSafe(
 }
 
 async function recordProviderFailureSafe(
-  provider: "sms" | "email" | "calendar" | "meta_ads" | "google_ads",
+  provider: "sms" | "email" | "calendar" | "meta_ads" | "google_ads" | "google_ads_analyst",
   detail: string | null
 ): Promise<void> {
   try {
@@ -3235,6 +3236,46 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           error instanceof GoogleAdsApiError ? error.status === 429 || error.status >= 500 : true;
 
         return retryable ? { status: "retry", error: detail } : { status: "processed", error: detail };
+      }
+    }
+
+    case "google.ads_analyst.run": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const rangeDaysRaw = payload?.["rangeDays"];
+      const rangeDays =
+        typeof rangeDaysRaw === "number"
+          ? rangeDaysRaw
+          : typeof rangeDaysRaw === "string"
+            ? Number(rangeDaysRaw)
+            : NaN;
+
+      const sinceRaw = typeof payload?.["since"] === "string" ? payload["since"] : null;
+      const untilRaw = typeof payload?.["until"] === "string" ? payload["until"] : null;
+      const createdBy = typeof payload?.["createdBy"] === "string" ? payload["createdBy"] : null;
+      const invokedBy = payload?.["invokedBy"] === "admin" ? "admin" : "worker";
+
+      try {
+        const result = await runGoogleAdsAnalystReport({
+          rangeDays: Number.isFinite(rangeDays) ? Math.min(Math.max(Math.floor(rangeDays), 1), 30) : undefined,
+          since: sinceRaw ?? undefined,
+          until: untilRaw ?? undefined,
+          invokedBy,
+          createdBy
+        });
+
+        if (!result.ok) {
+          const detail = `google_ads_analyst_failed:${result.error}${result.detail ? `:${result.detail}` : ""}`;
+          await recordProviderFailureSafe("google_ads_analyst", detail);
+          return { status: "processed", error: detail };
+        }
+
+        await recordProviderSuccessSafe("google_ads_analyst");
+        console.info("[outbox] google.ads_analyst.run.ok", { id: event.id, reportId: result.reportId });
+        return { status: "processed" };
+      } catch (error) {
+        const detail = `google_ads_analyst_error:${String(error)}`;
+        await recordProviderFailureSafe("google_ads_analyst", detail);
+        return { status: "retry", error: detail };
       }
     }
 
