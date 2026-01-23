@@ -100,7 +100,9 @@ async function googleAdsSearchStream(input: {
     throw new Error("google_ads_not_configured");
   }
 
-  const apiVersionRaw = (process.env["GOOGLE_ADS_API_VERSION"] ?? "v17").trim();
+  // As of Jan 2026, googleads.googleapis.com no longer serves v17 (returns 404 HTML).
+  // Default to a currently served version; still overrideable via env var.
+  const apiVersionRaw = (process.env["GOOGLE_ADS_API_VERSION"] ?? "v20").trim();
   const apiVersion = apiVersionRaw.startsWith("v") ? apiVersionRaw : `v${apiVersionRaw}`;
 
   const loginCustomerIdRaw = process.env["GOOGLE_ADS_LOGIN_CUSTOMER_ID"] ?? "";
@@ -122,6 +124,11 @@ async function googleAdsSearchStream(input: {
 
   const text = await response.text();
   if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    const looksLikeHtml = contentType.includes("text/html") || /^\s*<!doctype html/i.test(text);
+    if (response.status === 404 && looksLikeHtml) {
+      throw new Error(`google_ads_endpoint_not_found:${apiVersion}`);
+    }
     throw new GoogleAdsApiError(response.status, text);
   }
 
