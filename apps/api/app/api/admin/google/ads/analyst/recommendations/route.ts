@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
-import { getDb, googleAdsAnalystRecommendations, googleAdsAnalystReports } from "@/db";
+import { getDb, googleAdsAnalystRecommendationEvents, googleAdsAnalystRecommendations, googleAdsAnalystReports } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -80,6 +80,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const payload = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const id = asString(payload["id"]);
   const status = asString(payload["status"]);
+  const note = asString(payload["note"]);
 
   if (!id || !status || !isAllowedStatus(status)) {
     return NextResponse.json({ ok: false, error: "invalid_request" }, { status: 400 });
@@ -89,6 +90,22 @@ export async function POST(request: NextRequest): Promise<Response> {
   const now = new Date();
 
   const db = getDb();
+  const existing = await db
+    .select({
+      id: googleAdsAnalystRecommendations.id,
+      reportId: googleAdsAnalystRecommendations.reportId,
+      kind: googleAdsAnalystRecommendations.kind,
+      status: googleAdsAnalystRecommendations.status
+    })
+    .from(googleAdsAnalystRecommendations)
+    .where(eq(googleAdsAnalystRecommendations.id, id))
+    .limit(1)
+    .then((rows) => rows[0] ?? null);
+
+  if (!existing) {
+    return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
+  }
+
   const [updated] = await db
     .update(googleAdsAnalystRecommendations)
     .set({
@@ -99,18 +116,29 @@ export async function POST(request: NextRequest): Promise<Response> {
       updatedAt: now
     })
     .where(eq(googleAdsAnalystRecommendations.id, id))
-    .returning({ id: googleAdsAnalystRecommendations.id, kind: googleAdsAnalystRecommendations.kind });
+    .returning({ id: googleAdsAnalystRecommendations.id });
 
   if (!updated?.id) {
     return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 });
   }
+
+  await db.insert(googleAdsAnalystRecommendationEvents).values({
+    recommendationId: existing.id,
+    reportId: existing.reportId,
+    kind: existing.kind,
+    fromStatus: existing.status,
+    toStatus: status,
+    note: note ? note.slice(0, 800) : null,
+    actorMemberId: actor.id ?? null,
+    actorSource: "ui"
+  });
 
   await recordAuditEvent({
     actor,
     action: "marketing.google_ads_recommendation.update",
     entityType: "google_ads_analyst_recommendation",
     entityId: updated.id,
-    meta: { status, kind: updated.kind }
+    meta: { status, kind: existing.kind }
   });
 
   return NextResponse.json({ ok: true, id: updated.id, status });

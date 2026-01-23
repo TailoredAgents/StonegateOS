@@ -101,6 +101,40 @@ type GoogleAdsAnalystRecommendationsPayload = {
   items: GoogleAdsAnalystRecommendation[];
 };
 
+type GoogleAdsAnalystReportListPayload = {
+  ok: true;
+  items: Array<{
+    id: string;
+    rangeDays: number;
+    since: string;
+    until: string;
+    callWeight: string;
+    bookingWeight: string;
+    createdBy: string | null;
+    createdByName: string | null;
+    createdAt: string;
+  }>;
+};
+
+type GoogleAdsAnalystRecommendationEventsPayload = {
+  ok: true;
+  reportId: string | null;
+  recommendationId: string | null;
+  items: Array<{
+    id: string;
+    reportId: string;
+    recommendationId: string;
+    kind: string;
+    fromStatus: string | null;
+    toStatus: string;
+    note: string | null;
+    actorMemberId: string | null;
+    actorName: string | null;
+    actorSource: string;
+    createdAt: string;
+  }>;
+};
+
 function fmtDate(iso: string | null): string {
   if (!iso) return "\u2014";
   const d = new Date(iso);
@@ -138,19 +172,22 @@ function normalizeWeight(value: number, fallback: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-export async function MarketingSection(): Promise<React.ReactElement> {
+export async function MarketingSection(props: { reportId?: string }): Promise<React.ReactElement> {
   let status: GoogleAdsStatusPayload | null = null;
   let summary: GoogleAdsSummaryPayload | null = null;
   let analyst: GoogleAdsAnalystStatusPayload | null = null;
+  let reports: GoogleAdsAnalystReportListPayload | null = null;
   let recs: GoogleAdsAnalystRecommendationsPayload | null = null;
+  let events: GoogleAdsAnalystRecommendationEventsPayload | null = null;
+  let selectedReport: GoogleAdsAnalystStatusPayload["latest"] | null = null;
   let error: string | null = null;
 
   try {
-    const [statusRes, summaryRes, analystRes, recsRes] = await Promise.all([
+    const [statusRes, summaryRes, analystRes, reportsRes] = await Promise.all([
       callAdminApi("/api/admin/google/ads/status"),
       callAdminApi("/api/admin/google/ads/summary?rangeDays=7"),
       callAdminApi("/api/admin/google/ads/analyst/status"),
-      callAdminApi("/api/admin/google/ads/analyst/recommendations")
+      callAdminApi("/api/admin/google/ads/analyst/reports?limit=30")
     ]);
 
     if (statusRes.ok) {
@@ -167,8 +204,55 @@ export async function MarketingSection(): Promise<React.ReactElement> {
       analyst = (await analystRes.json()) as GoogleAdsAnalystStatusPayload;
     }
 
-    if (recsRes.ok) {
-      recs = (await recsRes.json()) as GoogleAdsAnalystRecommendationsPayload;
+    if (reportsRes.ok) {
+      reports = (await reportsRes.json()) as GoogleAdsAnalystReportListPayload;
+    }
+
+    const selectedReportIdRaw = typeof props.reportId === "string" ? props.reportId.trim() : "";
+    const selectedReportId =
+      selectedReportIdRaw.length > 0
+        ? selectedReportIdRaw
+        : analyst?.latest?.id ?? reports?.items?.[0]?.id ?? null;
+
+    if (selectedReportId) {
+      selectedReport = analyst?.latest?.id === selectedReportId ? analyst.latest : null;
+      if (!selectedReport) {
+        const reportDetailRes = await callAdminApi(
+          `/api/admin/google/ads/analyst/reports/${encodeURIComponent(selectedReportId)}`
+        );
+        if (reportDetailRes.ok) {
+          const detail = (await reportDetailRes.json().catch(() => null)) as any;
+          if (detail?.ok && detail?.report) {
+            selectedReport = {
+              id: String(detail.report.id),
+              rangeDays: Number(detail.report.rangeDays),
+              since: String(detail.report.since),
+              until: String(detail.report.until),
+              callWeight: String(detail.report.callWeight),
+              bookingWeight: String(detail.report.bookingWeight),
+              report: detail.report.report as any,
+              createdAt: String(detail.report.createdAt)
+            };
+          }
+        }
+      }
+
+      const [recsRes, eventsRes] = await Promise.all([
+        callAdminApi(`/api/admin/google/ads/analyst/recommendations?reportId=${encodeURIComponent(selectedReportId)}`),
+        callAdminApi(
+          `/api/admin/google/ads/analyst/recommendations/events?reportId=${encodeURIComponent(selectedReportId)}`
+        )
+      ]);
+
+      if (recsRes.ok) {
+        recs = (await recsRes.json()) as GoogleAdsAnalystRecommendationsPayload;
+      }
+      if (eventsRes.ok) {
+        events = (await eventsRes.json()) as GoogleAdsAnalystRecommendationEventsPayload;
+      }
+    } else {
+      recs = { ok: true, reportId: null, items: [] };
+      events = { ok: true, reportId: null, recommendationId: null, items: [] };
     }
   } catch {
     error = "Google Ads status unavailable.";
@@ -192,6 +276,10 @@ export async function MarketingSection(): Promise<React.ReactElement> {
   const safeBookingWeight = weightSum > 0 ? bookingWeight / weightSum : 0.3;
 
   const recommendations = recs?.items ?? [];
+  const selectedReportId = recs?.reportId ?? null;
+  const reportHistory = reports?.items ?? [];
+  const changeLog = events?.items ?? [];
+  const activeReport = selectedReport ?? analyst?.latest ?? null;
   const approvedNegatives = recommendations
     .filter((item) => item.kind === "negative_keyword" && item.status === "approved")
     .map((item) => String(item.payload["term"] ?? "").trim())
@@ -298,6 +386,43 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                   Last run:{" "}
                   <span className="font-semibold text-slate-900">{fmtDate(analyst?.latest?.createdAt ?? null)}</span>
                 </div>
+                {activeReport ? (
+                  <div className="mt-1 text-xs text-slate-500">
+                    Viewing: <span className="font-semibold text-slate-900">{fmtDate(activeReport.createdAt)}</span>
+                    {activeReport.id !== (analyst?.latest?.id ?? "") ? (
+                      <span className="ml-2 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                        archived report
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {reportHistory.length > 0 ? (
+                  <form method="GET" className="mt-3 flex flex-wrap items-center gap-2">
+                    <input type="hidden" name="tab" value="marketing" />
+                    <label className="text-xs font-semibold text-slate-700">
+                      Report{" "}
+                      <select
+                        name="gaReportId"
+                        defaultValue={selectedReportId ?? ""}
+                        className="ml-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900"
+                      >
+                        <option value="">Latest</option>
+                        {reportHistory.slice(0, 30).map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {fmtDate(item.createdAt)} - {item.rangeDays}d
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="submit"
+                      className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
+                    >
+                      View
+                    </button>
+                  </form>
+                ) : null}
               </div>
 
               <div className="flex flex-col items-end gap-2">
@@ -352,29 +477,29 @@ export async function MarketingSection(): Promise<React.ReactElement> {
               </div>
             ) : null}
 
-            {analyst?.latest?.report ? (
+            {activeReport?.report ? (
               <div className="mt-3 space-y-3">
                 <div className="rounded-xl border border-slate-200 bg-white/80 p-3">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Summary</div>
-                  <div className="mt-1 whitespace-pre-wrap text-sm text-slate-900">{analyst.latest.report.summary}</div>
+                  <div className="mt-1 whitespace-pre-wrap text-sm text-slate-900">{activeReport.report.summary}</div>
                 </div>
 
                 <div className="rounded-xl border border-slate-200 bg-white/80 p-3">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Top actions</div>
                   <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-900">
-                    {analyst.latest.report.top_actions.map((item, idx) => (
+                    {activeReport.report.top_actions.map((item, idx) => (
                       <li key={`${idx}:${item}`}>{item}</li>
                     ))}
                   </ul>
                 </div>
 
-                {(analyst.latest.report.negatives_to_review?.length ?? 0) > 0 ? (
+                {(activeReport.report.negatives_to_review?.length ?? 0) > 0 ? (
                   <div className="rounded-xl border border-slate-200 bg-white/80 p-3">
                     <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Suggested negatives (review)
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {analyst.latest.report.negatives_to_review.slice(0, 24).map((term) => (
+                      {activeReport.report.negatives_to_review.slice(0, 24).map((term) => (
                         <span
                           key={term}
                           className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700"
@@ -390,6 +515,35 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                   recommendations={recommendations}
                   updateAction={updateGoogleAdsAnalystRecommendationAction}
                 />
+
+                <div className="rounded-xl border border-slate-200 bg-white/80 p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Change log</div>
+                  <div className="mt-1 text-xs text-slate-500">Tracks approvals/ignores/applied marks for this report.</div>
+
+                  {changeLog.length === 0 ? (
+                    <div className="mt-2 text-sm text-slate-600">
+                      No changes yet. Approve/ignore items above to create an audit trail.
+                    </div>
+                  ) : (
+                    <div className="mt-2 divide-y divide-slate-200/70">
+                      {changeLog.slice(0, 50).map((evt) => (
+                        <div key={evt.id} className="py-2 text-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="font-semibold text-slate-900">
+                              {evt.kind} • {evt.fromStatus ? `${evt.fromStatus} → ` : ""}
+                              {evt.toStatus}
+                            </div>
+                            <div className="text-xs font-semibold text-slate-600">{fmtDate(evt.createdAt)}</div>
+                          </div>
+                          <div className="mt-0.5 text-xs text-slate-500">
+                            {evt.actorName ?? "Unknown"} ({evt.actorSource})
+                            {evt.note ? ` • ${evt.note}` : ""}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 {false ? (
                   <div className="rounded-xl border border-slate-200 bg-white/80 p-3">
@@ -437,7 +591,7 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                                 <td className="py-2 pr-4">
                                   <div className="font-semibold text-slate-900">{label}</div>
                                   {subtitleParts.length > 0 ? (
-                                    <div className="text-xs text-slate-500">{subtitleParts.join(" â€¢ ")}</div>
+                                    <div className="text-xs text-slate-500">{subtitleParts.join(" • ")}</div>
                                   ) : null}
                                 </td>
                                 <td className="py-2 pr-4">
@@ -495,7 +649,7 @@ export async function MarketingSection(): Promise<React.ReactElement> {
                         {approvedNegatives.join("\n")}
                       </pre>
                       <div className="mt-2 text-[11px] text-slate-500">
-                        Apply these manually in Google Ads, then click â€œMark appliedâ€ for each item.
+                        Apply these manually in Google Ads, then click “Mark applied” for each item.
                       </div>
                     </div>
                   ) : null}

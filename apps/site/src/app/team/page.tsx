@@ -82,6 +82,7 @@ export default async function TeamPage({
     quoteMode?: string;
     view?: string;
     onlyOutbound?: string;
+    gaReportId?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -118,6 +119,7 @@ export default async function TeamPage({
     }
   }
   const contactIdParam = typeof params?.contactId === "string" ? params.contactId : undefined;
+  const gaReportIdParam = typeof params?.gaReportId === "string" ? params.gaReportId : undefined;
   const inboxThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
   const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
@@ -458,7 +460,7 @@ export default async function TeamPage({
 
         {tab === "marketing" && hasOwner ? (
           <React.Suspense fallback={<TeamSkeletonCard title="Loading marketing" />}>
-            <MarketingSection />
+            <MarketingSection reportId={gaReportIdParam} />
           </React.Suspense>
         ) : null}
 

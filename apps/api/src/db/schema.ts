@@ -835,6 +835,31 @@ export const googleAdsAnalystRecommendations = pgTable(
   })
 );
 
+export const googleAdsAnalystRecommendationEvents = pgTable(
+  "google_ads_analyst_recommendation_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    recommendationId: uuid("recommendation_id")
+      .notNull()
+      .references(() => googleAdsAnalystRecommendations.id, { onDelete: "cascade" }),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => googleAdsAnalystReports.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    fromStatus: text("from_status"),
+    toStatus: text("to_status").notNull(),
+    note: text("note"),
+    actorMemberId: uuid("actor_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    actorSource: text("actor_source").default("ui").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    reportIdx: index("google_ads_analyst_rec_events_report_idx").on(table.reportId, table.createdAt),
+    recommendationIdx: index("google_ads_analyst_rec_events_rec_idx").on(table.recommendationId, table.createdAt),
+    actorIdx: index("google_ads_analyst_rec_events_actor_idx").on(table.actorMemberId, table.createdAt)
+  })
+);
+
 export const calendarSyncState = pgTable("calendar_sync_state", {
   calendarId: text("calendar_id").primaryKey(),
   syncToken: text("sync_token"),
