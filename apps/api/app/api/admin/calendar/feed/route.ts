@@ -31,17 +31,14 @@ type CalendarFeedResponse = {
 const DEFAULT_DAYS_FORWARD = 30;
 const DEFAULT_DAYS_BACK = 1;
 const DEFAULT_APPOINTMENT_CAPACITY = 2;
+const MAX_RANGE_DAYS = 366;
 
 export async function GET(request: NextRequest): Promise<NextResponse<CalendarFeedResponse>> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ ok: false, appointments: [], externalEvents: [], conflicts: [], error: "unauthorized" }, { status: 401 });
   }
 
-  const now = new Date();
-  const daysForward = DEFAULT_DAYS_FORWARD;
-  const daysBack = DEFAULT_DAYS_BACK;
-  const windowStart = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000);
-  const windowEnd = new Date(now.getTime() + daysForward * 24 * 60 * 60 * 1000);
+  const { windowStart, windowEnd } = getWindow(request);
 
   const db = getDb();
   const dbRows = await db
@@ -192,6 +189,38 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
     externalEvents,
     conflicts
   });
+}
+
+function getWindow(request: NextRequest): { windowStart: Date; windowEnd: Date } {
+  const now = new Date();
+  const defaultStart = new Date(now.getTime() - DEFAULT_DAYS_BACK * 24 * 60 * 60 * 1000);
+  const defaultEnd = new Date(now.getTime() + DEFAULT_DAYS_FORWARD * 24 * 60 * 60 * 1000);
+
+  let url: URL | null = null;
+  try {
+    url = new URL(request.url);
+  } catch {
+    return { windowStart: defaultStart, windowEnd: defaultEnd };
+  }
+
+  const startRaw = url.searchParams.get("start");
+  const endRaw = url.searchParams.get("end");
+  if (!startRaw || !endRaw) return { windowStart: defaultStart, windowEnd: defaultEnd };
+
+  const parsedStart = new Date(startRaw);
+  const parsedEnd = new Date(endRaw);
+  if (Number.isNaN(parsedStart.getTime()) || Number.isNaN(parsedEnd.getTime())) {
+    return { windowStart: defaultStart, windowEnd: defaultEnd };
+  }
+
+  if (parsedEnd <= parsedStart) return { windowStart: defaultStart, windowEnd: defaultEnd };
+
+  const diffDays = (parsedEnd.getTime() - parsedStart.getTime()) / (24 * 60 * 60 * 1000);
+  if (!Number.isFinite(diffDays) || diffDays <= 0 || diffDays > MAX_RANGE_DAYS) {
+    return { windowStart: defaultStart, windowEnd: defaultEnd };
+  }
+
+  return { windowStart: parsedStart, windowEnd: parsedEnd };
 }
 
 function overlaps(a: CalendarEvent, b: CalendarEvent): boolean {

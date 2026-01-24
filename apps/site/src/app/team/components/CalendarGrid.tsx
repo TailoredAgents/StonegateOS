@@ -18,16 +18,16 @@ export type CalendarEvent = {
 type Props = {
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
+  anchorDay: string;
   onSelectEvent?: (id: string) => void;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function CalendarGrid({ events, conflicts, onSelectEvent }: Props): React.ReactElement {
-  const now = new Date();
-  const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - now.getDay()); // Sunday
-  startOfWeek.setHours(0, 0, 0, 0);
+export function CalendarGrid({ events, conflicts, anchorDay, onSelectEvent }: Props): React.ReactElement {
+  const anchor = parseDayKey(anchorDay) ?? new Date();
+  const weekday = getWeekdayIndex(anchor);
+  const startOfWeek = new Date(anchor.getTime() - weekday * DAY_MS);
 
   const days = Array.from({ length: 7 }).map((_, i) => new Date(startOfWeek.getTime() + i * DAY_MS));
 
@@ -138,3 +138,34 @@ function formatTimeRange(startIso: string, endIso: string): string {
   return `${formatTime(startIso)} - ${formatTime(endIso)}`;
 }
 
+function parseDayKey(dayKey: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey.trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+}
+
+function getWeekdayIndex(date: Date): number {
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: TEAM_TIME_ZONE, weekday: "short" }).format(date);
+  switch (weekday.toLowerCase().slice(0, 3)) {
+    case "sun":
+      return 0;
+    case "mon":
+      return 1;
+    case "tue":
+      return 2;
+    case "wed":
+      return 3;
+    case "thu":
+      return 4;
+    case "fri":
+      return 5;
+    case "sat":
+      return 6;
+    default:
+      return 0;
+  }
+}

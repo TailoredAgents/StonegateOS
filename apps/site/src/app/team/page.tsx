@@ -83,6 +83,8 @@ export default async function TeamPage({
     view?: string;
     onlyOutbound?: string;
     gaReportId?: string;
+    cal?: string;
+    calView?: string;
   }>;
 }) {
   const params = await searchParams;

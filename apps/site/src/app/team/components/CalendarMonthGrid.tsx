@@ -18,6 +18,7 @@ type Props = {
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
   onSelectEvent?: (id: string) => void;
+  anchorDay: string;
   selectedDay?: string | null;
   onSelectDay?: (day: string) => void;
 };
@@ -28,17 +29,14 @@ export function CalendarMonthGrid({
   events,
   conflicts,
   onSelectEvent,
+  anchorDay,
   selectedDay,
   onSelectDay
 }: Props): React.ReactElement {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth();
-
-  const firstOfMonth = new Date(year, month, 1);
-  const startOffset = firstOfMonth.getDay(); // 0 Sunday
-  const startDate = new Date(firstOfMonth);
-  startDate.setDate(firstOfMonth.getDate() - startOffset);
+  const anchor = parseDayKey(anchorDay) ?? new Date();
+  const firstOfMonth = getMonthStart(anchor);
+  const monthStartWeekday = getWeekdayIndex(firstOfMonth);
+  const startDate = new Date(firstOfMonth.getTime() - monthStartWeekday * DAY_MS);
   const cells = Array.from({ length: 42 }).map((_, i) => new Date(startDate.getTime() + i * DAY_MS));
 
   const buckets = new Map<string, CalendarEvent[]>();
@@ -59,7 +57,7 @@ export function CalendarMonthGrid({
     <div className="grid grid-cols-7 gap-2 text-sm">
       {cells.map((day, idx) => {
         const key = formatDayKey(day);
-        const inMonth = day.getMonth() === month;
+        const inMonth = getMonthStart(day).getTime() === firstOfMonth.getTime();
         const bucket = buckets.get(key) ?? [];
         const isSelected = typeof selectedDay === "string" && selectedDay.length > 0 ? selectedDay === key : false;
         return (
@@ -154,4 +152,48 @@ function formatTime(iso: string): string {
   const dayPeriod = dayPeriodRaw ? dayPeriodRaw.toLowerCase().slice(0, 1) : "";
   const minutePart = minute && minute !== "00" ? `:${minute}` : "";
   return `${hour}${minutePart}${dayPeriod}`;
+}
+
+function parseDayKey(dayKey: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey.trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+}
+
+function getWeekdayIndex(date: Date): number {
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: TEAM_TIME_ZONE, weekday: "short" }).format(date);
+  switch (weekday.toLowerCase().slice(0, 3)) {
+    case "sun":
+      return 0;
+    case "mon":
+      return 1;
+    case "tue":
+      return 2;
+    case "wed":
+      return 3;
+    case "thu":
+      return 4;
+    case "fri":
+      return 5;
+    case "sat":
+      return 6;
+    default:
+      return 0;
+  }
+}
+
+function getMonthStart(date: Date): Date {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: TEAM_TIME_ZONE, year: "numeric", month: "2-digit" }).formatToParts(
+    date
+  );
+  const year = Number(parts.find((p) => p.type === "year")?.value ?? "");
+  const month = Number(parts.find((p) => p.type === "month")?.value ?? "");
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1, 12, 0, 0, 0));
+  }
+  return new Date(Date.UTC(year, month - 1, 1, 12, 0, 0, 0));
 }
