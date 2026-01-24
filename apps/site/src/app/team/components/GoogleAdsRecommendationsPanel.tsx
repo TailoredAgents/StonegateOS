@@ -102,6 +102,9 @@ export function GoogleAdsRecommendationsPanel(props: {
         kind: item.kind,
         status: item.status,
         term: safeString(item.payload["term"]).trim(),
+        tier: safeString(item.payload["tier"]).trim(),
+        matchType: safeString(item.payload["matchType"]).trim(),
+        origin: safeString(item.payload["origin"]).trim(),
         campaignId: safeString(item.payload["campaignId"]).trim(),
         campaignName: safeString(item.payload["campaignName"]).trim(),
         clicks: safeString(item.payload["clicks"]).trim(),
@@ -191,6 +194,8 @@ export function GoogleAdsRecommendationsPanel(props: {
                 const term = safeString(item.payload["term"]).trim();
                 const campaignName = safeString(item.payload["campaignName"]).trim();
                 const campaignId = safeString(item.payload["campaignId"]).trim();
+                const tier = safeString(item.payload["tier"]).trim();
+                const matchType = safeString(item.payload["matchType"]).trim();
                 const clicks = item.payload["clicks"];
                 const cost = item.payload["cost"];
                 const callConv = item.payload["callConversions"];
@@ -204,6 +209,8 @@ export function GoogleAdsRecommendationsPanel(props: {
                       : `${item.kind}`;
 
                 const subtitleParts: string[] = [];
+                if (item.kind === "negative_keyword" && tier) subtitleParts.push(`Tier ${tier.toUpperCase()}`);
+                if (item.kind === "negative_keyword" && matchType) subtitleParts.push(matchType.toLowerCase());
                 if (item.kind === "negative_keyword" && campaignName) subtitleParts.push(campaignName);
                 if (campaignId) subtitleParts.push(`campaign ${campaignId}`);
                 if (typeof clicks === "number") subtitleParts.push(`${clicks} clicks`);

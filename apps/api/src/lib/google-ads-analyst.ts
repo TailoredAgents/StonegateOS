@@ -14,6 +14,8 @@ import { getGoogleAdsAnalystPolicy } from "@/lib/policy";
 import { getCompanyProfilePolicy } from "@/lib/policy";
 
 type ConversionClass = "call" | "booking" | "other";
+type NegativeTier = "A" | "B";
+type NegativeMatchType = "broad" | "phrase" | "exact";
 
 export type GoogleAdsAnalystRunResult =
   | { ok: true; reportId: string; createdAt: string }
@@ -29,6 +31,148 @@ const AnalystReportSchema = z.object({
   pause_candidates_to_review: z.array(z.string().min(1).max(140)).max(50),
   notes: z.string().min(0).max(1200)
 });
+
+const OUT_OF_AREA_STATES = [
+  "alabama",
+  "alaska",
+  "arizona",
+  "arkansas",
+  "california",
+  "colorado",
+  "connecticut",
+  "delaware",
+  "florida",
+  "hawaii",
+  "idaho",
+  "illinois",
+  "indiana",
+  "iowa",
+  "kansas",
+  "kentucky",
+  "louisiana",
+  "maine",
+  "maryland",
+  "massachusetts",
+  "michigan",
+  "minnesota",
+  "mississippi",
+  "missouri",
+  "montana",
+  "nebraska",
+  "nevada",
+  "new hampshire",
+  "new jersey",
+  "new mexico",
+  "new york",
+  "north carolina",
+  "north dakota",
+  "ohio",
+  "oklahoma",
+  "oregon",
+  "pennsylvania",
+  "rhode island",
+  "south carolina",
+  "south dakota",
+  "tennessee",
+  "texas",
+  "utah",
+  "vermont",
+  "virginia",
+  "washington",
+  "west virginia",
+  "wisconsin",
+  "wyoming"
+];
+
+function inferNegativeMatchType(term: string, tier: NegativeTier): NegativeMatchType {
+  const normalized = term.trim();
+  if (tier === "A" && /\s/.test(normalized)) return "phrase";
+  if (tier === "A" && normalized.length <= 25 && !/\s/.test(normalized)) return "broad";
+  if (/\s/.test(normalized)) return "phrase";
+  return "broad";
+}
+
+function formatNegativeTerm(term: string, matchType: NegativeMatchType): string {
+  const normalized = term.trim();
+  if (!normalized) return "";
+  if (matchType === "exact") return `[${normalized}]`;
+  if (matchType === "phrase") return `"${normalized}"`;
+  return normalized;
+}
+
+function normalizeNegativeKey(term: string, matchType: NegativeMatchType): string {
+  let normalized = term.trim().toLowerCase();
+  if (normalized.startsWith("[") && normalized.endsWith("]")) normalized = normalized.slice(1, -1).trim();
+  if (normalized.startsWith("\"") && normalized.endsWith("\"")) normalized = normalized.slice(1, -1).trim();
+  return `${matchType}:${normalized}`;
+}
+
+function extractOutOfAreaState(termLower: string): string | null {
+  for (const state of OUT_OF_AREA_STATES) {
+    if (termLower.includes(state)) return state;
+  }
+  return null;
+}
+
+function classifyTierANegativeFromSearchTerm(searchTerm: string): Array<{
+  term: string;
+  matchType: NegativeMatchType;
+  reason: string;
+}> {
+  const termLower = searchTerm.toLowerCase();
+  const out: Array<{ term: string; matchType: NegativeMatchType; reason: string }> = [];
+
+  const outOfArea = extractOutOfAreaState(termLower);
+  if (outOfArea) {
+    out.push({
+      term: outOfArea,
+      matchType: "broad",
+      reason: "Out-of-area location intent (state)."
+    });
+  }
+
+  if (/\b(job|jobs|career|careers|hiring|employment|apply)\b/.test(termLower)) {
+    out.push({
+      term: "job",
+      matchType: "broad",
+      reason: "Hiring/job intent."
+    });
+  }
+
+  if (/\b(donate|donation)\b/.test(termLower)) {
+    out.push({
+      term: "donate",
+      matchType: "broad",
+      reason: "Donation intent."
+    });
+  }
+
+  if (/\bfree\b/.test(termLower)) {
+    out.push({
+      term: "free",
+      matchType: "broad",
+      reason: "Free/low-intent intent."
+    });
+  }
+
+  if (termLower.includes("transfer station")) {
+    out.push({
+      term: "transfer station",
+      matchType: "phrase",
+      reason: "Landfill/transfer station intent."
+    });
+  }
+
+  if (termLower.includes("dump hours") || termLower.includes("landfill hours")) {
+    out.push({
+      term: termLower.includes("landfill") ? "landfill hours" : "dump hours",
+      matchType: "phrase",
+      reason: "Landfill/dump hours intent."
+    });
+  }
+
+  return out;
+}
 
 function normalizeWeightPair(callWeight: number, bookingWeight: number): { callWeight: number; bookingWeight: number } {
   const safeCall = Number.isFinite(callWeight) ? Math.max(0, Math.min(1, callWeight)) : 0.7;
@@ -549,50 +693,99 @@ export async function runGoogleAdsAnalystReport(input: {
       appliedAt: Date | null;
     }> = [];
 
-    for (const candidate of negativeCandidates) {
+    const negativeKeys = new Set<string>();
+
+    const pushNegativeRec = (input: {
+      term: string;
+      tier: NegativeTier;
+      matchType?: NegativeMatchType | null;
+      reason: string;
+      campaignId?: string | null;
+      clicks?: number | null;
+      cost?: number | null;
+      callConversions?: number | null;
+      bookingConversions?: number | null;
+      origin?: string | null;
+    }): void => {
+      const matchType = input.matchType ?? inferNegativeMatchType(input.term, input.tier);
+      const formatted = formatNegativeTerm(input.term, matchType);
+      const key = normalizeNegativeKey(formatted, matchType);
+      if (!formatted || negativeKeys.has(key)) return;
+      negativeKeys.add(key);
+
       recRows.push({
         reportId,
         kind: "negative_keyword",
         status: "proposed",
         payload: {
-          term: candidate.searchTerm,
-          campaignId: candidate.campaignId,
-          clicks: candidate.clicks,
-          cost: candidate.cost,
-          callConversions: candidate.call ?? 0,
-          bookingConversions: candidate.booking ?? 0,
-          reason: "High spend + clicks with 0 conversions"
+          term: formatted,
+          tier: input.tier,
+          matchType,
+          origin: input.origin ?? null,
+          campaignId: input.campaignId ?? null,
+          clicks: input.clicks ?? null,
+          cost: input.cost ?? null,
+          callConversions: input.callConversions ?? null,
+          bookingConversions: input.bookingConversions ?? null,
+          reason: input.reason
         },
         decidedBy: null,
         decidedAt: null,
         appliedAt: null
       });
+    };
+
+    // Tier A: hard-block negatives from observed search terms (no thresholds).
+    for (const termRow of searchTerms.slice(0, 200)) {
+      const candidates = classifyTierANegativeFromSearchTerm(termRow.searchTerm);
+      for (const candidate of candidates) {
+        pushNegativeRec({
+          term: candidate.term,
+          tier: "A",
+          matchType: candidate.matchType,
+          reason: candidate.reason,
+          origin: "hard_block"
+        });
+      }
     }
 
-    const negativeTerms = new Set<string>();
-    for (const row of recRows) {
-      if (row.kind !== "negative_keyword") continue;
-      const termRaw = row.payload["term"];
-      const term = typeof termRaw === "string" ? termRaw.trim().toLowerCase() : "";
-      if (term) negativeTerms.add(term);
+    for (const candidate of negativeCandidates) {
+      pushNegativeRec({
+        term: candidate.searchTerm,
+        tier: "B",
+        reason: "High spend + clicks with 0 conversions",
+        campaignId: candidate.campaignId,
+        clicks: candidate.clicks,
+        cost: candidate.cost,
+        callConversions: candidate.call ?? 0,
+        bookingConversions: candidate.booking ?? 0,
+        origin: "threshold"
+      });
     }
 
     for (const termRaw of aiNegatives) {
       const term = String(termRaw ?? "").trim();
-      const key = term.toLowerCase();
-      if (!term || negativeTerms.has(key)) continue;
-      negativeTerms.add(key);
-      recRows.push({
-        reportId,
-        kind: "negative_keyword",
-        status: "proposed",
-        payload: {
-          term,
-          reason: "AI suggested negative keyword"
-        },
-        decidedBy: null,
-        decidedAt: null,
-        appliedAt: null
+      if (!term) continue;
+
+      const tierA = classifyTierANegativeFromSearchTerm(term);
+      if (tierA.length > 0) {
+        for (const candidate of tierA) {
+          pushNegativeRec({
+            term: candidate.term,
+            tier: "A",
+            matchType: candidate.matchType,
+            reason: candidate.reason,
+            origin: "ai_hard_block"
+          });
+        }
+        continue;
+      }
+
+      pushNegativeRec({
+        term,
+        tier: "B",
+        reason: "AI suggested negative keyword",
+        origin: "ai"
       });
     }
 
