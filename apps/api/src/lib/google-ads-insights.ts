@@ -25,6 +25,8 @@ type SyncResult = {
   campaignConversions: number;
 };
 
+type GoogleAdsKeywordMatchType = "BROAD" | "PHRASE" | "EXACT";
+
 function normalizeCustomerId(value: string): string {
   return value.replace(/[^\d]/g, "");
 }
@@ -222,6 +224,122 @@ async function googleAdsSearchStream(input: {
   }
 
   return rows;
+}
+
+async function googleAdsMutate(input: {
+  customerId: string;
+  accessToken: string;
+  path: string;
+  body: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  const developerToken = process.env["GOOGLE_ADS_DEVELOPER_TOKEN"] ?? "";
+  if (!developerToken) {
+    throw new Error("google_ads_not_configured");
+  }
+
+  const { apiVersion, loginCustomerId } = getGoogleAdsConfiguredIds();
+
+  const url = `https://googleads.googleapis.com/${apiVersion}/customers/${input.customerId}/${input.path}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.accessToken}`,
+      "developer-token": developerToken,
+      ...(loginCustomerId ? { "login-customer-id": loginCustomerId } : {}),
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input.body)
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") ?? "";
+    const looksLikeHtml = contentType.includes("text/html") || /^\s*<!doctype html/i.test(text);
+    if (response.status === 404 && looksLikeHtml) {
+      throw new Error(`google_ads_endpoint_not_found:${apiVersion}`);
+    }
+    throw new GoogleAdsApiError(response.status, text);
+  }
+
+  let json: unknown = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = null;
+  }
+
+  if (!isRecord(json)) {
+    throw new Error("google_ads_invalid_response");
+  }
+
+  return json;
+}
+
+function normalizeNegativeKeywordTerm(input: string): { term: string; matchType: GoogleAdsKeywordMatchType } {
+  let term = input.trim();
+  if (term.startsWith("[") && term.endsWith("]") && term.length > 2) {
+    term = term.slice(1, -1).trim();
+    return { term, matchType: "EXACT" };
+  }
+  if (term.startsWith("\"") && term.endsWith("\"") && term.length > 2) {
+    term = term.slice(1, -1).trim();
+    return { term, matchType: "PHRASE" };
+  }
+  if (/\s/.test(term)) {
+    return { term, matchType: "PHRASE" };
+  }
+  return { term, matchType: "BROAD" };
+}
+
+function readResourceName(result: unknown): string | null {
+  if (!isRecord(result)) return null;
+  const resourceName = result["resourceName"];
+  return typeof resourceName === "string" ? resourceName : null;
+}
+
+export async function applyCustomerNegativeKeyword(input: {
+  customerId: string;
+  accessToken: string;
+  term: string;
+}): Promise<{ resourceName: string; term: string; matchType: GoogleAdsKeywordMatchType }> {
+  const normalized = normalizeNegativeKeywordTerm(input.term);
+  const term = normalized.term;
+
+  if (!term) {
+    throw new Error("google_ads_negative_term_empty");
+  }
+  if (term.length > 80) {
+    throw new Error("google_ads_negative_term_too_long");
+  }
+
+  const body = {
+    operations: [
+      {
+        create: {
+          keyword: {
+            text: term,
+            matchType: normalized.matchType
+          }
+        }
+      }
+    ],
+    partialFailure: false
+  };
+
+  const json = await googleAdsMutate({
+    customerId: input.customerId,
+    accessToken: input.accessToken,
+    path: "customerNegativeCriteria:mutate",
+    body
+  });
+
+  const results = Array.isArray(json["results"]) ? (json["results"] as unknown[]) : [];
+  const resourceName = readResourceName(results[0]);
+  if (!resourceName) {
+    throw new Error("google_ads_mutate_missing_resource_name");
+  }
+
+  return { resourceName, term, matchType: normalized.matchType };
 }
 
 function isIsoDateString(value: string): boolean {

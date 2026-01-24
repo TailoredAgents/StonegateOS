@@ -2,6 +2,7 @@
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import {
+  applyGoogleAdsAnalystRecommendationAction,
   runGoogleAdsAnalystAction,
   runGoogleAdsSyncAction,
   saveGoogleAdsAnalystSettingsAction,
@@ -518,6 +519,7 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
                 <GoogleAdsRecommendationsPanel
                   recommendations={recommendations}
                   updateAction={updateGoogleAdsAnalystRecommendationAction}
+                  applyAction={applyGoogleAdsAnalystRecommendationAction}
                 />
 
                 <div className="rounded-xl border border-slate-200 bg-white/80 p-3">

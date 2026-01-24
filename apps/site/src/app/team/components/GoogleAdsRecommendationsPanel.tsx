@@ -62,6 +62,7 @@ function downloadFile(filename: string, contents: string): void {
 export function GoogleAdsRecommendationsPanel(props: {
   recommendations: GoogleAdsRecommendation[];
   updateAction: (formData: FormData) => Promise<void>;
+  applyAction?: (formData: FormData) => Promise<void>;
 }): React.ReactElement {
   const [statusFilter, setStatusFilter] = React.useState<RecommendationStatus | "all">("proposed");
   const [kindFilter, setKindFilter] = React.useState<string>("all");
@@ -252,6 +253,22 @@ export function GoogleAdsRecommendationsPanel(props: {
                           </form>
                         ) : null}
 
+                        {item.status === "approved" && item.kind === "negative_keyword" && props.applyAction ? (
+                          <form
+                            action={props.applyAction}
+                            onSubmit={(event) => {
+                              if (!confirm("Apply this negative keyword in Google Ads now?")) {
+                                event.preventDefault();
+                              }
+                            }}
+                          >
+                            <input type="hidden" name="id" value={item.id} />
+                            <SubmitButton className="rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
+                              Apply
+                            </SubmitButton>
+                          </form>
+                        ) : null}
+
                         {item.status === "approved" ? (
                           <form action={props.updateAction}>
                             <input type="hidden" name="id" value={item.id} />
@@ -277,10 +294,11 @@ export function GoogleAdsRecommendationsPanel(props: {
           <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-xs text-slate-900">
             {approvedNegatives.join("\n")}
           </pre>
-          <div className="mt-2 text-[11px] text-slate-500">Apply these manually in Google Ads, then click "Mark applied" for each item.</div>
+          <div className="mt-2 text-[11px] text-slate-500">
+            Tip: use "Apply" to push negatives into Google Ads, or apply them manually and then click "Mark applied".
+          </div>
         </div>
       ) : null}
     </div>
   );
 }
-

@@ -2913,6 +2913,30 @@ export async function updateGoogleAdsAnalystRecommendationAction(formData: FormD
   redirect("/team?tab=marketing");
 }
 
+export async function applyGoogleAdsAnalystRecommendationAction(formData: FormData) {
+  const jar = await cookies();
+  const id = formData.get("id");
+
+  if (typeof id !== "string") {
+    jar.set({ name: "myst-flash-error", value: "Missing recommendation id", path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations/apply", {
+    method: "POST",
+    body: JSON.stringify({ id })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to apply recommendation");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  jar.set({ name: "myst-flash", value: "Applied in Google Ads.", path: "/" });
+  redirect("/team?tab=marketing");
+}
+
 type OutboundImportRow = {
   company?: string;
   contactName?: string;
