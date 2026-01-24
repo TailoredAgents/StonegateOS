@@ -1,6 +1,7 @@
 import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { runSeoAutopublishAction } from "../actions";
 import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE } from "./team-ui";
 
@@ -35,6 +36,7 @@ function fmtDate(iso: string | null): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     year: "numeric",
     month: "short",
     day: "numeric",

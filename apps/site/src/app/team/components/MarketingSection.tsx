@@ -1,6 +1,7 @@
 ﻿import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
+import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   applyGoogleAdsAnalystRecommendationAction,
   runGoogleAdsAnalystAction,
@@ -141,6 +142,7 @@ function fmtDate(iso: string | null): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "\u2014";
   return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
     year: "numeric",
     month: "short",
     day: "numeric",
