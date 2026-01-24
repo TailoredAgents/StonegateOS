@@ -159,7 +159,8 @@ async function callOpenAIAnalystJson(input: {
       { role: "system", content: input.systemPrompt },
       { role: "user", content: input.userPrompt }
     ],
-    max_output_tokens: 900,
+    // Keep this comfortably above the largest valid JSON output to avoid truncated JSON (which is un-parseable).
+    max_output_tokens: 1600,
     text: {
       verbosity: "medium",
       format: {
@@ -213,7 +214,7 @@ async function callOpenAIAnalystJson(input: {
               {
                 role: "system",
                 content:
-                  "Output ONLY the JSON object that matches the schema. No markdown, no extra commentary, no code fences."
+                  "Output ONLY the JSON object that matches the schema. Keep it concise (prefer 5–7 top actions). No markdown, no extra commentary, no code fences."
               },
               { role: "user", content: input.userPrompt }
             ]
@@ -483,7 +484,8 @@ export async function runGoogleAdsAnalystReport(input: {
     "- Be practical and specific. No generic advice like \"optimize targeting\" without naming what to do next.",
     "- Assume the operator will apply changes manually unless autonomous mode is enabled elsewhere.",
     "- Calls matter more than bookings. Use the provided weights and make that clear in the actions.",
-    "- Keep the summary short and decisive."
+    "- Keep the summary short and decisive.",
+    "- Prefer 5–7 top actions unless 3 is sufficient."
   ].join("\n");
 
   const userPrompt = [
