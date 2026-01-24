@@ -26,6 +26,10 @@ type GoogleAdsSummaryPayload = {
   ok: true;
   rangeDays: number;
   since: string;
+  scope?: {
+    campaignId: string | null;
+    campaignName: string | null;
+  };
   totals: {
     impressions: number;
     clicks: number;
@@ -50,6 +54,11 @@ type GoogleAdsSummaryPayload = {
     cost: string;
     conversions: string;
   }>;
+  diagnostics?: {
+    conversionActionsTotal: number;
+    callConversionActions: string[];
+    bookingConversionActions: string[];
+  };
 };
 
 type GoogleAdsAnalystPolicy = {
@@ -195,7 +204,7 @@ function normalizeWeight(value: number, fallback: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-export async function MarketingSection(props: { reportId?: string }): Promise<React.ReactElement> {
+export async function MarketingSection(props: { reportId?: string; campaignId?: string }): Promise<React.ReactElement> {
   let status: GoogleAdsStatusPayload | null = null;
   let summary: GoogleAdsSummaryPayload | null = null;
   let analyst: GoogleAdsAnalystStatusPayload | null = null;
@@ -206,9 +215,15 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
   let error: string | null = null;
 
   try {
+    const selectedCampaignIdRaw = typeof props.campaignId === "string" ? props.campaignId.trim() : "";
+    const summaryPath =
+      selectedCampaignIdRaw.length > 0
+        ? `/api/admin/google/ads/summary?rangeDays=7&campaignId=${encodeURIComponent(selectedCampaignIdRaw)}`
+        : "/api/admin/google/ads/summary?rangeDays=7";
+
     const [statusRes, summaryRes, analystRes, reportsRes] = await Promise.all([
       callAdminApi("/api/admin/google/ads/status"),
-      callAdminApi("/api/admin/google/ads/summary?rangeDays=7"),
+      callAdminApi(summaryPath),
       callAdminApi("/api/admin/google/ads/analyst/status"),
       callAdminApi("/api/admin/google/ads/analyst/reports?limit=30")
     ]);
@@ -298,6 +313,20 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
   const safeCallWeight = weightSum > 0 ? callWeight / weightSum : 0.7;
   const safeBookingWeight = weightSum > 0 ? bookingWeight / weightSum : 0.3;
 
+  const scopedCampaignId = summary?.scope?.campaignId ?? null;
+  const scopedCampaignName = summary?.scope?.campaignName ?? null;
+  const scopedClicks = summary?.totals?.clicks ?? 0;
+  const dataSufficiency = scopedClicks >= 50 ? "green" : scopedClicks >= 15 ? "yellow" : "red";
+  const dataSufficiencyLabel =
+    dataSufficiency === "green"
+      ? "green (50+ clicks)"
+      : dataSufficiency === "yellow"
+        ? "yellow (15–49 clicks)"
+        : "red (<15 clicks)";
+
+  const callConversionActions = summary?.diagnostics?.callConversionActions ?? [];
+  const bookingConversionActions = summary?.diagnostics?.bookingConversionActions ?? [];
+
   const recommendations = recs?.items ?? [];
   const selectedReportId = recs?.reportId ?? null;
   const reportHistory = reports?.items ?? [];
@@ -384,6 +413,66 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
                 <div className="mt-1 font-semibold text-slate-900">{fmtNumber(summary?.totals.impressions ?? 0)}</div>
               </div>
             </div>
+
+            <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-slate-700">
+                  Scope:{" "}
+                  <span className="font-semibold text-slate-900">
+                    {scopedCampaignId ? scopedCampaignName ?? scopedCampaignId : "All campaigns"}
+                  </span>
+                </div>
+
+                {(summary?.topCampaigns?.length ?? 0) > 0 ? (
+                  <form method="GET" className="flex items-center gap-2">
+                    <input type="hidden" name="tab" value="marketing" />
+                    {props.reportId ? <input type="hidden" name="gaReportId" value={props.reportId} /> : null}
+                    <select
+                      name="gaCampaignId"
+                      defaultValue={scopedCampaignId ?? ""}
+                      className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900"
+                    >
+                      <option value="">All campaigns</option>
+                      {(summary?.topCampaigns ?? []).map((row) => (
+                        <option key={row.campaignId} value={row.campaignId}>
+                          {row.campaignName ?? row.campaignId}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="submit"
+                      className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
+                    >
+                      Apply
+                    </button>
+                  </form>
+                ) : null}
+              </div>
+
+              <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-600">
+                <div>
+                  Data sufficiency:{" "}
+                  <span
+                    className={
+                      dataSufficiency === "green"
+                        ? "font-semibold text-emerald-700"
+                        : dataSufficiency === "yellow"
+                          ? "font-semibold text-amber-700"
+                          : "font-semibold text-rose-700"
+                    }
+                  >
+                    {dataSufficiencyLabel}
+                  </span>
+                </div>
+                <div>
+                  Call conversions detected: <span className="font-semibold text-slate-900">{callConversionActions.length}</span>
+                </div>
+                <div>
+                  Booking conversions detected:{" "}
+                  <span className="font-semibold text-slate-900">{bookingConversionActions.length}</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
@@ -423,6 +512,7 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
                 {reportHistory.length > 0 ? (
                   <form method="GET" className="mt-3 flex flex-wrap items-center gap-2">
                     <input type="hidden" name="tab" value="marketing" />
+                    {scopedCampaignId ? <input type="hidden" name="gaCampaignId" value={scopedCampaignId} /> : null}
                     <label className="text-xs font-semibold text-slate-700">
                       Report{" "}
                       <select
@@ -692,7 +782,7 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
 
           <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
             <div className="text-sm font-semibold text-slate-900">Top search terms</div>
-            <div className="mt-1 text-xs text-slate-500">Sorted by conversions (last 7 days).</div>
+            <div className="mt-1 text-xs text-slate-500">Sorted by conversions, then clicks (last 7 days).</div>
 
             <div className="mt-3 overflow-x-auto">
               <table className="min-w-[860px] text-left text-sm">
@@ -715,8 +805,9 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
                         <div className="font-semibold text-slate-900">{row.searchTerm}</div>
                       </td>
                       <td className="py-2 pr-4">
-                        <div className="font-semibold text-slate-900">{row.campaignName ?? row.campaignId}</div>
-                        {row.campaignName ? <div className="text-xs text-slate-500">{row.campaignId}</div> : null}
+                        <div className="font-semibold text-slate-900" title={row.campaignId}>
+                          {row.campaignName ?? row.campaignId}
+                        </div>
                       </td>
                       <td className="py-2 pr-4 text-right font-semibold text-slate-900">{fmtNumber(row.impressions)}</td>
                       <td className="py-2 pr-4 text-right font-semibold text-slate-900">{fmtNumber(row.clicks)}</td>
