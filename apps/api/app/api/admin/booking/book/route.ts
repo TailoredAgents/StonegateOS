@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
-import { sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { appointmentNotes, appointments, crmTasks, getDb, outboxEvents, properties, teamMembers } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -131,23 +131,35 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
 
       if (!resolvedPropertyId) {
-        const short = contactId.split("-")[0] ?? contactId.slice(0, 8);
-        const [created] = await tx
-          .insert(properties)
-          .values({
-            contactId,
-            addressLine1: `[Manual booking ${short}] Address pending`,
-            addressLine2: null,
-            city: PLACEHOLDER_CITY,
-            state: PLACEHOLDER_STATE,
-            postalCode: PLACEHOLDER_POSTAL_CODE,
-            gated: false,
-            createdAt: now,
-            updatedAt: now
-          })
-          .returning({ id: properties.id });
-        createdPropertyId = created?.id ?? null;
-        resolvedPropertyId = createdPropertyId;
+        const [existing] = await tx
+          .select({ id: properties.id })
+          .from(properties)
+          .where(eq(properties.contactId, contactId))
+          .orderBy(desc(properties.createdAt))
+          .limit(1);
+
+        if (existing?.id) {
+          resolvedPropertyId = existing.id;
+        } else {
+          const short = contactId.split("-")[0] ?? contactId.slice(0, 8);
+          const placeholderId = nanoid(6);
+          const [created] = await tx
+            .insert(properties)
+            .values({
+              contactId,
+              addressLine1: `[Manual booking ${short}] Address pending (${placeholderId})`,
+              addressLine2: null,
+              city: PLACEHOLDER_CITY,
+              state: PLACEHOLDER_STATE,
+              postalCode: PLACEHOLDER_POSTAL_CODE,
+              gated: false,
+              createdAt: now,
+              updatedAt: now
+            })
+            .returning({ id: properties.id });
+          createdPropertyId = created?.id ?? null;
+          resolvedPropertyId = createdPropertyId;
+        }
       }
 
       if (!resolvedPropertyId) {
