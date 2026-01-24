@@ -82,6 +82,20 @@ export async function GET(request: NextRequest): Promise<Response> {
       .limit(50)
   ]);
 
+  const campaignNameById = new Map<string, string>();
+  for (const row of topCampaigns) {
+    if (row.campaignId && row.campaignName) campaignNameById.set(row.campaignId, row.campaignName);
+  }
+
+  const normalizedTopSearchTerms = topSearchTerms.map((row) => {
+    const inferred = campaignNameById.get(row.campaignId) ?? null;
+    // Prefer the Top-campaigns name mapping when available so both tables stay consistent.
+    return {
+      ...row,
+      campaignName: inferred ?? row.campaignName ?? null
+    };
+  });
+
   return NextResponse.json({
     ok: true,
     rangeDays,
@@ -95,6 +109,6 @@ export async function GET(request: NextRequest): Promise<Response> {
       days: 0
     },
     topCampaigns,
-    topSearchTerms
+    topSearchTerms: normalizedTopSearchTerms
   });
 }
