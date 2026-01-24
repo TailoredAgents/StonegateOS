@@ -25,6 +25,7 @@
         "db:migrate": "node apps/api/scripts/fix-drizzle-migrations-seq.js && drizzle-kit migrate",
         "outbox:worker": "tsx scripts/outbox-worker.ts",
         "outbox:worker:prod": "NODE_ENV=production tsx scripts/outbox-worker.ts",
+        "smoke": "tsx scripts/smoke.ts",
         "geocode:backfill": "tsx scripts/geocode-backfill.ts"
     },
     "devDependencies": {
