@@ -49,6 +49,7 @@ import {
 } from "@/lib/twilio-recordings";
 import type { EstimateNotificationPayload, QuoteNotificationPayload } from "@/lib/notifications";
 import {
+  sendEstimateCancellation,
   sendEstimateConfirmation,
   sendEstimateReminder,
   sendQuoteSentNotification,
@@ -2120,6 +2121,12 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "skipped" };
       }
 
+      if (notification.appointment.status === "canceled") {
+        console.info("[outbox] estimate.requested.already_canceled", { id: event.id, appointmentId });
+        await clearPendingReminders(appointmentId);
+        return { status: "processed" };
+      }
+
       await ensureCalendarEventCreated(notification);
       await sendEstimateConfirmation(notification, "requested");
       await scheduleAppointmentReminders(appointmentId, notification.appointment.startAt);
@@ -2320,7 +2327,13 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "skipped" };
       }
 
-      await sendEstimateConfirmation(notification, "requested");
+      if (event.type === "estimate.status_changed" && status === "canceled") {
+        await sendEstimateCancellation(notification);
+      } else if (event.type !== "estimate.status_changed" || (status !== "no_show" && status !== "completed")) {
+        const reason = event.type === "estimate.status_changed" ? "rescheduled" : "requested";
+        await sendEstimateConfirmation(notification, reason);
+      }
+
       if (status === "canceled" || status === "no_show" || status === "completed") {
         await clearPendingReminders(appointment.id);
       }

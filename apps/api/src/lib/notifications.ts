@@ -43,6 +43,21 @@ export interface EstimateNotificationPayload {
 
 type ConfirmationReason = "requested" | "rescheduled";
 
+export async function sendEstimateCancellation(payload: EstimateNotificationPayload): Promise<void> {
+  const { contact, appointment } = payload;
+  const when = formatDateTime(appointment.startAt);
+
+  const smsBody = `Stonegate: Your appointment for ${when} was canceled. Reply here if you want to rebook.`;
+  const emailSubject = `Canceled: Stonegate appointment ${when}`;
+  const emailBody = `Your Stonegate Junk Removal appointment for ${when} was canceled.\n\nReply to this email (or text us) if you want to rebook.`;
+
+  if (contact.phone) {
+    await sendSms(contact.phone, smsBody, { leadId: payload.leadId, appointmentId: appointment.id });
+  }
+
+  await sendPlainEmail(contact.email, emailSubject, emailBody, { leadId: payload.leadId, appointmentId: appointment.id });
+}
+
 export interface QuoteNotificationPayload {
   quoteId: string;
   services: string[];
