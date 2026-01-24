@@ -424,13 +424,13 @@ export async function MarketingSection(props: { reportId?: string; campaignId?: 
                 </div>
 
                 {(summary?.topCampaigns?.length ?? 0) > 0 ? (
-                  <form method="GET" className="flex items-center gap-2">
+                  <form method="GET" className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
                     <input type="hidden" name="tab" value="marketing" />
                     {props.reportId ? <input type="hidden" name="gaReportId" value={props.reportId} /> : null}
                     <select
                       name="gaCampaignId"
                       defaultValue={scopedCampaignId ?? ""}
-                      className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900"
+                      className="w-full min-w-0 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900 sm:w-auto"
                     >
                       <option value="">All campaigns</option>
                       {(summary?.topCampaigns ?? []).map((row) => (
@@ -441,7 +441,7 @@ export async function MarketingSection(props: { reportId?: string; campaignId?: 
                     </select>
                     <button
                       type="submit"
-                      className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
+                      className="w-full whitespace-nowrap rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50 sm:w-auto"
                     >
                       Apply
                     </button>
