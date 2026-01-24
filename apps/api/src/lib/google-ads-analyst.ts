@@ -10,6 +10,7 @@ import {
   googleAdsInsightsDaily,
   googleAdsSearchTermsDaily
 } from "@/db";
+import { getGoogleAdsConfiguredIds } from "@/lib/google-ads-insights";
 import { getGoogleAdsAnalystPolicy } from "@/lib/policy";
 import { getCompanyProfilePolicy } from "@/lib/policy";
 
@@ -447,6 +448,11 @@ export async function runGoogleAdsAnalystReport(input: {
     return { ok: false, error: "openai_not_configured" };
   }
 
+  const { customerId } = getGoogleAdsConfiguredIds();
+  if (!customerId) {
+    return { ok: false, error: "google_ads_not_configured" };
+  }
+
   const tz = process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
   const now = DateTime.now().setZone(tz);
 
@@ -474,6 +480,7 @@ export async function runGoogleAdsAnalystReport(input: {
   const [campaignTotals, searchTerms, conversionActions, campaignActionTotals] = await Promise.all([
     db
       .select({
+        customerId: googleAdsInsightsDaily.customerId,
         campaignId: googleAdsInsightsDaily.campaignId,
         campaignName: sql<string>`max(${googleAdsInsightsDaily.campaignName})`,
         impressions: sql<number>`coalesce(sum(${googleAdsInsightsDaily.impressions}), 0)`.mapWith(Number),
@@ -483,12 +490,19 @@ export async function runGoogleAdsAnalystReport(input: {
         conversionValue: sql<string>`coalesce(sum(${googleAdsInsightsDaily.conversionValue}), 0)::text`
       })
       .from(googleAdsInsightsDaily)
-      .where(and(gte(googleAdsInsightsDaily.dateStart, since), lte(googleAdsInsightsDaily.dateStart, until)))
-      .groupBy(googleAdsInsightsDaily.campaignId)
+      .where(
+        and(
+          eq(googleAdsInsightsDaily.customerId, customerId),
+          gte(googleAdsInsightsDaily.dateStart, since),
+          lte(googleAdsInsightsDaily.dateStart, until)
+        )
+      )
+      .groupBy(googleAdsInsightsDaily.customerId, googleAdsInsightsDaily.campaignId)
       .orderBy(desc(sql`sum(${googleAdsInsightsDaily.cost})`))
       .limit(25),
     db
       .select({
+        customerId: googleAdsSearchTermsDaily.customerId,
         searchTerm: googleAdsSearchTermsDaily.searchTerm,
         campaignId: googleAdsSearchTermsDaily.campaignId,
         clicks: sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.clicks}), 0)`.mapWith(Number),
@@ -496,22 +510,31 @@ export async function runGoogleAdsAnalystReport(input: {
         conversions: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.conversions}), 0)::text`
       })
       .from(googleAdsSearchTermsDaily)
-      .where(and(gte(googleAdsSearchTermsDaily.dateStart, since), lte(googleAdsSearchTermsDaily.dateStart, until)))
-      .groupBy(googleAdsSearchTermsDaily.searchTerm, googleAdsSearchTermsDaily.campaignId)
+      .where(
+        and(
+          eq(googleAdsSearchTermsDaily.customerId, customerId),
+          gte(googleAdsSearchTermsDaily.dateStart, since),
+          lte(googleAdsSearchTermsDaily.dateStart, until)
+        )
+      )
+      .groupBy(googleAdsSearchTermsDaily.customerId, googleAdsSearchTermsDaily.searchTerm, googleAdsSearchTermsDaily.campaignId)
       .orderBy(desc(sql`sum(${googleAdsSearchTermsDaily.cost})`))
       .limit(75),
     db
       .select({
+        customerId: googleAdsConversionActions.customerId,
         actionId: googleAdsConversionActions.actionId,
         name: googleAdsConversionActions.name,
         category: googleAdsConversionActions.category,
         type: googleAdsConversionActions.type
       })
       .from(googleAdsConversionActions)
+      .where(eq(googleAdsConversionActions.customerId, customerId))
       .orderBy(desc(googleAdsConversionActions.fetchedAt))
       .limit(200),
     db
       .select({
+        customerId: googleAdsCampaignConversionsDaily.customerId,
         campaignId: googleAdsCampaignConversionsDaily.campaignId,
         actionId: googleAdsCampaignConversionsDaily.conversionActionId,
         actionName: sql<string>`max(${googleAdsCampaignConversionsDaily.conversionActionName})`,
@@ -521,11 +544,16 @@ export async function runGoogleAdsAnalystReport(input: {
       .from(googleAdsCampaignConversionsDaily)
       .where(
         and(
+          eq(googleAdsCampaignConversionsDaily.customerId, customerId),
           gte(googleAdsCampaignConversionsDaily.dateStart, since),
           lte(googleAdsCampaignConversionsDaily.dateStart, until)
         )
       )
-      .groupBy(googleAdsCampaignConversionsDaily.campaignId, googleAdsCampaignConversionsDaily.conversionActionId)
+      .groupBy(
+        googleAdsCampaignConversionsDaily.customerId,
+        googleAdsCampaignConversionsDaily.campaignId,
+        googleAdsCampaignConversionsDaily.conversionActionId
+      )
   ]);
 
   const actionById = new Map<string, { name: string | null; category: string | null; type: string | null }>();

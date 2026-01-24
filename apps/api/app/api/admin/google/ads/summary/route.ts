@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { desc, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { getDb, googleAdsInsightsDaily, googleAdsSearchTermsDaily } from "@/db";
+import { getGoogleAdsConfiguredIds } from "@/lib/google-ads-insights";
 import { isAdminRequest } from "../../../../web/admin";
 
 function parseRangeDays(request: NextRequest): number {
@@ -15,6 +16,11 @@ function parseRangeDays(request: NextRequest): number {
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+
+  const { customerId } = getGoogleAdsConfiguredIds();
+  if (!customerId) {
+    return NextResponse.json({ ok: false, error: "google_ads_not_configured" }, { status: 400 });
   }
 
   const rangeDays = parseRangeDays(request);
@@ -37,7 +43,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         days: sql<number>`count(distinct ${googleAdsInsightsDaily.dateStart})`.mapWith(Number)
       })
       .from(googleAdsInsightsDaily)
-      .where(gte(googleAdsInsightsDaily.dateStart, since))
+      .where(and(gte(googleAdsInsightsDaily.dateStart, since), eq(googleAdsInsightsDaily.customerId, customerId)))
       .then((rows) => rows[0] ?? null),
     db
       .select({
@@ -48,7 +54,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         conversions: sql<string>`coalesce(sum(${googleAdsInsightsDaily.conversions}), 0)::text`
       })
       .from(googleAdsInsightsDaily)
-      .where(gte(googleAdsInsightsDaily.dateStart, since))
+      .where(and(gte(googleAdsInsightsDaily.dateStart, since), eq(googleAdsInsightsDaily.customerId, customerId)))
       .groupBy(googleAdsInsightsDaily.campaignId)
       .orderBy(desc(sql`sum(${googleAdsInsightsDaily.conversions})`))
       .limit(20),
@@ -60,7 +66,9 @@ export async function GET(request: NextRequest): Promise<Response> {
           select max(${googleAdsInsightsDaily.campaignName})
           from ${googleAdsInsightsDaily}
           where ${googleAdsInsightsDaily.campaignId} = ${googleAdsSearchTermsDaily.campaignId}
+            and ${googleAdsInsightsDaily.customerId} = ${googleAdsSearchTermsDaily.customerId}
             and ${googleAdsInsightsDaily.dateStart} >= ${since}
+            and ${googleAdsInsightsDaily.customerId} = ${customerId}
         )`,
         impressions: sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.impressions}), 0)`.mapWith(Number),
         clicks: sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.clicks}), 0)`.mapWith(Number),
@@ -68,7 +76,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         conversions: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.conversions}), 0)::text`
       })
       .from(googleAdsSearchTermsDaily)
-      .where(gte(googleAdsSearchTermsDaily.dateStart, since))
+      .where(and(gte(googleAdsSearchTermsDaily.dateStart, since), eq(googleAdsSearchTermsDaily.customerId, customerId)))
       .groupBy(googleAdsSearchTermsDaily.searchTerm, googleAdsSearchTermsDaily.campaignId)
       .orderBy(desc(sql`sum(${googleAdsSearchTermsDaily.conversions})`))
       .limit(50)
