@@ -117,9 +117,7 @@ export function GoogleAdsRecommendationsPanel(props: {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recommendations</div>
-          <div className="mt-1 text-xs text-slate-500">
-            Approve items you want to apply. Nothing auto-applies changes.
-          </div>
+          <div className="mt-1 text-xs text-slate-500">Approve items you want to apply. Nothing auto-applies changes.</div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -218,13 +216,14 @@ export function GoogleAdsRecommendationsPanel(props: {
                   }
                 }
 
+                const reason = safeString(item.payload["reason"]).trim();
+
                 return (
                   <tr key={item.id} className="align-top">
                     <td className="py-2 pr-4">
                       <div className="font-semibold text-slate-900">{label}</div>
-                      {subtitleParts.length > 0 ? (
-                        <div className="text-xs text-slate-500">{subtitleParts.join(" • ")}</div>
-                      ) : null}
+                      {subtitleParts.length > 0 ? <div className="text-xs text-slate-500">{subtitleParts.join(" • ")}</div> : null}
+                      {reason ? <div className="mt-1 text-xs text-slate-500">{reason}</div> : null}
                     </td>
                     <td className="py-2 pr-4">
                       <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700">
@@ -278,9 +277,7 @@ export function GoogleAdsRecommendationsPanel(props: {
           <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white p-3 text-xs text-slate-900">
             {approvedNegatives.join("\n")}
           </pre>
-          <div className="mt-2 text-[11px] text-slate-500">
-            Apply these manually in Google Ads, then click “Mark applied” for each item.
-          </div>
+          <div className="mt-2 text-[11px] text-slate-500">Apply these manually in Google Ads, then click "Mark applied" for each item.</div>
         </div>
       ) : null}
     </div>

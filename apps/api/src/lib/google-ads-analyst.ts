@@ -11,6 +11,7 @@ import {
   googleAdsSearchTermsDaily
 } from "@/db";
 import { getGoogleAdsAnalystPolicy } from "@/lib/policy";
+import { getCompanyProfilePolicy } from "@/lib/policy";
 
 type ConversionClass = "call" | "booking" | "other";
 
@@ -321,6 +322,7 @@ export async function runGoogleAdsAnalystReport(input: {
 
   const policy = await getGoogleAdsAnalystPolicy();
   const weights = normalizeWeightPair(policy.callWeight, policy.bookingWeight);
+  const company = await getCompanyProfilePolicy();
 
   const db = getDb();
 
@@ -447,7 +449,8 @@ export async function runGoogleAdsAnalystReport(input: {
       searchTerm: row.searchTerm,
       campaignId: row.campaignId,
       cost: Number(row.cost) || 0,
-      clicks: row.clicks
+      clicks: row.clicks,
+      ...(campaignConversionBreakdown.get(row.campaignId) ?? { call: 0, booking: 0, other: 0, total: 0 })
     }));
 
   const suggestedNegatives = negativeCandidates.map((row) => row.searchTerm);
@@ -459,12 +462,21 @@ export async function runGoogleAdsAnalystReport(input: {
       campaignId: row.campaignId,
       campaignName: row.campaignName,
       cost: row.cost,
-      clicks: row.clicks
+      clicks: row.clicks,
+      callConversions: row.callConversions,
+      bookingConversions: row.bookingConversions,
+      weightedConversions: row.weightedConversions
     }));
 
   const systemPrompt = [
     "You are a Google Ads marketing analyst for a local junk removal company (Stonegate Junk Removal).",
     "Your job: read the last 7 days of ads data, then produce a short, actionable checklist to improve results.",
+    "",
+    "Business context:",
+    `- Company: ${company.businessName}`,
+    `- Primary phone: ${company.primaryPhone}`,
+    `- Service area: ${company.serviceAreaSummary}`,
+    "- Conversion goal priority: phone calls are the highest priority (bookings are secondary).",
     "",
     "Constraints:",
     "- Output MUST be valid JSON that matches the provided schema.",
@@ -523,6 +535,8 @@ export async function runGoogleAdsAnalystReport(input: {
   const reportId = row?.id ?? "";
 
   if (reportId) {
+    const aiNegatives = Array.isArray(ai.report.negatives_to_review) ? ai.report.negatives_to_review : [];
+    const aiPauseCandidates = Array.isArray(ai.report.pause_candidates_to_review) ? ai.report.pause_candidates_to_review : [];
     const recRows: Array<{
       reportId: string;
       kind: string;
@@ -543,7 +557,36 @@ export async function runGoogleAdsAnalystReport(input: {
           campaignId: candidate.campaignId,
           clicks: candidate.clicks,
           cost: candidate.cost,
+          callConversions: candidate.call ?? 0,
+          bookingConversions: candidate.booking ?? 0,
           reason: "High spend + clicks with 0 conversions"
+        },
+        decidedBy: null,
+        decidedAt: null,
+        appliedAt: null
+      });
+    }
+
+    const negativeTerms = new Set<string>();
+    for (const row of recRows) {
+      if (row.kind !== "negative_keyword") continue;
+      const termRaw = row.payload["term"];
+      const term = typeof termRaw === "string" ? termRaw.trim().toLowerCase() : "";
+      if (term) negativeTerms.add(term);
+    }
+
+    for (const termRaw of aiNegatives) {
+      const term = String(termRaw ?? "").trim();
+      const key = term.toLowerCase();
+      if (!term || negativeTerms.has(key)) continue;
+      negativeTerms.add(key);
+      recRows.push({
+        reportId,
+        kind: "negative_keyword",
+        status: "proposed",
+        payload: {
+          term,
+          reason: "AI suggested negative keyword"
         },
         decidedBy: null,
         decidedAt: null,
@@ -561,7 +604,41 @@ export async function runGoogleAdsAnalystReport(input: {
           campaignName: candidate.campaignName,
           clicks: candidate.clicks,
           cost: candidate.cost,
+          callConversions: candidate.callConversions,
+          bookingConversions: candidate.bookingConversions,
+          weightedConversions: candidate.weightedConversions,
           reason: "High spend with 0 weighted conversions"
+        },
+        decidedBy: null,
+        decidedAt: null,
+        appliedAt: null
+      });
+    }
+
+    const pauseKeys = new Set<string>();
+    for (const row of recRows) {
+      if (row.kind !== "pause_candidate") continue;
+      const campaignIdRaw = row.payload["campaignId"];
+      const campaignNameRaw = row.payload["campaignName"];
+      const campaignId = typeof campaignIdRaw === "string" ? campaignIdRaw.trim() : "";
+      const campaignName = typeof campaignNameRaw === "string" ? campaignNameRaw.trim() : "";
+      const key = campaignId ? `id:${campaignId}` : campaignName ? `name:${campaignName.toLowerCase()}` : "";
+      if (key) pauseKeys.add(key);
+    }
+
+    for (const candidateRaw of aiPauseCandidates) {
+      const candidate = String(candidateRaw ?? "").trim();
+      if (!candidate) continue;
+      const key = `name:${candidate.toLowerCase()}`;
+      if (pauseKeys.has(key)) continue;
+      pauseKeys.add(key);
+      recRows.push({
+        reportId,
+        kind: "pause_candidate",
+        status: "proposed",
+        payload: {
+          campaignName: candidate,
+          reason: "AI suggested pause candidate"
         },
         decidedBy: null,
         decidedAt: null,
