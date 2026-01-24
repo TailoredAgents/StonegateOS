@@ -121,5 +121,29 @@ export const SEO_TOPICS: SeoTopic[] = [
     titleHint: "Junk Removal in Woodstock, GA: Quick Answers and Pickup Prep Tips",
     primaryKeyword: "junk removal woodstock ga",
     relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
+  },
+  {
+    key: "junk-removal-canton-ga",
+    titleHint: "Junk Removal in Canton, GA: Same-Week Pickup and What We Take",
+    primaryKeyword: "junk removal canton ga",
+    relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
+  },
+  {
+    key: "junk-removal-acworth-ga",
+    titleHint: "Junk Removal in Acworth, GA: Fast Pickup for Homes and Businesses",
+    primaryKeyword: "junk removal acworth ga",
+    relatedServiceSlugs: ["furniture", "appliances", "construction-debris"]
+  },
+  {
+    key: "junk-removal-kennesaw-ga",
+    titleHint: "Junk Removal in Kennesaw, GA: A Simple Plan for Cleanouts",
+    primaryKeyword: "junk removal kennesaw ga",
+    relatedServiceSlugs: ["furniture", "appliances", "single-item"]
+  },
+  {
+    key: "junk-removal-alpharetta-ga",
+    titleHint: "Junk Removal in Alpharetta, GA: Quick Scheduling and Pickup Prep",
+    primaryKeyword: "junk removal alpharetta ga",
+    relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
   }
 ];

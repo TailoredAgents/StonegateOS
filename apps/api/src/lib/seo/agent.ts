@@ -8,6 +8,8 @@ const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const VOICE_MODEL = "gpt-4.1-mini";
 const AUTOPUBLISH_LAST_KEY = "blog_autopublish_last";
 const BRIEF_FALLBACK_MODEL = "gpt-4.1-mini";
+const SERVICE_CITIES = ["Canton", "Woodstock", "Marietta", "Acworth", "Kennesaw", "Roswell", "Alpharetta"] as const;
+const SERVICE_STATE = "GA";
 
 type OpenAIResponsesData = {
   output?: Array<{ content?: Array<{ text?: unknown; type?: unknown }> }>;
@@ -256,10 +258,10 @@ function getCodeVersion(): string | null {
 
 function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string }> {
   const links: Array<{ label: string; url: string }> = [
+    { label: "Book online", url: "/book" },
     { label: "Pricing", url: "/pricing" },
     { label: "Services", url: "/services" },
-    { label: "Service areas", url: "/areas" },
-    { label: "Schedule an estimate", url: "/estimate" }
+    { label: "Service areas", url: "/areas" }
   ];
 
   const serviceLabels: Record<string, string> = {
@@ -279,14 +281,16 @@ function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string
 }
 
 async function generateBrief(topic: SeoTopic, apiKey: string, brainModel: string): Promise<BriefGenResult> {
+  const cityLine = SERVICE_CITIES.map((city) => `${city}, ${SERVICE_STATE}`).join("; ");
   const systemPrompt = `You are an SEO content strategist for Stonegate Junk Removal (North Metro Atlanta).
-Hard rules:
-- Do NOT include any dollar amounts.
-- Do NOT mention any counties outside Cobb, Cherokee, Fulton, and Bartow.
-- Do NOT invent statistics, rankings, awards, or partnerships.
-- Keep it practical and specific to junk removal.
-Return ONLY JSON with: title, metaDescription, excerpt, outline (array of section headings).
-metaDescription must be <= 155 characters when possible.`.trim();
+  Hard rules:
+  - Do NOT include any dollar amounts.
+  - Do NOT mention any counties outside Cobb, Cherokee, Fulton, and Bartow.
+  - Keep the content geographically relevant to our core service cities: ${cityLine}.
+  - Do NOT invent statistics, rankings, awards, or partnerships.
+  - Keep it practical and specific to junk removal.
+  Return ONLY JSON with: title, metaDescription, excerpt, outline (array of section headings).
+  metaDescription must be <= 155 characters when possible.`.trim();
 
   const payload = {
     model: brainModel,
@@ -363,17 +367,19 @@ async function writePostMarkdown(
   apiKey: string
 ): Promise<string | null> {
   const internalLinks = buildInternalLinks(topic);
+  const serviceCitySentence = `We primarily serve ${SERVICE_CITIES.join(", ")}, ${SERVICE_STATE} (North Metro Atlanta).`;
 
   const systemPrompt = `You write a helpful local SEO blog post in Markdown for Stonegate Junk Removal.
-Rules:
-- Output Markdown ONLY.
-- Do NOT include any dollar amounts.
-- Do NOT mention any counties outside Cobb, Cherokee, Fulton, and Bartow.
-- Do NOT invent statistics, legal claims, rankings, or awards.
-- Mention "Stonegate Junk Removal" in the intro.
-- Include a short FAQ section (4 Q&As).
-- Include internal links exactly as provided (use [label](url)).
-- End with a short CTA to schedule an estimate or call (404) 777-2631.`.trim();
+  Rules:
+  - Output Markdown ONLY.
+  - Do NOT include any dollar amounts.
+  - Do NOT mention any counties outside Cobb, Cherokee, Fulton, and Bartow.
+  - Do NOT invent statistics, legal claims, rankings, or awards.
+  - Mention "Stonegate Junk Removal" in the intro.
+  - Include this service-area sentence (once, naturally): "${serviceCitySentence}"
+  - Include a short FAQ section (4 Q&As).
+  - Include internal links exactly as provided (use [label](url)).
+  - End with a short CTA to book online or call (404) 777-2631.`.trim();
 
   const payload = {
     model: VOICE_MODEL,
