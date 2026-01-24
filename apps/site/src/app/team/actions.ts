@@ -2937,6 +2937,71 @@ export async function applyGoogleAdsAnalystRecommendationAction(formData: FormDa
   redirect("/team?tab=marketing");
 }
 
+function parseJsonStringArray(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  const trimmed = value.trim();
+  if (!trimmed.length) return [];
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+  } catch {
+    return trimmed
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+  }
+}
+
+export async function bulkUpdateGoogleAdsAnalystRecommendationsAction(formData: FormData) {
+  const jar = await cookies();
+  const ids = parseJsonStringArray(formData.get("ids"));
+  const status = formData.get("status");
+
+  if (ids.length === 0 || (status !== "approved" && status !== "ignored" && status !== "proposed")) {
+    jar.set({ name: "myst-flash-error", value: "Missing bulk update", path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations/bulk", {
+    method: "POST",
+    body: JSON.stringify({ ids, status })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to bulk update recommendations");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  jar.set({ name: "myst-flash", value: `Updated ${ids.length} recommendation(s).`, path: "/" });
+  redirect("/team?tab=marketing");
+}
+
+export async function bulkApplyGoogleAdsAnalystRecommendationsAction(formData: FormData) {
+  const jar = await cookies();
+  const ids = parseJsonStringArray(formData.get("ids"));
+
+  if (ids.length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Missing bulk apply selection", path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations/apply/bulk", {
+    method: "POST",
+    body: JSON.stringify({ ids })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to bulk apply recommendations");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    redirect("/team?tab=marketing");
+  }
+
+  jar.set({ name: "myst-flash", value: "Applied approved negatives in Google Ads.", path: "/" });
+  redirect("/team?tab=marketing");
+}
+
 type OutboundImportRow = {
   company?: string;
   contactName?: string;

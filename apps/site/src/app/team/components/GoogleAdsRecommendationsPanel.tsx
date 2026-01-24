@@ -19,10 +19,23 @@ function safeString(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "");
 }
 
+function safeNumber(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 function toUsd(value: unknown): string | null {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return null;
   return `$${n.toFixed(2)}`;
+}
+
+function toPercent(value: unknown): string | null {
+  const n = safeNumber(value);
+  if (n === null) return null;
+  const normalized = n > 1 ? n / 100 : n;
+  const pct = Math.round(Math.max(0, Math.min(1, normalized)) * 100);
+  return `${pct}%`;
 }
 
 function buildCsv(rows: Array<Record<string, string>>): string {
@@ -62,10 +75,13 @@ function downloadFile(filename: string, contents: string): void {
 export function GoogleAdsRecommendationsPanel(props: {
   recommendations: GoogleAdsRecommendation[];
   updateAction: (formData: FormData) => Promise<void>;
+  bulkUpdateAction?: (formData: FormData) => Promise<void>;
   applyAction?: (formData: FormData) => Promise<void>;
+  bulkApplyAction?: (formData: FormData) => Promise<void>;
 }): React.ReactElement {
   const [statusFilter, setStatusFilter] = React.useState<RecommendationStatus | "all">("proposed");
   const [kindFilter, setKindFilter] = React.useState<string>("all");
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(() => new Set());
 
   const kinds = React.useMemo(() => {
     const set = new Set<string>();
@@ -81,12 +97,31 @@ export function GoogleAdsRecommendationsPanel(props: {
     });
   }, [props.recommendations, statusFilter, kindFilter]);
 
+  React.useEffect(() => {
+    const visible = new Set(filtered.map((row) => row.id));
+    setSelectedIds((prev) => {
+      const next = new Set<string>();
+      for (const id of prev) if (visible.has(id)) next.add(id);
+      return next;
+    });
+  }, [filtered]);
+
   const approvedNegatives = React.useMemo(() => {
     return props.recommendations
       .filter((item) => item.kind === "negative_keyword" && item.status === "approved")
       .map((item) => safeString(item.payload["term"]).trim())
       .filter((term) => term.length > 0);
   }, [props.recommendations]);
+
+  const selectedIdsArray = React.useMemo(() => Array.from(selectedIds), [selectedIds]);
+
+  const selectedApprovedNegativeIds = React.useMemo(() => {
+    if (selectedIds.size === 0) return [];
+    return props.recommendations
+      .filter((row) => selectedIds.has(row.id))
+      .filter((row) => row.kind === "negative_keyword" && row.status === "approved")
+      .map((row) => row.id);
+  }, [props.recommendations, selectedIds]);
 
   const exportApprovedNegatives = React.useCallback(() => {
     const rows = approvedNegatives.map((term) => ({ term }));
@@ -156,6 +191,64 @@ export function GoogleAdsRecommendationsPanel(props: {
             </select>
           </label>
 
+          <button
+            type="button"
+            className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+            onClick={() => setSelectedIds(new Set(filtered.map((row) => row.id)))}
+          >
+            Select all shown
+          </button>
+
+          {selectedIdsArray.length > 0 ? (
+            <button
+              type="button"
+              className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Clear ({selectedIdsArray.length})
+            </button>
+          ) : null}
+
+          {props.bulkUpdateAction && selectedIdsArray.length > 0 ? (
+            <>
+              <form action={props.bulkUpdateAction}>
+                <input type="hidden" name="ids" value={JSON.stringify(selectedIdsArray)} />
+                <input type="hidden" name="status" value="approved" />
+                <SubmitButton className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800">
+                  Approve selected
+                </SubmitButton>
+              </form>
+
+              <form action={props.bulkUpdateAction}>
+                <input type="hidden" name="ids" value={JSON.stringify(selectedIdsArray)} />
+                <input type="hidden" name="status" value="ignored" />
+                <SubmitButton className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50">
+                  Ignore selected
+                </SubmitButton>
+              </form>
+
+              {props.bulkApplyAction && selectedApprovedNegativeIds.length > 0 ? (
+                <form
+                  action={props.bulkApplyAction}
+                  onSubmit={(event) => {
+                    if (
+                      !confirm(
+                        `Apply ${selectedApprovedNegativeIds.length} approved negative keyword(s) in Google Ads now?`
+                      )
+                    ) {
+                      event.preventDefault();
+                    }
+                  }}
+                >
+                  <input type="hidden" name="ids" value={JSON.stringify(selectedApprovedNegativeIds)} />
+                  <SubmitButton className="rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
+                    Apply approved selected
+                  </SubmitButton>
+                </form>
+              ) : null}
+            </>
+          ) : null}
+
           {approvedNegatives.length > 0 ? (
             <>
               <button
@@ -184,6 +277,7 @@ export function GoogleAdsRecommendationsPanel(props: {
           <table className="min-w-full text-left text-sm">
             <thead>
               <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <th className="py-2 pr-2"></th>
                 <th className="py-2 pr-4">Item</th>
                 <th className="py-2 pr-4">Status</th>
                 <th className="py-2 pr-4 text-right">Actions</th>
@@ -200,6 +294,17 @@ export function GoogleAdsRecommendationsPanel(props: {
                 const cost = item.payload["cost"];
                 const callConv = item.payload["callConversions"];
                 const bookConv = item.payload["bookingConversions"];
+                const risk = safeString(item.payload["risk"]).trim().toLowerCase();
+                const confidence = toPercent(item.payload["confidence"]);
+                const riskReason = safeString(item.payload["riskReason"]).trim();
+                const impactClicks = safeNumber(item.payload["impactClicks"]) ?? safeNumber(clicks);
+                const impactImpressions = safeNumber(item.payload["impactImpressions"]);
+                const impactCost = safeNumber(item.payload["impactCost"]) ?? safeNumber(cost);
+                const campaignIds = Array.isArray(item.payload["campaignIds"])
+                  ? (item.payload["campaignIds"] as unknown[])
+                      .map((v) => safeString(v).trim())
+                      .filter((v) => v.length > 0)
+                  : [];
 
                 const label =
                   item.kind === "negative_keyword"
@@ -211,16 +316,31 @@ export function GoogleAdsRecommendationsPanel(props: {
                 const subtitleParts: string[] = [];
                 if (item.kind === "negative_keyword" && tier) subtitleParts.push(`Tier ${tier.toUpperCase()}`);
                 if (item.kind === "negative_keyword" && matchType) subtitleParts.push(matchType.toLowerCase());
-                if (item.kind === "negative_keyword" && campaignName) subtitleParts.push(campaignName);
-                if (campaignId) subtitleParts.push(`campaign ${campaignId}`);
-                if (typeof clicks === "number") subtitleParts.push(`${clicks} clicks`);
-                const usd = toUsd(cost);
-                if (usd) subtitleParts.push(`${usd} spend`);
+                if (item.kind === "negative_keyword") {
+                  if (risk) subtitleParts.push(`risk ${risk}`);
+                  if (confidence) subtitleParts.push(`confidence ${confidence}`);
+
+                  if (campaignIds.length > 1) subtitleParts.push(`seen in ${campaignIds.length} campaigns`);
+                  else if (campaignName) subtitleParts.push(campaignName);
+                  else if (campaignId) subtitleParts.push(`campaign ${campaignId}`);
+
+                  if (impactClicks !== null) subtitleParts.push(`${impactClicks} clicks`);
+                  const usd = toUsd(impactCost ?? "");
+                  if (usd) subtitleParts.push(`${usd} spend`);
+                  if (impactImpressions !== null && impactImpressions > 0) subtitleParts.push(`${impactImpressions} impr`);
+                } else {
+                  if (campaignName) subtitleParts.push(campaignName);
+                  if (campaignId) subtitleParts.push(`campaign ${campaignId}`);
+                  const clickN = safeNumber(clicks);
+                  if (clickN !== null) subtitleParts.push(`${clickN} clicks`);
+                  const usd = toUsd(cost);
+                  if (usd) subtitleParts.push(`${usd} spend`);
+                }
                 if (typeof callConv === "number" || typeof bookConv === "number") {
                   const call = typeof callConv === "number" ? callConv : Number(callConv);
                   const book = typeof bookConv === "number" ? bookConv : Number(bookConv);
                   if (Number.isFinite(call) || Number.isFinite(book)) {
-                    subtitleParts.push(`calls ${Number.isFinite(call) ? call : 0} • bookings ${Number.isFinite(book) ? book : 0}`);
+                    subtitleParts.push(`calls ${Number.isFinite(call) ? call : 0} / bookings ${Number.isFinite(book) ? book : 0}`);
                   }
                 }
 
@@ -228,9 +348,29 @@ export function GoogleAdsRecommendationsPanel(props: {
 
                 return (
                   <tr key={item.id} className="align-top">
+                    <td className="py-2 pr-2">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-300"
+                        checked={selectedIds.has(item.id)}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            if (checked) next.add(item.id);
+                            else next.delete(item.id);
+                            return next;
+                          });
+                        }}
+                        aria-label="Select recommendation"
+                      />
+                    </td>
                     <td className="py-2 pr-4">
                       <div className="font-semibold text-slate-900">{label}</div>
-                      {subtitleParts.length > 0 ? <div className="text-xs text-slate-500">{subtitleParts.join(" • ")}</div> : null}
+                      {subtitleParts.length > 0 ? (
+                        <div className="text-xs text-slate-500">{subtitleParts.join(" • ")}</div>
+                      ) : null}
+                      {riskReason ? <div className="mt-1 text-xs text-rose-600">{riskReason}</div> : null}
                       {reason ? <div className="mt-1 text-xs text-slate-500">{reason}</div> : null}
                     </td>
                     <td className="py-2 pr-4">

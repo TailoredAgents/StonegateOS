@@ -4,6 +4,8 @@ import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   applyGoogleAdsAnalystRecommendationAction,
+  bulkApplyGoogleAdsAnalystRecommendationsAction,
+  bulkUpdateGoogleAdsAnalystRecommendationsAction,
   runGoogleAdsAnalystAction,
   runGoogleAdsSyncAction,
   saveGoogleAdsAnalystSettingsAction,
@@ -415,39 +417,37 @@ export async function MarketingSection(props: { reportId?: string; campaignId?: 
             </div>
 
             <div className="mt-3 rounded-xl border border-slate-200 bg-white/80 px-3 py-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="text-xs font-semibold text-slate-700">
-                  Scope:{" "}
-                  <span className="font-semibold text-slate-900">
-                    {scopedCampaignId ? scopedCampaignName ?? scopedCampaignId : "All campaigns"}
-                  </span>
-                </div>
-
-                {(summary?.topCampaigns?.length ?? 0) > 0 ? (
-                  <form method="GET" className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-                    <input type="hidden" name="tab" value="marketing" />
-                    {props.reportId ? <input type="hidden" name="gaReportId" value={props.reportId} /> : null}
-                    <select
-                      name="gaCampaignId"
-                      defaultValue={scopedCampaignId ?? ""}
-                      className="w-full min-w-0 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900 sm:w-auto"
-                    >
-                      <option value="">All campaigns</option>
-                      {(summary?.topCampaigns ?? []).map((row) => (
-                        <option key={row.campaignId} value={row.campaignId}>
-                          {row.campaignName ?? row.campaignId}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="submit"
-                      className="w-full whitespace-nowrap rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50 sm:w-auto"
-                    >
-                      Apply
-                    </button>
-                  </form>
-                ) : null}
+              <div className="text-xs font-semibold text-slate-700">
+                Scope:{" "}
+                <span className="font-semibold text-slate-900">
+                  {scopedCampaignId ? scopedCampaignName ?? scopedCampaignId : "All campaigns"}
+                </span>
               </div>
+
+              {(summary?.topCampaigns?.length ?? 0) > 0 ? (
+                <form method="GET" className="mt-2 flex w-full flex-col gap-2 sm:flex-row sm:items-center">
+                  <input type="hidden" name="tab" value="marketing" />
+                  {props.reportId ? <input type="hidden" name="gaReportId" value={props.reportId} /> : null}
+                  <select
+                    name="gaCampaignId"
+                    defaultValue={scopedCampaignId ?? ""}
+                    className="w-full min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-900"
+                  >
+                    <option value="">All campaigns</option>
+                    {(summary?.topCampaigns ?? []).map((row) => (
+                      <option key={row.campaignId} value={row.campaignId}>
+                        {row.campaignName ?? row.campaignId}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    className="w-full whitespace-nowrap rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50 sm:w-auto"
+                  >
+                    Apply
+                  </button>
+                </form>
+              ) : null}
 
               <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-600">
                 <div>
@@ -630,7 +630,9 @@ export async function MarketingSection(props: { reportId?: string; campaignId?: 
                 <GoogleAdsRecommendationsPanel
                   recommendations={recommendations}
                   updateAction={updateGoogleAdsAnalystRecommendationAction}
+                  bulkUpdateAction={bulkUpdateGoogleAdsAnalystRecommendationsAction}
                   applyAction={applyGoogleAdsAnalystRecommendationAction}
+                  bulkApplyAction={bulkApplyGoogleAdsAnalystRecommendationsAction}
                 />
 
                 <div className="rounded-xl border border-slate-200 bg-white/80 p-3">

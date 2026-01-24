@@ -17,6 +17,7 @@ import { getCompanyProfilePolicy } from "@/lib/policy";
 type ConversionClass = "call" | "booking" | "other";
 type NegativeTier = "A" | "B";
 type NegativeMatchType = "broad" | "phrase" | "exact";
+type NegativeRisk = "low" | "medium" | "high";
 
 export type GoogleAdsAnalystRunResult =
   | { ok: true; reportId: string; createdAt: string }
@@ -85,12 +86,112 @@ const OUT_OF_AREA_STATES = [
   "wyoming"
 ];
 
+const NEGATIVE_DO_NOT_BLOCK_PHRASES = [
+  "junk removal",
+  "junk pickup",
+  "haul away",
+  "haul-away",
+  "trash removal",
+  "bulk pickup",
+  "bulk trash",
+  "estate cleanout",
+  "estate clean out",
+  "garage cleanout",
+  "garage clean out",
+  "appliance removal",
+  "mattress removal",
+  "furniture removal",
+  "yard waste removal",
+  "construction debris removal"
+];
+
+const NEGATIVE_DO_NOT_BLOCK_TOKENS = [
+  "junk",
+  "removal",
+  "pickup",
+  "cleanout",
+  "clean-out",
+  "haul",
+  "away",
+  "mattress",
+  "box spring",
+  "appliance",
+  "furniture",
+  "couch",
+  "sofa",
+  "hot tub",
+  "debris",
+  "yard",
+  "brush"
+];
+
 function inferNegativeMatchType(term: string, tier: NegativeTier): NegativeMatchType {
   const normalized = term.trim();
   if (tier === "A" && /\s/.test(normalized)) return "phrase";
   if (tier === "A" && normalized.length <= 25 && !/\s/.test(normalized)) return "broad";
   if (/\s/.test(normalized)) return "phrase";
   return "broad";
+}
+
+function normalizeForOverlap(input: string): string {
+  let term = input.trim().toLowerCase();
+  if (term.startsWith("[") && term.endsWith("]")) term = term.slice(1, -1).trim();
+  if (term.startsWith("\"") && term.endsWith("\"")) term = term.slice(1, -1).trim();
+  term = term.replace(/\s+/g, " ");
+  return term;
+}
+
+function assessNegativeRisk(input: {
+  term: string;
+  matchType: NegativeMatchType;
+}): { risk: NegativeRisk; reason: string | null } {
+  const term = normalizeForOverlap(input.term);
+  if (!term) return { risk: "medium", reason: "Empty term" };
+
+  for (const phrase of NEGATIVE_DO_NOT_BLOCK_PHRASES) {
+    const normalizedPhrase = normalizeForOverlap(phrase);
+    if (normalizedPhrase && term.includes(normalizedPhrase)) {
+      return { risk: "high", reason: `Overlaps whitelist phrase \"${normalizedPhrase}\"` };
+    }
+  }
+
+  if (input.matchType === "broad") {
+    for (const token of NEGATIVE_DO_NOT_BLOCK_TOKENS) {
+      const normalizedToken = normalizeForOverlap(token);
+      if (!normalizedToken) continue;
+      if (
+        term === normalizedToken ||
+        term.includes(` ${normalizedToken} `) ||
+        term.startsWith(`${normalizedToken} `) ||
+        term.endsWith(` ${normalizedToken}`)
+      ) {
+        return { risk: "high", reason: `Broad negative overlaps core token \"${normalizedToken}\"` };
+      }
+    }
+  }
+
+  if (term.length <= 3 && input.matchType === "broad") {
+    return { risk: "medium", reason: "Very short broad negative can over-block" };
+  }
+
+  return { risk: "low", reason: null };
+}
+
+function computeConfidence(input: {
+  tier: NegativeTier;
+  risk: NegativeRisk;
+  dataSufficiency: "red" | "yellow" | "green";
+  impactClicks: number;
+  impactCost: number;
+}): number {
+  const base = input.tier === "A" ? 0.92 : 0.55;
+  const suff =
+    input.dataSufficiency === "green" ? 1 : input.dataSufficiency === "yellow" ? 0.85 : 0.6;
+  const evidenceBoost =
+    input.impactClicks >= 12 || input.impactCost >= 25 ? 0.25 : input.impactClicks >= 3 ? 0.1 : 0;
+  const riskPenalty = input.risk === "high" ? 0.4 : input.risk === "medium" ? 0.15 : 0;
+  const score = base * suff + evidenceBoost - riskPenalty;
+  return Math.max(0.01, Math.min(0.99, score));
 }
 
 function formatNegativeTerm(term: string, matchType: NegativeMatchType): string {
@@ -225,6 +326,7 @@ function extractOutputText(data: any): string | null {
   const output = Array.isArray(data?.output) ? data.output : [];
   for (const item of output) {
     const content = Array.isArray(item?.content) ? item.content : [];
+    const textChunks: string[] = [];
     for (const chunk of content) {
       if (chunk?.json && typeof chunk.json === "object") {
         try {
@@ -233,8 +335,10 @@ function extractOutputText(data: any): string | null {
           // ignore
         }
       }
-      if (typeof chunk?.text === "string" && chunk.text.trim()) return chunk.text.trim();
+      if (typeof chunk?.text === "string" && chunk.text.trim()) textChunks.push(chunk.text);
     }
+    const combined = textChunks.join("").trim();
+    if (combined) return combined;
   }
   if (typeof data?.output_text === "string" && data.output_text.trim()) return data.output_text.trim();
   return null;
@@ -359,7 +463,7 @@ async function callOpenAIAnalystJson(input: {
               {
                 role: "system",
                 content:
-                  "Output ONLY the JSON object that matches the schema. Keep it concise (prefer 5–7 top actions). No markdown, no extra commentary, no code fences."
+                  "Output ONLY the JSON object that matches the schema. Keep it concise (prefer 5-7 top actions). No markdown, no extra commentary, no code fences."
               },
               { role: "user", content: input.userPrompt }
             ]
@@ -505,6 +609,7 @@ export async function runGoogleAdsAnalystReport(input: {
         customerId: googleAdsSearchTermsDaily.customerId,
         searchTerm: googleAdsSearchTermsDaily.searchTerm,
         campaignId: googleAdsSearchTermsDaily.campaignId,
+        impressions: sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.impressions}), 0)`.mapWith(Number),
         clicks: sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.clicks}), 0)`.mapWith(Number),
         cost: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.cost}), 0)::text`,
         conversions: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.conversions}), 0)::text`
@@ -657,7 +762,7 @@ export async function runGoogleAdsAnalystReport(input: {
     "- Assume the operator will apply changes manually unless autonomous mode is enabled elsewhere.",
     "- Calls matter more than bookings. Use the provided weights and make that clear in the actions.",
     "- Keep the summary short and decisive.",
-    "- Prefer 5–7 top actions unless 3 is sufficient."
+    "- Prefer 5-7 top actions unless 3 is sufficient."
   ].join("\n");
 
   const userPrompt = [
@@ -711,6 +816,17 @@ export async function runGoogleAdsAnalystReport(input: {
   if (reportId) {
     const aiNegatives = Array.isArray(ai.report.negatives_to_review) ? ai.report.negatives_to_review : [];
     const aiPauseCandidates = Array.isArray(ai.report.pause_candidates_to_review) ? ai.report.pause_candidates_to_review : [];
+    const dataSufficiency = totalClicks >= 50 ? "green" : totalClicks >= 15 ? "yellow" : "red";
+    const campaignNameById = new Map<string, string>();
+    for (const campaign of campaignTotals) {
+      if (!campaign.campaignId) continue;
+      const name =
+        typeof campaign.campaignName === "string" && campaign.campaignName.trim().length
+          ? campaign.campaignName.trim()
+          : campaign.campaignId;
+      campaignNameById.set(campaign.campaignId, name);
+    }
+
     const recRows: Array<{
       reportId: string;
       kind: string;
@@ -721,7 +837,7 @@ export async function runGoogleAdsAnalystReport(input: {
       appliedAt: Date | null;
     }> = [];
 
-    const negativeKeys = new Set<string>();
+    const negativeIndexByKey = new Map<string, number>();
 
     const pushNegativeRec = (input: {
       term: string;
@@ -729,17 +845,114 @@ export async function runGoogleAdsAnalystReport(input: {
       matchType?: NegativeMatchType | null;
       reason: string;
       campaignId?: string | null;
+      impressions?: number | null;
       clicks?: number | null;
       cost?: number | null;
       callConversions?: number | null;
       bookingConversions?: number | null;
       origin?: string | null;
+      exampleSearchTerm?: string | null;
     }): void => {
       const matchType = input.matchType ?? inferNegativeMatchType(input.term, input.tier);
       const formatted = formatNegativeTerm(input.term, matchType);
       const key = normalizeNegativeKey(formatted, matchType);
-      if (!formatted || negativeKeys.has(key)) return;
-      negativeKeys.add(key);
+      if (!formatted) return;
+
+      const campaignId = typeof input.campaignId === "string" ? input.campaignId.trim() : "";
+      const campaignName = campaignId ? (campaignNameById.get(campaignId) ?? campaignId) : "";
+
+      const impactImpressions = Number.isFinite(input.impressions ?? NaN) ? Number(input.impressions) : 0;
+      const impactClicks = Number.isFinite(input.clicks ?? NaN) ? Number(input.clicks) : 0;
+      const impactCost = Number.isFinite(input.cost ?? NaN) ? Number(input.cost) : 0;
+
+      const assessed = assessNegativeRisk({ term: formatted, matchType });
+      const confidence = computeConfidence({
+        tier: input.tier,
+        risk: assessed.risk,
+        dataSufficiency,
+        impactClicks,
+        impactCost
+      });
+
+      const existingIndex = negativeIndexByKey.get(key);
+      if (typeof existingIndex === "number") {
+        const existing = recRows[existingIndex];
+        if (!existing) {
+          negativeIndexByKey.delete(key);
+        } else {
+        const payload = existing.payload;
+
+        const existingTier = String(payload["tier"] ?? "").toUpperCase();
+        const resolvedTier: NegativeTier = existingTier === "A" || input.tier === "A" ? "A" : "B";
+
+        const mergeArray = (field: string, value: string): string[] => {
+          const current = Array.isArray(payload[field]) ? (payload[field] as string[]) : [];
+          if (!value) return current;
+          if (!current.includes(value)) current.push(value);
+          return current;
+        };
+
+        const campaignIds = campaignId ? mergeArray("campaignIds", campaignId) : (Array.isArray(payload["campaignIds"]) ? (payload["campaignIds"] as string[]) : []);
+        const campaignNames = campaignName ? mergeArray("campaignNames", campaignName) : (Array.isArray(payload["campaignNames"]) ? (payload["campaignNames"] as string[]) : []);
+        const origins = input.origin ? mergeArray("origins", input.origin) : (Array.isArray(payload["origins"]) ? (payload["origins"] as string[]) : []);
+        const reasons = input.reason ? mergeArray("reasons", input.reason) : (Array.isArray(payload["reasons"]) ? (payload["reasons"] as string[]) : []);
+        const examples =
+          input.exampleSearchTerm && input.exampleSearchTerm.trim().length
+            ? (() => {
+                const cur = Array.isArray(payload["examples"]) ? (payload["examples"] as string[]) : [];
+                if (!cur.includes(input.exampleSearchTerm) && cur.length < 5) cur.push(input.exampleSearchTerm);
+                return cur;
+              })()
+            : Array.isArray(payload["examples"])
+              ? (payload["examples"] as string[])
+              : [];
+
+        const mergedImpactImpressions = Number(payload["impactImpressions"] ?? 0) + impactImpressions;
+        const mergedImpactClicks = Number(payload["impactClicks"] ?? 0) + impactClicks;
+        const mergedImpactCost = Number(payload["impactCost"] ?? 0) + impactCost;
+
+        const existingRisk = String(payload["risk"] ?? "low") as NegativeRisk;
+        const mergedRisk: NegativeRisk =
+          existingRisk === "high" || assessed.risk === "high"
+            ? "high"
+            : existingRisk === "medium" || assessed.risk === "medium"
+              ? "medium"
+              : "low";
+
+        const mergedConfidence = computeConfidence({
+          tier: resolvedTier,
+          risk: mergedRisk,
+          dataSufficiency,
+          impactClicks: mergedImpactClicks,
+          impactCost: mergedImpactCost
+        });
+
+        existing.payload = {
+          ...payload,
+          tier: resolvedTier,
+          origin: payload["origin"] ?? input.origin ?? null,
+          origins,
+          reason: payload["reason"] ?? input.reason,
+          reasons,
+          campaignId: (payload["campaignId"] as string) ?? (campaignId || null),
+          campaignName: (payload["campaignName"] as string) ?? (campaignName || null),
+          campaignIds,
+          campaignNames,
+          examples,
+          impactImpressions: mergedImpactImpressions,
+          impactClicks: mergedImpactClicks,
+          impactCost: Number(mergedImpactCost.toFixed(2)),
+          clicks: mergedImpactClicks,
+          cost: Number(mergedImpactCost.toFixed(2)),
+          risk: mergedRisk,
+          riskReason: (payload["riskReason"] as string) ?? assessed.reason ?? null,
+          confidence: Number(mergedConfidence.toFixed(2))
+        };
+        return;
+        }
+      }
+
+      negativeIndexByKey.set(key, recRows.length);
 
       recRows.push({
         reportId,
@@ -750,12 +963,24 @@ export async function runGoogleAdsAnalystReport(input: {
           tier: input.tier,
           matchType,
           origin: input.origin ?? null,
-          campaignId: input.campaignId ?? null,
-          clicks: input.clicks ?? null,
-          cost: input.cost ?? null,
+          origins: input.origin ? [input.origin] : [],
+          reason: input.reason,
+          reasons: input.reason ? [input.reason] : [],
+          campaignId: campaignId || null,
+          campaignName: campaignName || null,
+          campaignIds: campaignId ? [campaignId] : [],
+          campaignNames: campaignName ? [campaignName] : [],
+          examples: input.exampleSearchTerm ? [input.exampleSearchTerm] : [],
+          impactImpressions,
+          impactClicks,
+          impactCost: Number(impactCost.toFixed(2)),
+          clicks: impactClicks,
+          cost: Number(impactCost.toFixed(2)),
           callConversions: input.callConversions ?? null,
           bookingConversions: input.bookingConversions ?? null,
-          reason: input.reason
+          risk: assessed.risk,
+          riskReason: assessed.reason ?? null,
+          confidence: Number(confidence.toFixed(2))
         },
         decidedBy: null,
         decidedAt: null,
@@ -772,7 +997,12 @@ export async function runGoogleAdsAnalystReport(input: {
           tier: "A",
           matchType: candidate.matchType,
           reason: candidate.reason,
-          origin: "hard_block"
+          origin: "hard_block",
+          campaignId: termRow.campaignId,
+          impressions: termRow.impressions,
+          clicks: termRow.clicks,
+          cost: Number(termRow.cost),
+          exampleSearchTerm: termRow.searchTerm
         });
       }
     }
@@ -787,7 +1017,8 @@ export async function runGoogleAdsAnalystReport(input: {
         cost: candidate.cost,
         callConversions: candidate.call ?? 0,
         bookingConversions: candidate.booking ?? 0,
-        origin: "threshold"
+        origin: "threshold",
+        exampleSearchTerm: candidate.searchTerm
       });
     }
 
@@ -813,7 +1044,8 @@ export async function runGoogleAdsAnalystReport(input: {
         term,
         tier: "B",
         reason: "AI suggested negative keyword",
-        origin: "ai"
+        origin: "ai",
+        exampleSearchTerm: term
       });
     }
 
