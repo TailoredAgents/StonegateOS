@@ -6,14 +6,35 @@ type Check = {
   expectStatus?: number;
 };
 
+function optEnv(name: string): string | undefined {
+  return process.env[name] || undefined;
+}
+
 function reqEnv(name: string): string {
-  const value = process.env[name];
+  const value = optEnv(name);
   if (!value) throw new Error(`Missing required env var: ${name}`);
   return value;
 }
 
-function optEnv(name: string): string | undefined {
-  return process.env[name] || undefined;
+function resolveApiBaseUrl(): string {
+  // Preferred explicit config for local/staging/prod parity.
+  const explicit = optEnv("API_BASE_URL");
+  if (explicit) return explicit;
+
+  // Render automatically injects this into each service shell/runtime.
+  const renderExternal = optEnv("RENDER_EXTERNAL_URL");
+  if (renderExternal) return renderExternal;
+
+  throw new Error("Missing API base URL. Set API_BASE_URL (recommended) or run inside Render where RENDER_EXTERNAL_URL is available.");
+}
+
+function resolveSiteUrl(): string | undefined {
+  return (
+    optEnv("NEXT_PUBLIC_SITE_URL") ??
+    optEnv("SITE_URL") ??
+    optEnv("RENDER_SITE_URL") ??
+    undefined
+  );
 }
 
 async function run(check: Check): Promise<{ ok: boolean; detail: string }> {
@@ -33,22 +54,25 @@ async function run(check: Check): Promise<{ ok: boolean; detail: string }> {
 }
 
 async function main() {
-  const apiBaseUrl = reqEnv("API_BASE_URL").replace(/\/$/, "");
-  const siteUrl = optEnv("NEXT_PUBLIC_SITE_URL")?.replace(/\/$/, "") ?? optEnv("SITE_URL")?.replace(/\/$/, "");
+  const apiBaseUrl = resolveApiBaseUrl().replace(/\/$/, "");
+  const siteUrl = resolveSiteUrl()?.replace(/\/$/, "");
   const adminApiKey = reqEnv("ADMIN_API_KEY");
 
   const checks: Check[] = [
     { name: "api.healthz", url: `${apiBaseUrl}/api/healthz` },
     { name: "api.db.status", url: `${apiBaseUrl}/api/admin/db/status`, headers: { "x-admin-api-key": adminApiKey } },
     { name: "api.providers.health", url: `${apiBaseUrl}/api/admin/providers/health`, headers: { "x-admin-api-key": adminApiKey } },
-    { name: "api.google.ads.status", url: `${apiBaseUrl}/api/admin/google/ads/status`, headers: { "x-admin-api-key": adminApiKey }, expectStatus: 200 }
+    { name: "api.google.ads.status", url: `${apiBaseUrl}/api/admin/google/ads/status`, headers: { "x-admin-api-key": adminApiKey }, expectStatus: 200 },
+    { name: "api.seo.status", url: `${apiBaseUrl}/api/admin/seo/status`, headers: { "x-admin-api-key": adminApiKey }, expectStatus: 200 },
+    { name: "api.inbox.failed-sends", url: `${apiBaseUrl}/api/admin/inbox/failed-sends?limit=1`, headers: { "x-admin-api-key": adminApiKey }, expectStatus: 200 }
   ];
 
   if (siteUrl) {
     checks.unshift({ name: "site.healthz", url: `${siteUrl}/api/healthz` });
   }
 
-  console.log(`Smoke checks against API_BASE_URL=${apiBaseUrl}${siteUrl ? ` SITE_URL=${siteUrl}` : ""}`);
+  const apiLabel = optEnv("API_BASE_URL") ? "API_BASE_URL" : optEnv("RENDER_EXTERNAL_URL") ? "RENDER_EXTERNAL_URL" : "API";
+  console.log(`Smoke checks against ${apiLabel}=${apiBaseUrl}${siteUrl ? ` SITE_URL=${siteUrl}` : ""}`);
 
   let failed = 0;
   for (const check of checks) {
@@ -70,4 +94,3 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
-

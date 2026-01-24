@@ -31,6 +31,22 @@ This checklist applies to:
 Run a quick smoke check (recommended):
 - `pnpm -w smoke` (requires env vars; see `scripts/smoke.ts`)
 
+### Running smoke checks on Render (recommended)
+You can run smoke checks directly from the Render shell for the **API** service (best default) because Render provides `RENDER_EXTERNAL_URL` automatically.
+
+From the Render shell:
+```bash
+cd /opt/render/project/src
+npx -y pnpm@9.15.9 -w smoke
+```
+
+Required env vars in the service:
+- `ADMIN_API_KEY`
+- Either `API_BASE_URL` (recommended) or Render’s `RENDER_EXTERNAL_URL` (automatic)
+
+Optional:
+- `NEXT_PUBLIC_SITE_URL` or `SITE_URL` so the script checks `site.healthz` too.
+
 Manual verification (minimum):
 1. Site health
    - `GET https://{api}/api/healthz` returns OK
@@ -61,4 +77,3 @@ If production breaks:
    - request id + time window
 3. If DB migrations were applied:
    - Prefer forward-fix migrations (avoid manual DB edits)
-
