@@ -44,6 +44,8 @@ type GoogleAdsSummaryPayload = {
   topSearchTerms: Array<{
     searchTerm: string;
     campaignId: string;
+    campaignName: string | null;
+    impressions: number;
     clicks: number;
     cost: string;
     conversions: string;
@@ -160,6 +162,23 @@ function fmtMoney(value: string): string {
   const n = Number(value);
   if (!Number.isFinite(n)) return "$0.00";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+}
+
+function parseNumeric(value: string): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function fmtPercent(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0%";
+  return new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 }).format(value);
+}
+
+function fmtAvgCpc(cost: string, clicks: number): string {
+  const clickCount = Number.isFinite(clicks) ? clicks : 0;
+  if (clickCount <= 0) return "$0.00";
+  const cpc = parseNumeric(cost) / clickCount;
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cpc);
 }
 
 function hasActiveFailure(input: { lastFailureAt: string | null; lastSuccessAt: string | null }): boolean {
@@ -676,12 +695,17 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
             <div className="mt-1 text-xs text-slate-500">Sorted by conversions (last 7 days).</div>
 
             <div className="mt-3 overflow-x-auto">
-              <table className="min-w-full text-left text-sm">
+              <table className="min-w-[860px] text-left text-sm">
                 <thead>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     <th className="py-2 pr-4">Search term</th>
-                    <th className="py-2 pr-4 text-right">Conv</th>
+                    <th className="py-2 pr-4">Campaign</th>
+                    <th className="py-2 pr-4 text-right">Impr</th>
+                    <th className="py-2 pr-4 text-right">Clicks</th>
+                    <th className="py-2 pr-4 text-right">Avg CPC</th>
                     <th className="py-2 pr-4 text-right">Cost</th>
+                    <th className="py-2 pr-4 text-right">Conv</th>
+                    <th className="py-2 pr-4 text-right">Conv rate</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200/70">
@@ -689,17 +713,28 @@ export async function MarketingSection(props: { reportId?: string }): Promise<Re
                     <tr key={`${row.campaignId}:${row.searchTerm}`} className="align-top">
                       <td className="py-2 pr-4">
                         <div className="font-semibold text-slate-900">{row.searchTerm}</div>
-                        <div className="text-xs text-slate-500">{row.campaignId}</div>
                       </td>
+                      <td className="py-2 pr-4">
+                        <div className="font-semibold text-slate-900">{row.campaignName ?? row.campaignId}</div>
+                        {row.campaignName ? <div className="text-xs text-slate-500">{row.campaignId}</div> : null}
+                      </td>
+                      <td className="py-2 pr-4 text-right font-semibold text-slate-900">{fmtNumber(row.impressions)}</td>
+                      <td className="py-2 pr-4 text-right font-semibold text-slate-900">{fmtNumber(row.clicks)}</td>
                       <td className="py-2 pr-4 text-right font-semibold text-slate-900">
-                        {Number(row.conversions).toFixed(0)}
+                        {fmtAvgCpc(row.cost, row.clicks)}
                       </td>
                       <td className="py-2 pr-4 text-right font-semibold text-slate-900">{fmtMoney(row.cost)}</td>
+                      <td className="py-2 pr-4 text-right font-semibold text-slate-900">
+                        {parseNumeric(row.conversions).toFixed(0)}
+                      </td>
+                      <td className="py-2 pr-4 text-right font-semibold text-slate-900">
+                        {fmtPercent(parseNumeric(row.conversions) / Math.max(row.clicks, 1))}
+                      </td>
                     </tr>
                   ))}
                   {(!summary?.topSearchTerms || summary.topSearchTerms.length === 0) && (
                     <tr>
-                      <td className="py-3 text-sm text-slate-600" colSpan={3}>
+                      <td className="py-3 text-sm text-slate-600" colSpan={8}>
                         No search term rows yet. Click Sync now.
                       </td>
                     </tr>

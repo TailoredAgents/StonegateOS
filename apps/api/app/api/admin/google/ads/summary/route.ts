@@ -56,6 +56,13 @@ export async function GET(request: NextRequest): Promise<Response> {
       .select({
         searchTerm: googleAdsSearchTermsDaily.searchTerm,
         campaignId: googleAdsSearchTermsDaily.campaignId,
+        campaignName: sql<string>`(
+          select max(${googleAdsInsightsDaily.campaignName})
+          from ${googleAdsInsightsDaily}
+          where ${googleAdsInsightsDaily.campaignId} = ${googleAdsSearchTermsDaily.campaignId}
+            and ${googleAdsInsightsDaily.dateStart} >= ${since}
+        )`,
+        impressions: sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.impressions}), 0)`.mapWith(Number),
         clicks: sql<number>`coalesce(sum(${googleAdsSearchTermsDaily.clicks}), 0)`.mapWith(Number),
         cost: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.cost}), 0)::text`,
         conversions: sql<string>`coalesce(sum(${googleAdsSearchTermsDaily.conversions}), 0)::text`
