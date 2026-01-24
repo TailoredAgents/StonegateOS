@@ -1,5 +1,9 @@
-# Archived E2E Planning Docs
+# Archived Docs
 
-These files capture historical E2E testing plans. They are kept for reference only.
+These files are kept for reference only and may be outdated.
 
-Current source of truth for delivery priorities and feature work: `ROADMAP.md`.
+Current source of truth:
+- Product/platform roadmap: `docs/TA_PLATFORM_PLAN.md`
+- New company launch checklist: `docs/TA_LAUNCH_PLAYBOOK.md`
+
+Historical docs in this folder include older E2E testing plans and legacy planning notes (including the old `ROADMAP.md`).
