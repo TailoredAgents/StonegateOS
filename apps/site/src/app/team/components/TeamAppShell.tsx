@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { Route } from "next";
 import { cn } from "@myst-os/ui";
@@ -26,6 +27,11 @@ type AccessPills = {
 type TeamUser = {
   name: string;
   email?: string | null;
+};
+
+type TeamBrand = {
+  shortName: string;
+  logoPath: string;
 };
 
 function IconGrid(props: React.SVGProps<SVGSVGElement>) {
@@ -102,6 +108,267 @@ function IconPhone(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconClipboardCheck(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M8.25 4.75h7.5m-6.5 0a2 2 0 0 0-2 2v12.5c0 1.105.895 2 2 2h9.5c1.105 0 2-.895 2-2V6.75c0-1.105-.895-2-2-2m-8.25 10.25 2 2 4.5-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconReceipt(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M7 3.75h10c.966 0 1.75.784 1.75 1.75v15l-1.5-.9-1.5.9-1.5-.9-1.5.9-1.5-.9-1.5.9-1.5-.9-1.5.9v-15c0-.966.784-1.75 1.75-1.75Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9 8.25h6M9 11.25h6M9 14.25h4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconDocument(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M7 3.75h7.5l2.5 2.5V20.25c0 .966-.784 1.75-1.75 1.75H7c-.966 0-1.75-.784-1.75-1.75V5.5c0-.966.784-1.75 1.75-1.75Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14.5 3.75v2.5c0 .552.448 1 1 1H18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M8.75 11h6.5M8.75 14h6.5M8.75 17h4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconColumns(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M6.25 4.75h3.5c.828 0 1.5.672 1.5 1.5v11.5c0 .828-.672 1.5-1.5 1.5h-3.5c-.828 0-1.5-.672-1.5-1.5V6.25c0-.828.672-1.5 1.5-1.5Zm8 0h3.5c.828 0 1.5.672 1.5 1.5v11.5c0 .828-.672 1.5-1.5 1.5h-3.5c-.828 0-1.5-.672-1.5-1.5V6.25c0-.828.672-1.5 1.5-1.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconMegaphone(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M4.75 11.25v1.5c0 .966.784 1.75 1.75 1.75h1.25l1.5 4h1.75l-.75-4h5.75l4.25 2.5V7.25l-4.25 2.5H6.5c-.966 0-1.75.784-1.75 1.75Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M18.5 10.25v3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconChart(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M5.5 19.5V6.5M5.5 19.5h13M8.5 16v-5M11.5 16v-8M14.5 16v-3M17.5 16v-10"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconSearch(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M10.5 18.25a7.75 7.75 0 1 1 0-15.5 7.75 7.75 0 0 1 0 15.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M16.25 16.25 20.5 20.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconSpark(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M12 2.75l1.4 5.1 5.1 1.4-5.1 1.4L12 15.75l-1.4-5.1-5.1-1.4 5.1-1.4L12 2.75Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M18.25 12.75l.8 2.9 2.9.8-2.9.8-.8 2.9-.8-2.9-2.9-.8 2.9-.8.8-2.9Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconShield(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M12 3.75 19 6.75v5.4c0 4.43-3.05 7.98-7 9.1-3.95-1.12-7-4.67-7-9.1v-5.4l7-3Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9.5 12.25 11.25 14l3.75-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconKey(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M14.5 10.25a4.75 4.75 0 1 0-1.64 3.6l3.39 3.4h2.5v-2.5h-2l-.5-.5V13.5l-.75-.75"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M10.25 8.75h.01"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconList(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M7.5 7.25h13M7.5 12h13M7.5 16.75h13"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M4.25 7.25h.01M4.25 12h.01M4.25 16.75h.01"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconMerge(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M7 5.5v13M7 5.5a1.75 1.75 0 1 0 0 .01M7 18.5a1.75 1.75 0 1 0 0 .01"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M17 5.5v5.1c0 .9-.36 1.76-1 2.4l-2 2c-.64.64-1 1.5-1 2.4v-.1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M17 5.5a1.75 1.75 0 1 0 0 .01"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconGear(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M12 14.75a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M19.25 12a7.18 7.18 0 0 0-.1-1.2l2.05-1.6-2-3.46-2.48 1a7.6 7.6 0 0 0-2.06-1.2l-.38-2.64h-4l-.38 2.64a7.6 7.6 0 0 0-2.06 1.2l-2.48-1-2 3.46 2.05 1.6A7.18 7.18 0 0 0 4.75 12c0 .41.03.81.1 1.2l-2.05 1.6 2 3.46 2.48-1c.64.5 1.33.9 2.06 1.2l.38 2.64h4l.38-2.64c.73-.3 1.42-.7 2.06-1.2l2.48 1 2-3.46-2.05-1.6c.07-.39.1-.79.1-1.2Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function IconChevronLeft(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
@@ -169,11 +436,43 @@ function iconForTab(id: string): React.ReactElement {
     case "contacts":
     case "partners":
       return <IconUsers className={className} />;
-    case "calendar":
     case "myday":
+      return <IconClipboardCheck className={className} />;
+    case "expenses":
+      return <IconReceipt className={className} />;
+    case "quotes":
+      return <IconDocument className={className} />;
+    case "pipeline":
+      return <IconColumns className={className} />;
+    case "outbound":
+      return <IconMegaphone className={className} />;
+    case "calendar":
       return <IconCalendar className={className} />;
     case "sales-hq":
       return <IconPhone className={className} />;
+    case "owner":
+      return <IconChart className={className} />;
+    case "commissions":
+      return <IconReceipt className={className} />;
+    case "marketing":
+      return <IconChart className={className} />;
+    case "seo":
+      return <IconSearch className={className} />;
+    case "automation":
+      return <IconSpark className={className} />;
+    case "policy":
+      return <IconShield className={className} />;
+    case "access":
+      return <IconKey className={className} />;
+    case "sales-log":
+    case "audit":
+      return <IconList className={className} />;
+    case "merge":
+      return <IconMerge className={className} />;
+    case "settings":
+      return <IconGear className={className} />;
+    case "chat":
+      return <IconSpark className={className} />;
     default:
       return <IconGrid className={className} />;
   }
@@ -206,6 +505,7 @@ export function TeamAppShell(props: {
   groups: TeamNavGroup[];
   access: AccessPills;
   user?: TeamUser | null;
+  brand?: TeamBrand;
   classicHref: string;
   children: React.ReactNode;
 }): React.ReactElement {
@@ -284,12 +584,18 @@ export function TeamAppShell(props: {
     <div className={cn("flex h-full flex-col gap-5 px-3 py-4", collapsed ? "px-2" : "px-3")}>
       <div className={cn("flex items-center justify-between", collapsed ? "px-1" : "px-2")}>
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-lg shadow-slate-300/60">
-            <IconGrid className="h-5 w-5" />
+          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            {props.brand?.logoPath ? (
+              <Image src={props.brand.logoPath} alt="" aria-hidden="true" width={32} height={32} className="h-8 w-8 object-contain" />
+            ) : (
+              <IconGrid className="h-5 w-5 text-slate-700" />
+            )}
           </div>
           {collapsed ? null : (
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Stonegate</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                {props.brand?.shortName ?? "Team"}
+              </div>
               <div className="text-sm font-semibold text-slate-900">Team Console</div>
             </div>
           )}

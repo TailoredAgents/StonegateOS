@@ -32,6 +32,7 @@ import { QuotesHubSection } from "./components/QuotesHubSection";
 import { SystemHealthBanner } from "./components/SystemHealthBanner";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { TeamAppShell, type TeamNavGroup, type TeamNavItem as ShellNavItem } from "./components/TeamAppShell";
+import { getCompanyShortName, getPublicCompanyProfile } from "../../lib/company";
 import { callAdminApi, resolveTeamMemberFromSessionCookie } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
 import { TeamSkeletonCard } from "./components/TeamSkeleton";
@@ -739,6 +740,8 @@ export default async function TeamPage({
     .map((item) => ({ id: item.id, label: item.label, href: item.href }));
 
   const classicHref = withLayout(`/team?tab=${encodeURIComponent(tab)}`);
+  const companyProfile = getPublicCompanyProfile();
+  const brand = { shortName: getCompanyShortName(companyProfile), logoPath: companyProfile.logoPath };
 
   return (
     <TeamAppShell
@@ -748,6 +751,7 @@ export default async function TeamPage({
       groups={groups}
       access={{ hasCrew, hasOffice, hasOwner }}
       user={teamMember ? { name: teamMember.name, email: teamMember.email } : null}
+      brand={brand}
       classicHref={classicHref}
     >
       {content}
