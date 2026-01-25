@@ -1,7 +1,7 @@
 # StonegateOS Monorepo
 
 ## What is this?
-StonegateOS is a monorepo for the Stonegate Junk Removal business:
+StonegateOS is a monorepo for a local service business (CRM + marketing site):
 - `apps/site`: public marketing site plus the team console (`/team`) and booking flow.
 - `apps/api`: Next.js API app with Drizzle/Postgres for leads, appointments, quotes, CRM, payments, and notifications.
 - `apps/app`: Owner Hub dashboard (daily schedule + payments summary).
@@ -107,15 +107,11 @@ The site ships with a junk removal catalog:
 
 Hero images point at placeholder assets under `apps/site/public/images/services/`. Replace them with real photos (same filenames) when ready.
 
-### Brand & Copy Configuration (TODOs)
-Update these when details are final:
-- Company name/metadata: `apps/site/src/app/layout.tsx`, `apps/site/src/lib/metadata.ts`
-- Homepage and marketing pages: `apps/site/content/pages/*.mdx`
-- Contact info (phone/email): `apps/site/src/components/Footer.tsx`, `apps/site/content/pages/contact.mdx`
-- Domain and canonical URL: `NEXT_PUBLIC_SITE_URL` and `apps/site/src/lib/metadata.ts`
-- Chat prompts: `apps/site/src/app/api/chat/route.ts`, team prompts `apps/api/app/api/chat/route.ts`
-- Notification prompts: `apps/api/src/lib/ai.ts`, `apps/api/src/lib/notifications.ts`
-- Logo: swap `/images/brand/Myst_logo.png` with the Stonegate logo and update alt text if the filename changes.
+### Brand & Copy Configuration (Build-Time, SEO-safe)
+The marketing site reads public branding from env at build time (no runtime DB fetch on public pages).
+
+- Set `NEXT_PUBLIC_COMPANY_*` vars in `.env` / Render to change company name, phone, email, logo, and structured data.
+- See `apps/site/src/lib/company.ts` and `.env.example`.
 
 Placeholders currently in use:
 - Email: `austin@stonegatejunkremoval.com`

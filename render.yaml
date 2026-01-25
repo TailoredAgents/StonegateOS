@@ -27,6 +27,32 @@ services:
         value: "20"
       - key: NEXT_PUBLIC_SITE_URL
         sync: false
+      - key: NEXT_PUBLIC_COMPANY_NAME
+        sync: false
+      - key: NEXT_PUBLIC_COMPANY_PHONE_E164
+        sync: false
+      - key: NEXT_PUBLIC_COMPANY_PHONE_DISPLAY
+        sync: false
+      - key: NEXT_PUBLIC_COMPANY_EMAIL
+        sync: false
+      - key: NEXT_PUBLIC_COMPANY_LOGO_PATH
+        sync: false
+      - key: NEXT_PUBLIC_COMPANY_SERVICE_AREA
+        sync: false
+      - key: NEXT_PUBLIC_COMPANY_HOURS_SUMMARY
+        sync: false
+      - key: NEXT_PUBLIC_COMPANY_HQ_CITY
+        sync: false
+      - key: NEXT_PUBLIC_COMPANY_HQ_STATE
+        sync: false
+      - key: NEXT_PUBLIC_COMPANY_HQ_COUNTRY
+        sync: false
+      - key: NEXT_PUBLIC_GOOGLE_BUSINESS_PROFILE_URL
+        sync: false
+      - key: NEXT_PUBLIC_FACEBOOK_PAGE_URL
+        sync: false
+      - key: NEXT_PUBLIC_INSTAGRAM_URL
+        sync: false
       - key: NEXT_PUBLIC_GA4_ID
         sync: false
       - key: NEXT_PUBLIC_META_PIXEL_ID
