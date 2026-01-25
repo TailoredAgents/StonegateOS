@@ -29,6 +29,7 @@ import { OutboundSection } from "./components/OutboundSection";
 import { PartnersSection } from "./components/PartnersSection";
 import { SeoAgentSection } from "./components/SeoAgentSection";
 import { QuotesHubSection } from "./components/QuotesHubSection";
+import { SystemHealthBanner } from "./components/SystemHealthBanner";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { callAdminApi } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
@@ -50,6 +51,21 @@ type LeadContactSummary = {
   phoneE164: string | null;
   source?: string | null;
   pipeline?: { stage?: string | null };
+};
+
+type SystemHealthApiFinding = {
+  id: string;
+  severity: "blocker" | "warning";
+  title: string;
+  detail: string;
+  fix: string[];
+};
+
+type SystemHealthApiResponse = {
+  ok: true;
+  generatedAt: string;
+  blockers: SystemHealthApiFinding[];
+  warnings: SystemHealthApiFinding[];
 };
 
 export default async function TeamPage({
@@ -152,6 +168,19 @@ export default async function TeamPage({
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
   const dismissedNewLeadId = cookieStore.get("myst-new-lead-dismissed")?.value ?? null;
+
+  let systemHealth: SystemHealthApiResponse | null = null;
+  if (hasOwner || hasCrew) {
+    try {
+      const response = await callAdminApi("/api/admin/system/health", { timeoutMs: 8_000 });
+      if (response.ok) {
+        const payload = (await response.json().catch(() => null)) as SystemHealthApiResponse | null;
+        if (payload && payload.ok) systemHealth = payload;
+      }
+    } catch {
+      systemHealth = null;
+    }
+  }
 
   const tabs: TabNavItem[] = [
     { id: "myday", label: "My Day", href: "/team?tab=myday", requires: "crew" },
@@ -281,6 +310,7 @@ export default async function TeamPage({
           </div>
         ) : null}
         {flash || flashError ? <FlashClearer /> : null}
+        {systemHealth ? <SystemHealthBanner health={systemHealth} /> : null}
         {newLead ? (
           <section className="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4 shadow-sm shadow-emerald-100">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

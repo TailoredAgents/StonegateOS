@@ -122,10 +122,25 @@ export async function addApptNote(formData: FormData) {
 
 export async function sendQuoteAction(formData: FormData) {
   const id = formData.get("quoteId");
-  if (typeof id !== "string") return;
-
-  await callAdminApi(`/api/quotes/${id}/send`, { method: "POST", body: JSON.stringify({}) });
   const jar = await cookies();
+  if (typeof id !== "string" || id.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Quote ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/quotes/${id.trim()}/send`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to send quote");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
   jar.set({ name: "myst-flash", value: "Quote sent", path: "/" });
   revalidatePath("/team");
 }
