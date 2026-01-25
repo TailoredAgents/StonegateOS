@@ -424,7 +424,7 @@ export function TeamAppShell(props: {
 
   return (
     <div className="min-h-screen bg-slate-100">
-      <div className="mx-auto flex min-h-screen max-w-[1920px]">
+      <div className="flex min-h-screen w-full">
         <aside
           className={cn(
             "hidden shrink-0 border-r border-slate-200/70 bg-slate-50/80 backdrop-blur supports-[backdrop-filter]:bg-slate-50/70 lg:block",
@@ -436,7 +436,7 @@ export function TeamAppShell(props: {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-40 border-b border-slate-200/70 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-            <div className="mx-auto flex max-w-[1760px] items-center justify-between gap-4 px-4 py-3 sm:px-6">
+            <div className="flex w-full items-center justify-between gap-4 px-4 py-3 sm:px-6">
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -469,7 +469,7 @@ export function TeamAppShell(props: {
           </header>
 
           <div className="flex-1">
-            <main className="mx-auto w-full max-w-[1760px] space-y-6 px-4 py-6 sm:px-6 sm:py-8">
+            <main className="w-full space-y-6 px-4 py-6 sm:px-6 sm:py-8">
               {props.children}
             </main>
           </div>
