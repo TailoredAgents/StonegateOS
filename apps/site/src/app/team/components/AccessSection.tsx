@@ -2,7 +2,13 @@ import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { CopyButton } from "@/components/CopyButton";
 import { callAdminApi } from "../lib/api";
-import { createRoleAction, createTeamMemberAction, updateDefaultSalesAssigneeAction, updateTeamMemberAction } from "../actions";
+import {
+  createRoleAction,
+  createTeamMemberAction,
+  deleteTeamMemberAction,
+  updateDefaultSalesAssigneeAction,
+  updateTeamMemberAction
+} from "../actions";
 
 type Role = {
   id: string;
@@ -155,57 +161,106 @@ export async function AccessSection(): Promise<React.ReactElement> {
           <p className="text-xs text-slate-500">Assign a role and mark active access.</p>
           <div className="mt-4 space-y-3">
             {members.map((member) => (
-              <form key={member.id} action={updateTeamMemberAction} className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600">
-                <input type="hidden" name="memberId" value={member.id} />
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="font-semibold text-slate-900">{member.name}</div>
-                    <div className="text-[11px] text-slate-500">{member.email ?? "No email"}</div>
-                    <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-500">
-                      <span className="font-medium text-slate-600">ID:</span>
-                      <code className="rounded bg-white/70 px-2 py-0.5">{member.id}</code>
-                      <CopyButton value={member.id} label="Copy" />
+              <div
+                key={member.id}
+                className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600"
+              >
+                <form action={updateTeamMemberAction} className="space-y-3">
+                  <input type="hidden" name="memberId" value={member.id} />
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-[220px] flex-1">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Name</span>
+                          <input
+                            name="name"
+                            defaultValue={member.name}
+                            required
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                          />
+                        </label>
+                        <label className="flex flex-col gap-1">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Email</span>
+                          <input
+                            name="email"
+                            type="email"
+                            defaultValue={member.email ?? ""}
+                            placeholder="devon@stonegatejunkremoval.com"
+                            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                          />
+                        </label>
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-500">
+                        <span className="font-medium text-slate-600">ID:</span>
+                        <code className="rounded bg-white/70 px-2 py-0.5">{member.id}</code>
+                        <CopyButton value={member.id} label="Copy" />
+                      </div>
                     </div>
+                    <label className="flex items-center gap-2 text-[11px]">
+                      <input
+                        type="checkbox"
+                        name="active"
+                        defaultChecked={member.active}
+                        className="mt-1 h-4 w-4 rounded border-slate-300"
+                      />
+                      Active
+                    </label>
                   </div>
-                  <label className="flex items-center gap-2 text-[11px]">
-                    <input type="checkbox" name="active" defaultChecked={member.active} className="h-4 w-4 rounded border-slate-300" />
-                    Active
-                  </label>
-                </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <select
-                    name="roleId"
-                    defaultValue={member.role?.id ?? ""}
-                    className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-700"
-                  >
-                    <option value="">No role</option>
-                    {roles.map((role) => (
-                      <option key={role.id} value={role.id}>
-                        {role.name}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    name="phone"
-                    defaultValue={member.phone ?? ""}
-                    placeholder="SMS phone (US), e.g. 6785551234"
-                    className="min-w-[240px] flex-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
-                  />
-                  <input
-                    name="defaultCrewSplitPercent"
-                    defaultValue={member.defaultCrewSplitBps !== null ? String(member.defaultCrewSplitBps / 100) : ""}
-                    placeholder="Crew split % (e.g. 50)"
-                    inputMode="decimal"
-                    className="w-[170px] rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
-                  />
-                  <SubmitButton
-                    className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                    pendingLabel="Saving..."
-                  >
-                    Update
-                  </SubmitButton>
-                </div>
-              </form>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      name="roleId"
+                      defaultValue={member.role?.id ?? ""}
+                      className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-700"
+                    >
+                      <option value="">No role</option>
+                      {roles.map((role) => (
+                        <option key={role.id} value={role.id}>
+                          {role.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      name="phone"
+                      defaultValue={member.phone ?? ""}
+                      placeholder="SMS phone (US), e.g. 6785551234"
+                      className="min-w-[240px] flex-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                    />
+                    <input
+                      name="defaultCrewSplitPercent"
+                      defaultValue={member.defaultCrewSplitBps !== null ? String(member.defaultCrewSplitBps / 100) : ""}
+                      placeholder="Crew split % (e.g. 50)"
+                      inputMode="decimal"
+                      className="w-[170px] rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                    />
+                    <SubmitButton
+                      className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                      pendingLabel="Saving..."
+                    >
+                      Update
+                    </SubmitButton>
+                  </div>
+                </form>
+                <details className="mt-3 rounded-2xl border border-red-200 bg-red-50/60 px-4 py-3">
+                  <summary className="cursor-pointer text-[11px] font-semibold text-red-700">Danger zone</summary>
+                  <div className="mt-3 space-y-2 text-[11px] text-red-700">
+                    <p>Delete this team member. This cannot be undone.</p>
+                    <form action={deleteTeamMemberAction} className="flex flex-wrap items-center gap-2">
+                      <input type="hidden" name="memberId" value={member.id} />
+                      <input
+                        name="confirm"
+                        placeholder='Type "DELETE" to confirm'
+                        className="min-w-[220px] flex-1 rounded-full border border-red-200 bg-white px-3 py-2 text-xs text-slate-700"
+                      />
+                      <SubmitButton
+                        className="rounded-full bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-red-200/50 transition hover:bg-red-700"
+                        pendingLabel="Deleting..."
+                      >
+                        Delete
+                      </SubmitButton>
+                    </form>
+                  </div>
+                </details>
+              </div>
             ))}
           </div>
           <form action={createTeamMemberAction} className="mt-5 space-y-3 text-xs text-slate-600">

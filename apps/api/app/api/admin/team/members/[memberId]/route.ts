@@ -5,6 +5,7 @@ import { getDb, policySettings, teamMembers } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { SALES_SCORECARD_POLICY_KEY } from "@/lib/sales-scorecard";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -62,6 +63,14 @@ function readPhoneMap(value: unknown): Record<string, string> {
     }
   }
   return phones;
+}
+
+function readDefaultAssignee(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const raw = value["defaultAssigneeMemberId"];
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 export async function PATCH(
@@ -268,21 +277,81 @@ export async function DELETE(
   }
 
   const db = getDb();
-  const [member] = await db
-    .delete(teamMembers)
-    .where(eq(teamMembers.id, memberId))
-    .returning(MEMBER_SELECT);
+  const actor = getAuditActorFromRequest(request);
+  const result = await db.transaction(async (tx) => {
+    const [member] = await tx.delete(teamMembers).where(eq(teamMembers.id, memberId)).returning(MEMBER_SELECT);
+    if (!member) return { member: null as typeof member | null, clearedDefaultAssignee: false };
 
-  if (!member) {
+    let clearedDefaultAssignee = false;
+
+    // Remove any saved phone mapping for this member.
+    const [phoneSetting] = await tx
+      .select({ value: policySettings.value })
+      .from(policySettings)
+      .where(eq(policySettings.key, "team_member_phones"))
+      .limit(1);
+    const phoneMap = readPhoneMap(phoneSetting?.value);
+    if (phoneMap[memberId]) {
+      delete phoneMap[memberId];
+      await tx
+        .insert(policySettings)
+        .values({
+          key: "team_member_phones",
+          value: { phones: phoneMap },
+          updatedBy: actor.id ?? null
+        })
+        .onConflictDoUpdate({
+          target: policySettings.key,
+          set: {
+            value: { phones: phoneMap },
+            updatedBy: actor.id ?? null,
+            updatedAt: new Date()
+          }
+        });
+    }
+
+    // If this member was the default lead assignee, clear it so it doesn't point at a deleted member.
+    const [salesSetting] = await tx
+      .select({ value: policySettings.value })
+      .from(policySettings)
+      .where(eq(policySettings.key, SALES_SCORECARD_POLICY_KEY))
+      .limit(1);
+    const currentDefault = readDefaultAssignee(salesSetting?.value);
+    if (currentDefault === memberId) {
+      const nextValue: Record<string, unknown> = isRecord(salesSetting?.value) ? { ...(salesSetting!.value as Record<string, unknown>) } : {};
+      delete nextValue["defaultAssigneeMemberId"];
+      clearedDefaultAssignee = true;
+
+      await tx
+        .insert(policySettings)
+        .values({
+          key: SALES_SCORECARD_POLICY_KEY,
+          value: nextValue,
+          updatedBy: actor.id ?? null
+        })
+        .onConflictDoUpdate({
+          target: policySettings.key,
+          set: {
+            value: nextValue,
+            updatedBy: actor.id ?? null,
+            updatedAt: new Date()
+          }
+        });
+    }
+
+    return { member, clearedDefaultAssignee };
+  });
+
+  if (!result.member) {
     return NextResponse.json({ error: "member_not_found" }, { status: 404 });
   }
 
   await recordAuditEvent({
-    actor: getAuditActorFromRequest(request),
+    actor,
     action: "team_member.deleted",
     entityType: "team_member",
     entityId: memberId,
-    meta: { name: member.name }
+    meta: { name: result.member.name, clearedDefaultAssignee: result.clearedDefaultAssignee }
   });
 
   return NextResponse.json({ ok: true });

@@ -2329,6 +2329,22 @@ export async function updateTeamMemberAction(formData: FormData) {
     active: formData.get("active") === "on"
   };
 
+  const name = formData.get("name");
+  if (typeof name === "string") {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+      jar.set({ name: "myst-flash-error", value: "Name is required", path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+    payload["name"] = trimmed;
+  }
+
+  const email = formData.get("email");
+  if (typeof email === "string") {
+    payload["email"] = email.trim();
+  }
+
   const roleId = formData.get("roleId");
   if (typeof roleId === "string") {
     payload["roleId"] = roleId.trim();
@@ -2372,6 +2388,38 @@ export async function updateTeamMemberAction(formData: FormData) {
   }
 
   jar.set({ name: "myst-flash", value: "Member updated", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function deleteTeamMemberAction(formData: FormData) {
+  const jar = await cookies();
+  const memberId = formData.get("memberId");
+  const confirm = formData.get("confirm");
+
+  if (typeof memberId !== "string" || memberId.trim().length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Member ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (typeof confirm !== "string" || confirm.trim().toUpperCase() !== "DELETE") {
+    jar.set({ name: "myst-flash-error", value: 'Type "DELETE" to confirm', path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/admin/team/members/${memberId.trim()}`, {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to delete member");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Team member deleted", path: "/" });
   revalidatePath("/team");
 }
 
