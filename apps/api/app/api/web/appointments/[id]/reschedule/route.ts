@@ -204,7 +204,7 @@ export async function POST(
       state: existing.propertyState ?? "",
       postalCode: existing.propertyPostalCode ?? ""
     },
-    rescheduleUrl
+    ...(rescheduleUrl ? { rescheduleUrl } : {})
   };
 
   if (updated.calendarEventId) {

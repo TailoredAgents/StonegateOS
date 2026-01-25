@@ -72,6 +72,7 @@ import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-hea
 import { MetaGraphApiError, syncMetaAdsInsightsDaily } from "@/lib/meta-ads-insights";
 import { GoogleAdsApiError, syncGoogleAdsInsightsDaily } from "@/lib/google-ads-insights";
 import { runGoogleAdsAnalystReport } from "@/lib/google-ads-analyst";
+import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -316,24 +317,6 @@ async function resolveDmRecipient(db: ReturnType<typeof getDb>, threadId: string
     : null;
 }
 
-function resolvePublicSiteBaseUrl(): string | null {
-  const raw = (process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "").trim();
-  if (!raw) {
-    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
-  }
-  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try {
-    const url = new URL(withScheme);
-    if (process.env["NODE_ENV"] === "production") {
-      const lowered = url.hostname.toLowerCase();
-      if (lowered === "localhost" || lowered === "127.0.0.1") return null;
-    }
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
-  }
-}
-
 function resolvePublicApiBaseUrl(): string | null {
   const raw = (process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"] ?? "").trim();
   if (!raw) {
@@ -434,9 +417,10 @@ async function createTwilioCall(input: {
   return { ok: true, callSid: payload?.sid ?? null };
 }
 
-function buildQuoteShareUrl(token: string): string {
-  const base = resolvePublicSiteBaseUrl() ?? "http://localhost:3000";
-  return `${base.replace(/\/$/, "")}/quote/${token}`;
+function buildQuoteShareUrl(token: string): string | null {
+  const base = resolvePublicSiteBaseUrl();
+  if (!base) return null;
+  return new URL(`/quote/${token}`, base).toString();
 }
 
 function buildRescheduleUrlForAppointment(appointmentId: string, token: string): string | null {
@@ -1386,7 +1370,7 @@ async function buildQuoteNotificationPayload(
   const shareToken = overrides?.shareToken ?? row.shareToken ?? null;
   const shareUrl = shareToken ? buildQuoteShareUrl(shareToken) : null;
   if (!shareUrl) {
-    console.warn("[outbox] quote_missing_share_url", { quoteId });
+    console.warn("[outbox] quote_missing_share_url", { quoteId, reason: "public_site_url_missing_or_unsafe" });
     return null;
   }
 

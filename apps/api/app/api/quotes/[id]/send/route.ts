@@ -6,6 +6,7 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { resolvePublicSiteBaseUrlOrThrow } from "@/lib/public-site-url";
 
 const SendQuoteSchema = z.object({
   expiresInDays: z.number().int().min(1).max(120).optional(),
@@ -13,13 +14,21 @@ const SendQuoteSchema = z.object({
 });
 
 function buildShareUrl(token: string, baseUrl?: string): string {
-  const root =
-    baseUrl ??
-    process.env["NEXT_PUBLIC_SITE_URL"] ??
-    process.env["SITE_URL"] ??
-    "http://localhost:3000";
-  const normalized = root.replace(/\/+$/, "");
-  return `${normalized}/quote/${token}`;
+  // Safety: never generate localhost/0.0.0.0 links in production. If an unsafe base
+  // is provided, ignore it and fall back to the configured public site base URL.
+  const configuredBase = resolvePublicSiteBaseUrlOrThrow();
+  if (baseUrl) {
+    const candidate = /^https?:\/\//i.test(baseUrl) ? baseUrl : `https://${baseUrl}`;
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.origin === configuredBase) {
+        return new URL(`/quote/${token}`, parsed.origin).toString();
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return new URL(`/quote/${token}`, configuredBase).toString();
 }
 
 export async function POST(

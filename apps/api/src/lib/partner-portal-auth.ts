@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { getDb, partnerLoginTokens, partnerSessions, partnerUsers } from "@/db";
 import { normalizePhone } from "../../app/api/web/utils";
+import { resolvePublicSiteBaseUrl as resolvePublicSiteBaseUrlInternal } from "@/lib/public-site-url";
 
 function readString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -27,21 +28,7 @@ export function normalizePhoneE164(value: unknown): string | null {
 }
 
 export function resolvePublicSiteBaseUrl(): string | null {
-  const raw = (process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "").trim();
-  if (!raw) {
-    return process.env["NODE_ENV"] === "development" ? "http://localhost:3000" : null;
-  }
-  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try {
-    const url = new URL(withScheme);
-    // This value is used in links sent via SMS/email. Never allow bind/private hosts,
-    // even if NODE_ENV is accidentally misconfigured in production.
-    const lowered = url.hostname.toLowerCase();
-    if (lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0") return null;
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return process.env["NODE_ENV"] === "development" ? "http://localhost:3000" : null;
-  }
+  return resolvePublicSiteBaseUrlInternal({ devFallbackLocalhost: true });
 }
 
 export function resolveRequestOriginBaseUrl(request: NextRequest): string | null {
@@ -50,7 +37,7 @@ export function resolveRequestOriginBaseUrl(request: NextRequest): string | null
   try {
     const url = new URL(origin);
     const lowered = url.hostname.toLowerCase();
-    if (lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0") return null;
+    if (lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0" || lowered === "::1") return null;
     // Only allow http in development; otherwise require https.
     if (process.env["NODE_ENV"] !== "development" && url.protocol !== "https:") return null;
     return url.toString().replace(/\/$/, "");

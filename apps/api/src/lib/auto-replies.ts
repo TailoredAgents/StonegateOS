@@ -24,6 +24,7 @@ import {
   normalizePostalCode,
   resolveTemplateForChannel
 } from "@/lib/policy";
+import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
@@ -102,12 +103,9 @@ function parseConfirmationIntent(body: string): ConfirmationIntent | null {
   return null;
 }
 
-function buildRescheduleUrlForAppointment(appointmentId: string, token: string): string {
-  const rawBase =
-    process.env["NEXT_PUBLIC_SITE_URL"] ??
-    process.env["SITE_URL"] ??
-    "http://localhost:3000";
-  const base = /^https?:\/\//i.test(rawBase) ? rawBase : `https://${rawBase}`;
+function buildRescheduleUrlForAppointment(appointmentId: string, token: string): string | null {
+  const base = resolvePublicSiteBaseUrl();
+  if (!base) return null;
   const url = new URL("/schedule", base);
   url.searchParams.set("appointmentId", appointmentId);
   url.searchParams.set("token", token);
@@ -471,7 +469,9 @@ async function handleConfirmationReply(input: {
 
     if (toAddress) {
       const rescheduleUrl = buildRescheduleUrlForAppointment(appointment.id, appointment.rescheduleToken);
-      const body = `No problem. Use this link to reschedule: ${rescheduleUrl}`;
+      const body = rescheduleUrl
+        ? `No problem. Use this link to reschedule: ${rescheduleUrl}`
+        : "No problem. Reply here with a better day/time and we’ll get you rescheduled.";
       const delayMs = randomDelayMs();
 
       const state =

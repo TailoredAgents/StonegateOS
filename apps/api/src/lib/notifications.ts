@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import { DateTime } from "luxon";
 import { generateEstimateNotificationCopy, generateQuoteNotificationCopy } from "@/lib/ai";
 import { joinServiceLabels, summarizeServiceLabels } from "@/lib/service-labels";
+import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 
 interface BaseContact {
   name: string;
@@ -76,27 +77,14 @@ const DEFAULT_TIME_ZONE =
   process.env["GOOGLE_CALENDAR_TIMEZONE"] ??
   "America/New_York";
 
-function resolvePublicSiteBaseUrl(): string | null {
-  const raw = (process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "").trim();
-  if (!raw) {
-    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
-  }
-  const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-  try {
-    const url = new URL(withScheme);
-    if (process.env["NODE_ENV"] === "production") {
-      const lowered = url.hostname.toLowerCase();
-      if (lowered === "localhost" || lowered === "127.0.0.1") return null;
-    }
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return process.env["NODE_ENV"] === "production" ? null : "http://localhost:3000";
-  }
-}
-
 function isLocalhostUrl(value: string): boolean {
   const lowered = value.toLowerCase();
-  return lowered.includes("localhost") || lowered.includes("127.0.0.1");
+  return (
+    lowered.includes("localhost") ||
+    lowered.includes("127.0.0.1") ||
+    lowered.includes("0.0.0.0") ||
+    lowered.includes("[::1]")
+  );
 }
 
 let cachedTransporter: nodemailer.Transporter | null;
@@ -308,8 +296,14 @@ function servicesSummary(services: string[]): string {
 
 function buildRescheduleUrl(appointment: EstimateNotificationPayload["appointment"]): string | null {
   if (appointment.rescheduleUrl) {
-    if (process.env["NODE_ENV"] !== "production" || !isLocalhostUrl(appointment.rescheduleUrl)) {
-      return appointment.rescheduleUrl;
+    try {
+      const parsed = new URL(appointment.rescheduleUrl);
+      const allowInsecure = process.env["NODE_ENV"] === "development" || process.env["NODE_ENV"] === "test";
+      if (!isLocalhostUrl(appointment.rescheduleUrl) && (allowInsecure || parsed.protocol === "https:")) {
+        return appointment.rescheduleUrl;
+      }
+    } catch {
+      // ignore
     }
   }
 

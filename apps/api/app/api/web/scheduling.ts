@@ -1,5 +1,6 @@
 import { DateTime } from "luxon";
 import { availabilityWindows } from "@myst-os/pricing";
+import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 
 export const APPOINTMENT_TIME_ZONE =
   process.env["APPOINTMENT_TIMEZONE"] ??
@@ -9,8 +10,7 @@ export const APPOINTMENT_TIME_ZONE =
 export const DEFAULT_APPOINTMENT_DURATION_MIN = 60;
 export const DEFAULT_TRAVEL_BUFFER_MIN = 30;
 
-export const SITE_URL =
-  process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "http://localhost:3000";
+export const SITE_URL = resolvePublicSiteBaseUrl({ devFallbackLocalhost: true });
 
 function getAvailabilityWindow(windowId: string | undefined | null) {
   if (!windowId) {
@@ -43,7 +43,8 @@ export function resolveAppointmentTiming(
   return { startAt: start.toJSDate(), durationMinutes: defaultDuration };
 }
 
-export function buildRescheduleUrl(appointmentId: string, token: string): string {
+export function buildRescheduleUrl(appointmentId: string, token: string): string | null {
+  if (!SITE_URL) return null;
   const url = new URL("/schedule", SITE_URL);
   url.searchParams.set("appointmentId", appointmentId);
   url.searchParams.set("token", token);
