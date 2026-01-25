@@ -20,13 +20,13 @@ function ChevronDown(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-type AccessRequirement = "owner" | "crew";
+type AccessRequirement = "owner" | "office" | "crew";
 
 export interface TabNavItem {
   id: string;
   label: string;
   href: string;
-  requires?: AccessRequirement;
+  requires?: AccessRequirement | AccessRequirement[];
 }
 
 export interface TabNavGroup {
@@ -57,23 +57,34 @@ interface TabNavProps {
   activeId: string;
   hasOwner: boolean;
   hasCrew: boolean;
+  hasOffice?: boolean;
   "aria-label"?: string;
 }
 
-export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label": ariaLabel }: TabNavProps) {
+export function TabNav({ items, groups, activeId, hasCrew, hasOwner, hasOffice = false, "aria-label": ariaLabel }: TabNavProps) {
   const router = useRouter();
   const [isPending, startTransition] = React.useTransition();
   const [openGroupId, setOpenGroupId] = React.useState<string | null>(null);
   const navRef = React.useRef<HTMLElement>(null);
 
-  const resolveAllowed = (requires?: AccessRequirement): boolean => {
-    if (requires === "owner") {
-      return hasOwner;
-    }
-    if (requires === "crew") {
-      return hasCrew || hasOwner;
-    }
-    return true;
+  const describeRequirement = React.useCallback((requires?: TabNavItem["requires"]): string | null => {
+    if (!requires) return null;
+    const list = Array.isArray(requires) ? requires : [requires];
+    if (list.includes("owner") && list.length === 1) return "Owner access required";
+    if (list.includes("office") && list.length === 1) return "Office access required";
+    if (list.includes("crew") && list.length === 1) return "Crew access required";
+    return "Access required";
+  }, []);
+
+  const resolveAllowed = (requires?: TabNavItem["requires"]): boolean => {
+    if (!requires) return true;
+    const list = Array.isArray(requires) ? requires : [requires];
+    return list.some((entry) => {
+      if (entry === "owner") return hasOwner;
+      if (entry === "office") return hasOffice || hasOwner;
+      if (entry === "crew") return hasCrew || hasOwner;
+      return false;
+    });
   };
 
   const resolvedGroups = React.useMemo(() => {
@@ -198,14 +209,22 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
               const groupHasActive = group.items.some((item) => item.id === activeId);
               const allowedItems = group.items.filter((item) => resolveAllowed(item.requires));
               const groupAllowed = allowedItems.length > 0;
+              const requiredKinds = new Set<AccessRequirement>();
+              group.items.forEach((item) => {
+                const req = item.requires;
+                if (!req) return;
+                (Array.isArray(req) ? req : [req]).forEach((entry) => requiredKinds.add(entry));
+              });
               const groupRestricted =
-                group.items.every((item) => item.requires === "owner") && !hasOwner
-                  ? "Owner access required"
-                  : group.items.every((item) => item.requires === "crew") && !hasCrew && !hasOwner
-                    ? "Crew access required"
-                    : !groupAllowed
-                      ? "Access required"
-                      : undefined;
+                !groupAllowed && requiredKinds.size > 0
+                  ? requiredKinds.has("owner") && requiredKinds.size === 1
+                    ? "Owner access required"
+                    : requiredKinds.has("crew") && requiredKinds.size === 1
+                      ? "Crew access required"
+                      : requiredKinds.has("office") && requiredKinds.size === 1
+                        ? "Office access required"
+                        : "Access required"
+                  : undefined;
 
               if (isSingle) {
                 const item = group.items[0];
@@ -213,12 +232,7 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
                   return null;
                 }
                 const allowed = resolveAllowed(item.requires);
-                const isRestricted =
-                  item.requires === "owner"
-                    ? !hasOwner
-                    : item.requires === "crew"
-                      ? !hasCrew && !hasOwner
-                      : false;
+                const isRestricted = !allowed;
                 const isActive = item.id === activeId;
                 const className = cn(
                   teamTabTokens.item.base,
@@ -235,13 +249,7 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
                     aria-disabled={isRestricted ? "true" : undefined}
                     data-state={isActive ? "active" : "inactive"}
                     data-access={item.requires ?? "all"}
-                    title={
-                      !allowed
-                        ? item.requires === "owner"
-                          ? "Owner access required"
-                          : "Crew access required"
-                        : undefined
-                    }
+                    title={!allowed ? describeRequirement(item.requires) ?? undefined : undefined}
                   >
                     <span className={teamTabTokens.label}>{group.label}</span>
                   </a>
@@ -309,13 +317,7 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
                             isActive ? "bg-primary-50 text-primary-700" : "text-slate-600 hover:bg-slate-100",
                             !allowed && "cursor-not-allowed opacity-45"
                           )}
-                          title={
-                            !allowed
-                              ? item.requires === "owner"
-                                ? "Owner access required"
-                                : "Crew access required"
-                              : undefined
-                          }
+                          title={!allowed ? describeRequirement(item.requires) ?? undefined : undefined}
                           role="menuitem"
                         >
                           <span>{item.label}</span>
@@ -331,12 +333,7 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
             })
           : items.map((item) => {
               const allowed = resolveAllowed(item.requires);
-              const isRestricted =
-                item.requires === "owner"
-                  ? !hasOwner
-                  : item.requires === "crew"
-                    ? !hasCrew && !hasOwner
-                    : false;
+              const isRestricted = !allowed;
               const isActive = item.id === activeId;
               const className = cn(
                 teamTabTokens.item.base,
@@ -353,13 +350,7 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, "aria-label
                   aria-disabled={isRestricted ? "true" : undefined}
                   data-state={isActive ? "active" : "inactive"}
                   data-access={item.requires ?? "all"}
-                  title={
-                    !allowed
-                      ? item.requires === "owner"
-                        ? "Owner access required"
-                        : "Crew access required"
-                      : undefined
-                  }
+                  title={!allowed ? describeRequirement(item.requires) ?? undefined : undefined}
                 >
                   <span className={teamTabTokens.label}>{item.label}</span>
                 </a>

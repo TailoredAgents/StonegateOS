@@ -1,13 +1,13 @@
 import React from "react";
 import { cookies } from "next/headers";
-import { AdminLoginForm } from "../admin/login/LoginForm";
-import { CrewLoginForm } from "../crew/login/LoginForm";
+import { redirect } from "next/navigation";
 import {
   logoutCrew,
   logoutOwner,
   dismissNewLeadAction,
   updatePipelineStageAction
 } from "./actions";
+import { teamLogoutAction, teamSetPasswordAction } from "./login/actions";
 import { MyDaySection } from "./components/MyDaySection";
 import { ContactsSection } from "./components/ContactsSection";
 import { PipelineSection } from "./components/PipelineSection";
@@ -31,7 +31,7 @@ import { SeoAgentSection } from "./components/SeoAgentSection";
 import { QuotesHubSection } from "./components/QuotesHubSection";
 import { SystemHealthBanner } from "./components/SystemHealthBanner";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
-import { callAdminApi } from "./lib/api";
+import { callAdminApi, resolveTeamMemberFromSessionCookie } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
 import { TeamSkeletonCard } from "./components/TeamSkeleton";
 import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE, teamButtonClass } from "./components/team-ui";
@@ -102,12 +102,36 @@ export default async function TeamPage({
     gaCampaignId?: string;
     cal?: string;
     calView?: string;
+    setup?: string;
+    saved?: string;
+    error?: string;
   }>;
 }) {
   const params = await searchParams;
   const cookieStore = await cookies();
-  const hasOwner = cookieStore.get(ADMIN_COOKIE)?.value ? true : false;
-  const hasCrew = cookieStore.get(CREW_COOKIE)?.value ? true : false;
+  const legacyOwnerSession = cookieStore.get(ADMIN_COOKIE)?.value ? true : false;
+  const legacyCrewSession = cookieStore.get(CREW_COOKIE)?.value ? true : false;
+  const teamMember = await resolveTeamMemberFromSessionCookie();
+  const teamRole = teamMember?.roleSlug ?? null;
+  const hasOwner = legacyOwnerSession || teamRole === "owner";
+  const hasOffice = teamRole === "office";
+  const hasCrew = legacyCrewSession || teamRole === "crew";
+  const isAuthenticated = hasOwner || hasOffice || hasCrew;
+
+  if (!isAuthenticated) {
+    redirect("/team/login");
+  }
+
+  const isAllowed = (requires?: TabNavItem["requires"]): boolean => {
+    if (!requires) return true;
+    const list = Array.isArray(requires) ? requires : [requires];
+    return list.some((entry) => {
+      if (entry === "owner") return hasOwner;
+      if (entry === "office") return hasOffice || hasOwner;
+      if (entry === "crew") return hasCrew || hasOwner;
+      return false;
+    });
+  };
 
   const requestedTab = params?.tab;
   const requestedQuoteMode = typeof params?.quoteMode === "string" ? params.quoteMode : undefined;
@@ -125,7 +149,7 @@ export default async function TeamPage({
       ? hasOwner
         ? "inbox"
         : "myday"
-      : normalizedRequestedTab || (hasCrew && !hasOwner ? "myday" : "inbox");
+      : normalizedRequestedTab || (hasCrew && !hasOwner && !hasOffice ? "myday" : "inbox");
   const contactsQuery = typeof params?.q === "string" ? params.q : undefined;
   const contactsView = typeof params?.view === "string" ? params.view.trim().toLowerCase() : "";
   const contactsOnlyOutbound = contactsView === "outbound" || params?.onlyOutbound === "1";
@@ -145,6 +169,9 @@ export default async function TeamPage({
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
   const memberIdParam = typeof params?.memberId === "string" ? params.memberId : undefined;
   const quoteModeParam = forcedQuoteMode ?? requestedQuoteMode;
+  const settingsSetup = params?.setup === "1";
+  const settingsSaved = params?.saved === "1";
+  const settingsError = typeof params?.error === "string" && params.error.trim().length ? params.error.trim() : null;
   const outboundFilters = {
     q: typeof params?.out_q === "string" ? params.out_q : undefined,
     campaign: typeof params?.out_campaign === "string" ? params.out_campaign : undefined,
@@ -170,7 +197,7 @@ export default async function TeamPage({
   const dismissedNewLeadId = cookieStore.get("myst-new-lead-dismissed")?.value ?? null;
 
   let systemHealth: SystemHealthApiResponse | null = null;
-  if (hasOwner || hasCrew) {
+  if (hasOwner || hasOffice || hasCrew) {
     try {
       const response = await callAdminApi("/api/admin/system/health", { timeoutMs: 8_000 });
       if (response.ok) {
@@ -183,17 +210,17 @@ export default async function TeamPage({
   }
 
   const tabs: TabNavItem[] = [
-    { id: "myday", label: "My Day", href: "/team?tab=myday", requires: "crew" },
-    { id: "expenses", label: "Expenses", href: "/team?tab=expenses", requires: "crew" },
-    { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "crew" },
-    { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "owner" },
-    { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "owner" },
-    { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "owner" },
-    { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "owner" },
-    { id: "outbound", label: "Outbound", href: "/team?tab=outbound", requires: "owner" },
+    { id: "myday", label: "My Day", href: "/team?tab=myday", requires: ["crew", "office"] },
+    { id: "expenses", label: "Expenses", href: "/team?tab=expenses", requires: ["crew", "office"] },
+    { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: ["crew", "office"] },
+    { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: ["office"] },
+    { id: "chat", label: "Chat", href: "/team?tab=chat", requires: ["office"] },
+    { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: ["office"] },
+    { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: ["office"] },
+    { id: "outbound", label: "Outbound", href: "/team?tab=outbound", requires: ["office"] },
     { id: "partners", label: "Partners", href: "/team?tab=partners", requires: "owner" },
-    { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "owner" },
-    { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "owner" },
+    { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: ["office"] },
+    { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: ["office"] },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
     { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "owner" },
     { id: "commissions", label: "Commissions", href: "/team?tab=commissions", requires: "owner" },
@@ -215,9 +242,11 @@ export default async function TeamPage({
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
   ];
   const activeTab = tabs.find((item) => item.id === tab) ?? tabs[0] ?? null;
-  const activeRequirement = activeTab?.requires;
-  const needsCrewLogin = activeRequirement === "crew" && !hasCrew && !hasOwner;
-  const needsOwnerLogin = activeRequirement === "owner" && !hasOwner;
+  if (activeTab && !isAllowed(activeTab.requires)) {
+    const fallback = hasCrew && !hasOffice && !hasOwner ? "myday" : "inbox";
+    const fallbackTab = tabs.find((candidate) => candidate.id === fallback && isAllowed(candidate.requires)) ?? tabs.find((candidate) => isAllowed(candidate.requires));
+    redirect((fallbackTab ? fallbackTab.href : "/team/login") as any);
+  }
 
   let calendarBadge: CalendarSyncBadge | null = null;
   if (tab === "settings" && hasOwner) {
@@ -243,7 +272,7 @@ export default async function TeamPage({
   }
 
   let newLead: LeadContactSummary | null = null;
-  if (hasOwner || hasCrew) {
+  if (hasOwner || hasOffice || hasCrew) {
     try {
       const response = await callAdminApi("/api/admin/contacts?limit=12");
       if (response.ok) {
@@ -276,26 +305,39 @@ export default async function TeamPage({
               <p className="mt-2 max-w-3xl text-sm text-slate-600 sm:text-base">
                 Monitor appointments, quotes, pipeline health, and contacts from a single polished workspace designed for your crew and office team.
               </p>
+              {teamMember ? (
+                <p className="mt-3 text-sm text-slate-700">
+                  Signed in as <span className="font-semibold text-slate-900">{teamMember.name}</span>
+                  {teamMember.email ? <span className="text-slate-500"> ({teamMember.email})</span> : null}
+                </p>
+              ) : null}
             </div>
             <div className="grid gap-2 text-sm text-slate-600 sm:justify-items-end sm:text-right">
               <span
                 className={`inline-flex w-full items-center justify-center rounded-full px-3 py-1.5 text-xs font-medium sm:w-auto ${
-                  hasCrew ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                  hasCrew || hasOwner ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
                 }`}
               >
-                Crew {hasCrew ? "signed in" : "login required"}
+                Crew {hasCrew || hasOwner ? "access" : "restricted"}
+              </span>
+              <span
+                className={`inline-flex w-full items-center justify-center rounded-full px-3 py-1.5 text-xs font-medium sm:w-auto ${
+                  hasOffice || hasOwner ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-500"
+                }`}
+              >
+                Office {hasOffice || hasOwner ? "access" : "restricted"}
               </span>
               <span
                 className={`inline-flex w-full items-center justify-center rounded-full px-3 py-1.5 text-xs font-medium sm:w-auto ${
                   hasOwner ? "bg-primary-100 text-primary-700" : "bg-slate-100 text-slate-500"
                 }`}
               >
-                Owner {hasOwner ? "access granted" : "login required"}
+                Owner {hasOwner ? "access" : "restricted"}
               </span>
             </div>
           </div>
           <div className="mt-6">
-            <TabNav items={tabs} groups={tabGroups} activeId={tab} hasOwner={hasOwner} hasCrew={hasCrew} />
+            <TabNav items={tabs} groups={tabGroups} activeId={tab} hasOwner={hasOwner} hasCrew={hasCrew} hasOffice={hasOffice} />
           </div>
         </header>
 
@@ -352,17 +394,7 @@ export default async function TeamPage({
           </section>
         ) : null}
 
-        {needsCrewLogin ? (
-          <section className="max-w-md rounded-2xl border border-slate-200 bg-white/80 p-6 shadow-lg shadow-slate-200/60">
-            <CrewLoginForm redirectTo={`/team?tab=${encodeURIComponent(tab)}`} />
-          </section>
-        ) : needsOwnerLogin ? (
-          <section className="max-w-md rounded-2xl border border-slate-200 bg-white/80 p-6 shadow-lg shadow-slate-200/60">
-            <AdminLoginForm redirectTo={`/team?tab=${encodeURIComponent(tab)}`} />
-          </section>
-        ) : null}
-
-        {tab === "myday" && (hasCrew || hasOwner) ? (
+        {tab === "myday" && (hasCrew || hasOffice || hasOwner) ? (
           <React.Suspense
             fallback={
               <TeamSkeletonCard title="Loading My Day" />
@@ -372,13 +404,13 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "expenses" && (hasCrew || hasOwner) ? (
+        {tab === "expenses" && (hasCrew || hasOffice || hasOwner) ? (
           <React.Suspense fallback={<TeamSkeletonCard title="Loading expenses" />}>
             <ExpensesSection />
           </React.Suspense>
         ) : null}
 
-        {tab === "chat" && hasOwner ? (
+        {tab === "chat" && (hasOffice || hasOwner) ? (
           <React.Suspense
             fallback={
               <TeamSkeletonCard title="Loading chat" />
@@ -388,7 +420,7 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "inbox" && hasOwner ? (
+        {tab === "inbox" && (hasOffice || hasOwner) ? (
           <React.Suspense
             fallback={
               <TeamSkeletonCard title="Loading inbox" />
@@ -398,7 +430,7 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "calendar" && hasOwner ? (
+        {tab === "calendar" && (hasOffice || hasOwner) ? (
           <React.Suspense
             fallback={
               <TeamSkeletonCard title="Loading calendar" />
@@ -408,7 +440,7 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "quotes" && (hasCrew || hasOwner) ? (
+        {tab === "quotes" && (hasCrew || hasOffice || hasOwner) ? (
           <React.Suspense
             fallback={
               <TeamSkeletonCard title="Loading Quotes" />
@@ -418,7 +450,7 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "pipeline" && hasOwner ? (
+        {tab === "pipeline" && (hasOffice || hasOwner) ? (
           <React.Suspense
             fallback={
               <TeamSkeletonCard title="Loading pipeline" />
@@ -428,7 +460,7 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "sales-hq" && hasOwner ? (
+        {tab === "sales-hq" && (hasOffice || hasOwner) ? (
           <React.Suspense
             fallback={
               <TeamSkeletonCard title="Loading Sales HQ" />
@@ -438,7 +470,7 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "outbound" && hasOwner ? (
+        {tab === "outbound" && (hasOffice || hasOwner) ? (
           <React.Suspense fallback={<TeamSkeletonCard title="Loading outbound prospects" />}>
             <OutboundSection memberId={memberIdParam} filters={outboundFilters} />
           </React.Suspense>
@@ -450,7 +482,7 @@ export default async function TeamPage({
           </React.Suspense>
         ) : null}
 
-        {tab === "contacts" && hasOwner ? (
+        {tab === "contacts" && (hasOffice || hasOwner) ? (
           <React.Suspense
             fallback={
               <TeamSkeletonCard title="Loading contacts" />
@@ -557,13 +589,62 @@ export default async function TeamPage({
         {tab === "settings" ? (
           <section className={`space-y-4 ${TEAM_CARD_PADDED}`}>
             <div className="space-y-4">
-              <h2 className={TEAM_SECTION_TITLE}>Acting as</h2>
+              <h2 className={TEAM_SECTION_TITLE}>Account</h2>
               <p className={TEAM_SECTION_SUBTITLE}>
-                CRM actions are currently attributed to the default actor (shared master login mode), so Sales HQ metrics are consistent.
+                Signed-in team members control attribution for calls, messages, and audit logs. Owner sessions still have full access.
               </p>
-              <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 text-sm font-semibold text-slate-800 shadow-sm shadow-slate-200/40">
-                Current: <span className="text-primary-700">default actor</span>
+              {settingsSetup ? (
+                <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800 shadow-sm shadow-sky-100">
+                  Set a password to enable password sign-in. Magic links will still work.
+                </div>
+              ) : null}
+              {settingsSaved ? (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 shadow-sm shadow-emerald-100">
+                  Saved.
+                </div>
+              ) : null}
+              {settingsError ? (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm shadow-rose-100">
+                  {settingsError}
+                </div>
+              ) : null}
+
+              {teamMember ? (
+                <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 text-sm text-slate-700 shadow-sm shadow-slate-200/40">
+                  <div className="font-semibold text-slate-900">{teamMember.name}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Role: <span className="font-medium text-slate-700">{teamMember.roleSlug ?? "office"}</span>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap gap-3">
+                <form action={teamLogoutAction}>
+                  <button className="rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800">
+                    Log out
+                  </button>
+                </form>
               </div>
+
+              {teamMember && !teamMember.passwordSet ? (
+                <div className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
+                  <h3 className="text-sm font-semibold text-slate-900">Set password</h3>
+                  <p className="mt-1 text-xs text-slate-500">Optional. Minimum 10 characters.</p>
+                  <form action={teamSetPasswordAction} className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <input
+                      name="password"
+                      type="password"
+                      minLength={10}
+                      required
+                      className="w-full flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                      placeholder="New password"
+                    />
+                    <button type="submit" className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-700">
+                      Save
+                    </button>
+                  </form>
+                </div>
+              ) : null}
 
               <h2 className={TEAM_SECTION_TITLE}>Calling</h2>
               <p className={TEAM_SECTION_SUBTITLE}>
@@ -573,19 +654,24 @@ export default async function TeamPage({
             </div>
 
             <div className="space-y-4">
-              <h2 className="text-base font-semibold text-slate-900">Sessions</h2>
-              <div className="flex flex-wrap gap-3">
-                <form action={logoutCrew}>
-                  <button className="rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800">
-                    Log out crew
-                  </button>
-                </form>
-                <form action={logoutOwner}>
-                  <button className="rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800">
-                    Log out owner
-                  </button>
-                </form>
-              </div>
+              <details className="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm shadow-slate-200/40">
+                <summary className="cursor-pointer text-sm font-semibold text-slate-900">Emergency sessions</summary>
+                <p className="mt-2 text-xs text-slate-500">
+                  These controls clear the legacy crew/owner cookies used before per-user login. Most teams won&apos;t need this.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-3">
+                  <form action={logoutCrew}>
+                    <button className="rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800">
+                      Log out crew
+                    </button>
+                  </form>
+                  <form action={logoutOwner}>
+                    <button className="rounded-full border border-slate-200 px-4 py-2 text-xs font-medium text-slate-600 hover:border-slate-300 hover:text-slate-800">
+                      Log out owner
+                    </button>
+                  </form>
+                </div>
+              </details>
             </div>
 
             {hasOwner ? (

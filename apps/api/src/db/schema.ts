@@ -287,6 +287,8 @@ export const teamMembers = pgTable(
     roleId: uuid("role_id").references(() => teamRoles.id, { onDelete: "set null" }),
     active: boolean("active").default(true).notNull(),
     defaultCrewSplitBps: integer("default_crew_split_bps"),
+    passwordHash: text("password_hash"),
+    passwordSetAt: timestamp("password_set_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
@@ -296,6 +298,48 @@ export const teamMembers = pgTable(
   (table) => ({
     emailIdx: index("team_members_email_idx").on(table.email),
     roleIdx: index("team_members_role_idx").on(table.roleId)
+  })
+);
+
+export const teamLoginTokens = pgTable(
+  "team_login_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    requestedIp: text("requested_ip"),
+    userAgent: text("user_agent"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    tokenHashIdx: uniqueIndex("team_login_tokens_hash_key").on(table.tokenHash),
+    memberIdx: index("team_login_tokens_member_idx").on(table.teamMemberId),
+    expiresIdx: index("team_login_tokens_expires_idx").on(table.expiresAt)
+  })
+);
+
+export const teamSessions = pgTable(
+  "team_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    sessionHash: text("session_hash").notNull(),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true })
+  },
+  (table) => ({
+    sessionHashIdx: uniqueIndex("team_sessions_hash_key").on(table.sessionHash),
+    memberIdx: index("team_sessions_member_idx").on(table.teamMemberId),
+    expiresIdx: index("team_sessions_expires_idx").on(table.expiresAt)
   })
 );
 
