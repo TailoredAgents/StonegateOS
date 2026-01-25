@@ -2,11 +2,6 @@ import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { CopyButton } from "@/components/CopyButton";
 import { callAdminApi } from "../lib/api";
-import {
-  createRoleAction,
-  createTeamMemberAction,
-  updateDefaultSalesAssigneeAction,
-} from "../actions";
 
 type Role = {
   id: string;
@@ -21,6 +16,8 @@ type TeamMember = {
   email: string | null;
   phone: string | null;
   defaultCrewSplitBps: number | null;
+  permissionsGrant: string[];
+  permissionsDeny: string[];
   active: boolean;
   role: {
     id: string;
@@ -53,7 +50,11 @@ export async function AccessSection(): Promise<React.ReactElement> {
       loadError = loadError ?? `Failed to load team members (HTTP ${membersRes.status})`;
     } else {
       const membersPayload = (await membersRes.json()) as { members?: TeamMember[] };
-      members = membersPayload.members ?? [];
+      members = (membersPayload.members ?? []).map((member) => ({
+        ...member,
+        permissionsGrant: Array.isArray(member.permissionsGrant) ? member.permissionsGrant : [],
+        permissionsDeny: Array.isArray(member.permissionsDeny) ? member.permissionsDeny : []
+      }));
     }
 
     if (settingsRes.ok) {
@@ -66,6 +67,10 @@ export async function AccessSection(): Promise<React.ReactElement> {
   } catch (error) {
     loadError = `Failed to load access control: ${(error as Error).message}`;
   }
+
+  const permissionOptions = Array.from(new Set(roles.flatMap((role) => role.permissions ?? []))).sort((a, b) =>
+    a.localeCompare(b)
+  );
 
   return (
     <section className="space-y-6">
@@ -81,7 +86,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
           <h3 className="text-base font-semibold text-slate-900">Lead routing</h3>
           <p className="text-xs text-slate-500">Choose who new leads are assigned to by default.</p>
-          <form action={updateDefaultSalesAssigneeAction} className="mt-4 flex flex-wrap items-center gap-3">
+          <form action="/api/team/access/sales-settings" method="post" className="mt-4 flex flex-wrap items-center gap-3">
             <select
               name="defaultAssigneeMemberId"
               defaultValue={defaultAssigneeMemberId ?? ""}
@@ -121,7 +126,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
               </div>
             ))}
           </div>
-          <form action={createRoleAction} className="mt-5 space-y-3 text-xs text-slate-600">
+          <form action="/api/team/access/roles" method="post" className="mt-5 space-y-3 text-xs text-slate-600">
             <label className="flex flex-col gap-1">
               <span>Role name</span>
               <input
@@ -237,6 +242,63 @@ export async function AccessSection(): Promise<React.ReactElement> {
                       Update
                     </SubmitButton>
                   </div>
+
+                  {permissionOptions.length ? (
+                    <details className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-3">
+                      <summary className="cursor-pointer text-[11px] font-semibold text-slate-700">
+                        Individual permission overrides
+                      </summary>
+                      <p className="mt-2 text-[11px] text-slate-500">
+                        Role permissions are the baseline. Grants add permissions, denies remove them (deny wins).
+                      </p>
+
+                      <input type="hidden" name="permissionsGrant_present" value="1" />
+                      <input type="hidden" name="permissionsDeny_present" value="1" />
+
+                      <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                        <div>
+                          <h4 className="text-[11px] font-semibold text-slate-700">Grant</h4>
+                          <div className="mt-2 grid gap-1">
+                            {permissionOptions.map((permission) => (
+                              <label
+                                key={`grant-${member.id}-${permission}`}
+                                className="flex items-center gap-2 text-xs text-slate-700"
+                              >
+                                <input
+                                  type="checkbox"
+                                  name="permissionsGrant"
+                                  value={permission}
+                                  defaultChecked={member.permissionsGrant.includes(permission)}
+                                  className="h-4 w-4 rounded border-slate-300"
+                                />
+                                <span className="font-mono text-[11px]">{permission}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="text-[11px] font-semibold text-slate-700">Deny</h4>
+                          <div className="mt-2 grid gap-1">
+                            {permissionOptions.map((permission) => (
+                              <label
+                                key={`deny-${member.id}-${permission}`}
+                                className="flex items-center gap-2 text-xs text-slate-700"
+                              >
+                                <input
+                                  type="checkbox"
+                                  name="permissionsDeny"
+                                  value={permission}
+                                  defaultChecked={member.permissionsDeny.includes(permission)}
+                                  className="h-4 w-4 rounded border-slate-300"
+                                />
+                                <span className="font-mono text-[11px]">{permission}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </details>
+                  ) : null}
                 </form>
                 <details className="mt-3 rounded-2xl border border-red-200 bg-red-50/60 px-4 py-3">
                   <summary className="cursor-pointer text-[11px] font-semibold text-red-700">Danger zone</summary>
@@ -260,7 +322,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
               </div>
             ))}
           </div>
-          <form action={createTeamMemberAction} className="mt-5 space-y-3 text-xs text-slate-600">
+          <form action="/api/team/access/members" method="post" className="mt-5 space-y-3 text-xs text-slate-600">
             <label className="flex flex-col gap-1">
               <span>Name</span>
               <input

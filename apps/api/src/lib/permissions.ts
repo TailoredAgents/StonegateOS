@@ -39,6 +39,35 @@ function normalizePermissions(permissions: string[] | null | undefined): string[
     .filter((entry) => entry.length > 0);
 }
 
+function mergePermissions(base: string[], grant: string[]): string[] {
+  const merged = [...normalizePermissions(base), ...normalizePermissions(grant)];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of merged) {
+    if (seen.has(entry)) continue;
+    seen.add(entry);
+    result.push(entry);
+  }
+  return result;
+}
+
+export function computeEffectivePermissions(input: {
+  rolePermissions: string[] | null | undefined;
+  grant: string[] | null | undefined;
+  deny: string[] | null | undefined;
+}): string[] {
+  const merged = mergePermissions(input.rolePermissions ?? [], input.grant ?? []);
+  const denyList = normalizePermissions(input.deny);
+
+  if (merged.includes("*")) {
+    return denyList.includes("*") ? [] : ["*"];
+  }
+
+  if (!denyList.length) return merged;
+
+  return merged.filter((permission) => !denyList.some((denied) => permissionMatches(denied, permission)));
+}
+
 function permissionMatches(granted: string, required: string): boolean {
   if (granted === "*") return true;
   if (required === "read") return granted === "read";
@@ -76,18 +105,24 @@ export async function resolvePermissionContext(request: NextRequest): Promise<Pe
     const [row] = await db
       .select({
         roleSlug: teamRoles.slug,
-        permissions: teamRoles.permissions
+        permissions: teamRoles.permissions,
+        permissionsGrant: teamMembers.permissionsGrant,
+        permissionsDeny: teamMembers.permissionsDeny
       })
       .from(teamMembers)
       .leftJoin(teamRoles, eq(teamMembers.roleId, teamRoles.id))
       .where(eq(teamMembers.id, actorId))
       .limit(1);
 
-    if (row?.permissions) {
+    if (row) {
       return {
         enforce: true,
         role: row.roleSlug ?? actorRole,
-        permissions: normalizePermissions(row.permissions)
+        permissions: computeEffectivePermissions({
+          rolePermissions: row.permissions ?? [],
+          grant: row.permissionsGrant,
+          deny: row.permissionsDeny
+        })
       };
     }
   }

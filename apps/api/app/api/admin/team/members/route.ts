@@ -53,6 +53,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     email: string | null;
     roleId: string | null;
     defaultCrewSplitBps: number | null;
+    permissionsGrant?: string[] | null;
+    permissionsDeny?: string[] | null;
     active: boolean | null;
     createdAt: Date;
     updatedAt: Date;
@@ -68,6 +70,8 @@ export async function GET(request: NextRequest): Promise<Response> {
         email: teamMembers.email,
         roleId: teamMembers.roleId,
         defaultCrewSplitBps: teamMembers.defaultCrewSplitBps,
+        permissionsGrant: teamMembers.permissionsGrant,
+        permissionsDeny: teamMembers.permissionsDeny,
         active: teamMembers.active,
         createdAt: teamMembers.createdAt,
         updatedAt: teamMembers.updatedAt,
@@ -101,7 +105,9 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     rows = fallbackRows.map((row) => ({
       ...row,
-      defaultCrewSplitBps: null
+      defaultCrewSplitBps: null,
+      permissionsGrant: [],
+      permissionsDeny: []
     }));
   }
 
@@ -111,6 +117,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     email: row.email ?? null,
     phone: phoneMap[row.id] ?? null,
     defaultCrewSplitBps: row.defaultCrewSplitBps ?? null,
+    permissionsGrant: Array.isArray(row.permissionsGrant) ? row.permissionsGrant : [],
+    permissionsDeny: Array.isArray(row.permissionsDeny) ? row.permissionsDeny : [],
     role: row.roleId
       ? {
           id: row.roleId,

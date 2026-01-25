@@ -22,11 +22,32 @@ function ChevronDown(props: React.SVGProps<SVGSVGElement>) {
 
 type AccessRequirement = "owner" | "office" | "crew";
 
+function isRoleRequirement(value: string): value is AccessRequirement {
+  return value === "owner" || value === "office" || value === "crew";
+}
+
+function permissionMatches(granted: string, required: string): boolean {
+  if (granted === "*") return true;
+  if (required === "read") return granted === "read";
+  if (granted === "read") {
+    return required === "read" || required.endsWith(".read");
+  }
+  if (granted.endsWith(".*")) {
+    const prefix = granted.slice(0, -2);
+    return required.startsWith(prefix);
+  }
+  return granted === required;
+}
+
+function hasPermission(permissions: string[], required: string): boolean {
+  return permissions.some((permission) => permissionMatches(permission, required));
+}
+
 export interface TabNavItem {
   id: string;
   label: string;
   href: string;
-  requires?: AccessRequirement | AccessRequirement[];
+  requires?: string | string[];
 }
 
 export interface TabNavGroup {
@@ -58,10 +79,20 @@ interface TabNavProps {
   hasOwner: boolean;
   hasCrew: boolean;
   hasOffice?: boolean;
+  permissions?: string[];
   "aria-label"?: string;
 }
 
-export function TabNav({ items, groups, activeId, hasCrew, hasOwner, hasOffice = false, "aria-label": ariaLabel }: TabNavProps) {
+export function TabNav({
+  items,
+  groups,
+  activeId,
+  hasCrew,
+  hasOwner,
+  hasOffice = false,
+  permissions = [],
+  "aria-label": ariaLabel
+}: TabNavProps) {
   const router = useRouter();
   const [isPending, startTransition] = React.useTransition();
   const [openGroupId, setOpenGroupId] = React.useState<string | null>(null);
@@ -70,9 +101,13 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, hasOffice =
   const describeRequirement = React.useCallback((requires?: TabNavItem["requires"]): string | null => {
     if (!requires) return null;
     const list = Array.isArray(requires) ? requires : [requires];
-    if (list.includes("owner") && list.length === 1) return "Owner access required";
-    if (list.includes("office") && list.length === 1) return "Office access required";
-    if (list.includes("crew") && list.length === 1) return "Crew access required";
+    const first = list[0];
+    if (list.length === 1 && typeof first === "string" && isRoleRequirement(first)) {
+      if (first === "owner") return "Owner access required";
+      if (first === "office") return "Office access required";
+      if (first === "crew") return "Crew access required";
+    }
+    if (list.length === 1 && typeof first === "string") return `Requires ${first}`;
     return "Access required";
   }, []);
 
@@ -80,10 +115,14 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, hasOffice =
     if (!requires) return true;
     const list = Array.isArray(requires) ? requires : [requires];
     return list.some((entry) => {
-      if (entry === "owner") return hasOwner;
-      if (entry === "office") return hasOffice || hasOwner;
-      if (entry === "crew") return hasCrew || hasOwner;
-      return false;
+      if (isRoleRequirement(entry)) {
+        if (entry === "owner") return hasOwner;
+        if (entry === "office") return hasOffice || hasOwner;
+        if (entry === "crew") return hasCrew || hasOwner;
+        return false;
+      }
+      if (hasOwner) return true;
+      return hasPermission(permissions, entry);
     });
   };
 
@@ -209,21 +248,25 @@ export function TabNav({ items, groups, activeId, hasCrew, hasOwner, hasOffice =
               const groupHasActive = group.items.some((item) => item.id === activeId);
               const allowedItems = group.items.filter((item) => resolveAllowed(item.requires));
               const groupAllowed = allowedItems.length > 0;
-              const requiredKinds = new Set<AccessRequirement>();
+              const requiredKinds = new Set<string>();
               group.items.forEach((item) => {
                 const req = item.requires;
                 if (!req) return;
                 (Array.isArray(req) ? req : [req]).forEach((entry) => requiredKinds.add(entry));
               });
+              const requiredRoles = Array.from(requiredKinds).filter((entry): entry is AccessRequirement =>
+                isRoleRequirement(entry)
+              );
+              const hasNonRoleRequirements = requiredKinds.size > requiredRoles.length;
               const groupRestricted =
                 !groupAllowed && requiredKinds.size > 0
-                  ? requiredKinds.has("owner") && requiredKinds.size === 1
-                    ? "Owner access required"
-                    : requiredKinds.has("crew") && requiredKinds.size === 1
-                      ? "Crew access required"
-                      : requiredKinds.has("office") && requiredKinds.size === 1
-                        ? "Office access required"
-                        : "Access required"
+                  ? requiredRoles.length === 1 && !hasNonRoleRequirements && requiredKinds.size === 1
+                    ? requiredRoles[0] === "owner"
+                      ? "Owner access required"
+                      : requiredRoles[0] === "crew"
+                        ? "Crew access required"
+                        : "Office access required"
+                    : "Access required"
                   : undefined;
 
               if (isSingle) {

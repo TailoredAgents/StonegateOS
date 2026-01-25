@@ -42,10 +42,7 @@ function setFlash(response: NextResponse, kind: "ok" | "error", message: string)
   });
 }
 
-export async function POST(
-  request: NextRequest,
-  context: { params: Promise<{ memberId: string }> }
-): Promise<Response> {
+export async function POST(request: NextRequest): Promise<Response> {
   const redirectTo = buildRedirect(request);
   if (!(await isOwnerRequest(request))) {
     const response = NextResponse.redirect(redirectTo, 303);
@@ -53,44 +50,15 @@ export async function POST(
     return response;
   }
 
-  const { memberId } = await context.params;
-  if (!memberId) {
-    const response = NextResponse.redirect(redirectTo, 303);
-    setFlash(response, "error", "Member ID missing");
-    return response;
-  }
-
   const formData = await request.formData();
   const name = typeof formData.get("name") === "string" ? String(formData.get("name")).trim() : "";
   const email = typeof formData.get("email") === "string" ? String(formData.get("email")).trim() : "";
   const roleId = typeof formData.get("roleId") === "string" ? String(formData.get("roleId")).trim() : "";
-  const phone = typeof formData.get("phone") === "string" ? String(formData.get("phone")).trim() : "";
   const active = formData.get("active") === "on";
-  const defaultCrewSplitPercent =
-    typeof formData.get("defaultCrewSplitPercent") === "string"
-      ? String(formData.get("defaultCrewSplitPercent")).trim()
-      : "";
-
-  const grantPresent = String(formData.get("permissionsGrant_present") ?? "") === "1";
-  const denyPresent = String(formData.get("permissionsDeny_present") ?? "") === "1";
-
-  const permissionsGrant = grantPresent
-    ? formData
-        .getAll("permissionsGrant")
-        .map((value) => String(value).trim())
-        .filter((value) => value.length > 0)
-    : null;
-
-  const permissionsDeny = denyPresent
-    ? formData
-        .getAll("permissionsDeny")
-        .map((value) => String(value).trim())
-        .filter((value) => value.length > 0)
-    : null;
 
   if (!name) {
     const response = NextResponse.redirect(redirectTo, 303);
-    setFlash(response, "error", "Name is required");
+    setFlash(response, "error", "Member name required");
     return response;
   }
 
@@ -99,31 +67,16 @@ export async function POST(
     active
   };
 
-  payload["email"] = email.length > 0 ? email : null;
-  payload["roleId"] = roleId.length > 0 ? roleId : null;
-  payload["phone"] = phone.length > 0 ? phone : null;
-  if (permissionsGrant !== null) payload["permissionsGrant"] = permissionsGrant;
-  if (permissionsDeny !== null) payload["permissionsDeny"] = permissionsDeny;
+  if (email.length > 0) payload["email"] = email;
+  if (roleId.length > 0) payload["roleId"] = roleId;
 
-  if (defaultCrewSplitPercent.length === 0) {
-    payload["defaultCrewSplitBps"] = null;
-  } else {
-    const parsed = Number(defaultCrewSplitPercent);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
-      const response = NextResponse.redirect(redirectTo, 303);
-      setFlash(response, "error", "Crew split % must be between 0 and 100");
-      return response;
-    }
-    payload["defaultCrewSplitBps"] = Math.round(parsed * 100);
-  }
-
-  const apiResponse = await callAdminApi(`/api/admin/team/members/${encodeURIComponent(memberId)}`, {
-    method: "PATCH",
+  const apiResponse = await callAdminApi("/api/admin/team/members", {
+    method: "POST",
     body: JSON.stringify(payload)
   });
 
   if (!apiResponse.ok) {
-    let message = "Unable to update member";
+    let message = "Unable to create member";
     try {
       const data = (await apiResponse.json()) as { message?: string; error?: string };
       const extracted = data.message ?? data.error;
@@ -140,6 +93,7 @@ export async function POST(
   }
 
   const response = NextResponse.redirect(redirectTo, 303);
-  setFlash(response, "ok", "Member updated");
+  setFlash(response, "ok", "Team member added");
   return response;
 }
+

@@ -1,4 +1,4 @@
-export type ServiceCategory = "house-wash" | "driveway" | "roof" | "deck" | "gutter" | "commercial" | "single-item" | "furniture" | "appliances" | "yard-waste" | "construction-debris" | "hot-tub";
+export type ServiceCategory = "house-wash" | "driveway" | "roof" | "deck" | "gutter" | "commercial" | "junk-removal" | "single-item" | "furniture" | "appliances" | "yard-waste" | "construction-debris" | "hot-tub" | "other";
 export type ZoneTier = "core" | "extended" | "premium";
 export interface ZoneConfig {
     id: string;

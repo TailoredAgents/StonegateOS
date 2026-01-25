@@ -285,6 +285,8 @@ export const teamMembers = pgTable(
     name: text("name").notNull(),
     email: text("email"),
     roleId: uuid("role_id").references(() => teamRoles.id, { onDelete: "set null" }),
+    permissionsGrant: text("permissions_grant").array().notNull().default([]),
+    permissionsDeny: text("permissions_deny").array().notNull().default([]),
     active: boolean("active").default(true).notNull(),
     defaultCrewSplitBps: integer("default_crew_split_bps"),
     passwordHash: text("password_hash"),

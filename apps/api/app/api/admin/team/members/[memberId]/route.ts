@@ -95,6 +95,8 @@ export async function PATCH(
     active?: boolean;
     phone?: string | null;
     defaultCrewSplitBps?: number | null;
+    permissionsGrant?: string[] | null;
+    permissionsDeny?: string[] | null;
   } | null;
 
   if (!payload || typeof payload !== "object") {
@@ -129,6 +131,40 @@ export async function PATCH(
       updates["defaultCrewSplitBps"] = value;
     } else {
       return NextResponse.json({ error: "invalid_default_crew_split" }, { status: 400 });
+    }
+  }
+
+  const normalizePermissionList = (value: unknown): string[] | null => {
+    if (value === null) return null;
+    if (!Array.isArray(value)) return null;
+    const cleaned = value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    return Array.from(new Set(cleaned));
+  };
+
+  if (payload.permissionsGrant !== undefined) {
+    if (payload.permissionsGrant === null) {
+      updates["permissionsGrant"] = [];
+    } else {
+      const normalized = normalizePermissionList(payload.permissionsGrant);
+      if (!normalized) {
+        return NextResponse.json({ error: "invalid_permissions_grant" }, { status: 400 });
+      }
+      updates["permissionsGrant"] = normalized;
+    }
+  }
+
+  if (payload.permissionsDeny !== undefined) {
+    if (payload.permissionsDeny === null) {
+      updates["permissionsDeny"] = [];
+    } else {
+      const normalized = normalizePermissionList(payload.permissionsDeny);
+      if (!normalized) {
+        return NextResponse.json({ error: "invalid_permissions_deny" }, { status: 400 });
+      }
+      updates["permissionsDeny"] = normalized;
     }
   }
 
@@ -171,12 +207,14 @@ export async function PATCH(
           updatedMember = row ?? null;
         } catch (error) {
           const code = extractPgCode(error);
-          if (code !== "42703" || updates["defaultCrewSplitBps"] === undefined) {
+          if (code !== "42703" || (updates["defaultCrewSplitBps"] === undefined && updates["permissionsGrant"] === undefined && updates["permissionsDeny"] === undefined)) {
             throw error;
           }
 
           const fallbackUpdates = { ...updates };
           delete fallbackUpdates["defaultCrewSplitBps"];
+          delete fallbackUpdates["permissionsGrant"];
+          delete fallbackUpdates["permissionsDeny"];
 
           if (Object.keys(fallbackUpdates).length === 1 && fallbackUpdates["updatedAt"]) {
             const [row] = await tx

@@ -28,6 +28,7 @@ type TeamSessionApiResponse = {
     email: string | null;
     roleSlug: string | null;
     passwordSet: boolean;
+    permissions?: string[];
   };
 };
 

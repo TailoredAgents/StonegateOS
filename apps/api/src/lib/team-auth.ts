@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { getDb, policySettings, teamLoginTokens, teamMembers, teamRoles, teamSessions } from "@/db";
+import { computeEffectivePermissions } from "@/lib/permissions";
 import { resolvePublicSiteBaseUrl as resolvePublicSiteBaseUrlInternal } from "@/lib/public-site-url";
 import { normalizePhone } from "../../app/api/web/utils";
 
@@ -262,7 +263,14 @@ export async function requireTeamSession(
   | { ok: false; status: number; error: string }
   | {
       ok: true;
-      teamMember: { id: string; name: string; email: string | null; roleSlug: string | null; passwordSet: boolean };
+      teamMember: {
+        id: string;
+        name: string;
+        email: string | null;
+        roleSlug: string | null;
+        passwordSet: boolean;
+        permissions: string[];
+      };
     }
 > {
   const header = request.headers.get("authorization") ?? "";
@@ -294,7 +302,10 @@ export async function requireTeamSession(
       email: teamMembers.email,
       active: teamMembers.active,
       passwordHash: teamMembers.passwordHash,
-      roleSlug: teamRoles.slug
+      roleSlug: teamRoles.slug,
+      rolePermissions: teamRoles.permissions,
+      permissionsGrant: teamMembers.permissionsGrant,
+      permissionsDeny: teamMembers.permissionsDeny
     })
     .from(teamMembers)
     .leftJoin(teamRoles, eq(teamMembers.roleId, teamRoles.id))
@@ -305,14 +316,25 @@ export async function requireTeamSession(
 
   await db.update(teamSessions).set({ lastSeenAt: now }).where(eq(teamSessions.id, sessionRow.id));
 
+  const roleSlug = memberRow.roleSlug ? memberRow.roleSlug.trim().toLowerCase() : null;
+  const permissions =
+    roleSlug === "owner"
+      ? ["*"]
+      : computeEffectivePermissions({
+          rolePermissions: memberRow.rolePermissions ?? [],
+          grant: memberRow.permissionsGrant ?? [],
+          deny: memberRow.permissionsDeny ?? []
+        });
+
   return {
     ok: true,
     teamMember: {
       id: memberRow.id,
       name: memberRow.name,
       email: memberRow.email ?? null,
-      roleSlug: memberRow.roleSlug ?? null,
-      passwordSet: Boolean(memberRow.passwordHash)
+      roleSlug,
+      passwordSet: Boolean(memberRow.passwordHash),
+      permissions
     }
   };
 }

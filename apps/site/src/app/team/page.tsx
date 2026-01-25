@@ -122,6 +122,50 @@ export default async function TeamPage({
     redirect("/team/login");
   }
 
+  const FALLBACK_PERMISSIONS_BY_ROLE: Record<string, string[]> = {
+    owner: ["*"],
+    office: [
+      "messages.send",
+      "messages.read",
+      "policy.read",
+      "policy.write",
+      "bookings.manage",
+      "automation.read",
+      "automation.write",
+      "audit.read",
+      "appointments.read",
+      "appointments.update",
+      "expenses.read",
+      "expenses.write"
+    ],
+    crew: ["messages.read", "appointments.read", "appointments.update", "expenses.read", "expenses.write"],
+    read_only: ["read"]
+  };
+
+  const effectivePermissions: string[] = hasOwner
+    ? ["*"]
+    : Array.isArray(teamMember?.permissions)
+      ? teamMember?.permissions ?? []
+      : teamRole && FALLBACK_PERMISSIONS_BY_ROLE[teamRole]
+        ? FALLBACK_PERMISSIONS_BY_ROLE[teamRole] ?? []
+        : [];
+
+  const permissionMatches = (granted: string, required: string): boolean => {
+    if (granted === "*") return true;
+    if (required === "read") return granted === "read";
+    if (granted === "read") return required === "read" || required.endsWith(".read");
+    if (granted.endsWith(".*")) {
+      const prefix = granted.slice(0, -2);
+      return required.startsWith(prefix);
+    }
+    return granted === required;
+  };
+
+  const hasPermission = (required: string): boolean => {
+    if (hasOwner) return true;
+    return effectivePermissions.some((permission) => permissionMatches(permission, required));
+  };
+
   const isAllowed = (requires?: TabNavItem["requires"]): boolean => {
     if (!requires) return true;
     const list = Array.isArray(requires) ? requires : [requires];
@@ -129,7 +173,7 @@ export default async function TeamPage({
       if (entry === "owner") return hasOwner;
       if (entry === "office") return hasOffice || hasOwner;
       if (entry === "crew") return hasCrew || hasOwner;
-      return false;
+      return hasPermission(entry);
     });
   };
 
@@ -210,27 +254,27 @@ export default async function TeamPage({
   }
 
   const tabs: TabNavItem[] = [
-    { id: "myday", label: "My Day", href: "/team?tab=myday", requires: ["crew", "office"] },
-    { id: "expenses", label: "Expenses", href: "/team?tab=expenses", requires: ["crew", "office"] },
-    { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: ["crew", "office"] },
-    { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: ["office"] },
-    { id: "chat", label: "Chat", href: "/team?tab=chat", requires: ["office"] },
-    { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: ["office"] },
-    { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: ["office"] },
-    { id: "outbound", label: "Outbound", href: "/team?tab=outbound", requires: ["office"] },
+    { id: "myday", label: "My Day", href: "/team?tab=myday", requires: "appointments.read" },
+    { id: "expenses", label: "Expenses", href: "/team?tab=expenses", requires: "expenses.read" },
+    { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "appointments.read" },
+    { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "messages.send" },
+    { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "messages.send" },
+    { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "bookings.manage" },
+    { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "messages.send" },
+    { id: "outbound", label: "Outbound", href: "/team?tab=outbound", requires: "messages.send" },
     { id: "partners", label: "Partners", href: "/team?tab=partners", requires: "owner" },
-    { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: ["office"] },
-    { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: ["office"] },
+    { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "bookings.manage" },
+    { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "bookings.manage" },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
-    { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "owner" },
-    { id: "commissions", label: "Commissions", href: "/team?tab=commissions", requires: "owner" },
-    { id: "marketing", label: "Marketing", href: "/team?tab=marketing", requires: "owner" },
-    { id: "seo", label: "SEO Agent", href: "/team?tab=seo", requires: "owner" },
-    { id: "automation", label: "Messaging Automation", href: "/team?tab=automation", requires: "owner" },
-    { id: "access", label: "Access", href: "/team?tab=access", requires: "owner" },
-    { id: "sales-log", label: "Sales Log", href: "/team?tab=sales-log", requires: "owner" },
-    { id: "audit", label: "Audit Log", href: "/team?tab=audit", requires: "owner" },
-    { id: "merge", label: "Merge Queue", href: "/team?tab=merge", requires: "owner" },
+    { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "policy.read" },
+    { id: "commissions", label: "Commissions", href: "/team?tab=commissions", requires: "access.manage" },
+    { id: "marketing", label: "Marketing", href: "/team?tab=marketing", requires: "policy.read" },
+    { id: "seo", label: "SEO Agent", href: "/team?tab=seo", requires: "policy.read" },
+    { id: "automation", label: "Messaging Automation", href: "/team?tab=automation", requires: "automation.read" },
+    { id: "access", label: "Access", href: "/team?tab=access", requires: "access.manage" },
+    { id: "sales-log", label: "Sales Log", href: "/team?tab=sales-log", requires: "audit.read" },
+    { id: "audit", label: "Audit Log", href: "/team?tab=audit", requires: "audit.read" },
+    { id: "merge", label: "Merge Queue", href: "/team?tab=merge", requires: "contacts.merge" },
     { id: "settings", label: "Settings", href: "/team?tab=settings" }
   ];
   const tabGroups: TabNavGroup[] = [
@@ -337,7 +381,15 @@ export default async function TeamPage({
             </div>
           </div>
           <div className="mt-6">
-            <TabNav items={tabs} groups={tabGroups} activeId={tab} hasOwner={hasOwner} hasCrew={hasCrew} hasOffice={hasOffice} />
+            <TabNav
+              items={tabs}
+              groups={tabGroups}
+              activeId={tab}
+              hasOwner={hasOwner}
+              hasCrew={hasCrew}
+              hasOffice={hasOffice}
+              permissions={effectivePermissions}
+            />
           </div>
         </header>
 
