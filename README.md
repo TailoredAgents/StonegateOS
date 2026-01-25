@@ -113,6 +113,8 @@ The marketing site reads public branding from env at build time (no runtime DB f
 - Set `NEXT_PUBLIC_COMPANY_*` vars in `.env` / Render to change company name, phone, email, logo, and structured data.
 - See `apps/site/src/lib/company.ts` and `.env.example`.
 
+Note: This repo’s marketing site is a starter template. For other businesses, it’s expected you’ll customize or replace the marketing site (BYO site) while keeping the CRM + automations as the reusable product.
+
 Placeholders currently in use:
 - Email: `austin@stonegatejunkremoval.com`
 - Phone: `(678) 541-7725`
