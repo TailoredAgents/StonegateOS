@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { getDb, policySettings, teamLoginTokens, teamMembers, teamRoles, teamSessions } from "@/db";
 import { resolvePublicSiteBaseUrl as resolvePublicSiteBaseUrlInternal } from "@/lib/public-site-url";
 import { normalizePhone } from "../../app/api/web/utils";
@@ -96,7 +96,7 @@ export async function findActiveTeamMemberByEmail(email: string): Promise<{
       passwordHash: teamMembers.passwordHash
     })
     .from(teamMembers)
-    .where(eq(teamMembers.email, email))
+    .where(eq(sql`lower(${teamMembers.email})`, email.toLowerCase()))
     .limit(1);
 
   if (!row?.id || !row.active) return null;

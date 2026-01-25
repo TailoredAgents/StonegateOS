@@ -48,10 +48,26 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       const smsBody = `Stonegate Team Console login link: ${url.toString()} (expires ${expiresAt.toISOString()})`;
 
-      await Promise.allSettled([
-        member.email ? sendEmailMessage(member.email, subject, body) : Promise.resolve(),
-        member.phoneE164 ? sendSmsMessage(member.phoneE164, smsBody) : Promise.resolve()
+      const results = await Promise.allSettled([
+        member.email ? sendEmailMessage(member.email, subject, body) : Promise.resolve({ ok: true }),
+        member.phoneE164 ? sendSmsMessage(member.phoneE164, smsBody) : Promise.resolve({ ok: true })
       ]);
+
+      const emailResult = results[0]?.status === "fulfilled" ? results[0].value : null;
+      const smsResult = results[1]?.status === "fulfilled" ? results[1].value : null;
+
+      if (emailResult && "ok" in emailResult && !emailResult.ok) {
+        console.warn("[team.auth] login_link_email_failed", {
+          to: member.email,
+          detail: "detail" in emailResult ? emailResult.detail ?? null : null
+        });
+      }
+      if (smsResult && "ok" in smsResult && !smsResult.ok) {
+        console.warn("[team.auth] login_link_sms_failed", {
+          to: member.phoneE164,
+          detail: "detail" in smsResult ? smsResult.detail ?? null : null
+        });
+      }
     } catch {
       // Avoid leaking whether an account exists / email deliverability.
     }

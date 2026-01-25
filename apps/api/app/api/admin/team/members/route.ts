@@ -149,7 +149,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "name_required" }, { status: 400 });
   }
 
-  const email = typeof payload.email === "string" && payload.email.trim().length > 0 ? payload.email.trim() : null;
+  const email =
+    typeof payload.email === "string" && payload.email.trim().length > 0
+      ? payload.email.trim().toLowerCase()
+      : null;
   const roleId = typeof payload.roleId === "string" && payload.roleId.trim().length > 0 ? payload.roleId.trim() : null;
   const active = typeof payload.active === "boolean" ? payload.active : true;
 

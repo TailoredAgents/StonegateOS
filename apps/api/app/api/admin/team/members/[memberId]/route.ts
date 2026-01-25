@@ -84,7 +84,7 @@ export async function PATCH(
     updates["name"] = payload.name.trim();
   }
   if (typeof payload.email === "string") {
-    updates["email"] = payload.email.trim().length > 0 ? payload.email.trim() : null;
+    updates["email"] = payload.email.trim().length > 0 ? payload.email.trim().toLowerCase() : null;
   }
   if (typeof payload.roleId === "string") {
     updates["roleId"] = payload.roleId.trim().length > 0 ? payload.roleId.trim() : null;
