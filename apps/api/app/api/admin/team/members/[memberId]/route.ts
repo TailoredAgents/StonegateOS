@@ -27,13 +27,28 @@ const MEMBER_SELECT = {
   active: teamMembers.active
 } as const;
 
-function normalizeE164(value: string): string | null {
+function normalizePhoneInput(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
-  if (!trimmed.startsWith("+")) return null;
-  const digits = trimmed.slice(1).replace(/[^\d]/g, "");
-  if (digits.length < 10 || digits.length > 15) return null;
-  return `+${digits}`;
+
+  // Allow US 10-digit numbers without +1.
+  if (/^\d{10}$/.test(trimmed)) {
+    return `+1${trimmed}`;
+  }
+
+  if (trimmed.startsWith("+")) {
+    const digits = trimmed.slice(1).replace(/[^\d]/g, "");
+    if (digits.length < 10 || digits.length > 15) return null;
+    return `+${digits}`;
+  }
+
+  // Allow common formatted US numbers like (678) 555-1212 or 678-555-1212.
+  const digitsOnly = trimmed.replace(/[^\d]/g, "");
+  if (digitsOnly.length === 10) {
+    return `+1${digitsOnly}`;
+  }
+
+  return null;
 }
 
 function readPhoneMap(value: unknown): Record<string, string> {
@@ -115,7 +130,7 @@ export async function PATCH(
       if (payload.phone.trim().length === 0) {
         phoneUpdate = { value: null };
       } else {
-        const normalized = normalizeE164(payload.phone);
+        const normalized = normalizePhoneInput(payload.phone);
         if (!normalized) {
           return NextResponse.json({ error: "invalid_phone" }, { status: 400 });
         }

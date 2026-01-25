@@ -21,7 +21,12 @@ export function normalizePhoneE164(value: unknown): string | null {
   const raw = readString(value);
   if (!raw) return null;
   try {
-    return normalizePhone(raw).e164;
+    const trimmed = raw.trim();
+    // Treat bare US 10-digit numbers as US by default.
+    if (/^\d{10}$/.test(trimmed)) {
+      return normalizePhone(`+1${trimmed}`).e164;
+    }
+    return normalizePhone(trimmed).e164;
   } catch {
     return null;
   }
