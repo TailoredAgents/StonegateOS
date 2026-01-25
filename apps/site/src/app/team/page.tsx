@@ -714,20 +714,25 @@ export default async function TeamPage({
 
   const allowedTabs = resolvedTabs.filter((item) => isAllowed(item.requires));
   const tabMap = new Map(allowedTabs.map((item) => [item.id, item]));
+  const quickIds = ["inbox", "contacts", "calendar", "sales-hq"];
+  const quickIdSet = new Set(quickIds);
   const groups: TeamNavGroup[] = tabGroups
     .filter((group) => group.id !== "account")
     .map((group) => ({
       id: group.id,
       label: group.label,
-      items: group.itemIds.map((id) => tabMap.get(id)).filter((item): item is TabNavItem => Boolean(item)).map((item) => ({
-        id: item.id,
-        label: item.label,
-        href: item.href
-      }))
+      items: group.itemIds
+        .filter((id) => !quickIdSet.has(id))
+        .map((id) => tabMap.get(id))
+        .filter((item): item is TabNavItem => Boolean(item))
+        .map((item) => ({
+          id: item.id,
+          label: item.label,
+          href: item.href
+        }))
     }))
     .filter((group) => group.items.length > 0);
 
-  const quickIds = ["inbox", "contacts", "calendar", "sales-hq"];
   const quickItems: ShellNavItem[] = quickIds
     .map((id) => tabMap.get(id))
     .filter((item): item is TabNavItem => Boolean(item))

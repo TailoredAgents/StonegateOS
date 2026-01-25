@@ -132,6 +132,21 @@ function IconChevronRight(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconChevronDown(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M6.75 9.75 12 15.25l5.25-5.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function IconMenu(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
@@ -182,6 +197,7 @@ function AccessPill({ label, enabled, tone }: { label: string; enabled: boolean;
 }
 
 const SIDEBAR_STORAGE_KEY = "team.sidebar.collapsed.v1";
+const GROUPS_STORAGE_KEY = "team.sidebar.groups.collapsed.v1";
 
 export function TeamAppShell(props: {
   activeId: string;
@@ -198,16 +214,47 @@ export function TeamAppShell(props: {
   const [isPending, startTransition] = React.useTransition();
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
+  const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
 
   React.useEffect(() => {
     const stored = globalThis.localStorage?.getItem(SIDEBAR_STORAGE_KEY);
     if (stored === "1") setCollapsed(true);
+
+    const groupsStored = globalThis.localStorage?.getItem(GROUPS_STORAGE_KEY);
+    if (!groupsStored) return;
+    try {
+      const parsed = JSON.parse(groupsStored) as unknown;
+      if (!Array.isArray(parsed)) return;
+      setCollapsedGroups(
+        parsed.reduce<Record<string, boolean>>((acc, groupId) => {
+          if (typeof groupId === "string") acc[groupId] = true;
+          return acc;
+        }, {})
+      );
+    } catch {
+      // ignore invalid JSON
+    }
   }, []);
 
   const handleToggleCollapse = React.useCallback(() => {
     setCollapsed((prev) => {
       const next = !prev;
       globalThis.localStorage?.setItem(SIDEBAR_STORAGE_KEY, next ? "1" : "0");
+      return next;
+    });
+  }, []);
+
+  const toggleGroupCollapsed = React.useCallback((groupId: string) => {
+    setCollapsedGroups((prev) => {
+      const next = { ...prev, [groupId]: !prev[groupId] };
+      try {
+        const collapsedIds = Object.entries(next)
+          .filter(([, isCollapsed]) => isCollapsed)
+          .map(([id]) => id);
+        globalThis.localStorage?.setItem(GROUPS_STORAGE_KEY, JSON.stringify(collapsedIds));
+      } catch {
+        // ignore persistence issues
+      }
       return next;
     });
   }, []);
@@ -259,8 +306,9 @@ export function TeamAppShell(props: {
                 key={item.id}
                 type="button"
                 onClick={() => handleNavigate(item.href)}
+                title={collapsed ? item.label : undefined}
                 className={cn(
-                  "group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-primary-200",
+                  "group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
                   active
                     ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/60"
                     : "text-slate-700 hover:bg-white hover:text-slate-900"
@@ -284,44 +332,65 @@ export function TeamAppShell(props: {
 
       <div className="flex-1 overflow-y-auto pr-1">
         <div className="space-y-4">
-          {props.groups.map((group) => (
-            <div key={group.id} className="space-y-2">
-              {collapsed ? null : (
-                <div className="px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  {group.label}
-                </div>
-              )}
-              <div className="space-y-1">
-                {group.items.map((item) => {
-                  const active = item.id === props.activeId;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => handleNavigate(item.href)}
+          {props.groups.map((group) => {
+            const isGroupCollapsed = collapsed ? false : Boolean(collapsedGroups[group.id]);
+            return (
+              <div key={group.id} className="space-y-2">
+                {collapsed ? null : (
+                  <button
+                    type="button"
+                    onClick={() => toggleGroupCollapsed(group.id)}
+                    className="flex w-full items-center justify-between rounded-2xl px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 transition hover:bg-white hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary-200"
+                    aria-expanded={!isGroupCollapsed}
+                  >
+                    <span>{group.label}</span>
+                    <span
                       className={cn(
-                        "group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
-                        active
-                          ? "bg-slate-900 text-white shadow-md shadow-slate-300/50"
-                          : "text-slate-700 hover:bg-white hover:text-slate-900"
+                        "inline-flex h-6 w-6 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition",
+                        isGroupCollapsed ? "rotate-[-90deg]" : "rotate-0"
                       )}
-                      aria-current={active ? "page" : undefined}
                     >
-                      <span
-                        className={cn(
-                          "flex h-9 w-9 items-center justify-center rounded-2xl border",
-                          active ? "border-white/20 bg-white/10 text-white" : "border-slate-200 bg-white text-slate-500 group-hover:text-slate-700"
-                        )}
-                      >
-                        {iconForTab(item.id)}
-                      </span>
-                      {collapsed ? null : <span className="truncate">{item.label}</span>}
-                    </button>
-                  );
-                })}
+                      <IconChevronDown className="h-4 w-4" />
+                    </span>
+                  </button>
+                )}
+                {isGroupCollapsed ? null : (
+                  <div className="space-y-1">
+                    {group.items.map((item) => {
+                      const active = item.id === props.activeId;
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleNavigate(item.href)}
+                          title={collapsed ? item.label : undefined}
+                          className={cn(
+                            "group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
+                            active
+                              ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/60"
+                              : "text-slate-700 hover:bg-white hover:text-slate-900"
+                          )}
+                          aria-current={active ? "page" : undefined}
+                        >
+                          <span
+                            className={cn(
+                              "flex h-9 w-9 items-center justify-center rounded-2xl border",
+                              active
+                                ? "border-primary-100 bg-white text-primary-700"
+                                : "border-slate-200 bg-white text-slate-500 group-hover:text-slate-700"
+                            )}
+                          >
+                            {iconForTab(item.id)}
+                          </span>
+                          {collapsed ? null : <span className="truncate">{item.label}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -367,7 +436,7 @@ export function TeamAppShell(props: {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-40 border-b border-slate-200/70 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-            <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 sm:px-6">
+            <div className="mx-auto flex max-w-[1760px] items-center justify-between gap-4 px-4 py-3 sm:px-6">
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -381,7 +450,7 @@ export function TeamAppShell(props: {
                   <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Team</div>
                   <div className="text-lg font-semibold text-slate-900">{props.title}</div>
                 </div>
-                {isPending ? <span className="text-xs font-semibold text-slate-400">Loading…</span> : null}
+                {isPending ? <span className="text-xs font-semibold text-slate-400">Loading...</span> : null}
               </div>
               <div className="flex items-center gap-2 sm:gap-3">
                 <div className="hidden items-center gap-2 md:flex">
@@ -400,7 +469,7 @@ export function TeamAppShell(props: {
           </header>
 
           <div className="flex-1">
-            <main className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6 sm:py-8">
+            <main className="mx-auto w-full max-w-[1760px] space-y-6 px-4 py-6 sm:px-6 sm:py-8">
               {props.children}
             </main>
           </div>
@@ -436,4 +505,3 @@ export function TeamAppShell(props: {
     </div>
   );
 }
-
