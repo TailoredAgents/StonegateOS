@@ -8,6 +8,14 @@ const CREW_COOKIE = "myst-crew-session";
 
 export const dynamic = "force-dynamic";
 
+function buildContactsRedirect(request: NextRequest, contactId?: string | null): URL {
+  const origin = new URL(request.url).origin;
+  const url = new URL("/team", origin);
+  url.searchParams.set("tab", "contacts");
+  if (contactId) url.searchParams.set("created", contactId);
+  return url;
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   const jar = request.cookies;
   const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
@@ -113,11 +121,15 @@ export async function POST(request: NextRequest): Promise<Response> {
     try {
       const data = (await apiResponse.json()) as {
         error?: string;
-        existingContact?: { firstName?: string | null; lastName?: string | null } | null;
+        existingContact?: { id?: string; firstName?: string | null; lastName?: string | null } | null;
       };
       if (data.error === "contact_already_exists") {
         const existingName = `${data.existingContact?.firstName ?? ""} ${data.existingContact?.lastName ?? ""}`.trim();
         message = existingName.length > 0 ? `Contact already exists (${existingName}).` : "Contact already exists.";
+        const existingId = typeof data.existingContact?.id === "string" ? data.existingContact.id : null;
+        const response = NextResponse.redirect(buildContactsRedirect(request, existingId), 303);
+        response.cookies.set({ name: "myst-flash-error", value: message, path: "/" });
+        return response;
       } else if (data.error) {
         message = data.error.replace(/_/g, " ");
       }
@@ -129,7 +141,17 @@ export async function POST(request: NextRequest): Promise<Response> {
     return response;
   }
 
-  const response = NextResponse.redirect(redirectTo, 303);
+  let createdId: string | null = null;
+  try {
+    const data = (await apiResponse.json()) as { contact?: { id?: string } };
+    if (typeof data?.contact?.id === "string" && data.contact.id.trim().length > 0) {
+      createdId = data.contact.id.trim();
+    }
+  } catch {
+    createdId = null;
+  }
+
+  const response = NextResponse.redirect(buildContactsRedirect(request, createdId), 303);
   response.cookies.set({ name: "myst-flash", value: "Contact created", path: "/" });
   return response;
 }
