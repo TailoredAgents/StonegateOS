@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { inArray } from "drizzle-orm";
 import { getDb, providerHealth } from "@/db";
 import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
+import { isGoogleCalendarEnabled } from "@/lib/calendar";
 import { isAdminRequest } from "../../../web/admin";
 
 const PROVIDERS = ["sms", "email", "calendar", "meta_ads", "google_ads"] as const;
@@ -76,6 +77,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const blockers: HealthFinding[] = [];
   const warnings: HealthFinding[] = [];
+  const calendarEnabled = isGoogleCalendarEnabled();
 
   const siteUrlBlocker = getPublicSiteUrlBlocker();
   if (siteUrlBlocker) blockers.push(siteUrlBlocker);
@@ -108,6 +110,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   for (const provider of providers) {
     if (provider.status !== "degraded") continue;
+    if (provider.provider === "calendar" && !calendarEnabled) continue;
     warnings.push({
       id: `provider_${provider.provider}`,
       severity: "warning",
@@ -129,4 +132,3 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
   });
 }
-
