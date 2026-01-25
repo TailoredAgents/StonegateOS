@@ -56,6 +56,7 @@ export type ReviewRequestPolicy = {
 export type CompanyProfilePolicy = {
   businessName: string;
   primaryPhone: string;
+  discountPercent: number;
   serviceAreaSummary: string;
   trailerAndPricingSummary: string;
   whatWeDo: string;
@@ -159,6 +160,7 @@ export const DEFAULT_QUIET_HOURS_POLICY: QuietHoursPolicy = {
 export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
   businessName: "Stonegate Junk Removal",
   primaryPhone: "(404) 777-2631",
+  discountPercent: 0.15,
   serviceAreaSummary:
     "We serve Georgia (primarily north and central Georgia). Share your ZIP code and we will confirm availability.",
   trailerAndPricingSummary:
@@ -1106,6 +1108,10 @@ export async function getCompanyProfilePolicy(db: DbExecutor = getDb()): Promise
   return {
     businessName: coerceString(stored["businessName"], DEFAULT_COMPANY_PROFILE_POLICY.businessName),
     primaryPhone: coerceString(stored["primaryPhone"], DEFAULT_COMPANY_PROFILE_POLICY.primaryPhone),
+    discountPercent: coerceFloat(stored["discountPercent"], DEFAULT_COMPANY_PROFILE_POLICY.discountPercent, {
+      min: 0,
+      max: 0.9
+    }),
     serviceAreaSummary: coerceString(
       stored["serviceAreaSummary"],
       DEFAULT_COMPANY_PROFILE_POLICY.serviceAreaSummary

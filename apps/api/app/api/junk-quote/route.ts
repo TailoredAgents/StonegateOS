@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
-import { isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
+import { getCompanyProfilePolicy, isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
 import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
 import { normalizeName, normalizePhone } from "../web/utils";
 
-const DISCOUNT = Number(process.env["INSTANT_QUOTE_DISCOUNT"] ?? 0.15);
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
 
@@ -35,6 +34,20 @@ function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseIn
 
 export function OPTIONS(request: NextRequest): NextResponse {
   return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+}
+
+async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>): Promise<number> {
+  const envRaw = process.env["INSTANT_QUOTE_DISCOUNT"];
+  const envValue = envRaw ? Number(envRaw) : NaN;
+  if (Number.isFinite(envValue) && envValue > 0 && envValue < 1) {
+    return envValue;
+  }
+
+  const profile = await getCompanyProfilePolicy(db);
+  const percent = profile.discountPercent;
+  if (!Number.isFinite(percent)) return 0;
+  if (percent <= 0 || percent >= 1) return 0;
+  return percent;
 }
 
 const RequestSchema = z.object({
@@ -385,17 +398,17 @@ export async function POST(request: NextRequest) {
 
     const base = applyBoundsToQuote(baseCandidate, body.job, bounds);
 
-    const discount = DISCOUNT > 0 && DISCOUNT < 1 ? DISCOUNT : 0;
-    const priceLowDiscounted = Math.round(base.priceLow * (1 - discount));
-    const priceHighDiscounted = Math.round(base.priceHigh * (1 - discount));
+    const db = getDb();
+    const discountPercent = await resolveInstantQuoteDiscountPercent(db);
+    const priceLowDiscounted = Math.round(base.priceLow * (1 - discountPercent));
+    const priceHighDiscounted = Math.round(base.priceHigh * (1 - discountPercent));
     const storedAiResult = {
       ...base,
-      discountPercent: discount,
+      discountPercent,
       priceLowDiscounted,
       priceHighDiscounted
     };
 
-    const db = getDb();
     const [quoteRow] = await db
       .insert(instantQuotes)
       .values({
@@ -541,7 +554,7 @@ export async function POST(request: NextRequest) {
       quoteId,
       quote: {
         ...base,
-        discountPercent: discount,
+        discountPercent,
         priceLowDiscounted,
         priceHighDiscounted
       }

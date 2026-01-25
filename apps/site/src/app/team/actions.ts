@@ -1741,6 +1741,7 @@ export async function updateCompanyProfilePolicyAction(formData: FormData) {
 
   const businessName = readText("businessName");
   const primaryPhone = readText("primaryPhone");
+  const discountPercentRaw = readText("discountPercent");
   const serviceAreaSummary = readText("serviceAreaSummary");
   const trailerAndPricingSummary = readText("trailerAndPricingSummary");
   const whatWeDo = readText("whatWeDo");
@@ -1755,12 +1756,23 @@ export async function updateCompanyProfilePolicyAction(formData: FormData) {
     return;
   }
 
+  let discountPercent: number | undefined;
+  if (discountPercentRaw.length > 0) {
+    const parsed = Number(discountPercentRaw);
+    if (Number.isFinite(parsed)) {
+      const normalized = parsed > 1 ? parsed / 100 : parsed;
+      const clamped = Math.min(0.9, Math.max(0, normalized));
+      discountPercent = clamped;
+    }
+  }
+
   await submitPolicyUpdate(
     jar,
     "company_profile",
     {
       businessName,
       primaryPhone: primaryPhone.length > 0 ? primaryPhone : undefined,
+      discountPercent,
       serviceAreaSummary: serviceAreaSummary.length > 0 ? serviceAreaSummary : undefined,
       trailerAndPricingSummary: trailerAndPricingSummary.length > 0 ? trailerAndPricingSummary : undefined,
       whatWeDo: whatWeDo.length > 0 ? whatWeDo : undefined,
@@ -1771,6 +1783,31 @@ export async function updateCompanyProfilePolicyAction(formData: FormData) {
     },
     "Company profile updated"
   );
+}
+
+export async function updateSalesAutopilotSignatureAction(formData: FormData) {
+  const jar = await cookies();
+  const agentDisplayNameRaw = formData.get("agentDisplayName");
+  const agentDisplayName = typeof agentDisplayNameRaw === "string" ? agentDisplayNameRaw.trim() : "";
+  if (agentDisplayName.length === 0) {
+    jar.set({ name: "myst-flash-error", value: "Name is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/sales/autopilot", {
+    method: "PATCH",
+    body: JSON.stringify({ agentDisplayName })
+  });
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to update Sales Autopilot");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Sales agent name updated", path: "/" });
+  revalidatePath("/team");
 }
 
 export async function updateConversationPersonaPolicyAction(formData: FormData) {

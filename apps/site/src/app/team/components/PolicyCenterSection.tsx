@@ -14,6 +14,7 @@ import {
   updatePolicyAction,
   updateQuietHoursPolicyAction,
   updateReviewRequestPolicyAction,
+  updateSalesAutopilotSignatureAction,
   updateServiceAreaPolicyAction,
   updateStandardJobPolicyAction,
   updateTemplatesPolicyAction
@@ -238,6 +239,12 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
     typeof companyValue["primaryPhone"] === "string" && companyValue["primaryPhone"].trim().length > 0
       ? companyValue["primaryPhone"]
       : "(404) 777-2631";
+  const companyDiscountPercent = (() => {
+    const raw = companyValue["discountPercent"];
+    const num = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+    if (!Number.isFinite(num)) return 0.15;
+    return Math.min(0.9, Math.max(0, num));
+  })();
   const companyServiceAreaSummary =
     typeof companyValue["serviceAreaSummary"] === "string" && companyValue["serviceAreaSummary"].trim().length > 0
       ? companyValue["serviceAreaSummary"]
@@ -266,6 +273,22 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
     typeof companyValue["outboundCallRecordingNotice"] === "string"
       ? (companyValue["outboundCallRecordingNotice"] as string)
       : "This call may be recorded for quality and training.";
+
+  let salesAutopilotName = "Devon";
+  try {
+    const autopilotResponse = await callAdminApi("/api/admin/sales/autopilot");
+    if (autopilotResponse.ok) {
+      const autopilotPayload = (await autopilotResponse.json().catch(() => null)) as
+        | { policy?: { agentDisplayName?: string } }
+        | null;
+      const candidate = autopilotPayload?.policy?.agentDisplayName;
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        salesAutopilotName = candidate.trim();
+      }
+    }
+  } catch {
+    salesAutopilotName = "Devon";
+  }
 
   const personaSetting = settingsByKey.get("conversation_persona");
   const personaValue = isRecord(personaSetting?.value) ? personaSetting!.value : {};
@@ -534,6 +557,18 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
                 <input name="primaryPhone" defaultValue={companyPrimaryPhone} className={INPUT_CLASS} />
               </div>
             </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className={LABEL_CLASS}>Instant quote discount (%)</label>
+                <input
+                  name="discountPercent"
+                  inputMode="decimal"
+                  defaultValue={Math.round(companyDiscountPercent * 1000) / 10}
+                  className={INPUT_CLASS}
+                />
+                <p className="mt-1 text-[11px] text-slate-500">Enter 15 for a 15% discount (used by /quote).</p>
+              </div>
+            </div>
             <div>
               <label className={LABEL_CLASS}>Service area summary</label>
               <textarea
@@ -599,6 +634,30 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
             </div>
           </form>
           <AdvancedJsonEditor setting={companySetting} />
+        </div>
+        <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold text-slate-900">Sales agent name</h3>
+            <p className="text-xs text-slate-500">Name used by Sales Autopilot when drafting and sending messages.</p>
+          </div>
+          <form action={updateSalesAutopilotSignatureAction} className="mt-4 space-y-4">
+            <div>
+              <label className={LABEL_CLASS}>Name</label>
+              <input name="agentDisplayName" defaultValue={salesAutopilotName} className={INPUT_CLASS} required />
+              <p className="mt-1 text-[11px] text-slate-500">
+                Advanced cadence settings live under Messaging Automation.
+              </p>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-500">
+              <span>Last updated {formatUpdatedAt(null)}</span>
+              <SubmitButton
+                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                pendingLabel="Saving..."
+              >
+                Save name
+              </SubmitButton>
+            </div>
+          </form>
         </div>
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
           <div className="flex flex-col gap-1">
