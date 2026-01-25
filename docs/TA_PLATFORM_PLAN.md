@@ -4,7 +4,7 @@ This document is the source-of-truth for how StonegateOS evolves into a reusable
 
 ## TL;DR
 - Deployment model: **one deployment per company** (Stonegate, Myst, etc.).
-- Customization model: **configuration-only** (branding + prompts + phone numbers + hours + website) using a portable **Company Pack**.
+- Customization model: CRM is **configuration-only** using a portable **Company Pack**; the marketing site is BYO/custom per company (kept SEO-fast).
 - Engineering principle: company-specific values must not be hardcoded; they must come from configuration (DB + env).
 
 ## Vision
@@ -17,7 +17,7 @@ Build a repeatable operating system for local service businesses:
 ## Non-goals (for now)
 - True multi-tenant SaaS (shared DB across companies).
 - Automated ad changes without operator approval.
-- Custom-coded website per customer (beyond template-driven blocks and content).
+- Building an in-product website builder / page-builder.
 
 ## Product model: Platform vs Company Pack
 **Platform (shared codebase)**
@@ -32,7 +32,7 @@ Build a repeatable operating system for local service businesses:
 - Pricing rules, discount policy, fees
 - Pipeline labels/stages and automation defaults
 - AI “voice”, templates, and knowledgebase pointers
-- Website content blocks + allowed custom pages (content, not code)
+- Optional: website template config (only if using the built-in marketing site template)
 
 ## Deployment model (TA chosen)
 **One deployment per company**:
@@ -61,7 +61,7 @@ Why:
 
 **Scope**
 - Company Pack editor in `/team` + export/import JSON.
-- Pack covers: branding, hours, service areas, pricing/discounts, pipeline labels, automation defaults, AI voice/templates, website blocks.
+- Pack covers: branding, hours, service areas, pricing/discounts, pipeline labels, automation defaults, AI voice/templates.
 - Export redacts secrets; secrets remain env-only.
 
 **Done when**
@@ -77,7 +77,9 @@ Why:
 
 **Scope**
 - Unique user accounts, memberships, roles/permissions (Sales/Ops/Owner/Admin).
-- Replace shared “master login” dependence for actions/metrics.
+- Team member accounts + roles + per-member permission overrides are implemented.
+- Temporary legacy “break-glass” sessions (Owner/Crew keys) are still available during active development for safety.
+- Before the system is considered “finished” (and sellable), remove/disable the legacy sessions and require per-user logins for accountability.
 - Audit logs include actor user.
 
 **Done when**
@@ -128,19 +130,11 @@ Why:
 - Pack includes a version and can evolve (migration-aware).
 - Pack must be editable via UI for non-technical operators.
 
-## Website templating rules
-Default approach:
-- Template-driven site using Company Pack data.
-- Content blocks (hero, services grid, testimonials, FAQ, areas, CTAs).
-
-Allowed customization (no code):
-- Add/remove blocks
-- Edit copy, headlines, CTAs
-- Add “custom pages” using existing blocks
-
-Paid/custom work (TA add-on):
-- New block types
-- Full custom designs beyond template system
+## Optional: Website template rules (if using the built-in template)
+If Tailored Agents ships a template marketing site for a customer, treat it as a separate deliverable from the CRM product:
+- Template-driven site reads branding from `NEXT_PUBLIC_COMPANY_*` at build time (SEO-safe).
+- Allowed customization (no code): edit copy/headlines/CTAs and swap assets (logo/photos).
+- Paid/custom work (TA add-on): full custom designs, new block types, or a BYO site integration.
 
 ## TA support + pricing model (recommended)
 - Base subscription: hosting + monitoring + backups + platform updates.
@@ -153,4 +147,3 @@ Paid/custom work (TA add-on):
 ## Next doc links
 - Company Pack schema: `docs/company-pack.schema.json`
 - TA Launch playbook: `docs/TA_LAUNCH_PLAYBOOK.md`
-

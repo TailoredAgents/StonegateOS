@@ -39,7 +39,9 @@ Optional:
 - Maintain “no perf regressions” for public pages.
 
 ## Phase 4 — Per-user Accounts + Permissions
-- Replace the shared “master login” with team member accounts.
+- Team member accounts + roles + per-member permission overrides are implemented.
+- Temporary legacy “break-glass” sessions (Owner/Crew keys) are still available during active development for safety.
+- Before the system is considered “finished” (and sellable), remove/disable the legacy sessions and require per-user logins for accountability.
 - Per-role permissions and audit logging of actions.
 - Tie sales attribution and coaching to the authenticated user.
 

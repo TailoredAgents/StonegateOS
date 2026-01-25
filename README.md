@@ -18,7 +18,9 @@ StonegateOS is a monorepo for a local service business (CRM + marketing site):
 3. Set `NEXT_PUBLIC_SITE_URL` (site) and `NEXT_PUBLIC_API_BASE_URL` (site) plus `API_BASE_URL` (server actions and API calls) to match your local ports (`http://localhost:3000` and `http://localhost:3001`).
 4. Provide `ADMIN_API_KEY`; this gates admin routes and the team console server actions.
 5. Timezone defaults to Eastern (`America/New_York`) with automatic DST; no env is needed unless you intentionally override `APPOINTMENT_TIMEZONE`.
-6. Crew login uses a hardcoded key in `apps/site/src/lib/crew-session.ts`.
+6. Team Console authentication supports both:
+   - Team member accounts (magic link + optional password) — preferred for accountability.
+   - Temporary legacy “break-glass” sessions (Owner/Crew keys, see `apps/site/src/lib/crew-session.ts`) — kept during active development and removed later.
 
 ## Database
 1. Start Postgres via Docker:
@@ -156,3 +158,7 @@ You can place these in the monorepo root `.env` or per-app `.env.local` files. B
 ### Team Console Access
 - Visit `/admin/login` to set the admin session cookie, or go directly to `/team` and log in via the UI.
 - The `/admin/*` routes are redirects into the Team Console tabs.
+
+Team Console login options:
+- Preferred: `/team/login` (request a magic link or log in with a password if set).
+- Temporary: “Emergency access” sessions (Owner/Crew keys). These are intended as break-glass only while iterating and will be removed before the system is considered “finished” and sellable.
