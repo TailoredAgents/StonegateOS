@@ -6,17 +6,18 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../../web/admin";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { resolvePublicSiteBaseUrlOrThrow } from "@/lib/public-site-url";
+import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 
 const SendQuoteSchema = z.object({
   expiresInDays: z.number().int().min(1).max(120).optional(),
   shareBaseUrl: z.string().url().optional()
 });
 
-function buildShareUrl(token: string, baseUrl?: string): string {
+function buildShareUrl(token: string, baseUrl?: string): string | null {
   // Safety: never generate localhost/0.0.0.0 links in production. If an unsafe base
   // is provided, ignore it and fall back to the configured public site base URL.
-  const configuredBase = resolvePublicSiteBaseUrlOrThrow();
+  const configuredBase = resolvePublicSiteBaseUrl();
+  if (!configuredBase) return null;
   if (baseUrl) {
     const candidate = /^https?:\/\//i.test(baseUrl) ? baseUrl : `https://${baseUrl}`;
     try {
@@ -82,6 +83,17 @@ export async function POST(
     ? new Date(Date.now() + parsedBody.data.expiresInDays * 24 * 60 * 60 * 1000)
     : null;
 
+  const shareUrl = buildShareUrl(shareToken, parsedBody.data.shareBaseUrl);
+  if (!shareUrl) {
+    return NextResponse.json(
+      {
+        error: "site_url_not_configured",
+        message: "Set NEXT_PUBLIC_SITE_URL or SITE_URL to generate customer-facing links."
+      },
+      { status: 500 }
+    );
+  }
+
   const [updated] = await db
     .update(quotes)
     .set({
@@ -122,8 +134,6 @@ export async function POST(
       expiresAt: expiresAt ? expiresAt.toISOString() : null
     }
   });
-
-  const shareUrl = buildShareUrl(shareToken, parsedBody.data.shareBaseUrl);
 
   return NextResponse.json({
     ok: true,
