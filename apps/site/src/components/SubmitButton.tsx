@@ -21,8 +21,20 @@ export function SubmitButton({
   const router = useRouter();
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPendingRef = useRef(false);
 
   useEffect(() => {
+    const wasPending = lastPendingRef.current;
+    lastPendingRef.current = pending;
+
+    if (wasPending && !pending) {
+      try {
+        router.refresh();
+      } catch {
+        // ignore
+      }
+    }
+
     if (!pending) {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
       if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);

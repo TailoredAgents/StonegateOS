@@ -415,7 +415,7 @@ export async function OutboundSection({
                     <th className="w-[150px] px-4 py-3">Due</th>
                     <th className="w-[86px] px-4 py-3">Attempt</th>
                     <th className="px-4 py-3">Prospect</th>
-                    <th className="hidden w-[128px] px-4 py-3 text-right md:table-cell">Actions</th>
+                    <th className="hidden w-[160px] px-4 py-3 text-right md:table-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -433,7 +433,7 @@ export async function OutboundSection({
                           </span>
                         </td>
                         <td className="px-4 py-3 text-slate-600">{item.attempt}</td>
-                        <td className="min-w-0 px-4 py-3">
+                        <td className="min-w-0 overflow-hidden px-4 py-3">
                           <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { taskId: item.id } })} className="block min-w-0">
                             <div className="truncate text-sm font-semibold text-slate-900">{item.company ? item.company : item.contact.name}</div>
                             <div className="mt-0.5 truncate text-[11px] text-slate-500">{item.company ? item.contact.name : item.campaign ? item.campaign : "Outbound"}</div>
@@ -444,16 +444,9 @@ export async function OutboundSection({
                               <span className="mx-1">{"\u2022"}</span>
                               <span>{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}</span>
                             </div>
-                            <div className="mt-1 hidden text-[11px] text-slate-500">
-                              <span>{item.contact.phone ?? "No phone"}</span>
-                              <span className="mx-1">•</span>
-                              <span>{item.contact.email ?? "No email"}</span>
-                              <span className="mx-1">•</span>
-                              <span>{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}</span>
-                            </div>
                           </a>
                         </td>
-                        <td className="hidden px-4 py-3 md:table-cell">
+                        <td className="hidden w-[160px] px-4 py-3 md:table-cell">
                           <div className="flex flex-wrap justify-end gap-2">
                             <form action={startContactCallAction}>
                               <input type="hidden" name="contactId" value={item.contact.id} />
