@@ -81,7 +81,14 @@ export function ContactNameEditorClient({
         Edit name
       </button>
       {open ? (
-        <div className="absolute left-0 z-20 mt-10 w-80 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-40 cursor-default bg-black/20 sm:hidden"
+            aria-label="Close name editor"
+            onClick={() => setOpen(false)}
+          />
+          <div className="fixed inset-x-4 top-24 z-50 mt-0 w-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-xl sm:absolute sm:left-0 sm:top-auto sm:inset-x-auto sm:z-20 sm:mt-10 sm:w-80">
           <form onSubmit={onSubmit} className="space-y-3">
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="text-xs font-semibold text-slate-600">
@@ -123,9 +130,9 @@ export function ContactNameEditorClient({
               Updates the contact name everywhere (Inbox, Contacts, Sales HQ).
             </p>
           </form>
-        </div>
+          </div>
+        </>
       ) : null}
     </div>
   );
 }
-

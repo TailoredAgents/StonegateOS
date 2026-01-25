@@ -433,7 +433,12 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
         ) : null}
       </header>
 
-      <form method="get" className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm text-slate-600 shadow-md shadow-slate-200/50">
+      <form
+        method="get"
+        className={`flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm text-slate-600 shadow-md shadow-slate-200/50 ${
+          showConversation ? "hidden lg:flex" : ""
+        }`}
+      >
         <input type="hidden" name="tab" value="inbox" />
         <select
           name="status"
@@ -1027,83 +1032,76 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 <InboxAutoScroll containerId="inbox-thread-scroll" bottomId="inbox-thread-bottom" depsKey={scrollKey} />
               </div>
 
-              <form action={suggestThreadReplyAction} className="flex justify-end gap-2 pt-2">
-                <input type="hidden" name="contactId" value={activeContactId} />
-                <input type="hidden" name="channel" value={requestedChannel} />
-                {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
-                <SubmitButton
-                  className={teamButtonClass("secondary", "sm")}
-                  pendingLabel="Thinking..."
-                  disabled={
-                    requestedChannel === "dm"
-                      ? !channelThreadMap.get("dm")
-                      : requestedChannel === "sms"
-                        ? !activeContact?.phone
-                        : requestedChannel === "email"
-                          ? !activeContact?.email
-                          : false
-                  }
-                >
-                  AI Suggest
-                </SubmitButton>
-              </form>
+              <div className="-mx-5 border-t border-slate-200 bg-white/95 px-5 pt-3 pb-[calc(env(safe-area-inset-bottom)+1rem)] backdrop-blur">
+                <form action={suggestThreadReplyAction} className="flex justify-end gap-2">
+                  <input type="hidden" name="contactId" value={activeContactId} />
+                  <input type="hidden" name="channel" value={requestedChannel} />
+                  {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
+                  <SubmitButton
+                    className={teamButtonClass("secondary", "sm")}
+                    pendingLabel="Thinking..."
+                    disabled={
+                      requestedChannel === "dm"
+                        ? !channelThreadMap.get("dm")
+                        : requestedChannel === "sms"
+                          ? !activeContact?.phone
+                          : requestedChannel === "email"
+                            ? !activeContact?.email
+                            : false
+                    }
+                  >
+                    AI Suggest
+                  </SubmitButton>
+                </form>
 
-              <form
-                action={sendThreadMessageAction}
-                className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]"
-              >
-                <input type="hidden" name="contactId" value={activeContactId} />
-                <input type="hidden" name="channel" value={requestedChannel} />
-                {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
-                {requestedChannel === "email" ? (
+                <form action={sendThreadMessageAction} className="mt-3 space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <input type="hidden" name="contactId" value={activeContactId} />
+                  <input type="hidden" name="channel" value={requestedChannel} />
+                  {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
+                  {requestedChannel === "email" ? (
+                    <label className="flex flex-col gap-1 text-xs text-slate-600">
+                      <span>Subject</span>
+                      <input
+                        name="subject"
+                        defaultValue={(selectedThread as { subject?: string | null } | null)?.subject ?? ""}
+                        className={TEAM_INPUT_COMPACT}
+                      />
+                    </label>
+                  ) : null}
                   <label className="flex flex-col gap-1 text-xs text-slate-600">
-                    <span>Subject</span>
-                    <input
-                      name="subject"
-                      defaultValue={(selectedThread as { subject?: string | null } | null)?.subject ?? ""}
-                      className={TEAM_INPUT_COMPACT}
-                    />
+                    <span>Message</span>
+                    <textarea name="body" rows={3} className={TEAM_INPUT_COMPACT} />
                   </label>
-                ) : null}
-                <label className="flex flex-col gap-1 text-xs text-slate-600">
-                  <span>Message</span>
-                  <textarea
-                    name="body"
-                    rows={3}
-                    className={TEAM_INPUT_COMPACT}
-                  />
-                </label>
-                {requestedChannel === "sms" || requestedChannel === "dm" ? (
-                  <label className="flex flex-col gap-1 text-xs text-slate-600">
-                    <span>Attach photos (optional)</span>
-                    <input
-                      type="file"
-                      name="attachments"
-                      accept="image/*,video/*"
-                      multiple
-                      className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
-                    />
-                    <span className="text-[11px] text-slate-500">
-                      You can send photos with or without text. (Max 5 files, 5MB each.)
-                    </span>
-                  </label>
-                ) : null}
-                <SubmitButton
-                  className={teamButtonClass("primary", "sm")}
-                  pendingLabel="Sending..."
-                  disabled={
-                    requestedChannel === "dm"
-                      ? !channelThreadMap.get("dm")
-                      : requestedChannel === "sms"
-                        ? !activeContact?.phone
-                        : requestedChannel === "email"
-                          ? !activeContact?.email
-                          : false
-                  }
-                >
-                  Send message
-                </SubmitButton>
-              </form>
+                  {requestedChannel === "sms" || requestedChannel === "dm" ? (
+                    <label className="flex flex-col gap-1 text-xs text-slate-600">
+                      <span>Attach photos (optional)</span>
+                      <input
+                        type="file"
+                        name="attachments"
+                        accept="image/*,video/*"
+                        multiple
+                        className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
+                      />
+                      <span className="text-[11px] text-slate-500">You can send photos with or without text.</span>
+                    </label>
+                  ) : null}
+                  <SubmitButton
+                    className={teamButtonClass("primary", "sm")}
+                    pendingLabel="Sending..."
+                    disabled={
+                      requestedChannel === "dm"
+                        ? !channelThreadMap.get("dm")
+                        : requestedChannel === "sms"
+                          ? !activeContact?.phone
+                          : requestedChannel === "email"
+                            ? !activeContact?.email
+                            : false
+                    }
+                  >
+                    Send message
+                  </SubmitButton>
+                </form>
+              </div>
             </div>
           ) : (
             <div className="p-5">

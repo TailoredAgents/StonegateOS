@@ -117,8 +117,21 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              const today = formatDayKey(new Date());
+              setAnchorDay(today);
+              setSelectedDay(today);
+              setSelectedId(null);
+              updateCalendarUrl({ anchorDay: today });
+            }}
+            className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700"
+          >
+            Today
+          </button>
           <button
             type="button"
             onClick={handlePrev}
@@ -133,10 +146,10 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
           >
             Next
           </button>
-          <div className="ml-1 text-sm font-semibold text-slate-900">{title}</div>
+          <div className="w-full pt-1 text-base font-semibold text-slate-900 sm:w-auto sm:pt-0">{title}</div>
         </div>
 
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => {
