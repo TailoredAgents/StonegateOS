@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
-import { getDb, teamLoginTokens, teamMembers, teamRoles, teamSessions } from "@/db";
+import { getDb, policySettings, teamLoginTokens, teamMembers, teamRoles, teamSessions } from "@/db";
 import { resolvePublicSiteBaseUrl as resolvePublicSiteBaseUrlInternal } from "@/lib/public-site-url";
+import { normalizePhone } from "../../app/api/web/utils";
 
 function readString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -14,6 +15,16 @@ export function normalizeEmail(value: unknown): string | null {
   const raw = readString(value);
   if (!raw) return null;
   return raw.toLowerCase();
+}
+
+export function normalizePhoneE164(value: unknown): string | null {
+  const raw = readString(value);
+  if (!raw) return null;
+  try {
+    return normalizePhone(raw).e164;
+  } catch {
+    return null;
+  }
 }
 
 export function resolvePublicSiteBaseUrl(): string | null {
@@ -40,11 +51,39 @@ export function getUserAgent(request: NextRequest): string | null {
   return request.headers.get("user-agent")?.trim() ?? null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readPhoneMap(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const phonesRaw = value["phones"];
+  if (!isRecord(phonesRaw)) return {};
+  const phones: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(phonesRaw)) {
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      phones[key] = raw.trim();
+    }
+  }
+  return phones;
+}
+
+async function getTeamPhoneMap(): Promise<Record<string, string>> {
+  const db = getDb();
+  const [phoneSetting] = await db
+    .select({ value: policySettings.value })
+    .from(policySettings)
+    .where(eq(policySettings.key, "team_member_phones"))
+    .limit(1);
+  return readPhoneMap(phoneSetting?.value);
+}
+
 export async function findActiveTeamMemberByEmail(email: string): Promise<{
   id: string;
   name: string;
   email: string | null;
   active: boolean;
+  phoneE164: string | null;
   passwordHash: string | null;
 } | null> {
   const db = getDb();
@@ -61,11 +100,49 @@ export async function findActiveTeamMemberByEmail(email: string): Promise<{
     .limit(1);
 
   if (!row?.id || !row.active) return null;
+  const phoneMap = await getTeamPhoneMap();
   return {
     id: row.id,
     name: row.name,
     email: row.email ?? null,
     active: row.active ?? true,
+    phoneE164: phoneMap[row.id] ?? null,
+    passwordHash: row.passwordHash ?? null
+  };
+}
+
+export async function findActiveTeamMemberByPhone(phoneE164: string): Promise<{
+  id: string;
+  name: string;
+  email: string | null;
+  active: boolean;
+  phoneE164: string | null;
+  passwordHash: string | null;
+} | null> {
+  const phoneMap = await getTeamPhoneMap();
+  const memberId = Object.entries(phoneMap).find(([, phone]) => phone === phoneE164)?.[0] ?? null;
+  if (!memberId) return null;
+
+  const db = getDb();
+  const [row] = await db
+    .select({
+      id: teamMembers.id,
+      name: teamMembers.name,
+      email: teamMembers.email,
+      active: teamMembers.active,
+      passwordHash: teamMembers.passwordHash
+    })
+    .from(teamMembers)
+    .where(eq(teamMembers.id, memberId))
+    .limit(1);
+
+  if (!row?.id || !row.active) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email ?? null,
+    active: row.active ?? true,
+    phoneE164,
     passwordHash: row.passwordHash ?? null
   };
 }
@@ -318,4 +395,3 @@ export async function loginWithPassword(
     }
   };
 }
-

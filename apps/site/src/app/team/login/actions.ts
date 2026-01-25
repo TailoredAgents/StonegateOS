@@ -20,15 +20,16 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
 }
 
 export async function requestTeamMagicLinkAction(formData: FormData) {
-  const emailRaw = formData.get("email");
-  const email = typeof emailRaw === "string" ? emailRaw.trim() : "";
-  if (!email) {
-    redirect("/team/login?error=email_required");
+  const identifierRaw = formData.get("identifier");
+  const identifier = typeof identifierRaw === "string" ? identifierRaw.trim() : "";
+  if (!identifier) {
+    redirect("/team/login?error=email_or_phone_required");
   }
 
+  const isEmail = identifier.includes("@");
   await callTeamPublicApi("/api/public/team/request-link", {
     method: "POST",
-    body: JSON.stringify({ email })
+    body: JSON.stringify(isEmail ? { email: identifier } : { phone: identifier })
   });
 
   redirect("/team/login?sent=1");
@@ -91,4 +92,3 @@ export async function teamSetPasswordAction(formData: FormData) {
 
   redirect("/team?tab=settings&saved=1");
 }
-

@@ -45,16 +45,18 @@ export default async function TeamLoginPage({
       <div className="grid gap-5 lg:grid-cols-2">
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
           <h2 className="text-lg font-semibold text-slate-900">Magic link</h2>
-          <p className="mt-1 text-sm text-slate-600">We&apos;ll email a secure link that signs you in.</p>
+          <p className="mt-1 text-sm text-slate-600">
+            We&apos;ll send a secure link via email or SMS (if your phone is on file).
+          </p>
           <form action={requestTeamMagicLinkAction} className="mt-4 space-y-3">
             <label className="block">
-              <div className="text-xs font-semibold text-slate-700">Work email</div>
+              <div className="text-xs font-semibold text-slate-700">Email or phone</div>
               <input
-                name="email"
-                type="email"
+                name="identifier"
+                type="text"
                 required
                 className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                placeholder="you@stonegatejunkremoval.com"
+                placeholder="you@stonegatejunkremoval.com or +16785551234"
               />
             </label>
             <button
