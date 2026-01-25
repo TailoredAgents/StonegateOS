@@ -5,9 +5,7 @@ import { callAdminApi } from "../lib/api";
 import {
   createRoleAction,
   createTeamMemberAction,
-  deleteTeamMemberAction,
   updateDefaultSalesAssigneeAction,
-  updateTeamMemberAction
 } from "../actions";
 
 type Role = {
@@ -165,7 +163,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
                 key={member.id}
                 className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3 text-xs text-slate-600"
               >
-                <form action={updateTeamMemberAction} className="space-y-3">
+                <form action={`/api/team/access/members/${member.id}`} method="post" className="space-y-3">
                   <input type="hidden" name="memberId" value={member.id} />
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-[220px] flex-1">
@@ -244,8 +242,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
                   <summary className="cursor-pointer text-[11px] font-semibold text-red-700">Danger zone</summary>
                   <div className="mt-3 space-y-2 text-[11px] text-red-700">
                     <p>Delete this team member. This cannot be undone.</p>
-                    <form action={deleteTeamMemberAction} className="flex flex-wrap items-center gap-2">
-                      <input type="hidden" name="memberId" value={member.id} />
+                    <form action={`/api/team/access/members/${member.id}/delete`} method="post" className="flex flex-wrap items-center gap-2">
                       <input
                         name="confirm"
                         placeholder='Type "DELETE" to confirm'
