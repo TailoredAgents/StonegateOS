@@ -382,6 +382,13 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
 
   const selectedThreadState = (selectedThread as { state?: string | null } | null)?.state ?? "new";
   const allowedStates = selectedThread ? getAllowedStates(selectedThreadState) : [...THREAD_STATES];
+  const activeThreadSummary =
+    activeContactId && threads.length
+      ? threads.find((t) => t.contact?.id === activeContactId && t.channel === requestedChannel) ??
+        threads.find((t) => t.contact?.id === activeContactId) ??
+        null
+      : null;
+  const activeProperty = activeThread?.property ?? activeThreadSummary?.property ?? null;
   const activePhone = normalizePhoneLink(activeContact?.phone);
   const canCall = Boolean(activeContactId && activePhone);
   const showConversation = Boolean(activeContactId);
@@ -460,7 +467,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
         </button>
       </form>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+      <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)_340px] xl:grid-cols-[400px_minmax(0,1fr)_380px]">
         <div
           className={`space-y-4 rounded-3xl border border-slate-200 bg-white/90 p-4 shadow-xl shadow-slate-200/50 backdrop-blur ${
             showConversation ? "hidden lg:block" : ""
@@ -787,7 +794,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                         )}`
                       : "| No thread yet"}
                   </p>
-                  {activeThread?.property?.outOfArea ? (
+                  {activeProperty?.outOfArea ? (
                     <p className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
                       Out of area
                     </p>
@@ -798,7 +805,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     </p>
                   ) : null}
                 </div>
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2 lg:hidden">
                   {activeContactId ? (
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       {(["sms", "dm", "email"] as const).map((ch) => {
@@ -962,7 +969,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     return (
                       <div key={message.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                         <div
-                          className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-sm ${
+                          className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-sm lg:max-w-[640px] ${
                             isOutbound ? "bg-primary-100 text-slate-900" : "bg-slate-100 text-slate-700"
                           }`}
                         >
@@ -1108,6 +1115,217 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
               <div className={TEAM_EMPTY_STATE}>Select a thread to view the conversation.</div>
             </div>
           )}
+        </div>
+
+        <div className="hidden rounded-3xl border border-slate-200 bg-white/90 shadow-xl shadow-slate-200/50 backdrop-blur lg:block">
+          <div className="flex max-h-[78dvh] flex-col gap-4 overflow-hidden p-5">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-4">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-slate-900">Details</h3>
+                <p className="mt-1 text-xs text-slate-500">Keep context handy while you reply.</p>
+              </div>
+            </div>
+
+            {activeContactId ? (
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="truncate text-sm font-semibold text-slate-900">
+                          {activeContact?.name ?? "Unknown contact"}
+                        </div>
+                        <ContactNameEditorClient contactId={activeContactId} contactName={activeContact?.name ?? ""} />
+                      </div>
+                      <div className="mt-1 space-y-1 text-xs text-slate-600">
+                        {activeContact?.phone ? (
+                          <div>Phone: {activeContact.phone}</div>
+                        ) : (
+                          <div className="text-slate-400">Phone: not on file</div>
+                        )}
+                        {activeContact?.email ? (
+                          <div>Email: {activeContact.email}</div>
+                        ) : (
+                          <div className="text-slate-400">Email: not on file</div>
+                        )}
+                      </div>
+                    </div>
+                    {activeProperty?.outOfArea ? (
+                      <span className="shrink-0 rounded-full bg-rose-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                        Out of area
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {activeProperty ? (
+                    <div className="mt-3 border-t border-slate-200/70 pt-3 text-xs text-slate-600">
+                      <div className="font-semibold text-slate-700">Address</div>
+                      <div className="mt-1">
+                        {activeProperty.addressLine1}
+                        <div className="text-slate-500">
+                          {activeProperty.city}, {activeProperty.state} {activeProperty.postalCode}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Channels</div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    {(["sms", "dm", "email"] as const).map((ch) => {
+                      const isActive = requestedChannel === ch;
+                      const existingId = channelThreadMap.get(ch) ?? null;
+                      const hasPhone = Boolean(activeContact?.phone);
+                      const hasEmail = Boolean(activeContact?.email);
+                      const disabled =
+                        ch === "dm"
+                          ? !existingId
+                          : ch === "sms"
+                            ? !hasPhone
+                            : ch === "email"
+                              ? !hasEmail
+                              : false;
+
+                      const label = ch === "dm" ? "Messenger" : ch.toUpperCase();
+                      const href = buildInboxHref({
+                        status: activeStatus === "all" ? null : activeStatus,
+                        contactId: activeContactId,
+                        channel: ch
+                      });
+
+                      return (
+                        <a
+                          key={ch}
+                          href={disabled ? "#" : href}
+                          className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
+                            isActive
+                              ? "border-primary-300 bg-primary-50 text-primary-800"
+                              : "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                          } ${disabled ? "pointer-events-none opacity-40" : ""}`}
+                          title={
+                            disabled
+                              ? ch === "dm"
+                                ? "No Messenger thread yet"
+                                : ch === "sms"
+                                  ? "No phone number on file"
+                                  : "No email on file"
+                              : undefined
+                          }
+                        >
+                          {label}
+                        </a>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <form action={startContactCallAction} className="inline">
+                      <input type="hidden" name="contactId" value={activeContactId ?? ""} />
+                      <SubmitButton
+                        className={`rounded-full border px-3 py-2 text-xs font-semibold ${
+                          canCall
+                            ? "border-slate-200 text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                            : "pointer-events-none border-slate-100 text-slate-300"
+                        }`}
+                        disabled={!canCall}
+                        pendingLabel="Calling..."
+                      >
+                        Call
+                      </SubmitButton>
+                    </form>
+                    <form action={markSalesTouchAction} className="inline">
+                      <input type="hidden" name="contactId" value={activeContactId} />
+                      <SubmitButton
+                        className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                        pendingLabel="Saving..."
+                      >
+                        Mark contacted
+                      </SubmitButton>
+                    </form>
+                    <details className="relative">
+                      <summary className="cursor-pointer list-none rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700">
+                        Remove
+                      </summary>
+                      <div className="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
+                        <form action={setSalesDispositionAction} className="space-y-2">
+                          <input type="hidden" name="contactId" value={activeContactId} />
+                          <select
+                            name="disposition"
+                            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs"
+                            defaultValue="handled"
+                          >
+                            <option value="spam">Spam</option>
+                            <option value="not_a_lead">Not a lead</option>
+                            <option value="out_of_state">Out of state</option>
+                            <option value="out_of_area">Out of area</option>
+                            <option value="bad_phone">Bad phone</option>
+                            <option value="duplicate">Duplicate</option>
+                            <option value="handled">Handled</option>
+                            <option value="do_not_contact">Do not contact</option>
+                          </select>
+                          <SubmitButton
+                            className="w-full rounded-full bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+                            pendingLabel="Removing..."
+                          >
+                            Confirm remove
+                          </SubmitButton>
+                        </form>
+                      </div>
+                    </details>
+                  </div>
+                </div>
+
+                {selectedThreadId ? (
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Thread status</div>
+                    <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
+                      <input type="hidden" name="threadId" value={selectedThreadId} />
+                      <select
+                        name="state"
+                        defaultValue={(selectedThread as { state?: string | null } | null)?.state ?? "new"}
+                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
+                      >
+                        {allowedStates.map((value) => (
+                          <option key={value} value={value}>
+                            {formatStateLabel(value)}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        name="status"
+                        defaultValue={(selectedThread as { status?: string } | null)?.status ?? "open"}
+                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
+                      >
+                        {THREAD_STATUSES.map((value) => (
+                          <option key={value} value={value}>
+                            {formatStatusLabel(value)}
+                          </option>
+                        ))}
+                      </select>
+                      <SubmitButton
+                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                        pendingLabel="Saving..."
+                      >
+                        Update
+                      </SubmitButton>
+                    </form>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-xs text-slate-500">
+                    No {requestedChannel === "dm" ? "Messenger" : requestedChannel.toUpperCase()} thread yet.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-5">
+                <div className={TEAM_EMPTY_STATE}>Select a thread to see details.</div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </section>
