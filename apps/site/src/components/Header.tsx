@@ -20,6 +20,7 @@ const navItems = [
 
 export function Header() {
   const pathname = usePathname();
+  const isBookingLanding = pathname === "/book";
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -50,51 +51,66 @@ export function Header() {
           <Image src="/images/brand/Stonegatelogo.png" alt="" aria-hidden="true" width={80} height={41} priority />
           <span className="sr-only">Stonegate Junk Removal</span>
         </Link>
-        <nav className="hidden items-center gap-6 md:flex">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="text-sm font-medium text-neutral-600 transition hover:text-primary-700"
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
+        {!isBookingLanding ? (
+          <nav className="hidden items-center gap-6 md:flex">
+            {navItems.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="text-sm font-medium text-neutral-600 transition hover:text-primary-700"
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+        ) : null}
         <div className="hidden items-center gap-3 md:flex">
-          <Suspense
-            fallback={
-              <Button asChild>
-                <Link href="/book">Get instant quote</Link>
-              </Button>
-            }
-          >
-            <GetQuoteButton />
-          </Suspense>
+          {!isBookingLanding ? (
+            <Suspense
+              fallback={
+                <Button asChild>
+                  <Link href="/book">Get instant quote</Link>
+                </Button>
+              }
+            >
+              <GetQuoteButton />
+            </Suspense>
+          ) : null}
           <Button
             asChild
             variant="ghost"
             className="border border-neutral-300/70 text-primary-800 hover:border-primary-300"
           >
-            <a href="tel:+14047772631">Call</a>
+            <a href="tel:+14047772631">{isBookingLanding ? "Call (404) 777-2631" : "Call"}</a>
           </Button>
         </div>
-        <button
-          type="button"
-          onClick={toggleMenu}
-          className="inline-flex items-center gap-2 rounded-md border border-neutral-300/60 px-4 py-2 text-sm font-semibold text-neutral-700 shadow-soft transition hover:border-primary-300 hover:text-primary-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 md:hidden"
-          aria-controls="mobile-navigation"
-          aria-expanded={isMenuOpen}
-        >
-          <span>{isMenuOpen ? "Close" : "Menu"}</span>
-        </button>
-      </div>
-      <div
-        className={cn(
-          "md:hidden",
-          isMenuOpen ? "pointer-events-auto" : "pointer-events-none"
+        {isBookingLanding ? (
+          <Button
+            asChild
+            variant="ghost"
+            className="border border-neutral-300/70 text-primary-800 hover:border-primary-300 md:hidden"
+          >
+            <a href="tel:+14047772631">Call</a>
+          </Button>
+        ) : (
+          <button
+            type="button"
+            onClick={toggleMenu}
+            className="inline-flex items-center gap-2 rounded-md border border-neutral-300/60 px-4 py-2 text-sm font-semibold text-neutral-700 shadow-soft transition hover:border-primary-300 hover:text-primary-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500 md:hidden"
+            aria-controls="mobile-navigation"
+            aria-expanded={isMenuOpen}
+          >
+            <span>{isMenuOpen ? "Close" : "Menu"}</span>
+          </button>
         )}
-      >
+      </div>
+      {!isBookingLanding ? (
+        <div
+          className={cn(
+            "md:hidden",
+            isMenuOpen ? "pointer-events-auto" : "pointer-events-none"
+          )}
+        >
         <button
           type="button"
           onClick={closeMenu}
@@ -154,7 +170,8 @@ export function Header() {
             </Button>
           </div>
         </div>
-      </div>
+        </div>
+      ) : null}
     </header>
   );
 }

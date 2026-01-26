@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Button, cn } from "@myst-os/ui";
-import { Check } from "lucide-react";
+import { Check, MessageSquare, ShieldCheck, Star } from "lucide-react";
 import { useUTM } from "../lib/use-utm";
 import { trackGoogleAdsConversion } from "../lib/google-ads";
 
@@ -76,6 +76,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [types, setTypes] = React.useState<JunkType[]>([]);
   const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize>("few_items");
   const [notes, setNotes] = React.useState("");
+  const [showNotes, setShowNotes] = React.useState(false);
   const [zip, setZip] = React.useState("");
   const [photos, setPhotos] = React.useState<string[]>([]);
   const [photoUploadStatus, setPhotoUploadStatus] = React.useState<"idle" | "uploading" | "error">("idle");
@@ -731,7 +732,22 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       </div>
 
       <h2 className="font-display text-2xl text-primary-800">Show us what you need gone</h2>
-      <p className="mt-1 text-sm text-neutral-600">Photos + a few quick answers = an instant quote.</p>
+      <p className="mt-1 text-sm text-neutral-600">Answer 3 quick questions to see your price before booking.</p>
+
+      <div className="mt-3 grid gap-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700 sm:grid-cols-3">
+        <div className="flex items-center gap-2">
+          <Star className="h-4 w-4 text-amber-500" aria-hidden="true" />
+          <span>Google reviews</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-primary-700" aria-hidden="true" />
+          <span>Licensed &amp; insured</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-primary-700" aria-hidden="true" />
+          <span>Text confirmation</span>
+        </div>
+      </div>
 
       {error ? (
         <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="alert">
@@ -796,7 +812,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <label htmlFor="lead-photos" className="text-sm font-semibold text-neutral-800">
                 Add 1-4 photos for the most accurate quote
               </label>
-              <p className="text-xs text-neutral-500">Most people just snap a quick photo with their phone.</p>
+              <p className="text-xs text-neutral-500">Optional — photos help us price it faster and more accurately.</p>
               <input
                 id="lead-photos"
                 type="file"
@@ -806,7 +822,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 className="block w-full cursor-pointer rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
               />
               {photoUploadStatus === "uploading" ? (
-                <div className="text-xs text-neutral-600">Uploading photos…</div>
+                <div className="text-xs text-neutral-600">Uploading photos...</div>
               ) : photoUploadStatus === "error" ? (
                 <div className="text-xs text-amber-700">{photoUploadMessage ?? "Unable to upload photos."}</div>
               ) : null}
@@ -872,35 +888,49 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-neutral-800">Anything else we should know?</label>
-              <textarea
-                rows={3}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                placeholder="Gate codes, stairs, heavy items, etc."
-              />
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-0.5">
+                  <label className="text-sm font-semibold text-neutral-800">Anything else we should know?</label>
+                  <p className="text-xs text-neutral-500">Optional: gate codes, stairs, heavy items, etc.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowNotes((prev) => !prev)}
+                  className="text-xs font-semibold text-primary-700 underline"
+                >
+                  {showNotes ? "Hide" : "Add details"}
+                </button>
+              </div>
+              {showNotes ? (
+                <textarea
+                  rows={3}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                  placeholder="Gate codes, stairs, heavy items, etc."
+                />
+              ) : null}
             </div>
 
-              <div className="space-y-1">
-                <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
-                <input
-                  type="text"
-                  autoComplete="postal-code"
-                  inputMode="numeric"
-                  value={zip}
-                  onChange={(e) => setZip(e.target.value)}
-                  required
-                  placeholder="30189"
-                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+            <div className="space-y-1">
+              <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
+              <input
+                type="text"
+                autoComplete="postal-code"
+                inputMode="numeric"
+                value={zip}
+                onChange={(e) => setZip(e.target.value)}
+                required
+                placeholder="30189"
+                className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
               />
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <Button type="submit" className="w-full justify-center sm:w-auto">
-                Next: Your details
+                See my instant quote
               </Button>
-              <p className="text-xs text-neutral-500">On the next step we'll grab your name and number and show your quote on screen.</p>
+              <p className="text-xs text-neutral-500">You'll see your price before booking. No obligation.</p>
             </div>
           </div>
         ) : (

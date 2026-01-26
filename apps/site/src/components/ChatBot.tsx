@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Button, cn } from "@myst-os/ui";
+import { usePathname } from "next/navigation";
 
 type BookingSuggestion = { startAt: string; endAt: string; reason?: string; services?: string[] };
 type BookingPayload = {
@@ -41,6 +42,11 @@ function fallbackResponse(message: string): string {
 }
 
 export function ChatBot() {
+  const pathname = usePathname();
+  if (pathname === "/book" || pathname.startsWith("/book/") || pathname.startsWith("/quote")) {
+    return null;
+  }
+
   const [isOpen, setIsOpen] = React.useState(false);
   const [input, setInput] = React.useState("");
   const [bookingInFlight, setBookingInFlight] = React.useState(false);

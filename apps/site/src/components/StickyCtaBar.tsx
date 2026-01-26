@@ -12,6 +12,11 @@ interface StickyCtaBarProps {
 }
 
 export function StickyCtaBar({ className }: StickyCtaBarProps) {
+  const pathname = usePathname();
+  if (pathname === "/book" || pathname.startsWith("/book/") || pathname.startsWith("/quote")) {
+    return null;
+  }
+
   return (
     <div
       className={cn(
