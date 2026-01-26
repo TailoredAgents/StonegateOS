@@ -4,9 +4,10 @@ import { TEAM_TIME_ZONE } from "../lib/timezone";
 
 type Props = {
   event: CalendarEvent;
+  variant?: "standalone" | "embedded";
 };
 
-export function CalendarEventDetail({ event }: Props): React.ReactElement {
+export function CalendarEventDetail({ event, variant = "standalone" }: Props): React.ReactElement {
   const appointmentId =
     event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : null);
   const rescheduleLink =
@@ -15,9 +16,13 @@ export function CalendarEventDetail({ event }: Props): React.ReactElement {
       : null;
   const teamLink = appointmentId ? `/team?tab=myday&appointmentId=${encodeURIComponent(appointmentId)}` : null;
   const notes = event.notes ?? [];
+  const shellClass =
+    variant === "embedded"
+      ? "rounded-xl border border-slate-200 bg-white p-3"
+      : "rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50";
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
+    <div className={shellClass}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-700">
           {event.source === "db" ? "Appointment" : "Google"}

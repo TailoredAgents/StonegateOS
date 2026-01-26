@@ -6,9 +6,10 @@ import { CalendarGrid, type CalendarEvent } from "./CalendarGrid";
 import { CalendarMonthGrid } from "./CalendarMonthGrid";
 import { CalendarEventDetail } from "./CalendarEventDetail";
 import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
+import { TEAM_CARD } from "./team-ui";
 
 type Props = {
-  initialView: "week" | "month";
+  initialView: "week" | "month" | "day";
   initialAnchor: string;
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
@@ -19,7 +20,7 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const [view, setView] = React.useState<"week" | "month">(initialView);
+  const [view, setView] = React.useState<"week" | "month" | "day">(initialView);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [anchorDay, setAnchorDay] = React.useState<string>(() => (initialAnchor?.trim()?.length ? initialAnchor : formatDayKey(new Date())));
   const [selectedDay, setSelectedDay] = React.useState<string>(() => (initialAnchor?.trim()?.length ? initialAnchor : formatDayKey(new Date())));
@@ -38,14 +39,13 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
   }, [initialAnchor]);
 
   const dayEvents = React.useMemo(() => {
-    if (view !== "month") return [];
     return events
       .filter((evt) => dayKeyFromIso(evt.start) === selectedDay)
       .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
-  }, [events, selectedDay, view]);
+  }, [events, selectedDay]);
 
   const updateCalendarUrl = React.useCallback(
-    (next: { anchorDay?: string; view?: "week" | "month" }) => {
+    (next: { anchorDay?: string; view?: "week" | "month" | "day" }) => {
       const params = new URLSearchParams(searchParams?.toString());
       params.set("tab", "calendar");
       const nextAnchor = (next.anchorDay ?? anchorDay).trim();
@@ -71,27 +71,33 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
         if (key) {
           setSelectedDay(key);
           setAnchorDay(key);
+          updateCalendarUrl({ anchorDay: key });
         }
       }
     },
-    [events]
+    [events, updateCalendarUrl]
   );
 
   const handleSelectDay = React.useCallback(
     (day: string) => {
       setSelectedDay(day);
       setAnchorDay(day);
+      updateCalendarUrl({ anchorDay: day });
       const next = events
         .filter((evt) => dayKeyFromIso(evt.start) === day)
         .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))[0];
       setSelectedId(next?.id ?? null);
     },
-    [events]
+    [events, updateCalendarUrl]
   );
 
   const handlePrev = React.useCallback(() => {
     const nextAnchor =
-      view === "month" ? addMonthsToDayKey(anchorDay, -1) : addDaysToDayKey(anchorDay, -7);
+      view === "month"
+        ? addMonthsToDayKey(anchorDay, -1)
+        : view === "day"
+          ? addDaysToDayKey(anchorDay, -1)
+          : addDaysToDayKey(anchorDay, -7);
     setAnchorDay(nextAnchor);
     setSelectedDay(nextAnchor);
     setSelectedId(null);
@@ -100,7 +106,11 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
 
   const handleNext = React.useCallback(() => {
     const nextAnchor =
-      view === "month" ? addMonthsToDayKey(anchorDay, 1) : addDaysToDayKey(anchorDay, 7);
+      view === "month"
+        ? addMonthsToDayKey(anchorDay, 1)
+        : view === "day"
+          ? addDaysToDayKey(anchorDay, 1)
+          : addDaysToDayKey(anchorDay, 7);
     setAnchorDay(nextAnchor);
     setSelectedDay(nextAnchor);
     setSelectedId(null);
@@ -112,12 +122,15 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
       return formatMonthLabel(anchorDay);
     }
     const weekStart = getWeekStartDayKey(anchorDay);
-    return `Week of ${formatShortDateLabel(weekStart)}`;
+    if (view === "day") {
+      return formatDayKeyLabel(anchorDay);
+    }
+    return `Week of ${formatShortDateLabel(weekStart)} · ${formatMonthLabel(weekStart)}`;
   }, [anchorDay, view]);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className={`${TEAM_CARD} sticky top-4 z-10 flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between`}>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -153,6 +166,18 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
           <button
             type="button"
             onClick={() => {
+              setView("day");
+              updateCalendarUrl({ view: "day" });
+            }}
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              view === "day" ? "bg-primary-600 text-white" : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+            }`}
+          >
+            Day
+          </button>
+          <button
+            type="button"
+            onClick={() => {
               setView("week");
               updateCalendarUrl({ view: "week" });
             }}
@@ -160,7 +185,7 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
               view === "week" ? "bg-primary-600 text-white" : "bg-slate-200 text-slate-700 hover:bg-slate-300"
             }`}
           >
-            Week view
+            Week
           </button>
           <button
             type="button"
@@ -172,54 +197,120 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
               view === "month" ? "bg-primary-600 text-white" : "bg-slate-200 text-slate-700 hover:bg-slate-300"
             }`}
           >
-            Month view
+            Month
           </button>
         </div>
       </div>
 
-      {view === "month" ? (
-        <div className="space-y-3">
-          <CalendarMonthGrid
-            events={events}
-            conflicts={conflicts}
-            anchorDay={anchorDay}
-            selectedDay={selectedDay}
-            onSelectDay={handleSelectDay}
-            onSelectEvent={handleSelectEvent}
-          />
-          <div className="rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm sm:hidden">
-            <div className="mb-2 text-xs font-semibold uppercase text-slate-500">
-              {formatDayKeyLabel(selectedDay)}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="min-w-0">
+          {view === "month" ? (
+            <CalendarMonthGrid
+              events={events}
+              conflicts={conflicts}
+              anchorDay={anchorDay}
+              selectedDay={selectedDay}
+              onSelectDay={handleSelectDay}
+              onSelectEvent={handleSelectEvent}
+            />
+          ) : view === "day" ? (
+            <div className="rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm">
+              <div className="mb-3 text-xs font-semibold uppercase text-slate-500">{formatDayKeyLabel(selectedDay)}</div>
+              {dayEvents.length === 0 ? (
+                <p className="text-sm text-slate-500">No appointments.</p>
+              ) : (
+                <div className="space-y-2">
+                  {dayEvents.map((evt) => (
+                    <button
+                      key={evt.id}
+                      type="button"
+                      onClick={() => handleSelectEvent(evt.id)}
+                      className={`block w-full overflow-hidden rounded-lg border px-3 py-3 text-left ${
+                        evt.id === selectedId ? "border-primary-300 bg-primary-50/70" : "border-slate-200 bg-white hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="whitespace-nowrap text-xs font-semibold tabular-nums text-slate-800">
+                          {formatTimeRange(evt.start, evt.end)}
+                        </span>
+                        {evt.status ? (
+                          <span className="rounded-full bg-primary-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-primary-700">
+                            {evt.status}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 truncate text-sm font-semibold text-slate-900">{evt.title}</div>
+                      {evt.address ? <div className="truncate text-xs text-slate-600">{evt.address}</div> : null}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            {dayEvents.length === 0 ? (
-              <p className="text-xs text-slate-500">No appointments.</p>
-            ) : (
-              <div className="space-y-2">
-                {dayEvents.map((evt) => (
+          ) : (
+            <CalendarGrid
+              events={events}
+              conflicts={conflicts}
+              anchorDay={anchorDay}
+              selectedDay={selectedDay}
+              onSelectDay={handleSelectDay}
+              onSelectEvent={handleSelectEvent}
+            />
+          )}
+        </div>
+
+        <aside className="min-w-0">
+          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-semibold uppercase text-slate-500">Details</div>
+                <div className="mt-1 text-sm font-semibold text-slate-900">{formatDayKeyLabel(selectedDay)}</div>
+              </div>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                {dayEvents.length} {dayEvents.length === 1 ? "item" : "items"}
+              </span>
+            </div>
+
+            <div className="mt-3 space-y-2">
+              {dayEvents.length === 0 ? (
+                <p className="text-sm text-slate-500">Select a date to see appointments.</p>
+              ) : (
+                dayEvents.slice(0, 8).map((evt) => (
                   <button
                     key={evt.id}
                     type="button"
                     onClick={() => handleSelectEvent(evt.id)}
-                    className={`block w-full overflow-hidden rounded-lg border px-2 py-2 text-left ${
-                      evt.source === "db" ? "border-primary-200 bg-primary-50/70" : "border-slate-200 bg-slate-50"
+                    className={`block w-full overflow-hidden rounded-xl border px-3 py-2 text-left text-sm ${
+                      evt.id === selectedId ? "border-primary-300 bg-primary-50/70" : "border-slate-200 bg-white hover:bg-slate-50"
                     }`}
                   >
-                    <div className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-slate-800">
-                      {formatTimeRange(evt.start, evt.end)}
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-slate-700">
+                        {formatTimeRange(evt.start, evt.end)}
+                      </span>
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
+                        {evt.source === "db" ? "appt" : "google"}
+                      </span>
                     </div>
-                    <div className="mt-0.5 truncate text-sm font-semibold text-slate-900">{evt.title}</div>
-                    {evt.address ? <div className="truncate text-xs text-slate-600">{evt.address}</div> : null}
+                    <div className="mt-1 truncate font-semibold text-slate-900">{evt.title}</div>
+                    {evt.address ? <div className="truncate text-[11px] text-slate-600">{evt.address}</div> : null}
                   </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      ) : (
-        <CalendarGrid events={events} conflicts={conflicts} anchorDay={anchorDay} onSelectEvent={handleSelectEvent} />
-      )}
+                ))
+              )}
+              {dayEvents.length > 8 ? (
+                <div className="text-xs text-slate-500">+{dayEvents.length - 8} more… use day view to see all.</div>
+              ) : null}
+            </div>
 
-      {selectedEvent ? <CalendarEventDetail event={selectedEvent} /> : null}
+            <div className="mt-4">
+              {selectedEvent ? (
+                <CalendarEventDetail event={selectedEvent} variant="embedded" />
+              ) : (
+                <p className="text-sm text-slate-500">Select an appointment to see full details.</p>
+              )}
+            </div>
+          </div>
+        </aside>
+      </div>
     </div>
   );
 }

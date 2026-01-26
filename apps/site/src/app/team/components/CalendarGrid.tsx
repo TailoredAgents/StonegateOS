@@ -19,12 +19,21 @@ type Props = {
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
   anchorDay: string;
+  selectedDay?: string | null;
+  onSelectDay?: (dayKey: string) => void;
   onSelectEvent?: (id: string) => void;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export function CalendarGrid({ events, conflicts, anchorDay, onSelectEvent }: Props): React.ReactElement {
+export function CalendarGrid({
+  events,
+  conflicts,
+  anchorDay,
+  selectedDay,
+  onSelectDay,
+  onSelectEvent
+}: Props): React.ReactElement {
   const anchor = parseDayKey(anchorDay) ?? new Date();
   const weekday = getWeekdayIndex(anchor);
   const startOfWeek = new Date(anchor.getTime() - weekday * DAY_MS);
@@ -54,19 +63,28 @@ export function CalendarGrid({ events, conflicts, anchorDay, onSelectEvent }: Pr
       {days.map((day) => {
         const key = formatDayKey(day);
         const bucket = dayBuckets[key] ?? [];
+        const isSelected = typeof selectedDay === "string" && selectedDay.length > 0 ? selectedDay === key : false;
         return (
           <div
             key={key}
-            className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm"
+            className={`min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm ${
+              isSelected ? "ring-2 ring-primary-200" : ""
+            }`}
           >
-            <div className="mb-2 text-xs font-semibold uppercase text-slate-500">
+            <button
+              type="button"
+              onClick={() => onSelectDay?.(key)}
+              className={`mb-2 w-full text-left text-xs font-semibold uppercase ${
+                isSelected ? "text-primary-700" : "text-slate-500 hover:text-primary-700"
+              }`}
+            >
               {day.toLocaleDateString(undefined, {
                 timeZone: TEAM_TIME_ZONE,
                 weekday: "short",
                 month: "short",
                 day: "numeric"
               })}
-            </div>
+            </button>
             <div className="space-y-2">
               {bucket.length === 0 ? (
                 <p className="text-xs text-slate-400">Empty</p>

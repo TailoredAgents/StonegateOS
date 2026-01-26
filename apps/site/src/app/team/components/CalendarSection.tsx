@@ -59,7 +59,7 @@ export async function CalendarSection({
     propertyId?: string;
   };
 }): Promise<React.ReactElement> {
-  const view = searchParams?.calView === "month" ? "month" : "week";
+  const view = searchParams?.calView === "month" ? "month" : searchParams?.calView === "day" ? "day" : "week";
   const anchor = parseAnchorDate(searchParams?.cal ?? null) ?? new Date();
   const range = computeRange(anchor, view);
 
@@ -147,8 +147,14 @@ function getMonthStart(date: Date): Date {
   return new Date(Date.UTC(year, month - 1, 1, 12, 0, 0, 0));
 }
 
-function computeRange(anchor: Date, view: "week" | "month"): { start: Date; end: Date } {
+function computeRange(anchor: Date, view: "week" | "month" | "day"): { start: Date; end: Date } {
   const safeAnchor = Number.isNaN(anchor.getTime()) ? new Date() : anchor;
+  if (view === "day") {
+    const start = new Date(safeAnchor.getTime());
+    const end = new Date(start.getTime() + DAY_MS);
+    return { start, end };
+  }
+
   if (view === "week") {
     const weekday = getWeekdayIndex(safeAnchor);
     const start = new Date(safeAnchor.getTime() - weekday * DAY_MS);
