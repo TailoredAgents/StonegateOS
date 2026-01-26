@@ -953,7 +953,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 <div className="text-sm text-neutral-700">{quoteState.tier}</div>
                 <div className="text-xs text-neutral-600">{quoteState.reason}</div>
                 <div className="text-xs text-neutral-600">
-                  Disposal fees may apply: $50 per mattress, $30 per paint container, $10 per tire (pass-through dump fees).
+                  Disposal fees may apply for certain items (for example, mattresses/box springs are +$40 each).
                 </div>
                 <div className="text-xs text-neutral-600">
                   We&apos;ll confirm the exact price on-site before we start. If we use less space than expected, your price goes down.

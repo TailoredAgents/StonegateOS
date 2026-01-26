@@ -33,9 +33,9 @@ const RESPONSE_DELAY_MAX_MS = 30_000;
 function fallbackResponse(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("price") || m.includes("cost") || m.includes("quote") || m.includes("estimate"))
-    return "We price strictly by trailer volume: 1/4 $200, 1/2 $400, 3/4 $600, full $800 (before promos). We'll confirm the exact price on-site.";
+    return "We price by load size. Single item pickup starts at $75, quarter load $150, half load $300, 3/4 load $450, and a full load $600. We’ll confirm the exact price on-site.";
   if (m.includes("mattress") || m.includes("paint") || m.includes("tire"))
-    return "Base pricing is by volume. Disposal pass-through fees apply if needed: +$50 per mattress, +$30 per paint container, +$10 per tire.";
+    return "Base pricing is by volume. Some items have dump pass-through fees (for example, mattresses/box springs are +$40 each).";
   if (m.includes("insurance") || m.includes("licensed")) return "Yes - Stonegate is licensed and insured. COIs available on request.";
   return "Happy to help - ask about pricing ranges, what we haul, or say \"book me\" to schedule an estimate.";
 }

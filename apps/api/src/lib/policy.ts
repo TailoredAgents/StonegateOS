@@ -164,7 +164,7 @@ export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
   serviceAreaSummary:
     "We serve Georgia (primarily north and central Georgia). Share your ZIP code and we will confirm availability.",
   trailerAndPricingSummary:
-    "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume. A quarter trailer starts around $170 after our current 15% discount. Photos help us estimate quickly.",
+    "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume. Single item pickup starts at $75; quarter load $150; half load $300; 3/4 load $450; full load $600. Photos help us estimate quickly.",
   whatWeDo: "Junk removal and hauling for household and light commercial items.",
   whatWeDontDo: "We do not take hazmat, oils, or paints. Ask if unsure.",
   bookingStyle:

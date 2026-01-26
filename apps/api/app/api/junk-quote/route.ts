@@ -112,30 +112,24 @@ const QuoteResultSchema = z
         path: ["priceLow"]
       });
     }
-    if (value.priceLow < 200 || value.priceHigh < 200) {
+    if (value.priceLow < 75 || value.priceHigh < 75) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "prices must be >= 200",
-        path: ["priceLow"]
-      });
-    }
-    if (value.priceLow % 200 !== 0 || value.priceHigh % 200 !== 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "prices must be in $200 (quarter-load) increments",
+        message: "prices must be >= 75",
         path: ["priceLow"]
       });
     }
   });
 
 const VOLUME_PRICING = {
-  quarter: 200,
-  half: 400,
-  threeQuarter: 600,
-  full: 800
+  singleItem: 75,
+  quarter: 150,
+  half: 300,
+  threeQuarter: 450,
+  full: 600
 } as const;
 
-const UNIT_PRICE = 200;
+const UNIT_PRICE = 150;
 type JobInput = z.infer<typeof RequestSchema>["job"];
 type QuoteResult = z.infer<typeof QuoteResultSchema>;
 
@@ -153,10 +147,12 @@ function clampInt(value: number, min: number, max: number): number {
 }
 
 function unitsToPrice(units: number): number {
+  if (units <= 0) return VOLUME_PRICING.singleItem;
   return units * UNIT_PRICE;
 }
 
 function priceToUnits(price: number): number {
+  if (price === VOLUME_PRICING.singleItem) return 0;
   return Math.round(price / UNIT_PRICE);
 }
 
@@ -167,8 +163,8 @@ function getQuoteBounds(job: JobInput): QuoteBounds {
 
   switch (job.perceivedSize) {
     case "few_items":
-      minUnits = 1;
-      maxUnits = 1;
+      minUnits = 0;
+      maxUnits = 0;
       break;
     case "small_area":
       minUnits = 1;
@@ -204,9 +200,9 @@ function getQuoteBounds(job: JobInput): QuoteBounds {
   }
 
   return {
-    minUnits: clampInt(minUnits, 1, 50),
-    maxUnits: clampInt(maxUnits, 1, 50),
-    minHighUnits: typeof minHighUnits === "number" ? clampInt(minHighUnits, 1, 50) : undefined
+    minUnits: clampInt(minUnits, 0, 50),
+    maxUnits: clampInt(maxUnits, 0, 50),
+    minHighUnits: typeof minHighUnits === "number" ? clampInt(minHighUnits, 0, 50) : undefined
   };
 }
 
@@ -216,6 +212,7 @@ function formatLoadCount(units: number): string {
 }
 
 function formatFraction(units: number): string {
+  if (units === 0) return "Single item";
   if (units === 1) return "1/4";
   if (units === 2) return "1/2";
   if (units === 3) return "3/4";
@@ -225,6 +222,7 @@ function formatFraction(units: number): string {
 
 function formatTierLabel(minUnits: number, maxUnits: number): string {
   if (minUnits === maxUnits) {
+    if (minUnits === 0) return "Single item pickup";
     if (minUnits <= 4) return minUnits === 4 ? "Full trailer" : `${formatFraction(minUnits)} trailer`;
     return `${formatLoadCount(minUnits)} trailer loads`;
   }
@@ -246,12 +244,37 @@ function shouldMentionMultiLoad(job: JobInput, bounds: QuoteBounds, priceHigh: n
 }
 
 function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBounds): QuoteResult {
-  const minUnits = Math.max(1, bounds.minUnits);
+  const minUnits = Math.max(0, bounds.minUnits);
   const maxUnits = Math.max(minUnits, bounds.maxUnits);
   const minPrice = unitsToPrice(minUnits);
   const maxPrice = unitsToPrice(maxUnits);
   const minHighUnits = bounds.minHighUnits ? clampInt(bounds.minHighUnits, minUnits, maxUnits) : undefined;
   const minHighPrice = typeof minHighUnits === "number" ? unitsToPrice(minHighUnits) : null;
+
+  const allowedPrices: number[] = [];
+  for (let units = minUnits; units <= maxUnits; units++) {
+    allowedPrices.push(unitsToPrice(units));
+  }
+
+  const pickClosest = (value: number): number => {
+    let best = allowedPrices[0] ?? minPrice;
+    let bestDistance = Math.abs(best - value);
+    for (const candidate of allowedPrices) {
+      const distance = Math.abs(candidate - value);
+      if (distance < bestDistance || (distance === bestDistance && candidate > best)) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  };
+
+  const pickNextUp = (value: number): number => {
+    for (const candidate of allowedPrices) {
+      if (candidate >= value) return candidate;
+    }
+    return allowedPrices[allowedPrices.length - 1] ?? maxPrice;
+  };
 
   let priceLow = quote.priceLow;
   let priceHigh = quote.priceHigh;
@@ -261,12 +284,11 @@ function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBoun
   priceLow = clampInt(priceLow, minPrice, maxPrice);
   priceHigh = clampInt(priceHigh, minPrice, maxPrice);
 
-  // Re-align to $200 increments inside the allowed bounds.
-  priceLow = clampInt(Math.round(priceLow / UNIT_PRICE) * UNIT_PRICE, minPrice, maxPrice);
-  priceHigh = clampInt(Math.round(priceHigh / UNIT_PRICE) * UNIT_PRICE, minPrice, maxPrice);
+  priceLow = pickClosest(priceLow);
+  priceHigh = pickClosest(priceHigh);
 
   if (minHighPrice && priceHigh < minHighPrice) {
-    priceHigh = minHighPrice;
+    priceHigh = pickNextUp(minHighPrice);
   }
   if (priceLow > priceHigh) {
     priceLow = priceHigh;
@@ -321,7 +343,7 @@ function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBoun
 }
 
 function getFallbackQuote(job: JobInput, bounds: QuoteBounds): QuoteResult {
-  const minUnits = Math.max(1, bounds.minUnits);
+  const minUnits = Math.max(0, bounds.minUnits);
   const maxUnits = Math.max(minUnits, bounds.maxUnits);
   const minHighUnits = bounds.minHighUnits ? clampInt(bounds.minHighUnits, minUnits, maxUnits) : undefined;
   const highUnits = Math.max(maxUnits, minHighUnits ?? maxUnits);
@@ -398,16 +420,11 @@ export async function POST(request: NextRequest) {
 
     const base = applyBoundsToQuote(baseCandidate, body.job, bounds);
 
-    const db = getDb();
-    const discountPercent = await resolveInstantQuoteDiscountPercent(db);
-    const priceLowDiscounted = Math.round(base.priceLow * (1 - discountPercent));
-    const priceHighDiscounted = Math.round(base.priceHigh * (1 - discountPercent));
     const storedAiResult = {
-      ...base,
-      discountPercent,
-      priceLowDiscounted,
-      priceHighDiscounted
+      ...base
     };
+
+    const db = getDb();
 
     const [quoteRow] = await db
       .insert(instantQuotes)
@@ -552,12 +569,7 @@ export async function POST(request: NextRequest) {
     return corsJson({
       ok: true,
       quoteId,
-      quote: {
-        ...base,
-        discountPercent,
-        priceLowDiscounted,
-        priceHighDiscounted
-      }
+      quote: base
     }, requestOrigin);
   } catch (error) {
     console.error("[junk-quote] server_error", error);
@@ -610,7 +622,7 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>, bounds: Quote
 
     const mustMentionMultiLoad = shouldMentionMultiLoad(body.job, bounds, minHighPrice ?? unitsToPrice(bounds.maxUnits));
     const dynamicRules = [
-      `Allowed prices for this request are ONLY: ${allowedPrices.join(", ")} (in $200 increments).`,
+      `Allowed prices for this request are ONLY: ${allowedPrices.join(", ")}.`,
       minHighPrice ? `Because of the job size/type, priceHigh MUST be >= ${minHighPrice}.` : null,
       mustMentionMultiLoad
         ? `Your reasonSummary MUST mention that the job may require more than one trailer load.`
@@ -812,33 +824,30 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>, bounds: Quote
 
 const SYSTEM_PROMPT = `
 You are the quoting assistant for Stonegate Junk Removal in Woodstock, Georgia.
-Stonegate uses one large 7x16x4 dump trailer. Pricing is STRICTLY based on trailer volume only.
+Stonegate uses one large 7x16x4 dump trailer. Pricing is based on either a single-item pickup or trailer volume.
 Do NOT add charges for weight, stairs, distance, time, urgency, heavy/bulky items, or difficulty.
 
-Base volume prices (BEFORE discounts):
-- 1/4 trailer: $200
-- 1/2 trailer: $400
-- 3/4 trailer: $600
-- Full trailer: $800
+Base prices:
+- Single item pickup: $75
+- 1/4 trailer: $150
+- 1/2 trailer: $300
+- 3/4 trailer: $450
+- Full trailer: $600
 
 Multi-load jobs:
-- If you believe the job can require more than one load, you may quote above $800.
-- Prices MUST always be in $200 increments (quarter-trailer units). Example ranges:
-  - 1 to 2 trailer loads: $800 - $1600
-  - 1.5 to 2.5 trailer loads: $1200 - $2000
-  - 2 to 3 trailer loads: $1600 - $2400
-Return base prices only; discounts are applied separately by the server.
+- If you believe the job can require more than one trailer load, you may quote above $600.
+- Use the base prices above as reference and keep priceLow/priceHigh aligned to realistic trailer-load amounts (avoid odd, non-tier numbers).
 
 Rules:
 - Respond ONLY with JSON: { "loadFractionEstimate": number, "priceLow": number, "priceHigh": number, "displayTierLabel": string, "reasonSummary": string, "needsInPersonEstimate": boolean }
-- Always give a price range, never a single number.
+- Always return priceLow and priceHigh. They may be equal if the range is very tight.
 - Map perceived size to trailer fraction:
-  few_items -> ~0.25
+  few_items -> single item (or up to 1/4 trailer if needed)
   small_area -> 0.25-0.5
   one_room_or_half_garage -> 0.5-0.75
   big_cleanout -> 0.75-1.0+ (can be multiple loads)
   not_sure -> err on 0.5+ unless clearly tiny
-- Use ONLY the base volume prices above (and their $200 increments for multi-load). Do not invent other prices.
+- Use the base prices above; do not invent unrelated pricing schemes.
 - If the job seems uncertain or could be multiple loads, widen the range and set needsInPersonEstimate=true.
 - displayTierLabel: short category like "Small load", "Half trailer", "Large to full trailer", "Multi-trailer project".
 - reasonSummary: one friendly sentence.
