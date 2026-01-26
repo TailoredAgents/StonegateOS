@@ -67,6 +67,7 @@ const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
   { id: "flexible", label: "Flexible" }
 ];
 
+const GOOGLE_ADS_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_LEAD_SEND_TO"] ?? "";
 const GOOGLE_ADS_CONTACT_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO"] ?? "";
 
 export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
@@ -112,6 +113,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
   const [photoSkipped, setPhotoSkipped] = React.useState(false);
   const trackedScheduleRef = React.useRef(false);
+  const trackedLeadQuoteIdRef = React.useRef<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const quoteCardRef = React.useRef<HTMLDivElement | null>(null);
   const nameInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -188,6 +190,18 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const trackGoogleContactConversion = React.useCallback(() => {
     if (!GOOGLE_ADS_CONTACT_SEND_TO) return;
     trackGoogleAdsConversion(GOOGLE_ADS_CONTACT_SEND_TO, { value: 1, currency: "USD" });
+  }, []);
+
+  const trackGoogleLeadConversion = React.useCallback((quoteId: string | null) => {
+    if (!GOOGLE_ADS_LEAD_SEND_TO) return;
+    if (!quoteId) return;
+    if (trackedLeadQuoteIdRef.current === quoteId) return;
+    trackedLeadQuoteIdRef.current = quoteId;
+    trackGoogleAdsConversion(GOOGLE_ADS_LEAD_SEND_TO, {
+      value: 1,
+      currency: "USD",
+      transaction_id: quoteId
+    });
   }, []);
 
   const formatSlotLabel = React.useCallback(
@@ -345,9 +359,10 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         throw new Error(message);
       }
       if (!data.quote) throw new Error("Quote unavailable");
+      const nextQuoteId = typeof data.quoteId === "string" && data.quoteId.length ? data.quoteId : null;
       setQuoteState({
         status: "ready",
-        quoteId: data.quoteId ?? null,
+        quoteId: nextQuoteId,
         baseLow: data.quote.priceLow,
         baseHigh: data.quote.priceHigh,
         low: data.quote.priceLowDiscounted ?? data.quote.priceLow,
@@ -357,6 +372,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         reason: data.quote.reasonSummary,
         needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate)
       });
+      trackGoogleLeadConversion(nextQuoteId);
     } catch (err) {
       setQuoteState({ status: "error", message: (err as Error).message });
     }

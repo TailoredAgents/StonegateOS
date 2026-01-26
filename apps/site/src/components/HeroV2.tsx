@@ -7,7 +7,7 @@ import { Badge, Button, cn } from "@myst-os/ui";
 declare global {
   interface Window {
     gtag?: (...args: unknown[]) => void;
-    dataLayer?: Array<Record<string, unknown>>;
+    dataLayer?: unknown[];
   }
 }
 

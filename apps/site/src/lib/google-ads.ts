@@ -1,7 +1,7 @@
 declare global {
   interface Window {
     gtag?: (...args: unknown[]) => void;
-    dataLayer?: Array<Record<string, unknown>>;
+    dataLayer?: unknown[];
   }
 }
 
@@ -16,11 +16,12 @@ export function trackGoogleAdsConversion(sendTo: string, params?: Record<string,
       return;
     }
 
+    window.dataLayer = window.dataLayer || [];
     if (Array.isArray(window.dataLayer)) {
-      window.dataLayer.push({ event: "google_ads_conversion", send_to: normalized, ...(params ?? {}) });
+      // Mirror the gtag() stub behavior: it pushes the `arguments` array into dataLayer.
+      window.dataLayer.push(["event", "conversion", { send_to: normalized, ...(params ?? {}) }]);
     }
   } catch (error) {
     console.warn("Google Ads conversion tracking failed", error);
   }
 }
-

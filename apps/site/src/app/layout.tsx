@@ -1,6 +1,7 @@
 import "@/lib/react-internals-polyfill";
 import type { Metadata } from "next";
 import { absoluteUrl, siteUrl } from "@/lib/metadata";
+import { GoogleTag } from "@/components/GoogleTag";
 import "./globals.css";
 
 const defaultTitle = "Stonegate Junk Removal";
@@ -47,6 +48,9 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const ga4Id = process.env["NEXT_PUBLIC_GA4_ID"] ?? null;
+  const googleAdsTagId = process.env["NEXT_PUBLIC_GOOGLE_ADS_TAG_ID"] ?? null;
+
   return (
     <html lang="en">
       <head>
@@ -58,6 +62,7 @@ export default function RootLayout({
         <link rel="preconnect" href="https://mpc-prod-27-s6uit34pua-uk.a.run.app" />
       </head>
       <body className="antialiased bg-neutral-100 text-neutral-900 font-sans">
+        <GoogleTag ga4Id={ga4Id} googleAdsTagId={googleAdsTagId} />
         {children}
       </body>
     </html>
