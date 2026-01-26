@@ -9,7 +9,14 @@ import { ContactNameEditorClient } from "./ContactNameEditorClient";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
 import { SubmitButton } from "@/components/SubmitButton";
-import { bookAppointmentAction, deleteContactAction, startContactCallAction } from "../actions";
+import {
+  addPropertyAction,
+  bookAppointmentAction,
+  deleteContactAction,
+  deletePropertyAction,
+  startContactCallAction,
+  updatePropertyAction
+} from "../actions";
 
 type Props = {
   contact: ContactSummary;
@@ -49,14 +56,27 @@ function buildMapsLink(contact: ContactSummary): string | null {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 }
 
+function buildMapsLinkForProperty(property: ContactSummary["properties"][number] | null | undefined): string | null {
+  if (!property) return null;
+  const parts = [property.addressLine1, property.addressLine2 ?? "", property.city, property.state, property.postalCode]
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (parts.length === 0) return null;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts.join(", "))}`;
+}
+
 export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): React.ReactElement {
   const memberNameById = React.useMemo(() => new Map(teamMembers.map((m) => [m.id, m.name])), [teamMembers]);
   const [stage, setStage] = React.useState(() => contact.pipeline?.stage ?? "new");
   const [assignee, setAssignee] = React.useState<string | null>(() => contact.salespersonMemberId ?? null);
   const [showBookingForm, setShowBookingForm] = React.useState(false);
+  const [addingProperty, setAddingProperty] = React.useState(false);
+  const [editingPropertyId, setEditingPropertyId] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     setShowBookingForm(false);
+    setAddingProperty(false);
+    setEditingPropertyId(null);
     setStage(contact.pipeline?.stage ?? "new");
     setAssignee(contact.salespersonMemberId ?? null);
     setSystemTasks((contact.reminders ?? []).filter(isSystemTask).sort((a, b) => Date.parse(a.dueAt ?? "") - Date.parse(b.dueAt ?? "")));
@@ -354,6 +374,178 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
           <span className="rounded-full bg-slate-100 px-3 py-1">Notes: {contact.notesCount ?? (contact.notes?.length ?? 0)}</span>
         </div>
         <div className="text-[11px] text-slate-500">Last activity: {formatDateTime(contact.lastActivityAt)}</div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Address</div>
+            <div className="text-sm font-semibold text-slate-900">Properties</div>
+          </div>
+          {addingProperty ? null : (
+            <button
+              type="button"
+              className={teamButtonClass("secondary", "sm")}
+              onClick={() => {
+                setAddingProperty(true);
+                setEditingPropertyId(null);
+              }}
+            >
+              Add property
+            </button>
+          )}
+        </div>
+
+        <div className="mt-3 space-y-3">
+          {(contact.properties ?? []).map((property) => {
+            const isEditing = editingPropertyId === property.id;
+            return (
+              <div key={property.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="text-xs text-slate-600">
+                    <div className="text-sm font-semibold text-slate-900">
+                      {property.addressLine1}
+                      {property.addressLine2 ? `, ${property.addressLine2}` : ""}
+                    </div>
+                    <div>
+                      {property.city}, {property.state} {property.postalCode}
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-500">Added {formatDateTime(property.createdAt)}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <a
+                      className={`${teamButtonClass("secondary", "sm")} ${buildMapsLinkForProperty(property) ? "" : "pointer-events-none opacity-50"}`}
+                      href={buildMapsLinkForProperty(property) ?? "#"}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Maps
+                    </a>
+                    {isEditing ? (
+                      <button
+                        type="button"
+                        className={teamButtonClass("secondary", "sm")}
+                        onClick={() => setEditingPropertyId(null)}
+                      >
+                        Close
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className={teamButtonClass("secondary", "sm")}
+                        onClick={() => {
+                          setAddingProperty(false);
+                          setEditingPropertyId(property.id);
+                        }}
+                      >
+                        Edit
+                      </button>
+                    )}
+                    <form
+                      action={deletePropertyAction}
+                      onSubmit={(event) => {
+                        if (!window.confirm("Delete this property address?")) {
+                          event.preventDefault();
+                        }
+                      }}
+                    >
+                      <input type="hidden" name="contactId" value={contact.id} />
+                      <input type="hidden" name="propertyId" value={property.id} />
+                      <SubmitButton className={teamButtonClass("danger", "sm")} pendingLabel="Deleting...">
+                        Delete
+                      </SubmitButton>
+                    </form>
+                  </div>
+                </div>
+
+                {isEditing ? (
+                  <form
+                    action={updatePropertyAction}
+                    className="mt-3 grid grid-cols-1 gap-3 text-xs text-slate-600 sm:grid-cols-2"
+                    onSubmit={() => setEditingPropertyId(null)}
+                  >
+                    <input type="hidden" name="contactId" value={contact.id} />
+                    <input type="hidden" name="propertyId" value={property.id} />
+                    <label className="flex flex-col gap-1 sm:col-span-2">
+                      <span>Address line 1</span>
+                      <input name="addressLine1" defaultValue={property.addressLine1} required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                    </label>
+                    <label className="flex flex-col gap-1 sm:col-span-2">
+                      <span>Address line 2</span>
+                      <input name="addressLine2" defaultValue={property.addressLine2 ?? ""} className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span>City</span>
+                      <input name="city" defaultValue={property.city} required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="flex flex-col gap-1">
+                        <span>State</span>
+                        <input name="state" defaultValue={property.state} required maxLength={2} className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase" />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span>Postal code</span>
+                        <input name="postalCode" defaultValue={property.postalCode} required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap gap-2 sm:col-span-2">
+                      <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
+                        Save
+                      </SubmitButton>
+                      <button type="button" className={teamButtonClass("secondary", "sm")} onClick={() => setEditingPropertyId(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : null}
+              </div>
+            );
+          })}
+
+          {addingProperty ? (
+            <form
+              action={addPropertyAction}
+              className="grid grid-cols-1 gap-3 rounded-2xl border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-600 sm:grid-cols-2"
+              onSubmit={() => setAddingProperty(false)}
+            >
+              <input type="hidden" name="contactId" value={contact.id} />
+              <label className="flex flex-col gap-1 sm:col-span-2">
+                <span>Address line 1</span>
+                <input name="addressLine1" required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+              </label>
+              <label className="flex flex-col gap-1 sm:col-span-2">
+                <span>Address line 2</span>
+                <input name="addressLine2" className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>City</span>
+                <input name="city" required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1">
+                  <span>State</span>
+                  <input name="state" required maxLength={2} className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase" />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>Postal code</span>
+                  <input name="postalCode" required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2 sm:col-span-2">
+                <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
+                  Save
+                </SubmitButton>
+                <button type="button" className={teamButtonClass("secondary", "sm")} onClick={() => setAddingProperty(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : null}
+
+          {!addingProperty && (contact.properties ?? []).length === 0 ? (
+            <div className="text-xs text-slate-500">No address yet. Add a property to save the job location.</div>
+          ) : null}
+        </div>
       </div>
 
       {systemTasks.length > 0 ? (
