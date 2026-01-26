@@ -79,6 +79,7 @@ export default async function TeamPage({
     offset?: string;
     includeOutbound?: string;
     contactId?: string;
+    created?: string;
     threadId?: string;
     status?: string;
     channel?: string;
@@ -208,7 +209,9 @@ export default async function TeamPage({
       contactsOffset = parsed;
     }
   }
-  const contactIdParam = typeof params?.contactId === "string" ? params.contactId : undefined;
+  const contactIdRaw = typeof params?.contactId === "string" ? params.contactId : undefined;
+  const createdContactRaw = typeof params?.created === "string" ? params.created : undefined;
+  const contactIdParam = contactIdRaw ?? createdContactRaw;
   const gaReportIdParam = typeof params?.gaReportId === "string" ? params.gaReportId : undefined;
   const gaCampaignIdParam = typeof params?.gaCampaignId === "string" ? params.gaCampaignId : undefined;
   const inboxThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
