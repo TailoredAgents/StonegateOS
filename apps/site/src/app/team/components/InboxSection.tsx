@@ -7,6 +7,7 @@ import { InboxAutoScroll } from "./InboxAutoScroll";
 import { InboxMediaGallery } from "./InboxMediaGallery";
 import { TEAM_EMPTY_STATE, TEAM_INPUT_COMPACT, TEAM_SELECT, teamButtonClass } from "./team-ui";
 import type { ContactNoteSummary } from "./contacts.types";
+import type { ContactReminderSummary } from "./contacts.types";
 import {
   createThreadAction,
   retryFailedMessageAction,
@@ -21,17 +22,20 @@ import {
 } from "../actions";
 import { ContactNameEditorClient } from "./ContactNameEditorClient";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
+import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
 
 type ThreadSummary = {
   id: string;
   status: string;
   state?: string | null;
   stateUpdatedAt?: string | null;
+  updatedAt?: string | null;
   channel: string;
   subject: string | null;
   lastMessagePreview: string | null;
   lastMessageAt: string | null;
   lastInboundAt?: string | null;
+  assignedTo?: { id: string; name: string } | null;
   contact: {
     id: string;
     name: string;
@@ -63,6 +67,7 @@ type ThreadDetail = {
   subject: string | null;
   lastMessageAt: string | null;
   lastInboundAt?: string | null;
+  assignedTo?: { id: string; name: string } | null;
   contact: {
     id: string;
     name: string;
@@ -369,39 +374,128 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
   const timelineThreads = timeline?.threads ?? [];
   const timelineMessages = timeline?.messages?.length ? timeline.messages : activeThreadMessages;
 
-  let contactNotes: ContactNoteSummary[] = [];
+  let activeContactSummary:
+    | {
+        pipeline?: { stage: string; notes: string | null };
+        stats?: { appointments: number; quotes: number };
+        lastActivityAt?: string | null;
+      }
+    | null = null;
   if (activeContactId) {
     try {
-      const res = await callAdminApi(
-        `/api/admin/crm/tasks?contactId=${encodeURIComponent(activeContactId)}&status=completed`
-      );
+      const res = await callAdminApi(`/api/admin/contacts?contactId=${encodeURIComponent(activeContactId)}&limit=1`);
       if (res.ok) {
         const data = (await res.json().catch(() => null)) as unknown;
-        const tasks = data && typeof data === "object" ? (data as Record<string, unknown>)["tasks"] : null;
-        if (Array.isArray(tasks)) {
-          contactNotes = tasks
-            .map((task) => {
-              if (!task || typeof task !== "object") return null;
-              const record = task as Record<string, unknown>;
-              const id = typeof record["id"] === "string" ? record["id"] : null;
-              const body = typeof record["notes"] === "string" ? record["notes"] : null;
-              const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : null;
-              const updatedAt = typeof record["updatedAt"] === "string" ? record["updatedAt"] : null;
-              if (!id || !body || !createdAt || !updatedAt) return null;
-              const normalized = body.trim();
-              if (!normalized) return null;
-              return {
-                id,
-                body: normalized,
-                createdAt,
-                updatedAt
-              } satisfies ContactNoteSummary;
-            })
-            .filter(Boolean)
-            .slice(0, 25) as ContactNoteSummary[];
+        const contactsPayload =
+          data && typeof data === "object" ? (data as Record<string, unknown>)["contacts"] : null;
+        if (Array.isArray(contactsPayload) && contactsPayload.length > 0) {
+          const first = contactsPayload[0];
+          if (first && typeof first === "object") {
+            const record = first as Record<string, unknown>;
+            const pipelineRaw = record["pipeline"];
+            const statsRaw = record["stats"];
+            const lastActivityAt = typeof record["lastActivityAt"] === "string" ? record["lastActivityAt"] : null;
+
+            const stage =
+              pipelineRaw && typeof pipelineRaw === "object" && typeof (pipelineRaw as Record<string, unknown>)["stage"] === "string"
+                ? String((pipelineRaw as Record<string, unknown>)["stage"])
+                : null;
+            const pipelineNotes =
+              pipelineRaw && typeof pipelineRaw === "object" && typeof (pipelineRaw as Record<string, unknown>)["notes"] === "string"
+                ? String((pipelineRaw as Record<string, unknown>)["notes"])
+                : null;
+
+            const appts =
+              statsRaw && typeof statsRaw === "object" && typeof (statsRaw as Record<string, unknown>)["appointments"] === "number"
+                ? Number((statsRaw as Record<string, unknown>)["appointments"])
+                : null;
+            const quotesCount =
+              statsRaw && typeof statsRaw === "object" && typeof (statsRaw as Record<string, unknown>)["quotes"] === "number"
+                ? Number((statsRaw as Record<string, unknown>)["quotes"])
+                : null;
+
+            activeContactSummary = {
+              pipeline: stage ? { stage, notes: pipelineNotes } : undefined,
+              stats: appts !== null && quotesCount !== null ? { appointments: appts, quotes: quotesCount } : undefined,
+              lastActivityAt
+            };
+          }
         }
       }
     } catch {
+      activeContactSummary = null;
+    }
+  }
+
+  let contactReminders: ContactReminderSummary[] = [];
+  let contactNotes: ContactNoteSummary[] = [];
+  if (activeContactId) {
+    try {
+      const [openRes, completedRes] = await Promise.all([
+        callAdminApi(`/api/admin/crm/tasks?contactId=${encodeURIComponent(activeContactId)}&status=open`),
+        callAdminApi(`/api/admin/crm/tasks?contactId=${encodeURIComponent(activeContactId)}&status=completed`)
+      ]);
+
+      const parseTasks = async (res: Response): Promise<Array<Record<string, unknown>>> => {
+        if (!res.ok) return [];
+        const data = (await res.json().catch(() => null)) as unknown;
+        const tasks = data && typeof data === "object" ? (data as Record<string, unknown>)["tasks"] : null;
+        return Array.isArray(tasks) ? (tasks as Array<Record<string, unknown>>) : [];
+      };
+
+      const isSystemReminder = (title: string, notes: string | null): boolean => {
+        const lowerTitle = title.toLowerCase();
+        if (lowerTitle.startsWith("auto:")) return true;
+        const lowerNotes = (notes ?? "").toLowerCase();
+        return lowerNotes.includes("kind=speed_to_lead") || lowerNotes.includes("kind=follow_up") || lowerNotes.includes("[auto]");
+      };
+
+      const openTasks = await parseTasks(openRes);
+      contactReminders = openTasks
+        .map((task) => {
+          if (!task || typeof task !== "object") return null;
+          const id = typeof task["id"] === "string" ? (task["id"] as string) : null;
+          const title = typeof task["title"] === "string" ? (task["title"] as string) : null;
+          const dueAt = typeof task["dueAt"] === "string" ? (task["dueAt"] as string) : null;
+          const assignedTo = typeof task["assignedTo"] === "string" ? (task["assignedTo"] as string) : null;
+          const status = task["status"] === "completed" ? "completed" : "open";
+          const createdAt = typeof task["createdAt"] === "string" ? (task["createdAt"] as string) : null;
+          const updatedAt = typeof task["updatedAt"] === "string" ? (task["updatedAt"] as string) : null;
+          const notes = typeof task["notes"] === "string" ? (task["notes"] as string) : null;
+          if (!id || !title || !createdAt || !updatedAt) return null;
+          if (status !== "open") return null;
+          if (isSystemReminder(title, notes)) return null;
+          return {
+            id,
+            title,
+            notes,
+            dueAt,
+            assignedTo,
+            status: "open",
+            createdAt,
+            updatedAt
+          } satisfies ContactReminderSummary;
+        })
+        .filter(Boolean)
+        .slice(0, 25) as ContactReminderSummary[];
+
+      const completedTasks = await parseTasks(completedRes);
+      contactNotes = completedTasks
+        .map((task) => {
+          if (!task || typeof task !== "object") return null;
+          const id = typeof task["id"] === "string" ? (task["id"] as string) : null;
+          const body = typeof task["notes"] === "string" ? (task["notes"] as string) : null;
+          const createdAt = typeof task["createdAt"] === "string" ? (task["createdAt"] as string) : null;
+          const updatedAt = typeof task["updatedAt"] === "string" ? (task["updatedAt"] as string) : null;
+          if (!id || !body || !createdAt || !updatedAt) return null;
+          const normalized = body.trim();
+          if (!normalized) return null;
+          return { id, body: normalized, createdAt, updatedAt } satisfies ContactNoteSummary;
+        })
+        .filter(Boolean)
+        .slice(0, 25) as ContactNoteSummary[];
+    } catch {
+      contactReminders = [];
       contactNotes = [];
     }
   }
@@ -541,13 +635,18 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                   messageCount: number;
                 };
 
+                const getThreadActivityAt = (thread: ThreadSummary): string | null => {
+                  return thread.lastMessageAt ?? thread.lastInboundAt ?? thread.stateUpdatedAt ?? thread.updatedAt ?? null;
+                };
+
                 const byKey = new Map<string, ContactGroup>();
                 for (const thread of threads) {
                   const contactId = thread.contact?.id ?? null;
                   const key = contactId ?? `thread:${thread.id}`;
                   const existing = byKey.get(key);
                   const threadName = thread.contact?.name ?? "Unknown contact";
-                  const parsedLast = thread.lastMessageAt ? Date.parse(thread.lastMessageAt) : NaN;
+                  const threadActivityAt = getThreadActivityAt(thread);
+                  const parsedLast = threadActivityAt ? Date.parse(threadActivityAt) : NaN;
                   const parsedExisting = existing?.lastActivityAt ? Date.parse(existing.lastActivityAt) : NaN;
                   const isNewer =
                     Number.isFinite(parsedLast) &&
@@ -563,7 +662,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                       contactId,
                       name: threadName,
                       threads: [thread],
-                      lastActivityAt: thread.lastMessageAt ?? null,
+                      lastActivityAt: threadActivityAt,
                       lastPreview: thread.lastMessagePreview ?? null,
                       outOfArea: Boolean(thread.property?.outOfArea),
                       followupNextAt,
@@ -594,8 +693,11 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                   }
 
                   if (isNewer) {
-                    existing.lastActivityAt = thread.lastMessageAt ?? null;
-                    existing.lastPreview = thread.lastMessagePreview ?? existing.lastPreview;
+                    existing.lastActivityAt = threadActivityAt;
+                    existing.lastPreview =
+                      (typeof thread.lastMessagePreview === "string" && thread.lastMessagePreview.trim().length > 0
+                        ? thread.lastMessagePreview
+                        : null) ?? existing.lastPreview;
                     existing.name = threadName || existing.name;
                   }
                 }
@@ -611,8 +713,10 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                   const isActive = Boolean(group.contactId && activeContactId) && group.contactId === activeContactId;
 
                   const sortedThreads = [...group.threads].sort((a, b) => {
-                    const aTime = a.lastMessageAt ? Date.parse(a.lastMessageAt) : 0;
-                    const bTime = b.lastMessageAt ? Date.parse(b.lastMessageAt) : 0;
+                    const aAt = getThreadActivityAt(a);
+                    const bAt = getThreadActivityAt(b);
+                    const aTime = aAt ? Date.parse(aAt) : 0;
+                    const bTime = bAt ? Date.parse(bAt) : 0;
                     if (aTime !== bTime) return bTime - aTime;
                     return a.channel.localeCompare(b.channel);
                   });
@@ -1187,6 +1291,20 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                         ) : (
                           <div className="text-slate-400">Email: not on file</div>
                         )}
+                        {activeThreadSummary?.assignedTo?.name ? (
+                          <div>Assigned to: {activeThreadSummary.assignedTo.name}</div>
+                        ) : null}
+                        {activeContactSummary?.pipeline?.stage ? (
+                          <div>Stage: {activeContactSummary.pipeline.stage}</div>
+                        ) : null}
+                        {activeContactSummary?.stats ? (
+                          <div>
+                            Appointments: {activeContactSummary.stats.appointments} • Quotes: {activeContactSummary.stats.quotes}
+                          </div>
+                        ) : null}
+                        {activeContactSummary?.lastActivityAt ? (
+                          <div>Last activity: {formatTimestamp(activeContactSummary.lastActivityAt)}</div>
+                        ) : null}
                       </div>
                     </div>
                     {activeProperty?.outOfArea ? (
@@ -1208,6 +1326,8 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     </div>
                   ) : null}
                 </div>
+
+                <InboxContactRemindersClient contactId={activeContactId} initialReminders={contactReminders} />
 
                 <InboxContactNotesClient contactId={activeContactId} initialNotes={contactNotes} />
 
