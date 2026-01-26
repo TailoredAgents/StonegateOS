@@ -77,6 +77,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const utm = useUTM();
   const [step, setStep] = React.useState<1 | 2>(1);
   const [types, setTypes] = React.useState<JunkType[]>([]);
+  const [otherSelected, setOtherSelected] = React.useState(false);
+  const [otherDetails, setOtherDetails] = React.useState("");
   const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize>("few_items");
   const [notes, setNotes] = React.useState("");
   const [showNotes, setShowNotes] = React.useState(false);
@@ -314,12 +316,17 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     setError(null);
     setQuoteState({ status: "loading" });
     try {
-      if (!types.length) {
+      const resolvedTypes: JunkType[] = types.length ? types : otherSelected ? ["general_junk"] : [];
+      if (!resolvedTypes.length) {
         setStep(1);
         setQuoteState({ status: "idle" });
         setError("Pick at least one type of junk.");
         return;
       }
+
+      const otherLine =
+        otherSelected && otherDetails.trim().length > 0 ? `Other: ${otherDetails.trim()}` : "";
+      const combinedNotes = [notes.trim(), otherLine].filter((v) => v.length > 0).join("\n");
       const res = await fetch(`${apiBase}/api/junk-quote`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -327,9 +334,9 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
           source: "public_site",
           contact: { name: name.trim(), phone: phone.trim(), timeframe },
           job: {
-            types,
+            types: resolvedTypes,
             perceivedSize,
-            notes: notes.trim() || undefined,
+            notes: combinedNotes || undefined,
             zip: zip.trim(),
             photoUrls: photos
           },
@@ -737,7 +744,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       <h2 className="font-display text-2xl text-primary-800">Show us what you need gone</h2>
       <p className="mt-1 text-sm text-neutral-600">Answer 3 quick questions to see your price before booking.</p>
 
-      <div className="mt-3 grid gap-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700 sm:grid-cols-3">
+      <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700">
         <a
           href={GOOGLE_REVIEW_URL}
           target="_blank"
@@ -775,6 +782,11 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         onSubmit={(e) => {
           e.preventDefault();
           if (step === 1) {
+            if (!types.length && !otherSelected) {
+              setError("Pick at least one type of junk.");
+              return;
+            }
+            setError(null);
             setStep(2);
           } else {
             void submitQuote();
@@ -820,7 +832,45 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                     </label>
                   );
                 })}
+                <label
+                  htmlFor="junk-type-other"
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition sm:col-span-2",
+                    otherSelected
+                      ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
+                      : "border-neutral-200 bg-white text-neutral-700"
+                  )}
+                >
+                  <input
+                    id="junk-type-other"
+                    type="checkbox"
+                    className="sr-only"
+                    checked={otherSelected}
+                    onChange={() => setOtherSelected((prev) => !prev)}
+                    aria-label="Other (describe below)"
+                  />
+                  <span
+                    className={cn(
+                      "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                      otherSelected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                    )}
+                    aria-hidden="true"
+                  >
+                    <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                  </span>
+                  <span>Other (describe below)</span>
+                </label>
               </div>
+              {otherSelected ? (
+                <textarea
+                  rows={2}
+                  value={otherDetails}
+                  onChange={(e) => setOtherDetails(e.target.value)}
+                  className="mt-2 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                  placeholder="Example: pallets, yard equipment, glass table, etc."
+                  autoComplete="off"
+                />
+              ) : null}
             </div>
 
             <div className="space-y-2">
@@ -930,6 +980,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             <div className="space-y-1">
               <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
               <input
+                name="zip"
                 type="text"
                 autoComplete="postal-code"
                 inputMode="numeric"
@@ -955,6 +1006,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 <label className="text-sm font-semibold text-neutral-800">Name</label>
                 <input
                   ref={nameInputRef}
+                  name="name"
                   type="text"
                   autoComplete="name"
                   required
@@ -967,6 +1019,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <div>
                 <label className="text-sm font-semibold text-neutral-800">Mobile number</label>
                 <input
+                  name="phone"
                   type="tel"
                   autoComplete="tel"
                   inputMode="tel"
@@ -980,6 +1033,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <div className="sm:col-span-2">
                 <label className="text-sm font-semibold text-neutral-800">Email (optional)</label>
                 <input
+                  name="email"
                   type="email"
                   autoComplete="email"
                   inputMode="email"
@@ -1058,8 +1112,9 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                     <div className="text-xs font-semibold text-neutral-700">Book this pickup</div>
                     <div className="grid gap-2 md:grid-cols-2">
                       <input
+                        name="addressLine1"
                         type="text"
-                        autoComplete="street-address"
+                        autoComplete="address-line1"
                         placeholder="Street address"
                         value={addressLine1}
                         onChange={(e) => setAddressLine1(e.target.value)}
@@ -1067,6 +1122,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                       />
                       <div className="grid grid-cols-3 gap-2">
                         <input
+                          name="city"
                           type="text"
                           autoComplete="address-level2"
                           placeholder="City"
@@ -1075,6 +1131,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                           className="col-span-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                         />
                         <input
+                          name="state"
                           type="text"
                           autoComplete="address-level1"
                           placeholder="GA"
@@ -1085,6 +1142,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                         />
                       </div>
                       <input
+                        name="postalCode"
                         type="text"
                         autoComplete="postal-code"
                         inputMode="numeric"
