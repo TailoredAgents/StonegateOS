@@ -2,9 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
-
-const ADMIN_COOKIE = "myst-admin-session";
-const CREW_COOKIE = "myst-crew-session";
+import { requireTeamRole } from "@/app/api/team/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -17,17 +15,10 @@ export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ taskId: string }> }
 ): Promise<Response> {
-  const jar = request.cookies;
   const returnJson = wantsJson(request);
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
-  const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
-
-  if (!hasOwner && !hasCrew) {
-    if (returnJson) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
-    return NextResponse.redirect(getSafeRedirectUrl(request, "/team?tab=contacts"), 303);
-  }
+  const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
+  const auth = await requireTeamRole(request, { returnJson, redirectTo, roles: ["owner", "office", "crew"] });
+  if (!auth.ok) return auth.response;
 
   const { taskId } = await context.params;
   const id = taskId?.trim() ?? "";
@@ -81,17 +72,10 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ taskId: string }> }
 ): Promise<Response> {
-  const jar = request.cookies;
   const returnJson = wantsJson(request);
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
-  const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
-
-  if (!hasOwner && !hasCrew) {
-    if (returnJson) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    }
-    return NextResponse.redirect(getSafeRedirectUrl(request, "/team?tab=contacts"), 303);
-  }
+  const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
+  const auth = await requireTeamRole(request, { returnJson, redirectTo, roles: ["owner", "office", "crew"] });
+  if (!auth.ok) return auth.response;
 
   const { taskId } = await context.params;
   const id = taskId?.trim() ?? "";

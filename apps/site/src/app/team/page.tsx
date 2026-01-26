@@ -435,7 +435,7 @@ export default async function TeamPage({
 
       {tab === "pipeline" && (hasOffice || hasOwner) ? (
         <React.Suspense fallback={<TeamSkeletonCard title="Loading pipeline" />}>
-          <PipelineSection />
+          <PipelineSection contactId={contactIdParam ?? undefined} />
         </React.Suspense>
       ) : null}
 

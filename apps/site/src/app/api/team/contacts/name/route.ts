@@ -1,9 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
-
-const ADMIN_COOKIE = "myst-admin-session";
-const CREW_COOKIE = "myst-crew-session";
+import { requireTeamRole } from "@/app/api/team/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -12,15 +10,8 @@ function jsonError(message: string, status = 400): NextResponse {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const jar = request.cookies;
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
-  const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
-
-  if (!hasOwner && !hasCrew) {
-    const response = jsonError("Please sign in again and retry.", 401);
-    response.cookies.set({ name: "myst-flash-error", value: "Please sign in again and retry.", path: "/" });
-    return response;
-  }
+  const auth = await requireTeamRole(request, { returnJson: true, roles: ["owner", "office", "crew"] });
+  if (!auth.ok) return auth.response;
 
   const body = (await request.json().catch(() => null)) as unknown;
   if (!body || typeof body !== "object") {

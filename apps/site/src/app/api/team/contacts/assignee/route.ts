@@ -2,9 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
-
-const ADMIN_COOKIE = "myst-admin-session";
-const CREW_COOKIE = "myst-crew-session";
+import { requireTeamRole } from "@/app/api/team/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -14,17 +12,10 @@ function wantsJson(request: NextRequest): boolean {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const jar = request.cookies;
   const returnJson = wantsJson(request);
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
-  const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
-
-  if (!hasOwner && !hasCrew) {
-    const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
-    return returnJson
-      ? NextResponse.json({ error: "unauthorized" }, { status: 401 })
-      : NextResponse.redirect(redirectTo, 303);
-  }
+  const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
+  const auth = await requireTeamRole(request, { returnJson, redirectTo, roles: ["owner", "office", "crew"] });
+  if (!auth.ok) return auth.response;
 
   const payload = (await request.json().catch(() => null)) as unknown;
   if (!payload || typeof payload !== "object") {

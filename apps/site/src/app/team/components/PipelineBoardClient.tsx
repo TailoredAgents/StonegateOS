@@ -1,9 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState, useTransition } from "react";
-import { SubmitButton } from "@/components/SubmitButton";
+import { useEffect, useState } from "react";
 import { ArrowRight, FileText, Save } from "lucide-react";
-import { updatePipelineStageAction } from "../actions";
+import { useRouter } from "next/navigation";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import type { PipelineContact, PipelineLane } from "./pipeline.types";
 import { labelForPipelineStage, themeForPipelineStage } from "./pipeline.stages";
@@ -38,47 +37,64 @@ function formatShortDate(iso: string | null): string {
 type PipelineBoardClientProps = {
   stages: string[];
   lanes: PipelineLane[];
+  selectedContactId?: string | null;
 };
 
-export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClientProps) {
+async function persistPipelineStage(contactId: string, stage: string): Promise<void> {
+  const response = await fetch("/api/team/contacts/pipeline", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ contactId, stage })
+  });
+
+  if (!response.ok) {
+    const data = (await response.json().catch(() => null)) as { message?: string; error?: string } | null;
+    const message = data?.message ?? data?.error ?? "Unable to update stage.";
+    throw new Error(message);
+  }
+}
+
+export default function PipelineBoardClient({ stages, lanes, selectedContactId }: PipelineBoardClientProps) {
+  const router = useRouter();
   const [board, setBoard] = useState<PipelineLane[]>(() => normalizeBoard(lanes));
   const [dragging, setDragging] = useState<{ id: string; stage: string } | null>(null);
   const [hoverStage, setHoverStage] = useState<string | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [ignoreClickUntil, setIgnoreClickUntil] = useState(0);
+  const [savingCount, setSavingCount] = useState(0);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setBoard(normalizeBoard(lanes));
   }, [lanes]);
 
-  const contactLookup = useMemo(() => {
-    const map = new Map<string, PipelineContact>();
-    for (const lane of board) {
-      for (const contact of lane.contacts) {
-        map.set(contact.id, contact);
-      }
-    }
-    return map;
-  }, [board]);
-
   function moveContact(contactId: string, targetStage: string) {
     setBoard((current) => {
-      const contact = contactLookup.get(contactId);
-      if (!contact) return current;
-      if (contact.pipeline.stage === targetStage) return current;
+      let found: PipelineContact | null = null;
+      const stripped: PipelineLane[] = [];
+
+      for (const lane of current) {
+        const kept: PipelineContact[] = [];
+        for (const contact of lane.contacts) {
+          if (contact.id === contactId) {
+            found = contact;
+            continue;
+          }
+          kept.push(contact);
+        }
+        stripped.push({ ...lane, contacts: kept });
+      }
+
+      if (!found) return current;
+      if (found.pipeline.stage === targetStage) return current;
 
       const updatedContact: PipelineContact = {
-        ...contact,
+        ...found,
         pipeline: {
-          ...contact.pipeline,
+          ...found.pipeline,
           stage: targetStage,
           updatedAt: new Date().toISOString()
         }
       };
-
-      const stripped = current.map((lane) => ({
-        ...lane,
-        contacts: lane.contacts.filter((c) => c.id !== contactId)
-      }));
 
       const targetIndex = stripped.findIndex((lane) => lane.stage === targetStage);
       if (targetIndex === -1) return current;
@@ -95,7 +111,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
     });
   }
 
-  function handleDrop(event: React.DragEvent<HTMLDivElement>, stage: string) {
+  async function handleDrop(event: React.DragEvent<HTMLDivElement>, stage: string) {
     event.preventDefault();
     setHoverStage(null);
 
@@ -110,19 +126,26 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
       // ignore
     }
 
-    if (!contactId && dragging) {
-      contactId = dragging.id;
-    }
+    const previousStage = dragging?.stage ?? null;
+    if (!contactId && dragging) contactId = dragging.id;
 
     if (!contactId || dragging?.stage === stage) return;
 
     moveContact(contactId, stage);
     setDragging(null);
+    setSaveError(null);
 
-    const formData = new FormData();
-    formData.set("contactId", contactId);
-    formData.set("stage", stage);
-    startTransition(() => updatePipelineStageAction(formData));
+    setSavingCount((count) => count + 1);
+    try {
+      await persistPipelineStage(contactId, stage);
+    } catch (error) {
+      if (previousStage) {
+        moveContact(contactId, previousStage);
+      }
+      setSaveError(error instanceof Error ? error.message : "Unable to update stage.");
+    } finally {
+      setSavingCount((count) => Math.max(0, count - 1));
+    }
   }
 
   function handleDragOver(event: React.DragEvent<HTMLDivElement>, stage: string) {
@@ -144,6 +167,14 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
   function handleDragEnd() {
     setDragging(null);
     setHoverStage(null);
+    setIgnoreClickUntil(Date.now() + 400);
+  }
+
+  function selectContact(contactId: string) {
+    const query = new URLSearchParams();
+    query.set("tab", "pipeline");
+    query.set("contactId", contactId);
+    router.push(`/team?${query.toString()}`);
   }
 
   return (
@@ -184,6 +215,7 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                 ) : (
                   lane.contacts.map((contact) => {
                     const theme = themeForPipelineStage(contact.pipeline.stage);
+                    const isSelected = selectedContactId === contact.id;
                     return (
                       <article
                         key={contact.id}
@@ -192,9 +224,22 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                         draggable
                         onDragStart={(event: React.DragEvent<HTMLDivElement>) => handleDragStart(contact, stage, event)}
                         onDragEnd={handleDragEnd}
+                        onClick={() => {
+                          if (dragging) return;
+                          if (Date.now() < ignoreClickUntil) return;
+                          selectContact(contact.id);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            if (dragging) return;
+                            if (Date.now() < ignoreClickUntil) return;
+                            selectContact(contact.id);
+                          }
+                        }}
                         className={`cursor-grab rounded-2xl border px-4 py-4 text-xs shadow-sm transition hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-300 ${
                           dragging?.id === contact.id ? "opacity-60" : ""
-                        } ${theme.cardBorder} ${theme.cardBackground}`}
+                        } ${theme.cardBorder} ${theme.cardBackground} ${isSelected ? "ring-2 ring-primary-300" : ""}`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div className="space-y-1">
@@ -224,7 +269,8 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                         <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
                           <a
                             className={`${teamButtonClass("secondary", "sm")} gap-2`}
-                            href={`/team?tab=contacts&q=${encodeURIComponent(`${contact.firstName} ${contact.lastName}`.trim())}`}
+                            href={`/team?tab=contacts&contactId=${encodeURIComponent(contact.id)}`}
+                            onClick={(event) => event.stopPropagation()}
                           >
                             <ArrowRight className="h-4 w-4" aria-hidden="true" />
                             View contact
@@ -232,24 +278,36 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                           <a
                             className={`${teamButtonClass("secondary", "sm")} gap-2`}
                             href={`/team?tab=quotes&quoteMode=builder&contactId=${encodeURIComponent(contact.id)}`}
+                            onClick={(event) => event.stopPropagation()}
                           >
                             <FileText className="h-4 w-4" aria-hidden="true" />
                             Create quote
                           </a>
                         </div>
-                        <form
-                          action={updatePipelineStageAction}
-                          className="mt-3 flex flex-wrap items-center gap-2 text-[11px]"
-                          onSubmit={() => setHoverStage(null)}
-                        >
-                          <input type="hidden" name="contactId" value={contact.id} />
+                        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
                           <label className="flex items-center gap-2">
                             <span className="sr-only">Pipeline stage</span>
                             <select
-                              name="stage"
-                              defaultValue={contact.pipeline.stage}
+                              value={contact.pipeline.stage}
                               className={TEAM_SELECT}
                               onClick={(event) => event.stopPropagation()}
+                              onChange={async (event) => {
+                                event.stopPropagation();
+                                const nextStage = event.target.value;
+                                const prevStage = contact.pipeline.stage;
+                                if (nextStage === prevStage) return;
+                                moveContact(contact.id, nextStage);
+                                setSaveError(null);
+                                setSavingCount((count) => count + 1);
+                                try {
+                                  await persistPipelineStage(contact.id, nextStage);
+                                } catch (error) {
+                                  moveContact(contact.id, prevStage);
+                                  setSaveError(error instanceof Error ? error.message : "Unable to update stage.");
+                                } finally {
+                                  setSavingCount((count) => Math.max(0, count - 1));
+                                }
+                              }}
                             >
                               {stages.map((option) => (
                                 <option key={option} value={option}>
@@ -258,14 +316,8 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
                               ))}
                             </select>
                           </label>
-                          <SubmitButton
-                            className={`${teamButtonClass("secondary", "sm")} gap-2`}
-                            pendingLabel="Saving..."
-                          >
-                            <Save className="h-4 w-4" aria-hidden="true" />
-                            Update
-                          </SubmitButton>
-                        </form>
+                          <Save className="h-4 w-4 text-slate-400" aria-hidden="true" />
+                        </div>
                       </article>
                     );
                   })
@@ -275,7 +327,8 @@ export default function PipelineBoardClient({ stages, lanes }: PipelineBoardClie
           );
         })}
       </div>
-      {isPending ? <div className="mt-4 text-center text-xs text-slate-500">Saving updates...</div> : null}
+      {savingCount > 0 ? <div className="mt-4 text-center text-xs text-slate-500">Saving updates...</div> : null}
+      {saveError ? <div className="mt-3 text-center text-xs font-semibold text-rose-600">{saveError}</div> : null}
     </div>
   );
 }
