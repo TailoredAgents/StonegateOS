@@ -69,6 +69,9 @@ const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
 
 const GOOGLE_ADS_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_LEAD_SEND_TO"] ?? "";
 const GOOGLE_ADS_CONTACT_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO"] ?? "";
+const GOOGLE_REVIEW_URL = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_URL"] ?? "https://g.page/r/Ce6kQH50C8_dEAI/review";
+const GOOGLE_REVIEW_RATING = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_RATING"] ?? "5.0";
+const GOOGLE_REVIEW_COUNT = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"] ?? "10";
 
 export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   const utm = useUTM();
@@ -735,10 +738,22 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       <p className="mt-1 text-sm text-neutral-600">Answer 3 quick questions to see your price before booking.</p>
 
       <div className="mt-3 grid gap-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700 sm:grid-cols-3">
-        <div className="flex items-center gap-2">
-          <Star className="h-4 w-4 text-amber-500" aria-hidden="true" />
-          <span>Google reviews</span>
-        </div>
+        <a
+          href={GOOGLE_REVIEW_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 rounded-md px-1 py-0.5 transition hover:bg-neutral-50 hover:text-primary-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary-500"
+          aria-label={`See our Google reviews (${GOOGLE_REVIEW_RATING} stars, ${GOOGLE_REVIEW_COUNT} reviews)`}
+        >
+          <span className="flex items-center gap-0.5" aria-hidden="true">
+            {Array.from({ length: 5 }).map((_, idx) => (
+              <Star key={idx} className="h-4 w-4 text-amber-500" fill="currentColor" strokeWidth={1.5} />
+            ))}
+          </span>
+          <span className="font-semibold">{GOOGLE_REVIEW_RATING}</span>
+          <span className="text-neutral-500">·</span>
+          <span>{GOOGLE_REVIEW_COUNT} reviews</span>
+        </a>
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-primary-700" aria-hidden="true" />
           <span>Licensed &amp; insured</span>
