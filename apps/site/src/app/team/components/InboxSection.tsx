@@ -6,6 +6,7 @@ import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { InboxAutoScroll } from "./InboxAutoScroll";
 import { InboxMediaGallery } from "./InboxMediaGallery";
 import { TEAM_EMPTY_STATE, TEAM_INPUT_COMPACT, TEAM_SELECT, teamButtonClass } from "./team-ui";
+import type { ContactNoteSummary } from "./contacts.types";
 import {
   createThreadAction,
   retryFailedMessageAction,
@@ -19,6 +20,7 @@ import {
   setSalesDispositionAction
 } from "../actions";
 import { ContactNameEditorClient } from "./ContactNameEditorClient";
+import { InboxContactNotesClient } from "./InboxContactNotesClient";
 
 type ThreadSummary = {
   id: string;
@@ -366,6 +368,43 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
   const activeContact = timeline?.contact ?? activeThread?.contact ?? null;
   const timelineThreads = timeline?.threads ?? [];
   const timelineMessages = timeline?.messages?.length ? timeline.messages : activeThreadMessages;
+
+  let contactNotes: ContactNoteSummary[] = [];
+  if (activeContactId) {
+    try {
+      const res = await callAdminApi(
+        `/api/admin/crm/tasks?contactId=${encodeURIComponent(activeContactId)}&status=completed`
+      );
+      if (res.ok) {
+        const data = (await res.json().catch(() => null)) as unknown;
+        const tasks = data && typeof data === "object" ? (data as Record<string, unknown>)["tasks"] : null;
+        if (Array.isArray(tasks)) {
+          contactNotes = tasks
+            .map((task) => {
+              if (!task || typeof task !== "object") return null;
+              const record = task as Record<string, unknown>;
+              const id = typeof record["id"] === "string" ? record["id"] : null;
+              const body = typeof record["notes"] === "string" ? record["notes"] : null;
+              const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : null;
+              const updatedAt = typeof record["updatedAt"] === "string" ? record["updatedAt"] : null;
+              if (!id || !body || !createdAt || !updatedAt) return null;
+              const normalized = body.trim();
+              if (!normalized) return null;
+              return {
+                id,
+                body: normalized,
+                createdAt,
+                updatedAt
+              } satisfies ContactNoteSummary;
+            })
+            .filter(Boolean)
+            .slice(0, 25) as ContactNoteSummary[];
+        }
+      }
+    } catch {
+      contactNotes = [];
+    }
+  }
 
   const channelThreadMap = new Map<string, string>();
   for (const t of timelineThreads) {
@@ -1169,6 +1208,8 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     </div>
                   ) : null}
                 </div>
+
+                <InboxContactNotesClient contactId={activeContactId} initialNotes={contactNotes} />
 
                 <div className="space-y-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Channels</div>
