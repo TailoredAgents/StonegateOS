@@ -6,7 +6,7 @@ import { getDb, inboxMediaUploads } from "@/db";
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_FILES_PER_REQUEST = 4;
 const DEFAULT_TTL_DAYS = 7;
 
@@ -149,4 +149,3 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   return corsJson({ ok: true, uploads }, requestOrigin);
 }
-

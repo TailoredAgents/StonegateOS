@@ -23,6 +23,12 @@ type Props = {
   teamMembers: Array<{ id: string; name: string }>;
 };
 
+type QuotePhotosPayload = {
+  ok?: boolean;
+  photoUrls?: string[];
+  error?: string;
+};
+
 function formatDateTime(value: string | null): string {
   if (!value) return "—";
   const parsed = new Date(value);
@@ -72,6 +78,8 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
   const [showBookingForm, setShowBookingForm] = React.useState(false);
   const [addingProperty, setAddingProperty] = React.useState(false);
   const [editingPropertyId, setEditingPropertyId] = React.useState<string | null>(null);
+  const [quotePhotoUrls, setQuotePhotoUrls] = React.useState<string[]>([]);
+  const [quotePhotosStatus, setQuotePhotosStatus] = React.useState<"idle" | "loading" | "error">("idle");
 
   React.useEffect(() => {
     setShowBookingForm(false);
@@ -80,6 +88,33 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
     setStage(contact.pipeline?.stage ?? "new");
     setAssignee(contact.salespersonMemberId ?? null);
     setSystemTasks((contact.reminders ?? []).filter(isSystemTask).sort((a, b) => Date.parse(a.dueAt ?? "") - Date.parse(b.dueAt ?? "")));
+  }, [contact.id]);
+
+  React.useEffect(() => {
+    const controller = new AbortController();
+    setQuotePhotosStatus("loading");
+
+    void (async () => {
+      try {
+        const response = await fetch(`/api/team/contacts/quote-photos?contactId=${encodeURIComponent(contact.id)}`, {
+          headers: { Accept: "application/json" },
+          signal: controller.signal
+        });
+        const data = (await response.json().catch(() => null)) as QuotePhotosPayload | null;
+        if (!response.ok || !data?.ok) {
+          throw new Error(typeof data?.error === "string" ? data.error : "Unable to load quote photos.");
+        }
+        const urls = Array.isArray(data.photoUrls) ? data.photoUrls.filter((url) => typeof url === "string" && url.trim().length > 0) : [];
+        setQuotePhotoUrls(urls);
+        setQuotePhotosStatus("idle");
+      } catch (error) {
+        if ((error as { name?: string }).name === "AbortError") return;
+        setQuotePhotoUrls([]);
+        setQuotePhotosStatus("error");
+      }
+    })();
+
+    return () => controller.abort();
   }, [contact.id]);
 
   const [stageSaving, setStageSaving] = React.useState(false);
@@ -545,6 +580,45 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
           {!addingProperty && (contact.properties ?? []).length === 0 ? (
             <div className="text-xs text-slate-500">No address yet. Add a property to save the job location.</div>
           ) : null}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Instant Quote</div>
+            <div className="text-sm font-semibold text-slate-900">Quote photos</div>
+          </div>
+          <div className="text-xs text-slate-500">{quotePhotoUrls.length ? `${quotePhotoUrls.length} photo(s)` : ""}</div>
+        </div>
+        <div className="mt-3 text-xs text-slate-600">
+          {quotePhotosStatus === "loading" ? (
+            <div>Loading photos…</div>
+          ) : quotePhotosStatus === "error" ? (
+            <div className="text-rose-600">Unable to load quote photos.</div>
+          ) : quotePhotoUrls.length === 0 ? (
+            <div>No quote photos on file yet.</div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {quotePhotoUrls.map((url) => (
+                <a
+                  key={url}
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group relative overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={url}
+                    alt="Quote photo"
+                    className="h-28 w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
+          <div className="mt-2 text-[11px] text-slate-500">Photos can expire after a few days.</div>
         </div>
       </div>
 
