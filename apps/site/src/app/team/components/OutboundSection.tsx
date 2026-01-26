@@ -404,7 +404,7 @@ export async function OutboundSection({
               </SubmitButton>
             </form>
 
-            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px]">
             <div className="rounded-2xl border border-slate-200 bg-white">
               <table className="w-full table-fixed text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -412,10 +412,10 @@ export async function OutboundSection({
                     <th className="w-[52px] px-4 py-3">
                       <span className="sr-only">Select</span>
                     </th>
-                    <th className="w-[150px] px-4 py-3">Due</th>
-                    <th className="w-[86px] px-4 py-3">Attempt</th>
+                    <th className="w-[130px] px-4 py-3">Due</th>
+                    <th className="w-[76px] px-4 py-3">Attempt</th>
                     <th className="px-4 py-3">Prospect</th>
-                    <th className="hidden w-[160px] px-4 py-3 text-right md:table-cell">Actions</th>
+                    <th className="hidden w-[176px] px-4 py-3 text-right md:table-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -446,8 +446,8 @@ export async function OutboundSection({
                             </div>
                           </a>
                         </td>
-                        <td className="hidden w-[160px] px-4 py-3 md:table-cell">
-                          <div className="flex flex-wrap justify-end gap-2">
+                        <td className="relative hidden w-[176px] border-l border-slate-100 bg-white px-4 py-3 md:table-cell">
+                          <div className="flex flex-col items-end gap-2">
                             <form action={startContactCallAction}>
                               <input type="hidden" name="contactId" value={item.contact.id} />
                               <input type="hidden" name="taskId" value={item.id} />
