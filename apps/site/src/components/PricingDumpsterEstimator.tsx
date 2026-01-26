@@ -190,76 +190,132 @@ function AddonCounters({ value, onChange }: AddonCountersProps) {
 
 function DumpsterSvg({ fillRatio, className }: { fillRatio: number; className?: string }) {
   const safeRatio = Math.min(1, Math.max(0, fillRatio));
-  const top = 82;
-  const bottom = 170;
-  const fillHeight = (bottom - top) * safeRatio;
-  const fillY = bottom - fillHeight;
+  const interiorTop = 86;
+  const interiorBottom = 160;
+  const fillHeight = (interiorBottom - interiorTop) * safeRatio;
+  const fillY = interiorBottom - fillHeight;
 
   return (
     <svg
-      viewBox="0 0 320 220"
+      viewBox="0 0 640 280"
       className={cn("h-full w-full", className)}
       role="img"
       aria-label="Trailer load visual"
     >
       <defs>
-        <linearGradient id="dumpster-front" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#0f4c5c" />
-          <stop offset="100%" stopColor="#06323c" />
+        <linearGradient id="pe-trailer-body" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#a8acb3" />
+          <stop offset="45%" stopColor="#7b808a" />
+          <stop offset="100%" stopColor="#676c76" />
         </linearGradient>
-        <linearGradient id="dumpster-right" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#0b3f4c" />
-          <stop offset="100%" stopColor="#052a33" />
+        <linearGradient id="pe-trailer-body-shadow" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#525764" stopOpacity="0.96" />
+          <stop offset="100%" stopColor="#2f3440" stopOpacity="0.96" />
         </linearGradient>
-        <linearGradient id="dumpster-left" x1="1" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#125a6c" />
-          <stop offset="100%" stopColor="#0a3b46" />
+        <linearGradient id="pe-trailer-frame" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#1f2937" />
+          <stop offset="100%" stopColor="#0b1220" />
         </linearGradient>
-        <linearGradient id="dumpster-fill" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id="pe-trailer-fill" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#f59e0b" stopOpacity="0.92" />
           <stop offset="100%" stopColor="#b45309" stopOpacity="0.96" />
         </linearGradient>
-        <clipPath id="front-window">
-          <polygon points="122,82 252,82 234,170 108,170" />
+        <clipPath id="pe-trailer-interior">
+          <polygon points="110,86 510,86 520,160 100,160" />
+        </clipPath>
+        <clipPath id="pe-trailer-fill-area">
+          <rect x="0" y={fillY} width="640" height={interiorBottom - fillY} />
         </clipPath>
       </defs>
 
       {/* Shadow */}
-      <ellipse cx="170" cy="195" rx="110" ry="18" fill="#0f172a" opacity="0.12" />
+      <ellipse cx="320" cy="250" rx="260" ry="18" fill="#0f172a" opacity="0.12" />
 
-      {/* Left face */}
-      <polygon points="60,40 110,70 90,180 40,150" fill="url(#dumpster-left)" />
-      {/* Right face */}
-      <polygon points="210,40 260,70 240,180 190,150" fill="url(#dumpster-right)" />
-      {/* Front face */}
-      <polygon points="110,70 260,70 240,180 90,180" fill="url(#dumpster-front)" />
+      {/* Tongue / hitch */}
+      <path
+        d="M520 180 L625 212 L620 226 L505 196 Z"
+        fill="url(#pe-trailer-frame)"
+        opacity="0.95"
+      />
+      <rect x="602" y="206" width="20" height="10" rx="3" fill="#0b1220" opacity="0.9" />
+      <rect x="590" y="214" width="10" height="26" rx="3" fill="#111827" opacity="0.92" />
 
-      {/* Fill window */}
-      <g clipPath="url(#front-window)">
+      {/* Frame */}
+      <rect x="85" y="176" width="448" height="18" rx="7" fill="url(#pe-trailer-frame)" />
+      <rect x="90" y="170" width="440" height="7" rx="3.5" fill="#0b1220" opacity="0.92" />
+
+      {/* Wheels + fender */}
+      <g>
+        <path
+          d="M230 206 C250 184 286 184 306 206 L306 220 L230 220 Z"
+          fill="#111827"
+          opacity="0.92"
+        />
+        <circle cx="258" cy="222" r="30" fill="#0b1220" />
+        <circle cx="258" cy="222" r="22" fill="#111827" />
+        <circle cx="258" cy="222" r="6" fill="#0b1220" opacity="0.95" />
+
+        <path
+          d="M298 206 C318 184 354 184 374 206 L374 220 L298 220 Z"
+          fill="#111827"
+          opacity="0.92"
+        />
+        <circle cx="326" cy="222" r="30" fill="#0b1220" />
+        <circle cx="326" cy="222" r="22" fill="#111827" />
+        <circle cx="326" cy="222" r="6" fill="#0b1220" opacity="0.95" />
+      </g>
+
+      {/* Body */}
+      <polygon points="90,176 100,70 520,70 530,176" fill="url(#pe-trailer-body)" />
+      <polygon points="510,70 520,70 530,176 520,176" fill="url(#pe-trailer-body-shadow)" opacity="0.85" />
+      <polyline points="100,70 90,176" fill="none" stroke="#111827" strokeWidth="3" opacity="0.55" />
+      <polyline points="520,70 530,176" fill="none" stroke="#111827" strokeWidth="3" opacity="0.55" />
+
+      {/* Interior fill */}
+      <g clipPath="url(#pe-trailer-interior)">
         <rect
           x={0}
           y={fillY}
-          width={320}
-          height={220 - fillY}
-          fill="url(#dumpster-fill)"
+          width={640}
+          height={280 - fillY}
+          fill="url(#pe-trailer-fill)"
           className="motion-safe:transition-[y,height] motion-safe:duration-300 motion-safe:ease-out"
         />
-        <rect x={0} y={0} width={320} height={220} fill="#000" opacity="0.08" />
+        <g clipPath="url(#pe-trailer-fill-area)" opacity="0.18" fill="#0f172a">
+          <rect x="118" y="122" width="84" height="18" rx="6" />
+          <rect x="218" y="134" width="98" height="16" rx="6" />
+          <rect x="336" y="124" width="92" height="18" rx="6" />
+          <rect x="438" y="138" width="78" height="16" rx="6" />
+        </g>
+        <rect x={0} y={0} width={640} height={280} fill="#000" opacity="0.06" />
       </g>
 
-      {/* Rim */}
-      <polygon
-        points="60,40 210,40 260,70 110,70"
-        fill="#0b3440"
-        opacity="0.92"
+      {/* Top tarp */}
+      <path
+        d="M100 68 C140 52 470 52 520 68 L512 82 C470 68 142 68 108 82 Z"
+        fill="#0b1220"
+        opacity="0.94"
       />
-      <polygon points="78,50 198,50 238,72 118,72" fill="#041c22" opacity="0.92" />
 
-      {/* Accent lines */}
-      <polyline points="110,70 90,180" fill="none" stroke="#ffffff" opacity="0.10" strokeWidth="2" />
-      <polyline points="260,70 240,180" fill="none" stroke="#ffffff" opacity="0.08" strokeWidth="2" />
-      <polyline points="60,40 40,150" fill="none" stroke="#ffffff" opacity="0.10" strokeWidth="2" />
-      <polyline points="210,40 190,150" fill="none" stroke="#ffffff" opacity="0.07" strokeWidth="2" />
+      {/* Ribs + rails */}
+      <g stroke="#111827" opacity="0.38" strokeWidth="3">
+        <line x1="160" y1="76" x2="152" y2="176" />
+        <line x1="230" y1="76" x2="224" y2="176" />
+        <line x1="300" y1="76" x2="296" y2="176" />
+        <line x1="370" y1="76" x2="368" y2="176" />
+        <line x1="440" y1="76" x2="440" y2="176" />
+      </g>
+      <g stroke="#111827" opacity="0.25" strokeWidth="4">
+        <line x1="110" y1="110" x2="510" y2="110" />
+        <line x1="102" y1="148" x2="518" y2="148" />
+      </g>
+
+      {/* Reflective tape */}
+      <g opacity="0.85">
+        <rect x="155" y="155" width="52" height="6" rx="3" fill="#ef4444" />
+        <rect x="218" y="155" width="58" height="6" rx="3" fill="#f97316" />
+        <rect x="288" y="155" width="56" height="6" rx="3" fill="#ef4444" />
+      </g>
     </svg>
   );
 }
@@ -307,6 +363,13 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
   const urlSyncEnabledRef = React.useRef(false);
 
   const addonTotal = React.useMemo(() => computeAddonTotal(addons), [addons]);
+  const selectedAddonSummary = React.useMemo(() => {
+    const parts: string[] = [];
+    if (addons.mattress > 0) parts.push(`${addons.mattress} mattress${addons.mattress === 1 ? "" : "es"}`);
+    if (addons.paint > 0) parts.push(`${addons.paint} paint can${addons.paint === 1 ? "" : "s"}`);
+    if (addons.tire > 0) parts.push(`${addons.tire} tire${addons.tire === 1 ? "" : "s"}`);
+    return parts;
+  }, [addons]);
   const totalMin = tier.min + addonTotal;
   const totalMax = tier.max + addonTotal;
 
@@ -412,7 +475,7 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
       <div className="grid gap-6 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <div className="space-y-4">
           <div className="rounded-2xl border border-neutral-200 bg-gradient-to-br from-white via-neutral-50 to-neutral-100 p-4 shadow-soft">
-            <div className="mx-auto aspect-[16/11] max-w-md">
+            <div className="mx-auto aspect-[16/7] w-full max-w-xl">
               <DumpsterSvg fillRatio={tier.sliderValue / 100} />
             </div>
 
@@ -535,7 +598,7 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
         </div>
 
         <div className="space-y-4 md:pt-1">
-          <div className="sticky top-24 z-10 rounded-2xl border border-neutral-200 bg-white/95 p-4 shadow-soft backdrop-blur md:static md:bg-transparent md:p-0 md:shadow-none">
+          <div className="sticky top-24 z-10 rounded-2xl bg-white/90 p-5 shadow-soft ring-1 ring-neutral-200/70 backdrop-blur">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">Summary</p>
@@ -552,6 +615,16 @@ function PricingDumpsterEstimatorInner({ className }: { className?: string }) {
                   {formatUsd(totalMin)}–{formatUsd(totalMax)}
                 </p>
               </div>
+            </div>
+            <div className="mt-4 border-t border-neutral-200/70 pt-3 text-xs text-neutral-600">
+              {selectedAddonSummary.length ? (
+                <p>
+                  Add-ons selected:{" "}
+                  <span className="font-semibold text-neutral-900">{selectedAddonSummary.join(" · ")}</span>
+                </p>
+              ) : (
+                <p>No add-ons selected.</p>
+              )}
             </div>
           </div>
 
