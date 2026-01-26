@@ -618,7 +618,7 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
               ))}
             </div>
           )}
-          <div className="mt-2 text-[11px] text-slate-500">Photos can expire after a few days.</div>
+          <div className="mt-2 text-[11px] text-slate-500">Photos can expire after 7 days.</div>
         </div>
       </div>
 
