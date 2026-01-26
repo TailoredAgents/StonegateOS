@@ -13,7 +13,7 @@ type InstantQuoteDto = {
   zip: string;
   jobTypes: string[];
   perceivedSize: string;
-  photoUrls: string[];
+  photoCount: number;
   aiResult: {
     loadFractionEstimate: number;
     priceLow: number;
@@ -28,7 +28,7 @@ type InstantQuoteDto = {
 };
 
 export async function InstantQuotesSection(): Promise<React.ReactElement> {
-  const res = await callAdminApi("/api/admin/instant-quotes");
+  const res = await callAdminApi("/api/admin/instant-quotes?limit=25");
   if (!res.ok) {
     return <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Instant quotes unavailable.</div>;
   }
@@ -40,7 +40,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-sm font-semibold text-slate-900">Instant Quotes</h3>
-          <p className="text-xs text-slate-500">Latest 50 photo/AI quotes</p>
+          <p className="text-xs text-slate-500">Latest 25 photo/AI quotes</p>
         </div>
         <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">{quotes.length}</span>
       </div>
@@ -75,7 +75,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
                 {q.aiResult.displayTierLabel} - {q.aiResult.loadFractionEstimate.toFixed(2)} trailer - {q.aiResult.reasonSummary}
               </div>
               <div className="text-[12px] text-slate-600">
-                Types: {q.jobTypes.join(", ")} | Size: {q.perceivedSize} | Photos: {q.photoUrls.length}
+                Types: {q.jobTypes.join(", ")} | Size: {q.perceivedSize} | Photos: {q.photoCount}
               </div>
               {q.aiResult.needsInPersonEstimate ? (
                 <div className="mt-1 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
