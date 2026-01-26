@@ -1,7 +1,11 @@
 ﻿'use client';
 
 import Link from "next/link";
+import type { Route } from "next";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Suspense, useMemo } from "react";
 import { Button, cn } from "@myst-os/ui";
+import { PRICING_ESTIMATOR_QUERY_KEYS } from "@/lib/pricing-estimator";
 
 interface StickyCtaBarProps {
   className?: string;
@@ -30,10 +34,46 @@ export function StickyCtaBar({ className }: StickyCtaBarProps) {
         >
           <a href="sms:+14047772631">Text</a>
         </Button>
-        <Button asChild className="flex-1 min-h-[48px] rounded-md text-base font-semibold">
-          <Link href="/estimate">Schedule Estimate</Link>
-        </Button>
+        <Suspense
+          fallback={
+            <Button asChild className="flex-1 min-h-[48px] rounded-md text-base font-semibold">
+              <Link href="/book">Get Quote</Link>
+            </Button>
+          }
+        >
+          <StickyGetQuoteButton />
+        </Suspense>
       </div>
     </div>
+  );
+}
+
+function StickyGetQuoteButton() {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const quoteHref = useMemo(() => {
+    if (pathname !== "/pricing") {
+      return "/book";
+    }
+
+    const params = new URLSearchParams(searchParams.toString());
+    const hasEstimatorParams =
+      params.has(PRICING_ESTIMATOR_QUERY_KEYS.load) ||
+      params.has(PRICING_ESTIMATOR_QUERY_KEYS.mattress) ||
+      params.has(PRICING_ESTIMATOR_QUERY_KEYS.paint) ||
+      params.has(PRICING_ESTIMATOR_QUERY_KEYS.tire);
+    if (!hasEstimatorParams) {
+      return "/book";
+    }
+
+    params.set("intent", "pricing-estimator");
+    return `/book?${params.toString()}`;
+  }, [pathname, searchParams]);
+
+  return (
+    <Button asChild className="flex-1 min-h-[48px] rounded-md text-base font-semibold">
+      <Link href={quoteHref as Route}>Get Quote</Link>
+    </Button>
   );
 }

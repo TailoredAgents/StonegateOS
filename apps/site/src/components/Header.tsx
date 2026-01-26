@@ -3,9 +3,10 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Route } from "next";
-import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { Button, cn } from "@myst-os/ui";
+import { PRICING_ESTIMATOR_QUERY_KEYS } from "@/lib/pricing-estimator";
 
 const navItems = [
   { href: "/services", label: "Services" },
@@ -60,9 +61,22 @@ export function Header() {
             </Link>
           ))}
         </nav>
-        <div className="hidden md:flex">
-          <Button asChild>
-            <Link href="/estimate">Schedule Estimate</Link>
+        <div className="hidden items-center gap-3 md:flex">
+          <Suspense
+            fallback={
+              <Button asChild>
+                <Link href="/book">Get instant quote</Link>
+              </Button>
+            }
+          >
+            <GetQuoteButton />
+          </Suspense>
+          <Button
+            asChild
+            variant="ghost"
+            className="border border-neutral-300/70 text-primary-800 hover:border-primary-300"
+          >
+            <a href="tel:+14047772631">Call</a>
           </Button>
         </div>
         <button
@@ -121,9 +135,15 @@ export function Header() {
             ))}
           </nav>
           <div className="flex flex-col gap-3">
-            <Button asChild size="lg" className="w-full">
-              <Link href="/estimate">Schedule Estimate</Link>
-            </Button>
+            <Suspense
+              fallback={
+                <Button asChild size="lg" className="w-full">
+                  <Link href="/book">Get instant quote</Link>
+                </Button>
+              }
+            >
+              <GetQuoteButton size="lg" className="w-full" />
+            </Suspense>
             <Button
               asChild
               variant="ghost"
@@ -136,5 +156,42 @@ export function Header() {
         </div>
       </div>
     </header>
+  );
+}
+
+function GetQuoteButton({
+  size,
+  className
+}: {
+  size?: "sm" | "md" | "lg";
+  className?: string;
+}) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const quoteHref = useMemo(() => {
+    if (pathname !== "/pricing") {
+      return "/book";
+    }
+
+    const params = new URLSearchParams(searchParams.toString());
+    const hasEstimatorParams =
+      params.has(PRICING_ESTIMATOR_QUERY_KEYS.load) ||
+      params.has(PRICING_ESTIMATOR_QUERY_KEYS.mattress) ||
+      params.has(PRICING_ESTIMATOR_QUERY_KEYS.paint) ||
+      params.has(PRICING_ESTIMATOR_QUERY_KEYS.tire);
+
+    if (!hasEstimatorParams) {
+      return "/book";
+    }
+
+    params.set("intent", "pricing-estimator");
+    return `/book?${params.toString()}`;
+  }, [pathname, searchParams]);
+
+  return (
+    <Button asChild size={size} className={className}>
+      <Link href={quoteHref as Route}>Get instant quote</Link>
+    </Button>
   );
 }

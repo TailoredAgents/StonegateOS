@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { Card, Section } from "@myst-os/ui";
 import { MdxContent } from "@/components/MdxContent";
+import { PricingDumpsterEstimator } from "@/components/PricingDumpsterEstimator";
 import { getPageBySlug } from "@/lib/content";
 import { createPageMetadata } from "@/lib/metadata";
 
@@ -23,10 +24,12 @@ export default function Page() {
           ) : null}
         </header>
         <Card tone="outline">
+          <PricingDumpsterEstimator />
+        </Card>
+        <Card tone="outline">
           <MdxContent code={page.body.code} />
         </Card>
       </div>
     </Section>
   );
 }
-

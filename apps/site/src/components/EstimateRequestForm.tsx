@@ -72,10 +72,12 @@ const CONTRACTOR_DEBRIS_OPTIONS = [
 export function EstimateRequestForm({
   className,
   initialServices,
+  initialNotes,
   context = "default"
 }: {
   className?: string;
   initialServices?: string[];
+  initialNotes?: string;
   context?: EstimateFormContext;
 }) {
   const utm = useUTM();
@@ -96,7 +98,7 @@ export function EstimateRequestForm({
   const [preferredDate, setPreferredDate] = React.useState("");
   const [timeWindow, setTimeWindow] = React.useState<string>("morning");
   const [alternateDate, setAlternateDate] = React.useState("");
-  const [notes, setNotes] = React.useState("");
+  const [notes, setNotes] = React.useState(() => initialNotes ?? "");
   const [company, setCompany] = React.useState("");
   const [trade, setTrade] = React.useState<string>("");
   const [debrisKinds, setDebrisKinds] = React.useState<string[]>([]);
@@ -221,10 +223,10 @@ export function EstimateRequestForm({
             <Check className="h-5 w-5" strokeWidth={3} />
           </span>
           <div>
-            <h2 className="font-display text-xl text-primary-900">You're all set</h2>
+            <h2 className="font-display text-xl text-primary-900">You’re all set</h2>
             <p className="mt-1 text-sm text-neutral-600">{submitState.message}</p>
             <p className="mt-2 text-xs text-neutral-500">
-              We'll usually respond quickly by text/call. If you need help right now, call (404) 777-2631.
+              We’ll usually respond quickly by text/call. If you need help right now, call (404) 777-2631.
             </p>
           </div>
         </div>
