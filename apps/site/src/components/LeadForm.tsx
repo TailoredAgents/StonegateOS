@@ -77,6 +77,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [notes, setNotes] = React.useState("");
   const [zip, setZip] = React.useState("");
   const [photos, setPhotos] = React.useState<string[]>([]);
+  const [photoUploadStatus, setPhotoUploadStatus] = React.useState<"idle" | "uploading" | "error">("idle");
+  const [photoUploadMessage, setPhotoUploadMessage] = React.useState<string | null>(null);
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
   const [email, setEmail] = React.useState("");
@@ -251,13 +253,39 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const handlePhotos = async (files: FileList | null) => {
     if (!files) return;
     const selected = Array.from(files).slice(0, 4);
-    const dataUrls: string[] = [];
-    for (const file of selected) {
-      const url = await toDataUrl(file);
-      if (url) dataUrls.push(url);
+    if (!apiBase) {
+      setPhotoUploadStatus("error");
+      setPhotoUploadMessage("Photo upload is unavailable right now. Please skip photos or try again later.");
+      return;
     }
-    setPhotos(dataUrls);
-    setPhotoSkipped(false);
+    setPhotoUploadStatus("uploading");
+    setPhotoUploadMessage(null);
+    try {
+      const uploadForm = new FormData();
+      for (const file of selected) {
+        const prepared = await shrinkImageIfNeeded(file);
+        uploadForm.append("file", prepared, prepared.name);
+      }
+      const res = await fetch(`${apiBase}/api/public/junk-quote/uploads`, {
+        method: "POST",
+        body: uploadForm
+      });
+      const payload = (await res.json().catch(() => null)) as { ok?: boolean; uploads?: { url?: unknown }[]; error?: string } | null;
+      if (!res.ok || !payload?.ok) {
+        throw new Error(typeof payload?.error === "string" ? payload.error : `Upload failed (HTTP ${res.status})`);
+      }
+      const urls =
+        payload.uploads
+          ?.map((u) => (u && typeof u.url === "string" ? u.url.trim() : ""))
+          .filter((u) => u.length > 0) ?? [];
+      if (!urls.length) throw new Error("Upload failed");
+      setPhotos(urls);
+      setPhotoSkipped(false);
+      setPhotoUploadStatus("idle");
+    } catch (err) {
+      setPhotoUploadStatus("error");
+      setPhotoUploadMessage((err as Error).message || "Unable to upload photos. Please try smaller photos or skip for now.");
+    }
   };
 
   const submitQuote = async () => {
@@ -761,11 +789,18 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 onChange={(e) => void handlePhotos(e.target.files)}
                 className="block w-full cursor-pointer rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
               />
+              {photoUploadStatus === "uploading" ? (
+                <div className="text-xs text-neutral-600">Uploading photos…</div>
+              ) : photoUploadStatus === "error" ? (
+                <div className="text-xs text-amber-700">{photoUploadMessage ?? "Unable to upload photos."}</div>
+              ) : null}
               <button
                 type="button"
                 className="text-xs text-primary-700 underline"
                 onClick={() => {
                   setPhotos([]);
+                  setPhotoUploadStatus("idle");
+                  setPhotoUploadMessage(null);
                   setPhotoSkipped(true);
                 }}
               >
@@ -1237,11 +1272,32 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   );
 }
 
-async function toDataUrl(file: File): Promise<string | null> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
-    reader.onerror = () => resolve(null);
-    reader.readAsDataURL(file);
+async function shrinkImageIfNeeded(file: File): Promise<File> {
+  const MAX_BYTES = 1_800_000;
+  if (file.size <= MAX_BYTES) return file;
+  if (typeof window === "undefined") return file;
+  if (!file.type.startsWith("image/")) return file;
+
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) return file;
+
+  const maxDimension = 1600;
+  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return file;
+  ctx.drawImage(bitmap, 0, 0, width, height);
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((b) => resolve(b), "image/jpeg", 0.72);
   });
+  if (!blob) return file;
+
+  const baseName = file.name.replace(/\.[^/.]+$/u, "") || "photo";
+  return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
 }

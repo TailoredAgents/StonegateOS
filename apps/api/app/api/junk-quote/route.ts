@@ -79,7 +79,19 @@ const RequestSchema = z.object({
     notes: z.string().optional().nullable(),
     zip: z.string().min(3),
     photoUrls: z
-      .preprocess((value) => (value == null ? undefined : value), z.array(z.string().url()).max(10).default([]))
+      .preprocess((value) => (value == null ? undefined : value), z.array(z.string().url().max(2048)).max(10).default([]))
+      .refine(
+        (urls) =>
+          urls.every((url) => {
+            try {
+              const parsed = new URL(url);
+              return parsed.protocol === "http:" || parsed.protocol === "https:";
+            } catch {
+              return false;
+            }
+          }),
+        { message: "Photo URLs must be http(s) links." }
+      )
   }),
   utm: z
     .object({
@@ -386,7 +398,13 @@ export async function POST(request: NextRequest) {
         const contactErrors = details.fieldErrors.contact ?? [];
         const jobErrors = details.fieldErrors.job ?? [];
 
-        if (contactErrors.some((err) => /at least 7 character/u.test(err))) {
+        const hasPhotoIssue = parsed.error.issues.some(
+          (issue) => issue.path?.[0] === "job" && issue.path?.[1] === "photoUrls"
+        );
+
+        if (hasPhotoIssue) {
+          message = "Those photos were too large to attach. Please try smaller photos or skip photos for now.";
+        } else if (contactErrors.some((err) => /at least 7 character/u.test(err))) {
           message = "Please enter a valid phone number.";
         } else if (contactErrors.some((err) => /at least 2 character/u.test(err))) {
           message = "Please enter your name.";
@@ -612,6 +630,18 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>, bounds: Quote
     }
   } as const;
 
+  const jobForAi = {
+    types: body.job.types,
+    perceivedSize: body.job.perceivedSize,
+    zip: body.job.zip,
+    notes:
+      typeof body.job.notes === "string" && body.job.notes.trim().length > 0
+        ? body.job.notes.trim().slice(0, 600)
+        : undefined,
+    photoCount: Array.isArray(body.job.photoUrls) ? body.job.photoUrls.length : 0
+  };
+  const jobForAiInput = JSON.stringify(jobForAi);
+
   async function requestOpenAi(format: TextFormat) {
     const allowedUnits = Array.from(
       { length: Math.max(0, bounds.maxUnits - bounds.minUnits + 1) },
@@ -640,7 +670,7 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>, bounds: Quote
       body: JSON.stringify({
         model,
         instructions: `${SYSTEM_PROMPT}\n\n${dynamicRules}`,
-        input: JSON.stringify(body.job),
+        input: jobForAiInput,
         tools: [],
         tool_choice: "none",
         reasoning: {
@@ -815,6 +845,9 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>, bounds: Quote
     return await requestOpenAi("json_schema");
   } catch (error) {
     if (error instanceof Error && error.message === "missing_api_key") {
+      throw error;
+    }
+    if (error instanceof Error && /exceeds the context window/u.test(error.message)) {
       throw error;
     }
     console.error("[junk-quote] ai_retrying_with_json_object", error instanceof Error ? error.message : error);
