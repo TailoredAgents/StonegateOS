@@ -288,7 +288,7 @@ export async function ContactsSection({
 
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-md shadow-slate-200/50">
           {selectedContact ? (
-            <ContactsDetailsPaneClient contact={selectedContact} teamMembers={teamMembers} />
+            <ContactsDetailsPaneClient key={selectedContact.id} contact={selectedContact} teamMembers={teamMembers} />
           ) : (
             <div className="text-sm text-slate-600">
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Details</div>

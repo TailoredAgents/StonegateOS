@@ -79,7 +79,7 @@ export async function PipelineSection({ contactId }: PipelineSectionProps): Prom
           <div className="lg:sticky lg:top-24 lg:self-start">
             {selectedContact ? (
               <div className="rounded-3xl border border-slate-200 bg-white/85 p-4 shadow-xl shadow-slate-200/50">
-                <ContactsDetailsPaneClient contact={selectedContact} teamMembers={teamMembers} />
+                <ContactsDetailsPaneClient key={selectedContact.id} contact={selectedContact} teamMembers={teamMembers} />
               </div>
             ) : (
               <div className="rounded-3xl border border-dashed border-slate-200 bg-white/70 p-6 text-sm text-slate-600 shadow-sm">

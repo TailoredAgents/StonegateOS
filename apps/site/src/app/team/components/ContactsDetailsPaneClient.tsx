@@ -8,7 +8,8 @@ import { teamButtonClass } from "./team-ui";
 import { ContactNameEditorClient } from "./ContactNameEditorClient";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
-import { startContactCallAction } from "../actions";
+import { SubmitButton } from "@/components/SubmitButton";
+import { bookAppointmentAction, deleteContactAction, startContactCallAction } from "../actions";
 
 type Props = {
   contact: ContactSummary;
@@ -52,6 +53,14 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
   const memberNameById = React.useMemo(() => new Map(teamMembers.map((m) => [m.id, m.name])), [teamMembers]);
   const [stage, setStage] = React.useState(() => contact.pipeline?.stage ?? "new");
   const [assignee, setAssignee] = React.useState<string | null>(() => contact.salespersonMemberId ?? null);
+  const [showBookingForm, setShowBookingForm] = React.useState(false);
+
+  React.useEffect(() => {
+    setShowBookingForm(false);
+    setStage(contact.pipeline?.stage ?? "new");
+    setAssignee(contact.salespersonMemberId ?? null);
+    setSystemTasks((contact.reminders ?? []).filter(isSystemTask).sort((a, b) => Date.parse(a.dueAt ?? "") - Date.parse(b.dueAt ?? "")));
+  }, [contact.id]);
 
   const [stageSaving, setStageSaving] = React.useState(false);
   const [stageError, setStageError] = React.useState<string | null>(null);
@@ -132,6 +141,7 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
   const mapsLink = buildMapsLink(contact);
   const assignedLabel = assignee ? memberNameById.get(assignee) ?? "Assigned" : "Unassigned";
   const canCall = Boolean(contact.phoneE164 ?? contact.phone);
+  const primaryPropertyId = (contact.properties ?? [])[0]?.id ?? "";
 
   return (
     <div className="space-y-4">
@@ -179,6 +189,9 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
         <a className={teamButtonClass("secondary", "sm")} href={`/team?tab=inbox&contactId=${encodeURIComponent(contact.id)}`}>
           Message
         </a>
+        <button type="button" className={teamButtonClass("secondary", "sm")} onClick={() => setShowBookingForm((prev) => !prev)}>
+          {showBookingForm ? "Close booking" : "Book appointment"}
+        </button>
         <a className={teamButtonClass("secondary", "sm")} href={`/team?tab=calendar&contactId=${encodeURIComponent(contact.id)}`}>
           Calendar
         </a>
@@ -190,7 +203,112 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
         >
           Maps
         </a>
+        <form
+          action={deleteContactAction}
+          className="inline"
+          onSubmit={(event) => {
+            if (!window.confirm(`Delete ${contact.name}? This cannot be undone.`)) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <input type="hidden" name="contactId" value={contact.id} />
+          <SubmitButton className={teamButtonClass("danger", "sm")} pendingLabel="Deleting...">
+            Delete
+          </SubmitButton>
+        </form>
       </div>
+
+      {showBookingForm ? (
+        <form action={bookAppointmentAction} className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-600">
+          <input type="hidden" name="contactId" value={contact.id} />
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Property</span>
+              <select
+                name="propertyId"
+                defaultValue={primaryPropertyId}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="">No address yet (create placeholder)</option>
+                {(contact.properties ?? []).map((property) => (
+                  <option key={property.id} value={property.id}>
+                    {property.addressLine1}, {property.city}, {property.state} {property.postalCode}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Start time</span>
+              <input
+                type="datetime-local"
+                name="startAt"
+                required
+                step={300}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Duration (minutes)</span>
+              <input
+                name="durationMinutes"
+                type="number"
+                min={15}
+                step={5}
+                defaultValue={60}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Travel buffer (minutes)</span>
+              <input
+                name="travelBufferMinutes"
+                type="number"
+                min={0}
+                step={5}
+                defaultValue={30}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 sm:col-span-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quoted price (optional)</span>
+              <input
+                name="quotedTotal"
+                type="number"
+                min={0}
+                step="0.01"
+                placeholder="e.g. 350"
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </label>
+
+            <label className="flex flex-col gap-1 sm:col-span-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Appointment notes (optional)</span>
+              <textarea
+                name="notes"
+                rows={3}
+                placeholder="What did they say? Parking/gate notes? Items? Time constraints?"
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Booking...">
+              Confirm booking
+            </SubmitButton>
+            <button type="button" className={teamButtonClass("secondary", "sm")} onClick={() => setShowBookingForm(false)}>
+              Cancel
+            </button>
+            <span className="text-[11px] text-slate-500">Calendar sync runs via the outbox worker.</span>
+          </div>
+        </form>
+      ) : null}
 
       <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -265,4 +383,3 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
     </div>
   );
 }
-
