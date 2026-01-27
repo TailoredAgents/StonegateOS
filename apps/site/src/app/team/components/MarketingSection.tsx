@@ -13,7 +13,6 @@ import {
 } from "../actions";
 import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE } from "./team-ui";
 import { GoogleAdsRecommendationsPanel } from "./GoogleAdsRecommendationsPanel";
-import { WebAnalyticsSection } from "./WebAnalyticsSection";
 
 type GoogleAdsStatusPayload = {
   ok: true;
@@ -210,7 +209,6 @@ function normalizeWeight(value: number, fallback: number): number {
 export async function MarketingSection(props: {
   reportId?: string;
   campaignId?: string;
-  waRangeDays?: string;
 }): Promise<React.ReactElement> {
   let status: GoogleAdsStatusPayload | null = null;
   let summary: GoogleAdsSummaryPayload | null = null;
@@ -347,7 +345,7 @@ export async function MarketingSection(props: {
   return (
     <section className="space-y-4">
       <header className={TEAM_CARD_PADDED}>
-        <h2 className={TEAM_SECTION_TITLE}>Marketing</h2>
+        <h2 className={TEAM_SECTION_TITLE}>Google Ads</h2>
         <p className={TEAM_SECTION_SUBTITLE}>
           Google Ads sync and AI analysis. Default behavior is safe: the CRM never auto-applies changes to Google Ads.
           You can optionally enable auto-run to refresh reports on a schedule.
@@ -431,7 +429,7 @@ export async function MarketingSection(props: {
 
               {(summary?.topCampaigns?.length ?? 0) > 0 ? (
                 <form method="GET" className="mt-2 flex w-full flex-col gap-2 sm:flex-row sm:items-center">
-                  <input type="hidden" name="tab" value="marketing" />
+                  <input type="hidden" name="tab" value="google-ads" />
                   {props.reportId ? <input type="hidden" name="gaReportId" value={props.reportId} /> : null}
                   <select
                     name="gaCampaignId"
@@ -516,7 +514,7 @@ export async function MarketingSection(props: {
 
                 {reportHistory.length > 0 ? (
                   <form method="GET" className="mt-3 flex flex-wrap items-center gap-2">
-                    <input type="hidden" name="tab" value="marketing" />
+                    <input type="hidden" name="tab" value="google-ads" />
                     {scopedCampaignId ? <input type="hidden" name="gaCampaignId" value={scopedCampaignId} /> : null}
                     <label className="text-xs font-semibold text-slate-700">
                       Report{" "}
@@ -888,9 +886,6 @@ export async function MarketingSection(props: {
         ) : null}
       </div>
 
-      <React.Suspense fallback={<div className={TEAM_CARD_PADDED}>Loading website analytics\u2026</div>}>
-        <WebAnalyticsSection rangeDays={props.waRangeDays} gaReportId={props.reportId} gaCampaignId={props.campaignId} />
-      </React.Suspense>
     </section>
   );
 }

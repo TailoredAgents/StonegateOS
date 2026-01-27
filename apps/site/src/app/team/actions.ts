@@ -2942,11 +2942,11 @@ export async function runGoogleAdsSyncAction() {
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to sync Google Ads");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   jar.set({ name: "myst-flash", value: "Google Ads sync queued.", path: "/" });
-  redirect("/team?tab=marketing");
+  redirect("/team?tab=google-ads");
 }
 
 export async function runGoogleAdsAnalystAction() {
@@ -2960,11 +2960,11 @@ export async function runGoogleAdsAnalystAction() {
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to run marketing analyst");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   jar.set({ name: "myst-flash", value: "Marketing analyst queued.", path: "/" });
-  redirect("/team?tab=marketing");
+  redirect("/team?tab=google-ads");
 }
 
 export async function saveGoogleAdsAnalystSettingsAction(formData: FormData) {
@@ -2981,11 +2981,11 @@ export async function saveGoogleAdsAnalystSettingsAction(formData: FormData) {
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to save marketing analyst settings");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   jar.set({ name: "myst-flash", value: "Marketing analyst settings updated.", path: "/" });
-  redirect("/team?tab=marketing");
+  redirect("/team?tab=google-ads");
 }
 
 export async function updateGoogleAdsAnalystRecommendationAction(formData: FormData) {
@@ -2995,7 +2995,7 @@ export async function updateGoogleAdsAnalystRecommendationAction(formData: FormD
 
   if (typeof id !== "string" || typeof status !== "string") {
     jar.set({ name: "myst-flash-error", value: "Missing recommendation update", path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations", {
@@ -3006,11 +3006,11 @@ export async function updateGoogleAdsAnalystRecommendationAction(formData: FormD
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to update recommendation");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   jar.set({ name: "myst-flash", value: "Recommendation updated.", path: "/" });
-  redirect("/team?tab=marketing");
+  redirect("/team?tab=google-ads");
 }
 
 export async function applyGoogleAdsAnalystRecommendationAction(formData: FormData) {
@@ -3019,7 +3019,7 @@ export async function applyGoogleAdsAnalystRecommendationAction(formData: FormDa
 
   if (typeof id !== "string") {
     jar.set({ name: "myst-flash-error", value: "Missing recommendation id", path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations/apply", {
@@ -3030,11 +3030,11 @@ export async function applyGoogleAdsAnalystRecommendationAction(formData: FormDa
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to apply recommendation");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   jar.set({ name: "myst-flash", value: "Applied in Google Ads.", path: "/" });
-  redirect("/team?tab=marketing");
+  redirect("/team?tab=google-ads");
 }
 
 function parseJsonStringArray(value: unknown): string[] {
@@ -3060,7 +3060,7 @@ export async function bulkUpdateGoogleAdsAnalystRecommendationsAction(formData: 
 
   if (ids.length === 0 || (status !== "approved" && status !== "ignored" && status !== "proposed")) {
     jar.set({ name: "myst-flash-error", value: "Missing bulk update", path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations/bulk", {
@@ -3071,11 +3071,11 @@ export async function bulkUpdateGoogleAdsAnalystRecommendationsAction(formData: 
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to bulk update recommendations");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   jar.set({ name: "myst-flash", value: `Updated ${ids.length} recommendation(s).`, path: "/" });
-  redirect("/team?tab=marketing");
+  redirect("/team?tab=google-ads");
 }
 
 export async function bulkApplyGoogleAdsAnalystRecommendationsAction(formData: FormData) {
@@ -3084,7 +3084,7 @@ export async function bulkApplyGoogleAdsAnalystRecommendationsAction(formData: F
 
   if (ids.length === 0) {
     jar.set({ name: "myst-flash-error", value: "Missing bulk apply selection", path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations/apply/bulk", {
@@ -3095,11 +3095,11 @@ export async function bulkApplyGoogleAdsAnalystRecommendationsAction(formData: F
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to bulk apply recommendations");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
-    redirect("/team?tab=marketing");
+    redirect("/team?tab=google-ads");
   }
 
   jar.set({ name: "myst-flash", value: "Applied approved negatives in Google Ads.", path: "/" });
-  redirect("/team?tab=marketing");
+  redirect("/team?tab=google-ads");
 }
 
 type OutboundImportRow = {

@@ -18,6 +18,7 @@ import { InboxSection } from "./components/InboxSection";
 import { ExpensesSection } from "./components/ExpensesSection";
 import { CommissionsSection } from "./components/CommissionsSection";
 import { MarketingSection } from "./components/MarketingSection";
+import { WebAnalyticsSection } from "./components/WebAnalyticsSection";
 import { PolicyCenterSection } from "./components/PolicyCenterSection";
 import { AutomationSection } from "./components/AutomationSection";
 import { AccessSection } from "./components/AccessSection";
@@ -192,6 +193,8 @@ export default async function TeamPage({
   } else if (requestedTab === "canvass") {
     normalizedRequestedTab = "quotes";
     forcedQuoteMode = "canvass";
+  } else if (requestedTab === "marketing") {
+    normalizedRequestedTab = "google-ads";
   }
   const tab =
     normalizedRequestedTab === "estimates"
@@ -278,7 +281,8 @@ export default async function TeamPage({
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
     { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "policy.read" },
     { id: "commissions", label: "Commissions", href: "/team?tab=commissions", requires: "access.manage" },
-    { id: "marketing", label: "Marketing", href: "/team?tab=marketing", requires: "policy.read" },
+    { id: "google-ads", label: "Google Ads", href: "/team?tab=google-ads", requires: "policy.read" },
+    { id: "web-analytics", label: "Website Analytics", href: "/team?tab=web-analytics", requires: "policy.read" },
     { id: "seo", label: "SEO Agent", href: "/team?tab=seo", requires: "policy.read" },
     { id: "automation", label: "Messaging Automation", href: "/team?tab=automation", requires: "automation.read" },
     { id: "access", label: "Access", href: "/team?tab=access", requires: "access.manage" },
@@ -296,7 +300,7 @@ export default async function TeamPage({
     { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
     { id: "sales", label: "Sales", itemIds: ["quotes", "pipeline", "sales-hq", "outbound", "partners", "contacts", "inbox", "calendar"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
-    { id: "marketing", label: "Marketing", itemIds: ["marketing", "seo"] },
+    { id: "marketing", label: "Marketing", itemIds: ["google-ads", "web-analytics", "seo"] },
     { id: "control", label: "Control", itemIds: ["commissions", "policy", "automation", "access", "sales-log", "audit", "merge"] },
     { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
   ];
@@ -489,9 +493,15 @@ export default async function TeamPage({
         </React.Suspense>
       ) : null}
 
-      {tab === "marketing" && hasOwner ? (
-        <React.Suspense fallback={<TeamSkeletonCard title="Loading marketing" />}>
-          <MarketingSection reportId={gaReportIdParam} campaignId={gaCampaignIdParam} waRangeDays={waRangeDaysParam} />
+      {tab === "google-ads" && hasOwner ? (
+        <React.Suspense fallback={<TeamSkeletonCard title="Loading Google Ads" />}>
+          <MarketingSection reportId={gaReportIdParam} campaignId={gaCampaignIdParam} />
+        </React.Suspense>
+      ) : null}
+
+      {tab === "web-analytics" && hasOwner ? (
+        <React.Suspense fallback={<TeamSkeletonCard title="Loading website analytics" />}>
+          <WebAnalyticsSection rangeDays={waRangeDaysParam} gaReportId={gaReportIdParam} gaCampaignId={gaCampaignIdParam} />
         </React.Suspense>
       ) : null}
 

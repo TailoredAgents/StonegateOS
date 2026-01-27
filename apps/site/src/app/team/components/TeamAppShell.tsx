@@ -454,6 +454,8 @@ function iconForTab(id: string): React.ReactElement {
       return <IconChart className={className} />;
     case "commissions":
       return <IconReceipt className={className} />;
+    case "google-ads":
+    case "web-analytics":
     case "marketing":
       return <IconChart className={className} />;
     case "seo":

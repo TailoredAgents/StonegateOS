@@ -116,7 +116,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       severity: "warning",
       title: `${provider.provider} provider issue`,
       detail: provider.lastFailureDetail ?? "Provider is degraded.",
-      fix: ["Open `/team?tab=inbox` or `/team?tab=marketing` to review provider health details."]
+      fix: ["Open `/team?tab=inbox` or `/team?tab=google-ads` to review provider health details."]
     });
   }
 

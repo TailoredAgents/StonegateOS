@@ -157,7 +157,7 @@ export async function WebAnalyticsSection(props: {
         </div>
 
         <form method="get" action="/team" className="flex flex-wrap items-center justify-end gap-2 text-sm">
-          <input type="hidden" name="tab" value="marketing" />
+          <input type="hidden" name="tab" value="web-analytics" />
           {props.gaReportId ? <input type="hidden" name="gaReportId" value={props.gaReportId} /> : null}
           {props.gaCampaignId ? <input type="hidden" name="gaCampaignId" value={props.gaCampaignId} /> : null}
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Range</label>
@@ -369,4 +369,3 @@ export async function WebAnalyticsSection(props: {
     </section>
   );
 }
-
