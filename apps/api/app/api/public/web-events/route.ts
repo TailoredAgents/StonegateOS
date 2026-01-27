@@ -34,7 +34,8 @@ function applyCors(response: NextResponse, requestOrigin: string | null): NextRe
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.set("Vary", "Origin");
   response.headers.set("Access-Control-Allow-Methods", "POST,OPTIONS");
-  response.headers.set("Access-Control-Allow-Headers", "*");
+  // Avoid wildcard headers; some browsers won't proceed with the actual request.
+  response.headers.set("Access-Control-Allow-Headers", "content-type");
   response.headers.set("Access-Control-Max-Age", "86400");
   return response;
 }
@@ -187,7 +188,12 @@ const PayloadSchema = z.union([
 
 export async function POST(request: NextRequest): Promise<Response> {
   const requestOrigin = request.headers.get("origin");
-  if (RAW_ALLOWED_ORIGINS !== "*" && resolveOrigin(requestOrigin) !== (requestOrigin ?? "").replace(/\/+$/u, "")) {
+  // Some clients may omit Origin; accept and rely on rate-limits + payload limits.
+  if (
+    requestOrigin &&
+    RAW_ALLOWED_ORIGINS !== "*" &&
+    resolveOrigin(requestOrigin) !== (requestOrigin ?? "").replace(/\/+$/u, "")
+  ) {
     return corsJson({ ok: false, error: "forbidden_origin" }, requestOrigin, { status: 403 });
   }
 
@@ -196,7 +202,21 @@ export async function POST(request: NextRequest): Promise<Response> {
     return corsJson({ ok: false, error: "rate_limited" }, requestOrigin, { status: 429 });
   }
 
-  const parsed = PayloadSchema.safeParse(await request.json().catch(() => null));
+  const contentType = request.headers.get("content-type") ?? "";
+  const body: unknown = await (async () => {
+    if (/application\/json/i.test(contentType) || /\+json/i.test(contentType)) {
+      return request.json().catch(() => null);
+    }
+    const raw = await request.text().catch(() => "");
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  })();
+
+  const parsed = PayloadSchema.safeParse(body);
   if (!parsed.success) {
     return corsJson({ ok: false, error: "invalid_payload" }, requestOrigin, { status: 400 });
   }

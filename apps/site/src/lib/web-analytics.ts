@@ -212,7 +212,8 @@ function enqueue(event: PayloadEvent): void {
 function buildPayload(events: PayloadEvent[]): Blob | string {
   const json = JSON.stringify({ events });
   if (typeof Blob !== "undefined") {
-    return new Blob([json], { type: "application/json" });
+    // Use text/plain to avoid CORS preflight on many browsers.
+    return new Blob([json], { type: "text/plain;charset=UTF-8" });
   }
   return json;
 }
@@ -236,7 +237,7 @@ async function flushQueue(): Promise<void> {
     if (!ok && typeof fetch === "function") {
       await fetch(url, {
         method: "POST",
-        headers: payload instanceof Blob ? undefined : { "Content-Type": "application/json" },
+        headers: payload instanceof Blob ? undefined : { "Content-Type": "text/plain;charset=UTF-8" },
         body: payload instanceof Blob ? payload : (payload as string),
         keepalive: true
       }).catch(() => null);
