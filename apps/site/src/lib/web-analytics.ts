@@ -71,9 +71,11 @@ const SESSION_ROTATE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const MAX_QUEUE = 50;
 const FLUSH_BATCH = 20;
+const FLUSH_DEBOUNCE_MS = 2_000;
 
 let queue: PayloadEvent[] = [];
 let flushInFlight = false;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 function nowMs(): number {
   return Date.now();
@@ -247,6 +249,16 @@ async function flushQueue(): Promise<void> {
   }
 }
 
+function scheduleFlush(): void {
+  if (typeof window === "undefined") return;
+  if (flushInFlight) return;
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    void flushQueue();
+  }, FLUSH_DEBOUNCE_MS);
+}
+
 export function trackWebEvent(input: WebAnalyticsEvent): void {
   if (typeof window === "undefined") return;
 
@@ -274,10 +286,16 @@ export function trackWebEvent(input: WebAnalyticsEvent): void {
 
   if (queue.length >= 10) {
     void flushQueue();
+  } else {
+    scheduleFlush();
   }
 }
 
 export function flushWebAnalytics(): void {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
   void flushQueue();
 }
 
