@@ -61,9 +61,7 @@ import { sendDmMessage, sendDmTyping, sendEmailMessage, sendSmsMessage } from "@
 import {
   buildContactTag,
   buildLeadTag,
-  getLeadClockStart,
   getSalesScorecardConfig,
-  getSpeedToLeadDeadline
 } from "@/lib/sales-scorecard";
 import { handleInboundAutoReply } from "@/lib/auto-replies";
 import { handleInboundSalesAutopilot, handleSalesAutopilotAutosend } from "@/lib/sales-autopilot";
@@ -360,10 +358,28 @@ function normalizePhoneE164(value: string): string | null {
   return null;
 }
 
+function normalizeSalesDueAt(dueAt: Date, timezone: string): Date {
+  const local = DateTime.fromJSDate(dueAt, { zone: timezone });
+  const start = local.set({ hour: 7, minute: 30, second: 0, millisecond: 0 });
+  const end = local.set({ hour: 19, minute: 30, second: 0, millisecond: 0 });
+
+  if (local < start) return start.toUTC().toJSDate();
+  if (local > end) return start.plus({ days: 1 }).toUTC().toJSDate();
+  return dueAt;
+}
+
+function resolveSalesClockStart(
+  createdAt: Date,
+  timezone: string
+): { clockStart: Date; isWithinBusinessHours: boolean } {
+  const normalized = normalizeSalesDueAt(createdAt, timezone);
+  return { clockStart: normalized, isWithinBusinessHours: normalized.getTime() === createdAt.getTime() };
+}
+
 function nextSalesWindowStart(now: Date): Date | null {
   const local = DateTime.fromJSDate(now, { zone: "America/New_York" });
-  const start = local.set({ hour: 8, minute: 0, second: 0, millisecond: 0 });
-  const end = local.set({ hour: 19, minute: 0, second: 0, millisecond: 0 });
+  const start = local.set({ hour: 7, minute: 30, second: 0, millisecond: 0 });
+  const end = local.set({ hour: 19, minute: 30, second: 0, millisecond: 0 });
 
   if (local < start) return start.toUTC().toJSDate();
   if (local >= end) return start.plus({ days: 1 }).toUTC().toJSDate();
@@ -595,16 +611,6 @@ async function maybeNotifyAssigneeForInboundSmsMessage(input: {
   });
 }
 
-function normalizeSalesDueAt(dueAt: Date, config: Awaited<ReturnType<typeof getSalesScorecardConfig>>): Date {
-  const local = DateTime.fromJSDate(dueAt, { zone: config.timezone });
-  const start = local.set({ hour: config.businessStartHour, minute: 0, second: 0, millisecond: 0 });
-  const end = local.set({ hour: config.businessEndHour, minute: 0, second: 0, millisecond: 0 });
-
-  if (local < start) return start.toUTC().toJSDate();
-  if (local > end) return start.plus({ days: 1 }).toUTC().toJSDate();
-  return dueAt;
-}
-
 function parseLocalTime(value: string): { hour: number; minute: number } | null {
   const trimmed = value.trim();
   const match = trimmed.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
@@ -708,16 +714,16 @@ async function ensureSalesFollowupsForLead(input: {
   }
 
   const now = new Date();
-  const clockStart = getLeadClockStart(row.contactCreatedAt ?? row.leadCreatedAt, config);
-  const speedDeadline = getSpeedToLeadDeadline(row.contactCreatedAt ?? row.leadCreatedAt, config);
-  const isWithinBusinessHours = clockStart.getTime() === (row.contactCreatedAt ?? row.leadCreatedAt).getTime();
+  const leadCreatedAt = row.contactCreatedAt ?? row.leadCreatedAt;
+  const { clockStart, isWithinBusinessHours } = resolveSalesClockStart(leadCreatedAt, config.timezone);
+  const speedDeadline = new Date(clockStart.getTime() + config.speedToLeadMinutes * 60_000);
 
   const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
   const hasPhone = Boolean((row.phoneE164 ?? row.phone ?? "").trim().length);
   const speedTitle = hasPhone ? "Auto: Call new lead (5 min SLA)" : "Auto: Message new lead (5 min SLA)";
   tasksToCreate.push({
     title: speedTitle,
-    dueAt: normalizeSalesDueAt(speedDeadline, config),
+    dueAt: normalizeSalesDueAt(speedDeadline, config.timezone),
     notes: `${contactTag}\n${leadTag}\nkind=speed_to_lead`
   });
 
@@ -750,7 +756,7 @@ async function ensureSalesFollowupsForLead(input: {
 
   const seenFollowupKeys = new Set<string>();
   for (const entry of followupDues) {
-    const normalizedDue = normalizeSalesDueAt(entry.dueAt, config);
+    const normalizedDue = normalizeSalesDueAt(entry.dueAt, config.timezone);
     if (normalizedDue.getTime() <= speedDeadline.getTime()) continue;
     const stepMinutes = Math.max(1, minutesBetween(clockStart, normalizedDue));
     const key = `${normalizedDue.toISOString()}:${entry.step}`;
@@ -781,11 +787,13 @@ async function ensureSalesFollowupsForLead(input: {
 
       if (!created?.id) continue;
 
-      await tx.insert(outboxEvents).values({
-        type: "crm.reminder.sms",
-        payload: { taskId: created.id },
-        nextAttemptAt: task.dueAt
-      });
+      if (!task.notes.includes("kind=follow_up")) {
+        await tx.insert(outboxEvents).values({
+          type: "crm.reminder.sms",
+          payload: { taskId: created.id },
+          nextAttemptAt: task.dueAt
+        });
+      }
 
       if (task.notes.includes("kind=speed_to_lead")) {
         await tx.insert(outboxEvents).values({
@@ -796,10 +804,12 @@ async function ensureSalesFollowupsForLead(input: {
       }
 
       if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
+        const delayMs = 15_000;
+        const instantAt = isWithinBusinessHours ? new Date(now.getTime() + delayMs) : clockStart;
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
           payload: { taskId: created.id, mode: "instant" },
-          nextAttemptAt: isWithinBusinessHours ? now : clockStart
+          nextAttemptAt: instantAt
         });
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
@@ -886,9 +896,8 @@ async function ensureSalesFollowupsForContact(input: {
   }
 
   const now = new Date();
-  const clockStart = getLeadClockStart(contactRow.createdAt, config);
-  const speedDeadline = getSpeedToLeadDeadline(contactRow.createdAt, config);
-  const isWithinBusinessHours = clockStart.getTime() === contactRow.createdAt.getTime();
+  const { clockStart, isWithinBusinessHours } = resolveSalesClockStart(contactRow.createdAt, config.timezone);
+  const speedDeadline = new Date(clockStart.getTime() + config.speedToLeadMinutes * 60_000);
 
   const tasksToCreate: Array<{ title: string; dueAt: Date; notes: string }> = [];
   const hasPhone = Boolean((contactRow.phoneE164 ?? contactRow.phone ?? "").trim().length);
@@ -897,7 +906,7 @@ async function ensureSalesFollowupsForContact(input: {
   const tagBlock = leadTag ? `${contactTag}\n${leadTag}` : contactTag;
   tasksToCreate.push({
     title: speedTitle,
-    dueAt: normalizeSalesDueAt(speedDeadline, config),
+    dueAt: normalizeSalesDueAt(speedDeadline, config.timezone),
     notes: `${tagBlock}\nkind=speed_to_lead`
   });
 
@@ -930,7 +939,7 @@ async function ensureSalesFollowupsForContact(input: {
 
   const seenFollowupKeys = new Set<string>();
   for (const entry of followupDues) {
-    const normalizedDue = normalizeSalesDueAt(entry.dueAt, config);
+    const normalizedDue = normalizeSalesDueAt(entry.dueAt, config.timezone);
     if (normalizedDue.getTime() <= speedDeadline.getTime()) continue;
     const stepMinutes = Math.max(1, minutesBetween(clockStart, normalizedDue));
     const key = `${normalizedDue.toISOString()}:${entry.step}`;
@@ -961,11 +970,13 @@ async function ensureSalesFollowupsForContact(input: {
 
       if (!created?.id) continue;
 
-      await tx.insert(outboxEvents).values({
-        type: "crm.reminder.sms",
-        payload: { taskId: created.id },
-        nextAttemptAt: task.dueAt
-      });
+      if (!task.notes.includes("kind=follow_up")) {
+        await tx.insert(outboxEvents).values({
+          type: "crm.reminder.sms",
+          payload: { taskId: created.id },
+          nextAttemptAt: task.dueAt
+        });
+      }
 
       if (task.notes.includes("kind=speed_to_lead")) {
         await tx.insert(outboxEvents).values({
@@ -977,10 +988,12 @@ async function ensureSalesFollowupsForContact(input: {
 
       if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
         if (!allowInstantCallEscalation) continue;
+        const delayMs = 15_000;
+        const instantAt = isWithinBusinessHours ? new Date(now.getTime() + delayMs) : clockStart;
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
           payload: { taskId: created.id, mode: "instant" },
-          nextAttemptAt: isWithinBusinessHours ? now : clockStart
+          nextAttemptAt: instantAt
         });
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
@@ -2124,6 +2137,54 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         "estimate.requested",
         { appointmentId }
       );
+
+      try {
+        const contactId = typeof notification.contactId === "string" ? notification.contactId : null;
+        const startAt = notification.appointment.startAt;
+        if (contactId && startAt instanceof Date) {
+          const db = getDb();
+          const config = await getSalesScorecardConfig(db);
+          const [contactRow] = await db
+            .select({ salespersonMemberId: contacts.salespersonMemberId })
+            .from(contacts)
+            .where(eq(contacts.id, contactId))
+            .limit(1);
+
+          const memberId = contactRow?.salespersonMemberId ?? config.defaultAssigneeMemberId;
+          const phoneMap = await getTeamMemberPhoneMap(db);
+          const recipient = phoneMap[memberId] ?? null;
+          if (recipient) {
+            const business = await getBusinessHoursPolicy(db);
+            const whenLabel = formatReminderDueAt(startAt, business.timezone);
+            const contactPhone = notification.contact.phone ? ` (${notification.contact.phone})` : "";
+            const message = `New booking: ${notification.contact.name}${contactPhone}\nWhen: ${whenLabel}`;
+            const result = await sendSmsMessage(recipient, message);
+            if (result.ok) {
+              await recordProviderSuccessSafe("sms");
+              await recordAuditEvent({
+                actor: { type: "worker", label: "outbox" },
+                action: "sales.booking_alert.sent",
+                entityType: "appointment",
+                entityId: appointmentId,
+                meta: { recipient, contactId, provider: result.provider ?? null }
+              });
+            } else {
+              const detail = result.detail ?? "booking_alert_failed";
+              await recordProviderFailureSafe("sms", detail);
+              await recordAuditEvent({
+                actor: { type: "worker", label: "outbox" },
+                action: "sales.booking_alert.failed",
+                entityType: "appointment",
+                entityId: appointmentId,
+                meta: { recipient, contactId, provider: result.provider ?? null, detail }
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.warn("[outbox] sales.booking_alert.error", { appointmentId, error: String(error) });
+      }
+
       return { status: "processed" };
     }
 
@@ -2657,6 +2718,17 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "processed" };
       }
 
+      if (isInstant) {
+        const [existingBooking] = await db
+          .select({ id: appointments.id })
+          .from(appointments)
+          .where(and(eq(appointments.contactId, contactId), isNotNull(appointments.startAt), ne(appointments.status, "canceled"), gte(appointments.startAt, now)))
+          .limit(1);
+        if (existingBooking?.id) {
+          return { status: "processed" };
+        }
+      }
+
       const [priorEscalation] = await db
         .select({ id: auditLogs.id })
         .from(auditLogs)
@@ -2922,6 +2994,12 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
         return { status: "processed" };
       }
 
+      const notes = typeof row.notes === "string" ? row.notes : "";
+      if (notes.includes("kind=follow_up")) {
+        console.info("[outbox] crm.reminder.follow_up_disabled", { id: event.id, taskId: row.id });
+        return { status: "processed" };
+      }
+
       if (row.status !== "open" || !row.dueAt) {
         console.info("[outbox] crm.reminder.not_open_or_missing_due", {
           id: event.id,
@@ -2967,8 +3045,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       const contactName = `${row.firstName ?? ""} ${row.lastName ?? ""}`.trim() || "Contact";
       const contactPhone = row.phoneE164 ?? row.phone ?? null;
       const dueLabel = formatReminderDueAt(row.dueAt, business.timezone);
-      const details =
-        typeof row.notes === "string" && row.notes.trim().length > 0 ? `\n${row.notes.trim()}` : "";
+      const details = notes.trim().length > 0 ? `\n${notes.trim()}` : "";
       const contactLine = contactPhone ? ` (${contactPhone})` : "";
 
       const message =
