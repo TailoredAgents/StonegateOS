@@ -103,6 +103,7 @@ export default async function TeamPage({
     onlyOutbound?: string;
     gaReportId?: string;
     gaCampaignId?: string;
+    waRangeDays?: string;
     cal?: string;
     calView?: string;
     setup?: string;
@@ -214,6 +215,7 @@ export default async function TeamPage({
   const contactIdParam = contactIdRaw ?? createdContactRaw;
   const gaReportIdParam = typeof params?.gaReportId === "string" ? params.gaReportId : undefined;
   const gaCampaignIdParam = typeof params?.gaCampaignId === "string" ? params.gaCampaignId : undefined;
+  const waRangeDaysParam = typeof params?.waRangeDays === "string" ? params.waRangeDays : undefined;
   const inboxThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
   const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
@@ -489,7 +491,7 @@ export default async function TeamPage({
 
       {tab === "marketing" && hasOwner ? (
         <React.Suspense fallback={<TeamSkeletonCard title="Loading marketing" />}>
-          <MarketingSection reportId={gaReportIdParam} campaignId={gaCampaignIdParam} />
+          <MarketingSection reportId={gaReportIdParam} campaignId={gaCampaignIdParam} waRangeDays={waRangeDaysParam} />
         </React.Suspense>
       ) : null}
 

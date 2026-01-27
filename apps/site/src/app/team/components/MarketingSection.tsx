@@ -13,6 +13,7 @@ import {
 } from "../actions";
 import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE } from "./team-ui";
 import { GoogleAdsRecommendationsPanel } from "./GoogleAdsRecommendationsPanel";
+import { WebAnalyticsSection } from "./WebAnalyticsSection";
 
 type GoogleAdsStatusPayload = {
   ok: true;
@@ -206,7 +207,11 @@ function normalizeWeight(value: number, fallback: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-export async function MarketingSection(props: { reportId?: string; campaignId?: string }): Promise<React.ReactElement> {
+export async function MarketingSection(props: {
+  reportId?: string;
+  campaignId?: string;
+  waRangeDays?: string;
+}): Promise<React.ReactElement> {
   let status: GoogleAdsStatusPayload | null = null;
   let summary: GoogleAdsSummaryPayload | null = null;
   let analyst: GoogleAdsAnalystStatusPayload | null = null;
@@ -882,6 +887,10 @@ export async function MarketingSection(props: { reportId?: string; campaignId?: 
           </div>
         ) : null}
       </div>
+
+      <React.Suspense fallback={<div className={TEAM_CARD_PADDED}>Loading website analytics\u2026</div>}>
+        <WebAnalyticsSection rangeDays={props.waRangeDays} gaReportId={props.reportId} gaCampaignId={props.campaignId} />
+      </React.Suspense>
     </section>
   );
 }

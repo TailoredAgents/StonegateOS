@@ -14,6 +14,7 @@ import {
   uniqueIndex,
   jsonb,
   integer,
+  doublePrecision,
   customType
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
@@ -878,6 +879,91 @@ export const googleAdsAnalystRecommendations = pgTable(
   (table) => ({
     reportIdx: index("google_ads_analyst_recs_report_idx").on(table.reportId, table.createdAt),
     statusIdx: index("google_ads_analyst_recs_status_idx").on(table.status, table.createdAt)
+  })
+);
+
+export const webEvents = pgTable(
+  "web_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sessionId: text("session_id").notNull(),
+    visitId: text("visit_id").notNull(),
+    event: text("event").notNull(),
+    path: text("path").notNull(),
+    key: text("key"),
+    referrerDomain: text("referrer_domain"),
+    utmSource: text("utm_source"),
+    utmMedium: text("utm_medium"),
+    utmCampaign: text("utm_campaign"),
+    utmTerm: text("utm_term"),
+    utmContent: text("utm_content"),
+    device: text("device"),
+    inAreaBucket: text("in_area_bucket"),
+    meta: jsonb("meta").$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    createdAtIdx: index("web_events_created_at_idx").on(table.createdAt),
+    eventIdx: index("web_events_event_idx").on(table.event),
+    pathIdx: index("web_events_path_idx").on(table.path),
+    sessionIdx: index("web_events_session_idx").on(table.sessionId)
+  })
+);
+
+export const webEventCountsDaily = pgTable(
+  "web_event_counts_daily",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    dateStart: text("date_start").notNull(),
+    event: text("event").notNull(),
+    path: text("path").notNull(),
+    key: text("key").notNull().default(""),
+    device: text("device").notNull().default(""),
+    inAreaBucket: text("in_area_bucket").notNull().default(""),
+    utmSource: text("utm_source").notNull().default(""),
+    utmMedium: text("utm_medium").notNull().default(""),
+    utmCampaign: text("utm_campaign").notNull().default(""),
+    utmTerm: text("utm_term").notNull().default(""),
+    utmContent: text("utm_content").notNull().default(""),
+    count: integer("count").notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    uniqueIdx: uniqueIndex("web_event_counts_daily_unique_idx").on(
+      table.dateStart,
+      table.event,
+      table.path,
+      table.key,
+      table.device,
+      table.inAreaBucket,
+      table.utmSource,
+      table.utmMedium,
+      table.utmCampaign,
+      table.utmTerm,
+      table.utmContent
+    ),
+    dateIdx: index("web_event_counts_daily_date_idx").on(table.dateStart),
+    eventIdx: index("web_event_counts_daily_event_idx").on(table.event),
+    pathIdx: index("web_event_counts_daily_path_idx").on(table.path)
+  })
+);
+
+export const webVitals = pgTable(
+  "web_vitals",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sessionId: text("session_id").notNull(),
+    visitId: text("visit_id").notNull(),
+    path: text("path").notNull(),
+    metric: text("metric").notNull(),
+    value: doublePrecision("value").notNull(),
+    rating: text("rating"),
+    device: text("device"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => ({
+    createdAtIdx: index("web_vitals_created_at_idx").on(table.createdAt),
+    pathMetricIdx: index("web_vitals_path_metric_idx").on(table.path, table.metric)
   })
 );
 

@@ -5,6 +5,7 @@ import { Button, cn } from "@myst-os/ui";
 import { Check, MessageSquare, ShieldCheck, Star } from "lucide-react";
 import { useUTM } from "../lib/use-utm";
 import { trackGoogleAdsConversion } from "../lib/google-ads";
+import { trackWebEvent } from "../lib/web-analytics";
 
 declare global {
   interface Window {
@@ -273,9 +274,13 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const handlePhotos = async (files: FileList | null) => {
     if (!files) return;
     const selected = Array.from(files).slice(0, 4);
+    const path = getAnalyticsPath();
+    const eventPrefix = path === "/book" ? "book" : "lead_form";
+    trackWebEvent({ event: `${eventPrefix}_photo_upload_start`, path, meta: { count: selected.length } });
     if (!apiBase) {
       setPhotoUploadStatus("error");
       setPhotoUploadMessage("Photo upload is unavailable right now. Please skip photos or try again later.");
+      trackWebEvent({ event: `${eventPrefix}_photo_upload_fail`, path, key: "missing_api_base_url" });
       return;
     }
     setPhotoUploadStatus("uploading");
@@ -302,9 +307,11 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       setPhotos(urls);
       setPhotoSkipped(false);
       setPhotoUploadStatus("idle");
+      trackWebEvent({ event: `${eventPrefix}_photo_upload_success`, path, meta: { photoCount: urls.length } });
     } catch (err) {
       setPhotoUploadStatus("error");
       setPhotoUploadMessage((err as Error).message || "Unable to upload photos. Please try smaller photos or skip for now.");
+      trackWebEvent({ event: `${eventPrefix}_photo_upload_fail`, path, key: bucketWebAnalyticsError(err) });
     }
   };
 
@@ -313,8 +320,15 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       setError("Please fill name, phone, and ZIP.");
       return;
     }
+    const analyticsPath = getAnalyticsPath();
+    const analyticsZip = zip.trim();
     setError(null);
     setQuoteState({ status: "loading" });
+    if (analyticsPath === "/book") {
+      trackWebEvent({ event: "book_quote_start", path: analyticsPath, zip: analyticsZip });
+    } else {
+      trackWebEvent({ event: "lead_form_quote_start", path: analyticsPath });
+    }
     try {
       const resolvedTypes: JunkType[] = types.length ? types : otherSelected ? ["general_junk"] : [];
       if (!resolvedTypes.length) {
@@ -384,8 +398,30 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate)
       });
       trackGoogleLeadConversion(nextQuoteId);
+      if (analyticsPath === "/book") {
+        trackWebEvent({
+          event: "book_quote_success",
+          path: analyticsPath,
+          zip: analyticsZip,
+          key: data.quote.displayTierLabel.slice(0, 120),
+          meta: { needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate) }
+        });
+      } else {
+        trackWebEvent({
+          event: "lead_form_quote_success",
+          path: analyticsPath,
+          key: data.quote.displayTierLabel.slice(0, 120),
+          meta: { needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate) }
+        });
+      }
     } catch (err) {
       setQuoteState({ status: "error", message: (err as Error).message });
+      const key = bucketWebAnalyticsError(err);
+      if (analyticsPath === "/book") {
+        trackWebEvent({ event: "book_quote_fail", path: analyticsPath, zip: analyticsZip, key });
+      } else {
+        trackWebEvent({ event: "lead_form_quote_fail", path: analyticsPath, key });
+      }
     }
   };
 
@@ -621,6 +657,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       setBookingMessage("Quote is missing. Please refresh and try again.");
       return;
     }
+    const analyticsPath = getAnalyticsPath();
+    const analyticsZip = zip.trim();
     if (!addressLine1 || !city || !stateField || !postalCode) {
       setBookingStatus("error");
       setBookingMessage("Please enter address details.");
@@ -633,6 +671,11 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     }
     setBookingStatus("loading");
     setBookingMessage(null);
+    if (analyticsPath === "/book") {
+      trackWebEvent({ event: "book_booking_attempt", path: analyticsPath, zip: analyticsZip });
+    } else {
+      trackWebEvent({ event: "lead_form_booking_attempt", path: analyticsPath });
+    }
     try {
       const payload: Record<string, unknown> = {
         instantQuoteId: quoteId,
@@ -660,12 +703,22 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         if (errorPayload?.error === "slot_full") {
           setBookingStatus("error");
           setBookingMessage("That time just filled up. Please pick another time.");
+          if (analyticsPath === "/book") {
+            trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "slot_full" });
+          } else {
+            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "slot_full" });
+          }
           void fetchAvailability();
           return;
         }
         if (errorPayload?.error === "day_full") {
           setBookingStatus("error");
           setBookingMessage("We are fully booked that day. Please choose another time.");
+          if (analyticsPath === "/book") {
+            trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "day_full" });
+          } else {
+            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "day_full" });
+          }
           void fetchAvailability();
           return;
         }
@@ -676,6 +729,16 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         ) {
           setBookingStatus("error");
           setBookingMessage("That hold expired. Please pick another time.");
+          if (analyticsPath === "/book") {
+            trackWebEvent({
+              event: "book_booking_fail",
+              path: analyticsPath,
+              zip: analyticsZip,
+              key: errorPayload.error
+            });
+          } else {
+            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: errorPayload.error });
+          }
           setHoldId(null);
           setHoldExpiresAt(null);
           setHoldStatus("idle");
@@ -688,15 +751,39 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             typeof errorPayload.errorId === "string" && errorPayload.errorId.length
               ? ` (ref ${errorPayload.errorId})`
               : "";
+          if (analyticsPath === "/book") {
+            trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "server_error" });
+          } else {
+            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "server_error" });
+          }
           throw new Error(`Booking failed on our end. Please try again or call us.${suffix}`);
         }
         if (typeof errorPayload?.message === "string" && errorPayload.message.trim().length > 0) {
+          if (analyticsPath === "/book") {
+            trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "message" });
+          } else {
+            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "message" });
+          }
           throw new Error(errorPayload.message);
         }
         const message =
           typeof errorPayload?.error === "string" && errorPayload.error.length
             ? errorPayload.error
             : `Booking failed (HTTP ${res.status})`;
+        if (analyticsPath === "/book") {
+          trackWebEvent({
+            event: "book_booking_fail",
+            path: analyticsPath,
+            zip: analyticsZip,
+            key: typeof errorPayload?.error === "string" ? errorPayload.error.slice(0, 120) : "http_error"
+          });
+        } else {
+          trackWebEvent({
+            event: "lead_form_booking_fail",
+            path: analyticsPath,
+            key: typeof errorPayload?.error === "string" ? errorPayload.error.slice(0, 120) : "http_error"
+          });
+        }
         throw new Error(message);
       }
       const data = (await res.json().catch(() => null)) as { startAt?: string | null } | null;
@@ -706,6 +793,20 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         `You're booked for ${formatSlotLabel(bookedAt)}. We'll text${email.trim().length ? " (and email)" : ""} you a confirmation.`
       );
       setHoldStatus("idle");
+      if (analyticsPath === "/book") {
+        trackWebEvent({
+          event: "book_booking_success",
+          path: analyticsPath,
+          zip: analyticsZip,
+          meta: { hasEmail: email.trim().length > 0, holdUsed: Boolean(holdId) }
+        });
+      } else {
+        trackWebEvent({
+          event: "lead_form_booking_success",
+          path: analyticsPath,
+          meta: { hasEmail: email.trim().length > 0, holdUsed: Boolean(holdId) }
+        });
+      }
       if (!trackedScheduleRef.current) {
         trackedScheduleRef.current = true;
         trackMetaEvent("Schedule", { content_name: "Book pickup", content_category: "junk_removal" });
@@ -714,6 +815,12 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     } catch (err) {
       setBookingStatus("error");
       setBookingMessage((err as Error).message);
+      const key = bucketWebAnalyticsError(err);
+      if (analyticsPath === "/book") {
+        trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key });
+      } else {
+        trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key });
+      }
     }
   };
 
@@ -729,6 +836,20 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         ? `$${quoteState.low}`
         : `$${quoteState.low} - $${quoteState.high}`
       : null;
+
+  const getAnalyticsPath = React.useCallback(() => {
+    if (typeof window === "undefined") return "/";
+    return window.location.pathname || "/";
+  }, []);
+
+  React.useEffect(() => {
+    const path = getAnalyticsPath();
+    if (path === "/book") {
+      trackWebEvent({ event: "book_step_view", path, key: String(step) });
+    } else {
+      trackWebEvent({ event: "lead_form_step_view", path, key: String(step) });
+    }
+  }, [getAnalyticsPath, step]);
 
   return (
     <div
@@ -758,7 +879,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             ))}
           </span>
           <span className="font-semibold">{GOOGLE_REVIEW_RATING}</span>
-          <span className="text-neutral-500">·</span>
+          <span className="text-neutral-500">•</span>
           <span>{GOOGLE_REVIEW_COUNT} reviews</span>
         </a>
         <div className="flex items-center gap-2">
@@ -785,6 +906,21 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             if (!types.length && !otherSelected) {
               setError("Pick at least one type of junk.");
               return;
+            }
+            const path = getAnalyticsPath();
+            const baseMeta = {
+              typeCount: types.length + (otherSelected ? 1 : 0),
+              otherSelected,
+              otherHasDetails: otherDetails.trim().length > 0,
+              perceivedSize,
+              hasPhotos: photos.length > 0,
+              photoCount: photos.length,
+              photoSkipped
+            };
+            if (path === "/book") {
+              trackWebEvent({ event: "book_step1_submit", path, zip: zip.trim(), meta: baseMeta });
+            } else {
+              trackWebEvent({ event: "lead_form_step1_submit", path, meta: baseMeta });
             }
             setError(null);
             setStep(2);
@@ -1389,6 +1525,27 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       </form>
     </div>
   );
+}
+
+function bucketWebAnalyticsError(err: unknown): string {
+  const message =
+    typeof err === "string"
+      ? err
+      : err && typeof err === "object" && "message" in err
+        ? String((err as any).message)
+        : String(err ?? "");
+  const text = message.trim().toLowerCase();
+  if (!text) return "unknown";
+  if (text.includes("413") || text.includes("too large") || text.includes("payload")) return "payload_too_large";
+  if (text.includes("missing_api_base_url")) return "missing_api_base_url";
+  if (text.includes("timeout")) return "timeout";
+  if (text.includes("failed to fetch") || text.includes("network")) return "network_error";
+  if (text.includes("forbidden") || text.includes("unauthorized") || text.includes("403")) return "forbidden";
+  if (text.includes("400") || text.includes("invalid")) return "invalid_request";
+  if (text.includes("upload")) return "upload_failed";
+  if (text.includes("quote")) return "quote_failed";
+  if (text.includes("booking")) return "booking_failed";
+  return text.slice(0, 60).replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "") || "unknown";
 }
 
 async function shrinkImageIfNeeded(file: File): Promise<File> {
