@@ -48,15 +48,15 @@ Verify DB health:
 curl -sS -H "x-admin-api-key: $ADMIN_API_KEY" https://{api-domain}/api/admin/db/status
 ```
 
-## 4) Import Company Pack (configuration-only)
-1. In `/team`, go to **Control → Settings → Company Pack** (or the dedicated onboarding wizard).
-2. Import the Company Pack JSON (exported from TA template or another company).
-3. Update the remaining fields in UI:
-   - branding, phone number(s), hours, service area
-   - pricing tiers + discount
-   - pipeline stage labels
-   - default assignee + team directory
-   - AI identity + templates
+## 4) Company Pack (planned; config-only onboarding)
+The repo includes the schema and inventory docs for a future "Company Pack" import/export flow, but the UI import/export is not treated as complete yet.
+
+Current approach (today):
+1. Set required env vars in Render (see `.env.example` and `DEPLOY-ON-RENDER.md`).
+2. Configure operational settings in `/team` (lead routing, automations, templates) where applicable.
+
+Planned approach (Phase 1 in `docs/TA_PLATFORM_PLAN.md`):
+- Owner-only export/import of a Company Pack JSON via `/team`, validated against `docs/company-pack.schema.json`.
 
 ## 5) Configure integrations (per-company)
 
@@ -112,4 +112,3 @@ curl -sS -H "x-admin-api-key: $ADMIN_API_KEY" https://{api-domain}/api/admin/db/
 - Daily: check provider health (Twilio/Meta/Google) + error logs.
 - Daily: verify inbound leads appear and routing works.
 - Weekly: export key data snapshots (DB backups or exports) before major changes.
-

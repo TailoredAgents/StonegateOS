@@ -1,8 +1,10 @@
 # Company Pack Inventory (Current Hardcodes)
 
-This doc lists company-specific values currently hardcoded across the repo so we can migrate them into the **Company Pack** (configuration-only) without breaking production.
+This doc lists company-specific values that are still hardcoded across the repo so we can migrate them into a **Company Pack** (configuration-only) without breaking production.
 
-Goal: make onboarding a new company deployment mostly **Import Company Pack + set env secrets** (no code edits).
+Primary goal: make onboarding a new company deployment mostly **Import Company Pack + set env secrets** (no code edits) for the CRM + automations.
+
+Note: the public marketing site can be customized or replaced per customer. The built-in marketing site supports build-time branding via `NEXT_PUBLIC_COMPANY_*`, but portability should not require a full in-product website builder.
 
 ## Inventory summary (what’s currently hardcoded)
 
@@ -73,4 +75,3 @@ In a new deployment:
 - TA can change company name/phone/hours/service-area/discounts/AI voice without code edits.
 - Website pages and structured data reflect the configured company identity.
 - Sales/Inbox/SEO messages reflect the configured brand and phone.
-

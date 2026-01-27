@@ -1,11 +1,16 @@
 # StonegateOS Monorepo
 
-## What is this?
-StonegateOS is a monorepo for a local service business (CRM + marketing site):
-- `apps/site`: public marketing site plus the team console (`/team`) and booking flow.
-- `apps/api`: Next.js API app with Drizzle/Postgres for leads, appointments, quotes, CRM, payments, and notifications.
-- `apps/app`: Owner Hub dashboard (daily schedule + payments summary).
-- `packages/pricing`, `packages/sdk`, `packages/ui`: shared pricing engine, SDK, and UI primitives.
+StonegateOS is a monorepo for a local service business: a customer-facing website + booking flow, plus an internal CRM ("Team Console") for sales/ops/owners.
+
+## Apps
+- `apps/site`: public marketing site + `/book` + Team Console UI at `/team`.
+- `apps/api`: backend + admin API (Next.js) with Drizzle/Postgres.
+- `apps/app`: optional owner dashboard app (WIP/experimental).
+
+## Major Features (Current)
+- Team Console (`/team`): Unified Inbox (SMS/Messenger/email), Contacts, Pipeline (drag-and-drop), Calendar (day/week/month), Sales HQ + call coaching, Outbound queue, Partners, Owner HQ, Marketing dashboards (Google Ads + Website Analytics), SEO agent, Control/settings.
+- Outbox worker: drains `outbox_events` and runs scheduled jobs (reminders, SEO autopublish, marketing sync, call analysis/coaching).
+- Integrations: Twilio (SMS + calls), Meta (Lead Ads + Messenger), Google Ads (sync + analyst), optional Google Calendar sync.
 
 ## Prerequisites
 - Node.js 22.20.0 for local development (see `.nvmrc`). Render is pinned to Node 20 in `render.yaml`.
@@ -19,8 +24,8 @@ StonegateOS is a monorepo for a local service business (CRM + marketing site):
 4. Provide `ADMIN_API_KEY`; this gates admin routes and the team console server actions.
 5. Timezone defaults to Eastern (`America/New_York`) with automatic DST; no env is needed unless you intentionally override `APPOINTMENT_TIMEZONE`.
 6. Team Console authentication supports both:
-   - Team member accounts (magic link + optional password) — preferred for accountability.
-   - Temporary legacy “break-glass” sessions (Owner/Crew keys, see `apps/site/src/lib/crew-session.ts`) — kept during active development and removed later.
+   - Team member accounts (magic link + optional password) - preferred for accountability.
+   - Temporary legacy "break-glass" sessions (Owner/Crew keys, see `apps/site/src/lib/crew-session.ts`) - kept during active development and removed later.
 
 ## Database
 1. Start Postgres via Docker:
@@ -90,6 +95,7 @@ pnpm -w build       # production build for all apps
 pnpm -w lint        # lint all workspaces
 pnpm -w test        # run workspace tests (if configured)
 pnpm outbox:worker  # run the outbox dispatcher (see docs/outbox-worker.md)
+pnpm -w smoke       # quick production-smoke checks (see docs/RELEASE_CHECKLIST.md)
 pnpm --filter api dev
 pnpm --filter site dev
 pnpm --filter app dev
@@ -119,7 +125,7 @@ Note: This repo’s marketing site is a starter template. For other businesses, 
 
 Placeholders currently in use:
 - Email: `austin@stonegatejunkremoval.com`
-- Phone: `(678) 541-7725`
+- Phone: `(404) 777-2631`
 - Domain: `https://stonegatejunkremoval.com`
 
 ## Deployment
@@ -161,4 +167,7 @@ You can place these in the monorepo root `.env` or per-app `.env.local` files. B
 
 Team Console login options:
 - Preferred: `/team/login` (request a magic link or log in with a password if set).
-- Temporary: “Emergency access” sessions (Owner/Crew keys). These are intended as break-glass only while iterating and will be removed before the system is considered “finished” and sellable.
+- Temporary: "Emergency access" sessions (Owner/Crew keys). These are intended as break-glass only while iterating and will be removed before the system is considered "finished" and sellable.
+
+## Docs
+Start here: `docs/README.md`.

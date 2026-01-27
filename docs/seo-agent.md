@@ -10,7 +10,7 @@ This repo includes a v1 SEO agent that autopublishes blog posts and makes them i
   - No automated backlink blasts.
   - No fabricated stats, awards, or partnerships.
   - No dollar amounts.
-  - No service area expansion beyond Cobb/Cherokee/Fulton/Bartow.
+  - No claims outside your configured service area (keep location language aligned with your real coverage).
 
 ### Storage (DB)
 - Tables:
@@ -68,7 +68,7 @@ The worker calls `maybeAutopublishBlogPost()` on an interval (default every ~6 h
 - Worker env var: `SEO_AUTOPUBLISH_INTERVAL_MS` (default ~6 hours)
 
 ### Manual run (admin-only)
-There is an admin endpoint you can call (use `x-api-key: ADMIN_API_KEY`):
+There is an admin endpoint you can call (use `x-admin-api-key: ADMIN_API_KEY`):
 - `POST /api/admin/seo/run` with JSON `{ "force": true }`
 
 ## What is still needed for broader SEO
@@ -87,13 +87,8 @@ The blog agent is only one piece. Rankings typically improve through:
    - Confirm key pages are indexed: `/`, `/services/*`, `/areas/*`, `/blog/*`
 
 2) Google Analytics 4 (GA4)
-   - The Render env list includes `NEXT_PUBLIC_GA4_ID`, but the site currently does not inject the GA script automatically.
-   - When implemented, standardize events:
-     - `quote_start`
-     - `quote_success`
-     - `booking_success`
-     - `call_click`
-     - `sms_click`
+   - Optional. StonegateOS already has a lightweight first-party analytics system for `/book` (see `docs/web-analytics.md`).
+   - If/when adding GA4, keep it minimal and avoid impacting performance on `/` and `/book`.
 
 ### Phase 2: Local SEO foundations
 - Google Business Profile: verify, keep NAP consistent, add photos and services, request reviews.

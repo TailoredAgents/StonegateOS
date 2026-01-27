@@ -27,56 +27,13 @@ OUTBOX_POLL_INTERVAL_MS=5000 pnpm outbox:worker
 
 ## Production Deployment
 
-Pick one of these lightweight strategies so the worker runs beside the API.
+This repo is designed to run the worker as a dedicated **Render Worker** service. The blueprint in `render.yaml` provisions `stonegate-outbox-worker` automatically.
 
-### PM2 (recommended)
-
-```bash
-pm2 start pnpm --name stonegate-outbox --interpreter pnpm -- \
-  outbox:worker
-
-# Optional: poll every 5 seconds
-pm2 start pnpm --name stonegate-outbox --interpreter pnpm -- \
-  env OUTBOX_POLL_INTERVAL_MS=5000 pnpm outbox:worker
-
-pm2 save
-```
-
-### Systemd (Linux)
-
-1. Create `/etc/systemd/system/myst-outbox.service`:
-
-   ```ini
-   [Unit]
-Description=StonegateOS Outbox Worker
-   After=network.target
-
-   [Service]
-   WorkingDirectory=/opt/mystos
-   Environment=NODE_ENV=production
-   Environment=OUTBOX_POLL_INTERVAL_MS=5000
-ExecStart=/usr/bin/pnpm outbox:worker
-   Restart=always
-User=stonegate
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-2. Reload and start:
-
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now myst-outbox
-   ```
-
-### Task Scheduler (Windows)
-
-Create a basic task that runs `pnpm outbox:worker` at startup and repeats every minute. Alternatively, set `OUTBOX_POLL_INTERVAL_MS` and let the process poll inside a hidden PowerShell window.
+If you are deploying elsewhere, run `pnpm outbox:worker` as a long-lived process alongside the API.
 
 ## Monitoring
 
-- Worker logs are emitted to stdout. Capture them via PM2 log files, systemd `journalctl`, or redirect to a log aggregator.
+- Worker logs are emitted to stdout. On Render, use the `stonegate-outbox-worker` service logs.
 - Metrics to watch:
   - `outbox_events` rows without `processed_at`
   - Worker batch summary (`processed`, `skipped`, `errors`)
@@ -89,7 +46,7 @@ Need to drain the queue on demand? Use the admin endpoint (requires `ADMIN_API_K
 ```bash
 curl -X POST http://localhost:3001/api/admin/outbox/dispatch \
   -H "Content-Type: application/json" \
-  -H "x-api-key: $ADMIN_API_KEY" \
+  -H "x-admin-api-key: $ADMIN_API_KEY" \
   -d '{"limit": 10}'
 ```
 

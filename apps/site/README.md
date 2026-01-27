@@ -31,3 +31,5 @@ Team Console timestamps are fixed to Eastern (`America/New_York`) with automatic
 
 ## Content
 Markdown/MDX content lives under `apps/site/content`. The site uses Contentlayer during build; see root README for build steps.
+
+For operational docs (deploy, release checklist, integrations), start at `docs/README.md`.

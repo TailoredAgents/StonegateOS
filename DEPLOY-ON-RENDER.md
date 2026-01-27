@@ -8,16 +8,32 @@ This repo includes a Render blueprint in `render.yaml` that provisions the site,
    - Postgres `stonegate-db` (Basic 1GB, Virginia)
    - Web services `stonegate-site` and `stonegate-api`
    - Worker `stonegate-outbox-worker` (runs outbox + SEO autopublish)
-4. Set environment variables before the first deploy (all listed in `render.yaml` with `sync: false` so they surface in the dashboard):
-   - Site (`stonegate-site`): `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_GA4_ID`, `NEXT_PUBLIC_META_PIXEL_ID`, `API_BASE_URL`, `ADMIN_API_KEY`
-     - Public branding (SEO-safe, build-time): `NEXT_PUBLIC_COMPANY_NAME`, `NEXT_PUBLIC_COMPANY_PHONE_E164`, `NEXT_PUBLIC_COMPANY_PHONE_DISPLAY`, `NEXT_PUBLIC_COMPANY_EMAIL`, `NEXT_PUBLIC_COMPANY_LOGO_PATH`, `NEXT_PUBLIC_COMPANY_HQ_CITY`, `NEXT_PUBLIC_COMPANY_HQ_STATE`, `NEXT_PUBLIC_COMPANY_HQ_COUNTRY`, `NEXT_PUBLIC_COMPANY_SERVICE_AREA`, `NEXT_PUBLIC_COMPANY_HOURS_SUMMARY`, `NEXT_PUBLIC_GOOGLE_BUSINESS_PROFILE_URL`, `NEXT_PUBLIC_FACEBOOK_PAGE_URL`, `NEXT_PUBLIC_INSTAGRAM_URL`
-       - If you use a custom/BYO marketing site, these are optional; the CRM + API can still run from this repo.
-     - Timezone: fixed to Eastern (`America/New_York`) with automatic DST; no env var needed.
-   - API (`stonegate-api`): `API_BASE_URL`, `ADMIN_API_KEY`, `NEXT_PUBLIC_SITE_URL`, `APPOINTMENT_TIMEZONE`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `DM_WEBHOOK_URL`, `DM_WEBHOOK_TOKEN`, `DM_WEBHOOK_FROM`, `FB_VERIFY_TOKEN`, `FB_APP_SECRET`, `FB_LEADGEN_ACCESS_TOKEN`, `FB_MARKETING_ACCESS_TOKEN`, `FB_AD_ACCOUNT_ID`, `FB_LEAD_FORM_IDS`, `META_DATASET_ID`, `META_CONVERSIONS_TOKEN`, `META_LEAD_EVENT_SOURCE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`, `GOOGLE_CALENDAR_WEBHOOK_URL`, `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_API_VERSION`, `GOOGLE_ADS_SYNC_INTERVAL_MS`, `GOOGLE_ADS_SYNC_DISABLED`, `GA4_MEASUREMENT_ID`, `GA4_API_SECRET`, `QUOTE_ALERT_EMAIL`, `LEAD_ALERT_SMS`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `OUTBOX_BATCH_SIZE`, `OUTBOX_POLL_INTERVAL_MS`
-   - Worker (`stonegate-outbox-worker`): `DATABASE_URL`, `NEXT_PUBLIC_SITE_URL`, `SITE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `DM_WEBHOOK_URL`, `DM_WEBHOOK_TOKEN`, `DM_WEBHOOK_FROM`, `LEAD_ALERT_SMS`, `FB_LEADGEN_ACCESS_TOKEN`, `FB_MARKETING_ACCESS_TOKEN`, `FB_AD_ACCOUNT_ID`, `META_DATASET_ID`, `META_CONVERSIONS_TOKEN`, `META_LEAD_EVENT_SOURCE`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CALENDAR_ID`, `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_API_VERSION`, `GOOGLE_ADS_SYNC_INTERVAL_MS`, `GOOGLE_ADS_SYNC_DISABLED`
-     - Optional: `SEO_AUTOPUBLISH_INTERVAL_MS`, `SEO_AUTOPUBLISH_DISABLED`
-   - Shared defaults: `NODE_ENV=production`, `NODE_VERSION=20` (already specified), and `DATABASE_URL` is wired automatically for the API and worker from `stonegate-db`
-5. Deploy the blueprint. `stonegate-api` runs `pnpm -w db:migrate` on each deploy (see `render.yaml`).
+4. Set environment variables before the first deploy.
+   - All expected env vars are listed in `render.yaml` (with `sync: false` so they appear in the Render dashboard).
+   - For a complete reference, also see `.env.example`.
+
+   **Minimum required**
+   - Site (`stonegate-site`)
+     - `NEXT_PUBLIC_SITE_URL`
+     - `NEXT_PUBLIC_API_BASE_URL`
+     - `API_BASE_URL` (for server actions that need to call the API)
+     - `ADMIN_API_KEY`
+   - API (`stonegate-api`)
+     - `ADMIN_API_KEY`
+     - `API_BASE_URL` (public API URL)
+     - Provider credentials as needed (Twilio, SMTP, OpenAI, Meta, Google Ads, etc.)
+   - Worker (`stonegate-outbox-worker`)
+     - Provider credentials to match what the worker should run (Twilio/SMTP/OpenAI/Meta/Google Ads)
+
+   **Optional (tracking / ads)**
+   - Meta pixel: `NEXT_PUBLIC_META_PIXEL_ID`
+   - Google Ads tag: `NEXT_PUBLIC_GOOGLE_ADS_TAG_ID` (+ conversion `send_to` strings)
+
+   **SEO-safe public branding (build-time)**
+   - `NEXT_PUBLIC_COMPANY_*` values control the marketing site's name/phone/structured data without runtime API calls.
+   - If you use a custom/BYO marketing site, these are optional; the CRM + API can still run from this repo.
+
+5. Deploy the blueprint. The API runs `pnpm -w db:migrate` on deploy (see `render.yaml`).
 6. Wait for `/api/healthz` on both web services to return `200 ok`.
-7. Submit a live lead on the deployed site and confirm records in `contacts`, `properties`, `leads`, and `outbox_events`.
+7. Submit a live lead on the deployed site and confirm records in `contacts`, `leads`, and `outbox_events`.
 8. Connect your custom domain to `stonegate-site` via Render DNS.

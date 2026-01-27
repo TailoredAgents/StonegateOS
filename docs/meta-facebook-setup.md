@@ -37,7 +37,7 @@ Worker service (`stonegate-outbox-worker`) for Ads Insights sync:
 - `FB_LEADGEN_ACCESS_TOKEN` (fallback token for Ads Insights if `FB_MARKETING_ACCESS_TOKEN` is unset)
 
 Admin auth (needed for the `/api/admin/...` endpoints):
-- `ADMIN_API_KEY` (send as `x-api-key` header)
+- `ADMIN_API_KEY` (send as `x-admin-api-key` header; `x-api-key` is also accepted)
 
 ## Meta App / Business Manager checklist
 
@@ -68,7 +68,7 @@ Admin auth (needed for the `/api/admin/...` endpoints):
 
 The sync is processed by the outbox worker (`meta.ads_insights.sync` event).
 
-- Manually enqueue: `POST /api/admin/meta/ads/sync` with header `x-api-key: <ADMIN_API_KEY>`
+- Manually enqueue: `POST /api/admin/meta/ads/sync` with header `x-admin-api-key: <ADMIN_API_KEY>`
   - Body examples:
     - `{ "days": 14 }`
     - `{ "since": "2026-01-01", "until": "2026-01-31" }`

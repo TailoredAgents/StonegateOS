@@ -42,3 +42,4 @@ pnpm -w db:migrate
 
 ## Notes
 The API app is part of a monorepo. See the root `README.md` for full setup and environment guidance.
+For operations docs (Render, outbox worker, SEO agent, integrations), start at `docs/README.md`.
