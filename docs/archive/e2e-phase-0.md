@@ -29,7 +29,7 @@ This document satisfies the Phase 0 (“Discovery & Success Criteria”) deliver
 - **Business outcome:** Quotes that require deposits can charge via Stripe test cards, webhook handlers mutate lead/quote status, and admin payments tab reflects transactions.
 - **Systems touched:** Stripe test account, local `stripe-cli` forwarding to `/api/stripe/webhook`, DB tables (`payments`, `appointments`), notification fan-out.
 - **Coverage intent:** Once payment UI is gated, tests will drive checkout (hosted link or embedded), trigger stripe-cli webhook fixture, and assert DB + queue side effects.
-- **Preconditions:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, stripe-cli installed in CI image, deterministic quote + customer fixture.
+- **Preconditions:** `STRIPE_SECRET_KEY`, stripe-cli installed in CI image, deterministic quote + customer fixture.
 
 ### Shared Technical Preconditions
 

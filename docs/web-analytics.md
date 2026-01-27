@@ -12,7 +12,7 @@ Website Analytics is a lightweight, first-party event system for the **public si
 Raw events are retained for 30 days; aggregates are stored for reporting.
 
 ## Where to view it
-`/team` → **Marketing** → **Website analytics**
+`/team` -> **Marketing** -> **Website analytics** (tab id: `web-analytics`)
 
 ## How quickly it updates
 Events are batched and flushed periodically; the dashboard should typically update within ~1 minute.
@@ -30,4 +30,3 @@ Also ensure API CORS allows the site origin:
 ## Privacy notes
 - ZIP is bucketed for service-area reporting and should not be stored as a raw ZIP in analytics.
 - No session replay/heatmaps are enabled by this system.
-

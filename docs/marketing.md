@@ -2,13 +2,16 @@
 
 The Marketing section in `/team` is approve-first: it can sync data and generate recommendations, but it never auto-applies changes to Google Ads unless you explicitly approve/apply them.
 
+Where to find it:
+- `/team` -> **Marketing** -> **Google Ads** (tab id: `google-ads`)
+
 ## What it does
 - **Google Ads sync**: pulls campaign/search-term/conversion data into Postgres for reporting.
 - **AI Marketing Analyst**: summarizes performance and proposes actions (negatives, pause candidates, checklists).
 - **Audit trail**: approvals/ignores are logged so you can review what changed and why.
 
 ## How to use (recommended workflow)
-1. In `/team` → **Marketing**, click **Sync now**.
+1. In `/team` -> **Marketing** -> **Google Ads**, click **Sync now**.
 2. Review the 7-day summary (clicks, spend, conversions).
 3. Click **Generate report**.
 4. Approve/ignore recommendations you agree with (keep it manual until you're confident).
@@ -35,4 +38,3 @@ Notes:
 - **401 / unauthorized**: wrong OAuth client, wrong refresh token scope, or the OAuth user lacks access to the Ads account.
 - **CUSTOMER_NOT_FOUND**: wrong `GOOGLE_ADS_CUSTOMER_ID` or using a manager id where an account id is expected.
 - **No data**: new campaigns can take time to populate; also verify spend/impressions in Google Ads UI.
-

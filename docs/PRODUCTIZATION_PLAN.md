@@ -4,7 +4,7 @@ Goal: make the CRM + automations easy to deploy for multiple service businesses 
 
 Product decision:
 - The CRM is the product (config-only onboarding).
-- The marketing site is expected to be customized per customer (or BYO site). The repo’s built-in marketing site can be used as a starter template, but portability should not depend on templating the entire marketing site.
+- The marketing site is expected to be customized per customer (or BYO site). The repo's built-in marketing site can be used as a starter template, but portability should not depend on templating the entire marketing site.
 
 ## Phase 0 — Foundation (Render-first, safe defaults)
 - Keep marketing pages SEO-safe: public branding comes from `NEXT_PUBLIC_COMPANY_*` env vars at build time (no runtime DB fetch on public pages).
@@ -35,7 +35,7 @@ Optional:
 
 ## Phase 3 — Professional UX (Team Console first)
 - Team Console: polish spacing, typography, table layouts, mobile usability, and common workflows.
-- Marketing site: only if/when we want the repo’s template to be a baseline offering.
+- Marketing site: only if/when we want the repo's template to be a baseline offering.
 - Maintain “no perf regressions” for public pages.
 
 ## Phase 4 — Per-user Accounts + Permissions

@@ -1,6 +1,12 @@
 # Outbox Worker
 
-StonegateOS records customer-facing follow-ups (notifications, analytics hooks, etc.) in the `outbox_events` table. A small worker drains that queue so the API stays fast and resilient. The worker also runs the SEO autopublisher on an interval.
+StonegateOS records customer-facing follow-ups (notifications, analytics hooks, etc.) in the `outbox_events` table. A small worker drains that queue so the API stays fast and resilient.
+
+In production, the worker is also responsible for scheduled “background” jobs like:
+- SEO autopublishing
+- Google Ads sync + AI analyst reports
+- Sales autopilot draft/send tasks
+- Call transcription/analysis + coaching summaries
 
 ## Environment
 

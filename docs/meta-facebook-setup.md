@@ -8,11 +8,11 @@ This repo already supports:
 
 ## Endpoints
 
-- Webhook callback URL (Meta App → Webhooks): `https://<API_BASE_URL>/api/webhooks/facebook`
+- Webhook callback URL (Meta App -> Webhooks): `https://<API_BASE_URL>/api/webhooks/facebook`
 - Admin enqueue Ads Insights sync: `POST https://<API_BASE_URL>/api/admin/meta/ads/sync`
 - Admin Ads summary (campaign-level by default): `GET https://<API_BASE_URL>/api/admin/meta/ads/summary?since=YYYY-MM-DD&until=YYYY-MM-DD[&level=ad]`
-  - `level=campaign` (default) → aggregates by campaign
-  - `level=ad` → aggregates by ad (includes `costPerLead` and `costPerConversion` where conversions = scheduled appointments)
+  - `level=campaign` (default) -> aggregates by campaign
+  - `level=ad` -> aggregates by ad (includes `costPerLead` and `costPerConversion` where conversions = scheduled appointments)
 
 ## Required env vars (Render)
 
@@ -23,6 +23,7 @@ API service (`stonegate-api`):
 - `FB_MESSENGER_ACCESS_TOKEN` (optional; if unset we reuse `FB_LEADGEN_ACCESS_TOKEN`)
 - `FB_LEAD_FORM_IDS` (optional comma-separated allowlist of form IDs)
 - `FB_PAGE_ID` (optional fallback for outbound Messenger send)
+- `FB_PAGE_ACCESS_TOKEN` (recommended; used by webhook handlers for sender lookups and outbound send validation)
 
 Note: outbound sends (`message.send`) are processed by the outbox worker in production; ensure the worker has the same `FB_*` env vars.
 
@@ -52,7 +53,7 @@ Admin auth (needed for the `/api/admin/...` endpoints):
 3. System User token (single-company)
    - Create a Business Manager **System User**
    - Assign the Page + Ad Account assets
-   - Grant Leads Access for the Page’s forms
+   - Grant Leads Access for the Page's forms
    - Generate an access token with required permissions (at minimum):
      - `leads_retrieval`
      - `pages_show_list`

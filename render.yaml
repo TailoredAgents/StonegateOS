@@ -148,6 +148,12 @@ services:
         sync: false
       - key: FB_LEADGEN_ACCESS_TOKEN
         sync: false
+      - key: FB_MESSENGER_ACCESS_TOKEN
+        sync: false
+      - key: FB_PAGE_ID
+        sync: false
+      - key: FB_PAGE_ACCESS_TOKEN
+        sync: false
       - key: FB_MARKETING_ACCESS_TOKEN
         sync: false
       - key: FB_AD_ACCOUNT_ID
@@ -198,11 +204,11 @@ services:
         sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
-      - key: STRIPE_WEBHOOK_SECRET
-        sync: false
       - key: OUTBOX_BATCH_SIZE
         sync: false
       - key: OUTBOX_POLL_INTERVAL_MS
+        sync: false
+      - key: CORS_ALLOW_ORIGINS
         sync: false
     buildFilter:
       paths:
@@ -273,6 +279,12 @@ services:
         sync: false
       - key: FB_LEADGEN_ACCESS_TOKEN
         sync: false
+      - key: FB_MESSENGER_ACCESS_TOKEN
+        sync: false
+      - key: FB_PAGE_ID
+        sync: false
+      - key: FB_PAGE_ACCESS_TOKEN
+        sync: false
       - key: FB_MARKETING_ACCESS_TOKEN
         sync: false
       - key: FB_AD_ACCOUNT_ID
@@ -282,6 +294,10 @@ services:
       - key: META_CONVERSIONS_TOKEN
         sync: false
       - key: META_LEAD_EVENT_SOURCE
+        sync: false
+      - key: SEO_AUTOPUBLISH_INTERVAL_MS
+        sync: false
+      - key: SEO_AUTOPUBLISH_DISABLED
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false

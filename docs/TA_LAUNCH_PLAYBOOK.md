@@ -8,11 +8,11 @@ Assumption: **one deployment per company** (separate Render services + separate 
 - Company name + logo + brand colors
 - Primary phone (Twilio number) and support email
 - Business hours + timezone
-- Service area (cities/zip rules) + “out of area” behavior
+- Service area (cities/zip rules) + "out of area" behavior
 - Pricing tiers + discount % + special fees (e.g., mattress fee)
 - Review link (Google)
 - Sales routing (default assignee) + team members
-- AI voice: agent name + tone + any “must say / must not say”
+- AI voice: agent name + tone + any "must say / must not say"
 - Integrations:
   - Twilio creds + webhook URLs configured
   - Meta (optional): page/app creds + webhook verify token
@@ -61,7 +61,7 @@ Planned approach (Phase 1 in `docs/TA_PLATFORM_PLAN.md`):
 ## 5) Configure integrations (per-company)
 
 ### Twilio (required if SMS/calls are used)
-- Confirm the phone number’s webhooks are set to your `api` endpoints (voice + sms + status).
+- Confirm the phone number's webhooks are set to your `api` endpoints (voice + sms + status).
 - Send a test SMS in and verify it appears in Unified Inbox.
 - Place a test inbound call and confirm it routes correctly.
 
@@ -71,12 +71,12 @@ Planned approach (Phase 1 in `docs/TA_PLATFORM_PLAN.md`):
 
 ### Google Ads (optional)
 - Set creds in `api` and `outbox-worker`.
-- In `/team → Marketing`, click **Sync now** and confirm health is green.
+- In `/team` -> **Marketing** -> **Google Ads**, click **Sync now** and confirm health is green.
 
 ## 6) Create team users + roles
 1. Create users for Sales/Ops/Owner roles.
 2. Confirm each role sees only what they should.
-3. Confirm “Assigned to” default matches Company Pack settings.
+3. Confirm "Assigned to" default matches Company Pack settings.
 
 ## 7) QA checklist (must pass before go-live)
 

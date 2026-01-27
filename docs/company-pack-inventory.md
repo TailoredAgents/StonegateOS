@@ -6,7 +6,7 @@ Primary goal: make onboarding a new company deployment mostly **Import Company P
 
 Note: the public marketing site can be customized or replaced per customer. The built-in marketing site supports build-time branding via `NEXT_PUBLIC_COMPANY_*`, but portability should not require a full in-product website builder.
 
-## Inventory summary (what’s currently hardcoded)
+## Inventory summary (what's currently hardcoded)
 
 ### Identity / Branding
 - Company name (“Stonegate”) appears in:

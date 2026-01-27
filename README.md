@@ -12,6 +12,21 @@ StonegateOS is a monorepo for a local service business: a customer-facing websit
 - Outbox worker: drains `outbox_events` and runs scheduled jobs (reminders, SEO autopublish, marketing sync, call analysis/coaching).
 - Integrations: Twilio (SMS + calls), Meta (Lead Ads + Messenger), Google Ads (sync + analyst), optional Google Calendar sync.
 
+## Team Console Tabs (IDs)
+The Team Console is one page (`/team`) with tab IDs in the query string (`/team?tab=...`).
+
+- **Ops**: `myday`, `expenses`, `calendar`, `chat`
+- **Sales**: `quotes`, `pipeline`, `sales-hq`, `outbound`, `partners`, `contacts`, `inbox`, `calendar`
+- **Owner HQ**: `owner`
+- **Marketing**: `google-ads`, `web-analytics`, `seo`
+- **Control**: `commissions`, `policy`, `automation`, `access`, `sales-log`, `audit`, `merge`
+- **Account**: `settings`
+
+Legacy aliases:
+- `tab=marketing` redirects to `tab=google-ads`
+- `tab=quote-builder` and `tab=canvass` redirect to `tab=quotes` (with mode selection)
+- `tab=estimates` is a legacy alias and is remapped to `inbox` (owner) or `myday` (non-owner)
+
 ## Prerequisites
 - Node.js 22.20.0 for local development (see `.nvmrc`). Render is pinned to Node 20 in `render.yaml`.
 - pnpm 9.15.9 (see root `package.json`).
@@ -19,7 +34,7 @@ StonegateOS is a monorepo for a local service business: a customer-facing websit
 
 ## Environment
 1. Copy `.env.example` to `.env` and fill in values.
-2. Set `DATABASE_URL` to your local connection string, for example `postgres://stonegate:stonegate@localhost:5432/stonegate`.
+2. Set `DATABASE_URL` to your local connection string. If you're using `devops/docker-compose.yml`, the defaults are `postgres://myst:myst@localhost:5432/mystos`.
 3. Set `NEXT_PUBLIC_SITE_URL` (site) and `NEXT_PUBLIC_API_BASE_URL` (site) plus `API_BASE_URL` (server actions and API calls) to match your local ports (`http://localhost:3000` and `http://localhost:3001`).
 4. Provide `ADMIN_API_KEY`; this gates admin routes and the team console server actions.
 5. Timezone defaults to Eastern (`America/New_York`) with automatic DST; no env is needed unless you intentionally override `APPOINTMENT_TIMEZONE`.
@@ -121,7 +136,7 @@ The marketing site reads public branding from env at build time (no runtime DB f
 - Set `NEXT_PUBLIC_COMPANY_*` vars in `.env` / Render to change company name, phone, email, logo, and structured data.
 - See `apps/site/src/lib/company.ts` and `.env.example`.
 
-Note: This repo’s marketing site is a starter template. For other businesses, it’s expected you’ll customize or replace the marketing site (BYO site) while keeping the CRM + automations as the reusable product.
+Note: This repo's marketing site is a starter template. For other businesses, it's expected you'll customize or replace the marketing site (BYO site) while keeping the CRM + automations as the reusable product.
 
 Placeholders currently in use:
 - Email: `austin@stonegatejunkremoval.com`
@@ -144,7 +159,7 @@ If deploying Stonegate-branded site/API, ensure:
 ## Payments & Stripe
 - Backfill charges with `pnpm tsx scripts/stripe-backfill.ts` or the admin backfill endpoint.
 - Charges tagged with `appointment_id` metadata in Stripe will auto-attach to the matching appointment.
-- Review and reconcile charges under the Team Console Payments tab (`/team?tab=payments`).
+Note: a dedicated Payments UI tab is not currently enabled; use Owner HQ and Stripe backfill tooling.
 
 ## Quotes
 - Create quotes via the admin API (`POST /api/quotes`) using services and add-ons priced through the pricing engine.
@@ -159,7 +174,7 @@ If deploying Stonegate-branded site/API, ensure:
   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`
   - SMTP credentials: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
 
-You can place these in the monorepo root `.env` or per-app `.env.local` files. Both API and Site load `.env.local`, `.env`, and the monorepo root `.env` at startup.
+For local dev from the repo root (`pnpm -w dev`), a root `.env` is usually sufficient. If you run apps individually, prefer per-app `.env.local` files or exported shell env vars.
 
 ### Team Console Access
 - Visit `/admin/login` to set the admin session cookie, or go directly to `/team` and log in via the UI.
