@@ -9,7 +9,18 @@ const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const VOICE_MODEL = "gpt-4.1-mini";
 const AUTOPUBLISH_LAST_KEY = "blog_autopublish_last";
 const BRIEF_FALLBACK_MODEL = "gpt-4.1-mini";
-const SERVICE_CITIES = ["Canton", "Woodstock", "Marietta", "Acworth", "Kennesaw", "Roswell", "Alpharetta"] as const;
+const SERVICE_CITIES = [
+  "Canton",
+  "Woodstock",
+  "Marietta",
+  "Acworth",
+  "Kennesaw",
+  "Roswell",
+  "Alpharetta",
+  "Holly Springs",
+  "Milton",
+  "Johns Creek"
+] as const;
 const SERVICE_STATE = "GA";
 
 type OpenAIResponsesData = {
