@@ -11,11 +11,25 @@ interface StickyCtaBarProps {
   className?: string;
 }
 
+const FALLBACK_PHONE_E164 = "+14047772631";
+
+function normalizePhoneE164(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return FALLBACK_PHONE_E164;
+  if (trimmed.startsWith("+")) return trimmed;
+  const digits = trimmed.replace(/[^\d]/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  return trimmed;
+}
+
 export function StickyCtaBar({ className }: StickyCtaBarProps) {
   const pathname = usePathname();
   if (pathname === "/book" || pathname.startsWith("/book/") || pathname.startsWith("/quote")) {
     return null;
   }
+
+  const phoneE164 = normalizePhoneE164(process.env["NEXT_PUBLIC_COMPANY_PHONE_E164"] ?? FALLBACK_PHONE_E164);
 
   return (
     <div
@@ -30,14 +44,14 @@ export function StickyCtaBar({ className }: StickyCtaBarProps) {
           variant="ghost"
           className="flex-1 min-h-[48px] rounded-md border border-neutral-300/70 text-base font-semibold text-primary-800 hover:border-primary-300"
         >
-          <a href="tel:+14047772631">Call</a>
+          <a href={`tel:${phoneE164}`}>Call</a>
         </Button>
         <Button
           asChild
           variant="ghost"
           className="flex-1 min-h-[48px] rounded-md border border-neutral-300/70 text-base font-semibold text-primary-800 hover:border-primary-300"
         >
-          <a href="sms:+14047772631">Text</a>
+          <a href={`sms:${phoneE164}`}>Text</a>
         </Button>
         <Suspense
           fallback={

@@ -1,10 +1,12 @@
 import "@/lib/react-internals-polyfill";
 import type { Metadata } from "next";
 import { absoluteUrl, siteUrl } from "@/lib/metadata";
+import { getPublicCompanyProfile } from "@/lib/company";
 import { GoogleTag } from "@/components/GoogleTag";
 import "./globals.css";
 
-const defaultTitle = "Stonegate Junk Removal";
+const company = getPublicCompanyProfile();
+const defaultTitle = company.name;
 const defaultDescription =
   "Fast, reliable junk removal and hauling across North Metro Atlanta. Schedule an on-site estimate and get clutter cleared responsibly with licensed, insured crews.";
 
@@ -12,7 +14,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
     default: defaultTitle,
-    template: "%s | Stonegate Junk Removal"
+    template: `%s | ${defaultTitle}`
   },
   description: defaultDescription,
   openGraph: {

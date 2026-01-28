@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { getAreaBySlug, getPageBySlug, getServiceBySlug } from "./content";
+import { getPublicCompanyProfile } from "./company";
 
-const fallbackTitle = "Stonegate Junk Removal";
+const company = getPublicCompanyProfile();
+const fallbackTitle = company.name;
 const fallbackDescription =
   "Fast, reliable junk removal and hauling across North Metro Atlanta. Schedule an on-site estimate and get clutter cleared responsibly with licensed, insured crews.";
 
@@ -68,7 +70,7 @@ export function createServiceMetadata(slug: string): Metadata {
   const path = `/services/${service.slug}`;
 
   return {
-    title: `${service.title} | Stonegate Junk Removal`,
+    title: service.title,
     description,
     openGraph: {
       title: service.title,
@@ -101,7 +103,7 @@ export function createAreaMetadata(slug: string): Metadata {
   const isIndex = area.slug === "index";
   const path = isIndex ? "/areas" : `/areas/${area.slug}`;
   const description = area.description ?? fallbackDescription;
-  const title = isIndex ? "Stonegate Service Areas" : `${area.title} | Stonegate Service Area`;
+  const title = isIndex ? "Service Areas" : area.title;
 
   return {
     title,

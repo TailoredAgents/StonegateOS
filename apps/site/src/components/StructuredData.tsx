@@ -1,5 +1,6 @@
 import React from "react";
 import { absoluteUrl, siteUrl } from "@/lib/metadata";
+import { getPublicCompanyProfile } from "@/lib/company";
 
 type JsonLd = Record<string, unknown>;
 
@@ -13,9 +14,10 @@ function JsonLdScript({ data }: { data: JsonLd | JsonLd[] }) {
 }
 
 export function SiteStructuredData(): React.ReactElement {
-  const businessName = "Stonegate Junk Removal";
-  const phoneE164 = "+14047772631";
-  const email = "austin@stonegatejunkremoval.com";
+  const company = getPublicCompanyProfile();
+  const businessName = company.name;
+  const phoneE164 = company.phoneE164;
+  const email = company.email;
 
   const sameAs = [
     process.env["NEXT_PUBLIC_GOOGLE_BUSINESS_PROFILE_URL"],
@@ -25,6 +27,8 @@ export function SiteStructuredData(): React.ReactElement {
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value));
 
+  const gbpUrl = process.env["NEXT_PUBLIC_GOOGLE_BUSINESS_PROFILE_URL"]?.trim() || null;
+
   const businessId = `${siteUrl}/#business`;
   const organizationId = `${siteUrl}/#organization`;
 
@@ -33,12 +37,15 @@ export function SiteStructuredData(): React.ReactElement {
     "@type": "Organization",
     name: businessName,
     url: siteUrl,
-    logo: absoluteUrl("/images/brand/Stonegatelogo.png")
+    logo: absoluteUrl(company.logoPath),
+    email,
+    telephone: phoneE164,
+    sameAs: sameAs.length ? sameAs : undefined
   };
 
   const localBusiness = {
     "@context": "https://schema.org",
-    "@type": "WasteRemovalService",
+    "@type": ["LocalBusiness", "WasteRemovalService"],
     "@id": businessId,
     name: businessName,
     url: siteUrl,
@@ -47,14 +54,31 @@ export function SiteStructuredData(): React.ReactElement {
     areaServed: [{ "@type": "State", name: "Georgia" }],
     address: {
       "@type": "PostalAddress",
-      addressLocality: "Woodstock",
-      addressRegion: "GA",
-      addressCountry: "US"
+      addressLocality: company.hqCity,
+      addressRegion: company.hqState,
+      addressCountry: company.hqCountry
     },
     image: [absoluteUrl("/opengraph-image")],
-    logo: absoluteUrl("/images/brand/Stonegatelogo.png"),
+    logo: absoluteUrl(company.logoPath),
     priceRange: "$$",
-    sameAs: sameAs.length ? sameAs : undefined
+    sameAs: sameAs.length ? sameAs : undefined,
+    hasMap: gbpUrl ?? undefined,
+    contactPoint: [
+      {
+        "@type": "ContactPoint",
+        contactType: "customer service",
+        telephone: phoneE164,
+        email
+      }
+    ],
+    openingHoursSpecification: [
+      {
+        "@type": "OpeningHoursSpecification",
+        dayOfWeek: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+        opens: "07:30",
+        closes: "19:30"
+      }
+    ]
   };
 
   const website = {
@@ -65,7 +89,7 @@ export function SiteStructuredData(): React.ReactElement {
     publisher: organization
   };
 
-  return <JsonLdScript data={[website, localBusiness]} />;
+  return <JsonLdScript data={[organization, website, localBusiness]} />;
 }
 
 export function ServiceStructuredData(props: {
@@ -74,8 +98,9 @@ export function ServiceStructuredData(props: {
   path: string;
   faqs?: Array<{ question: string; answer: string }>;
 }): React.ReactElement {
-  const businessName = "Stonegate Junk Removal";
-  const phoneE164 = "+14047772631";
+  const company = getPublicCompanyProfile();
+  const businessName = company.name;
+  const phoneE164 = company.phoneE164;
   const businessId = `${siteUrl}/#business`;
 
   const service = {
@@ -87,7 +112,7 @@ export function ServiceStructuredData(props: {
     areaServed: [{ "@type": "State", name: "Georgia" }],
     provider: {
       "@id": businessId,
-      "@type": "WasteRemovalService",
+      "@type": ["LocalBusiness", "WasteRemovalService"],
       name: businessName,
       url: siteUrl,
       telephone: phoneE164

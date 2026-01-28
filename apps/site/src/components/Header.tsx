@@ -8,6 +8,21 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { Button, cn } from "@myst-os/ui";
 import { PRICING_ESTIMATOR_QUERY_KEYS } from "@/lib/pricing-estimator";
 
+const FALLBACK_COMPANY_NAME = "Stonegate Junk Removal";
+const FALLBACK_PHONE_DISPLAY = "(404) 777-2631";
+const FALLBACK_PHONE_E164 = "+14047772631";
+const FALLBACK_LOGO_PATH = "/images/brand/Stonegatelogo.png";
+
+function normalizePhoneE164(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return FALLBACK_PHONE_E164;
+  if (trimmed.startsWith("+")) return trimmed;
+  const digits = trimmed.replace(/[^\d]/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  return trimmed;
+}
+
 const navItems = [
   { href: "/services", label: "Services" },
   { href: "/contractors", label: "For Contractors" },
@@ -22,6 +37,10 @@ export function Header() {
   const pathname = usePathname();
   const isBookingLanding = pathname === "/book";
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const companyName = process.env["NEXT_PUBLIC_COMPANY_NAME"] ?? FALLBACK_COMPANY_NAME;
+  const phoneE164 = normalizePhoneE164(process.env["NEXT_PUBLIC_COMPANY_PHONE_E164"] ?? FALLBACK_PHONE_E164);
+  const phoneDisplay = process.env["NEXT_PUBLIC_COMPANY_PHONE_DISPLAY"] ?? FALLBACK_PHONE_DISPLAY;
+  const logoPath = process.env["NEXT_PUBLIC_COMPANY_LOGO_PATH"] ?? FALLBACK_LOGO_PATH;
 
   useEffect(() => {
     if (!isMenuOpen) {
@@ -48,8 +67,8 @@ export function Header() {
     <header className="sticky top-0 z-50 border-b border-neutral-300/50 bg-white/95">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4 md:px-10">
         <Link href="/" className="flex items-center gap-2 text-primary-800">
-          <Image src="/images/brand/Stonegatelogo.png" alt="" aria-hidden="true" width={80} height={41} priority />
-          <span className="sr-only">Stonegate Junk Removal</span>
+          <Image src={logoPath} alt="" aria-hidden="true" width={80} height={41} priority />
+          <span className="sr-only">{companyName}</span>
         </Link>
         {!isBookingLanding ? (
           <nav className="hidden items-center gap-6 md:flex">
@@ -81,7 +100,7 @@ export function Header() {
             variant="ghost"
             className="border border-neutral-300/70 text-primary-800 hover:border-primary-300"
           >
-            <a href="tel:+14047772631">{isBookingLanding ? "Call (404) 777-2631" : "Call"}</a>
+            <a href={`tel:${phoneE164}`}>{isBookingLanding ? `Call ${phoneDisplay}` : "Call"}</a>
           </Button>
         </div>
         {isBookingLanding ? (
@@ -90,7 +109,7 @@ export function Header() {
             variant="ghost"
             className="border border-neutral-300/70 text-primary-800 hover:border-primary-300 md:hidden"
           >
-            <a href="tel:+14047772631">Call</a>
+            <a href={`tel:${phoneE164}`}>Call</a>
           </Button>
         ) : (
           <button
@@ -166,7 +185,7 @@ export function Header() {
               size="lg"
               className="w-full border border-neutral-300/70 text-primary-800 hover:border-primary-300"
             >
-              <a href="tel:+14047772631">Call (404) 777-2631</a>
+              <a href={`tel:${phoneE164}`}>Call {phoneDisplay}</a>
             </Button>
           </div>
         </div>

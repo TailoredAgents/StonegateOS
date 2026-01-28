@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { and, desc, eq, gte, isNotNull, lte, sql } from "drizzle-orm";
 import { blogPosts, getDb, seoAgentState } from "@/db";
+import { getCompanyProfilePolicy } from "@/lib/policy";
 import { SEO_TOPICS, type SeoTopic } from "./topics";
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
@@ -364,22 +365,23 @@ async function generateBrief(topic: SeoTopic, apiKey: string, brainModel: string
 async function writePostMarkdown(
   topic: SeoTopic,
   brief: PostBrief,
-  apiKey: string
+  apiKey: string,
+  company: { businessName: string; primaryPhone: string }
 ): Promise<string | null> {
   const internalLinks = buildInternalLinks(topic);
   const serviceCitySentence = `We primarily serve ${SERVICE_CITIES.join(", ")}, ${SERVICE_STATE} (North Metro Atlanta).`;
 
-  const systemPrompt = `You write a helpful local SEO blog post in Markdown for Stonegate Junk Removal.
+  const systemPrompt = `You write a helpful local SEO blog post in Markdown for ${company.businessName}.
   Rules:
   - Output Markdown ONLY.
   - Do NOT include any dollar amounts.
   - Do NOT mention any counties outside Cobb, Cherokee, Fulton, and Bartow.
   - Do NOT invent statistics, legal claims, rankings, or awards.
-  - Mention "Stonegate Junk Removal" in the intro.
+  - Mention "${company.businessName}" in the intro.
   - Include this service-area sentence (once, naturally): "${serviceCitySentence}"
   - Include a short FAQ section (4 Q&As).
   - Include internal links exactly as provided (use [label](url)).
-  - End with a short CTA to book online or call (404) 777-2631.`.trim();
+  - End with a short CTA to book online or call ${company.primaryPhone}.`.trim();
 
   const payload = {
     model: VOICE_MODEL,
@@ -612,6 +614,7 @@ export async function maybeAutopublishBlogPost(
       }
 
       const { topic, nextCursor } = await pickNextTopic(tx as any);
+      const companyProfile = await getCompanyProfilePolicy(tx as any);
       const briefRes = await generateBrief(topic, config.apiKey, config.brainModel);
       if (!briefRes.ok) {
         brainModelUsed = briefRes.modelUsed;
@@ -624,7 +627,10 @@ export async function maybeAutopublishBlogPost(
 
       let markdown: string | null = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const drafted = await writePostMarkdown(topic, brief, config.apiKey);
+        const drafted = await writePostMarkdown(topic, brief, config.apiKey, {
+          businessName: companyProfile.businessName,
+          primaryPhone: companyProfile.primaryPhone
+        });
         if (!drafted) continue;
         if (hasDollarAmounts(drafted)) continue;
         if (includesBannedGeo(drafted)) continue;

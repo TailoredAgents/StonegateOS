@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { Card, Section } from "@myst-os/ui";
 import { absoluteUrl } from "@/lib/metadata";
+import { getPublicCompanyProfile } from "@/lib/company";
 
 type BlogListResponse = {
   ok?: boolean;
@@ -32,11 +33,11 @@ async function fetchPosts() {
 }
 
 export const metadata: Metadata = {
-  title: "Blog | Stonegate Junk Removal",
+  title: "Blog",
   description:
     "Helpful local guides, checklists, and cleanup tips from Stonegate Junk Removal in North Metro Atlanta.",
   openGraph: {
-    title: "Blog | Stonegate Junk Removal",
+    title: "Blog",
     description:
       "Helpful local guides, checklists, and cleanup tips from Stonegate Junk Removal in North Metro Atlanta.",
     url: absoluteUrl("/blog"),
@@ -56,12 +57,13 @@ function fmtDate(value: string | null) {
 
 export default async function Page() {
   const posts = await fetchPosts();
+  const company = getPublicCompanyProfile();
 
   return (
     <Section>
       <div className="mx-auto max-w-4xl space-y-6">
         <header className="space-y-3">
-          <p className="text-label uppercase tracking-[0.28em] text-neutral-500">Stonegate Junk Removal</p>
+          <p className="text-label uppercase tracking-[0.28em] text-neutral-500">{company.name}</p>
           <h1 className="font-display text-display text-primary-800">Blog</h1>
           <p className="text-body text-neutral-600">
             Local cleanout tips, checklists, and pickup prep guides for North Metro Atlanta.

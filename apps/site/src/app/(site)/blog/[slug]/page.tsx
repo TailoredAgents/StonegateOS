@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Card, Section } from "@myst-os/ui";
 import { MarkdownContent } from "@/components/MarkdownContent";
-import { absoluteUrl } from "@/lib/metadata";
+import { absoluteUrl, siteUrl } from "@/lib/metadata";
 
 type BlogPostResponse = {
   ok?: boolean;
@@ -49,12 +49,12 @@ export async function generateMetadata(
   const post = await fetchPost(slug);
   if (!post) {
     return {
-      title: "Blog | Stonegate Junk Removal",
+      title: "Blog",
       alternates: { canonical: absoluteUrl("/blog") }
     };
   }
 
-  const title = post.metaTitle?.trim().length ? post.metaTitle.trim() : `${post.title} | Stonegate Junk Removal`;
+  const title = post.metaTitle?.trim().length ? post.metaTitle.trim() : post.title;
   const description =
     post.metaDescription?.trim().length ? post.metaDescription.trim() : post.excerpt ?? undefined;
   const path = `/blog/${post.slug}`;
@@ -89,18 +89,9 @@ export default async function Page(props: { params: Promise<{ slug: string }> })
     datePublished: post.publishedAt,
     dateModified: post.updatedAt ?? post.publishedAt,
     mainEntityOfPage: absoluteUrl(path),
-    author: {
-      "@type": "Organization",
-      name: "Stonegate Junk Removal"
-    },
-    publisher: {
-      "@type": "Organization",
-      name: "Stonegate Junk Removal",
-      logo: {
-        "@type": "ImageObject",
-        url: absoluteUrl("/images/brand/Stonegatelogo.png")
-      }
-    },
+    image: [absoluteUrl("/opengraph-image")],
+    author: { "@id": `${siteUrl}/#organization` },
+    publisher: { "@id": `${siteUrl}/#organization` },
     description: post.metaDescription ?? post.excerpt ?? undefined
   };
 
