@@ -804,17 +804,12 @@ async function ensureSalesFollowupsForLead(input: {
       }
 
       if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
-        const delayMs = 15_000;
+        const delayMs = 40_000;
         const instantAt = isWithinBusinessHours ? new Date(now.getTime() + delayMs) : clockStart;
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
           payload: { taskId: created.id, mode: "instant" },
           nextAttemptAt: instantAt
-        });
-        await tx.insert(outboxEvents).values({
-          type: "sales.escalation.call",
-          payload: { taskId: created.id, mode: "due" },
-          nextAttemptAt: task.dueAt
         });
       }
     }
@@ -988,17 +983,12 @@ async function ensureSalesFollowupsForContact(input: {
 
       if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
         if (!allowInstantCallEscalation) continue;
-        const delayMs = 15_000;
+        const delayMs = 40_000;
         const instantAt = isWithinBusinessHours ? new Date(now.getTime() + delayMs) : clockStart;
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
           payload: { taskId: created.id, mode: "instant" },
           nextAttemptAt: instantAt
-        });
-        await tx.insert(outboxEvents).values({
-          type: "sales.escalation.call",
-          payload: { taskId: created.id, mode: "due" },
-          nextAttemptAt: task.dueAt
         });
       }
     }
