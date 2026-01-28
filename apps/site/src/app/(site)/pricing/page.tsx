@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { Card, Section } from "@myst-os/ui";
 import { MdxContent } from "@/components/MdxContent";
 import { PricingDumpsterEstimator } from "@/components/PricingDumpsterEstimator";
+import { getPublicCompanyProfile } from "@/lib/company";
 import { getPageBySlug } from "@/lib/content";
 import { createPageMetadata } from "@/lib/metadata";
 
@@ -12,6 +13,8 @@ export default function Page() {
   if (!page) {
     notFound();
   }
+
+  const company = getPublicCompanyProfile();
 
   return (
     <Section>
@@ -28,6 +31,19 @@ export default function Page() {
         </Card>
         <Card tone="outline">
           <MdxContent code={page.body.code} />
+        </Card>
+        <Card tone="outline" className="p-6">
+          <p className="text-sm text-neutral-700">
+            Questions about a pickup or a special item? Call or text{" "}
+            <a className="font-semibold text-primary-800 hover:underline" href={`tel:${company.phoneE164}`}>
+              {company.phoneDisplay}
+            </a>{" "}
+            or email{" "}
+            <a className="font-semibold text-primary-800 hover:underline" href={`mailto:${company.email}`}>
+              {company.email}
+            </a>
+            .
+          </p>
         </Card>
       </div>
     </Section>

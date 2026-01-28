@@ -23,6 +23,19 @@ const SERVICE_CITIES = [
 ] as const;
 const SERVICE_STATE = "GA";
 
+const AREA_SLUGS_BY_TOPIC_CITY_KEY: Record<string, { city: string; slug: string }> = {
+  canton: { city: "Canton", slug: "canton" },
+  woodstock: { city: "Woodstock", slug: "woodstock" },
+  marietta: { city: "Marietta", slug: "marietta" },
+  acworth: { city: "Acworth", slug: "acworth" },
+  kennesaw: { city: "Kennesaw", slug: "kennesaw" },
+  roswell: { city: "Roswell", slug: "roswell" },
+  alpharetta: { city: "Alpharetta", slug: "alpharetta" },
+  "holly-springs": { city: "Holly Springs", slug: "holly-springs" },
+  milton: { city: "Milton", slug: "milton" },
+  "johns-creek": { city: "Johns Creek", slug: "johns-creek" }
+};
+
 type OpenAIResponsesData = {
   output?: Array<{ content?: Array<{ text?: unknown; type?: unknown }> }>;
   output_text?: unknown;
@@ -269,12 +282,28 @@ function getCodeVersion(): string | null {
 }
 
 function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string }> {
+  let cityAreaLink: { label: string; url: string } | null = null;
+  if (typeof topic.key === "string" && topic.key.startsWith("junk-removal-") && topic.key.endsWith("-ga")) {
+    const cityKey = topic.key.replace(/^junk-removal-/, "").replace(/-ga$/, "");
+    const match = AREA_SLUGS_BY_TOPIC_CITY_KEY[cityKey];
+    if (match) {
+      cityAreaLink = {
+        label: `Junk removal in ${match.city}, ${SERVICE_STATE}`,
+        url: `/areas/${match.slug}`
+      };
+    }
+  }
+
   const links: Array<{ label: string; url: string }> = [
     { label: "Book online", url: "/book" },
     { label: "Pricing", url: "/pricing" },
     { label: "Services", url: "/services" },
     { label: "Service areas", url: "/areas" }
   ];
+
+  if (cityAreaLink) {
+    links.push(cityAreaLink);
+  }
 
   const serviceLabels: Record<string, string> = {
     furniture: "Furniture removal",

@@ -6,7 +6,7 @@ import { absoluteUrl } from "@/lib/metadata";
 import { getOrderedServices } from "../../../lib/content";
 
 const description =
-  "Explore our most‑requested junk removal services. Every visit includes careful handling, responsible disposal, and a make‑it‑right guarantee.";
+  "Explore our most-requested junk removal services. Every visit includes careful handling, responsible disposal, and a make-it-right guarantee.";
 
 export const metadata: Metadata = {
   title: "Junk removal services built for Georgia homes",
@@ -56,11 +56,11 @@ export default function ServicesIndex() {
             <div>
               <h2 className="text-2xl font-semibold text-primary-800">For Contractors</h2>
               <p className="mt-2 text-body text-neutral-600">
-                Jobsite debris haul‑off and light demo support for remodels, siding, roofing, and build‑outs.
+                Jobsite debris haul-off and light demo support for remodels, siding, roofing, and build-outs.
               </p>
             </div>
             <Button variant="ghost" asChild className="mt-auto w-fit px-0 text-accent-700 hover:text-accent-800">
-              <Link href="/contractors">Contractor haul‑off details{" ->"}</Link>
+              <Link href="/contractors">Contractor haul-off details{" ->"}</Link>
             </Button>
           </Card>
         </div>

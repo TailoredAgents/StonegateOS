@@ -142,3 +142,25 @@ export function ServiceStructuredData(props: {
   const data = faqPage ? [service, faqPage] : [service];
   return <JsonLdScript data={data} />;
 }
+
+export function BreadcrumbStructuredData(props: {
+  items: Array<{ name: string; path: string }>;
+}): React.ReactElement | null {
+  const items = (props.items ?? []).filter((item) => item.name.trim().length && item.path.trim().length);
+  if (!items.length) return null;
+
+  return (
+    <JsonLdScript
+      data={{
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        itemListElement: items.map((item, idx) => ({
+          "@type": "ListItem",
+          position: idx + 1,
+          name: item.name,
+          item: absoluteUrl(item.path)
+        }))
+      }}
+    />
+  );
+}
