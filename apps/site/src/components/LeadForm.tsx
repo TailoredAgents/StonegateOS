@@ -1137,7 +1137,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <Button type="submit" className="w-full justify-center sm:w-auto">
-                Continue
+                Continue to my price
               </Button>
               <p className="text-xs text-neutral-500">Next: enter your contact info to see your price.</p>
             </div>
