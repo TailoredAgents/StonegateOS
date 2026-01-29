@@ -682,7 +682,7 @@ async function ensureSalesFollowupsForLead(input: {
     .limit(1);
 
   if (!row?.leadId) return;
-  if (row.stage === "won" || row.stage === "lost" || row.stage === "quoted") return;
+  if (row.stage === "won" || row.stage === "lost") return;
 
   const assigneeId = row.salespersonMemberId ?? config.defaultAssigneeMemberId;
   if (!row.salespersonMemberId) {
@@ -812,6 +812,11 @@ async function ensureSalesFollowupsForLead(input: {
           payload: { taskId: created.id, mode: "instant" },
           nextAttemptAt: instantAt
         });
+        console.info("[outbox] sales.escalation.scheduled", {
+          taskId: created.id,
+          mode: "instant",
+          nextAttemptAt: instantAt.toISOString()
+        });
       }
     }
 
@@ -850,7 +855,7 @@ async function ensureSalesFollowupsForContact(input: {
     .limit(1);
 
   if (!contactRow?.contactId) return;
-  if (contactRow.stage === "won" || contactRow.stage === "lost" || contactRow.stage === "quoted") return;
+  if (contactRow.stage === "won" || contactRow.stage === "lost") return;
 
   const assigneeId = contactRow.salespersonMemberId ?? config.defaultAssigneeMemberId;
   if (!contactRow.salespersonMemberId) {
