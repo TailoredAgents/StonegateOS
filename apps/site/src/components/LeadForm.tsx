@@ -65,7 +65,7 @@ const SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = 
   { id: "half_trailer", label: "One room", hint: "One room, or about half a garage" },
   { id: "three_quarter_trailer", label: "A couple rooms", hint: "2+ rooms, or a large garage pile" },
   { id: "big_cleanout", label: "Big cleanout", hint: "Full garage, basement, or multiple rooms" },
-  { id: "not_sure", label: "Not sure", hint: "No problem â€” photos help tighten the estimate" }
+  { id: "not_sure", label: "Not sure", hint: "No problem. Photos help tighten the estimate." }
 ];
 
 const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
@@ -870,7 +870,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       </div>
 
       <h2 className="font-display text-2xl text-primary-800">Show us what you need gone</h2>
-      <p className="mt-1 text-sm text-neutral-600">Answer 3 quick questions to see your price before booking.</p>
+      <p className="mt-1 text-sm text-neutral-600">Answer a few quick questions to see your price before booking.</p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700">
         <a
@@ -1137,9 +1137,9 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <Button type="submit" className="w-full justify-center sm:w-auto">
-                See my instant quote
+                Continue
               </Button>
-              <p className="text-xs text-neutral-500">You'll see your price before booking. No obligation.</p>
+              <p className="text-xs text-neutral-500">Next: enter your contact info to see your price.</p>
             </div>
           </div>
         ) : (
