@@ -4,7 +4,7 @@ import * as React from "react";
 import { Button, cn } from "@myst-os/ui";
 import { Check, MessageSquare, ShieldCheck, Star } from "lucide-react";
 import { useUTM } from "../lib/use-utm";
-import { trackGoogleAdsConversion } from "../lib/google-ads";
+import { setGoogleAdsEnhancedConversionsUserData, trackGoogleAdsConversion } from "../lib/google-ads";
 import { trackWebEvent } from "../lib/web-analytics";
 
 declare global {
@@ -218,6 +218,35 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     });
   }, []);
 
+  const applyEnhancedConversionsUserData = React.useCallback(
+    (input: {
+      name: string;
+      phone: string;
+      email?: string;
+      address?: { addressLine1?: string; city?: string; region?: string; postalCode?: string; country?: string };
+    }) => {
+      const fullName = input.name.trim();
+      const parts = fullName.split(/\s+/u).filter(Boolean);
+      const firstName = parts[0] ?? "";
+      const lastName = parts.length >= 2 ? parts.slice(1).join(" ") : "";
+
+      setGoogleAdsEnhancedConversionsUserData({
+        email: input.email,
+        phone_number: input.phone,
+        address: {
+          first_name: firstName || undefined,
+          last_name: lastName || undefined,
+          street: input.address?.addressLine1,
+          city: input.address?.city,
+          region: input.address?.region,
+          postal_code: input.address?.postalCode,
+          country: input.address?.country
+        }
+      });
+    },
+    []
+  );
+
   const formatSlotLabel = React.useCallback(
     (iso: string) => {
       const date = new Date(iso);
@@ -403,6 +432,16 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         tier: data.quote.displayTierLabel,
         reason: data.quote.reasonSummary,
         needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate)
+      });
+      applyEnhancedConversionsUserData({
+        name,
+        phone,
+        email,
+        address: {
+          postalCode: zip.trim(),
+          region: "GA",
+          country: "US"
+        }
       });
       trackGoogleLeadConversion(nextQuoteId);
       if (analyticsPath === "/book") {
@@ -817,6 +856,18 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       if (!trackedScheduleRef.current) {
         trackedScheduleRef.current = true;
         trackMetaEvent("Schedule", { content_name: "Book pickup", content_category: "junk_removal" });
+        applyEnhancedConversionsUserData({
+          name,
+          phone,
+          email,
+          address: {
+            addressLine1: addressLine1.trim(),
+            city: city.trim(),
+            region: stateField.trim().toUpperCase(),
+            postalCode: postalCode.trim(),
+            country: "US"
+          }
+        });
         trackGoogleContactConversion();
       }
     } catch (err) {
