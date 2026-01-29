@@ -1028,7 +1028,9 @@ function hashSha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-async function buildLeadAlertMessage(leadId: string): Promise<{ text: string; phone: string | null } | null> {
+async function buildLeadAlertMessage(
+  leadId: string
+): Promise<{ text: string; phone: string | null; mediaUrls: string[] | null } | null> {
   const db = getDb();
   const [row] = await db
     .select({
@@ -1045,7 +1047,8 @@ async function buildLeadAlertMessage(leadId: string): Promise<{ text: string; ph
       city: properties.city,
       state: properties.state,
       postalCode: properties.postalCode,
-      instantQuoteAiResult: instantQuotes.aiResult
+      instantQuoteAiResult: instantQuotes.aiResult,
+      instantQuotePhotoUrls: instantQuotes.photoUrls
     })
     .from(leads)
     .leftJoin(contacts, eq(leads.contactId, contacts.id))
@@ -1107,9 +1110,24 @@ async function buildLeadAlertMessage(leadId: string): Promise<{ text: string; ph
     source ? `Source: ${source}` : null
   ].filter(Boolean);
 
+  const mediaUrls = Array.isArray(row.instantQuotePhotoUrls)
+    ? row.instantQuotePhotoUrls
+        .filter((url): url is string => typeof url === "string" && url.trim().length > 0)
+        .filter((url) => {
+          try {
+            const parsed = new URL(url);
+            return parsed.protocol === "https:" || parsed.protocol === "http:";
+          } catch {
+            return false;
+          }
+        })
+        .slice(0, 4)
+    : [];
+
   return {
     text: pieces.join(" | "),
-    phone
+    phone,
+    mediaUrls: mediaUrls.length ? mediaUrls : null
   };
 }
 
@@ -2605,7 +2623,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
       let lastFailure: string | null = null;
 
       for (const recipient of pending) {
-        const result = await sendSmsMessage(recipient, message.text);
+        const result = await sendSmsMessage(recipient, message.text, message.mediaUrls);
         if (result.ok) {
           sentSet.add(recipient);
           await recordProviderSuccessSafe("sms");
