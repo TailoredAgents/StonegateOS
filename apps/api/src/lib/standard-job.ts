@@ -136,11 +136,18 @@ function normalizeJobTypes(input: string[]): string[] {
 
 function estimateLoadFraction(perceivedSize: string | null | undefined): number | null {
   switch ((perceivedSize ?? "").toLowerCase()) {
+    case "single_item":
     case "few_items":
+      return 0.25;
+    case "min_pickup":
       return 0.25;
     case "small_area":
       return 0.5;
+    case "half_trailer":
+      return 0.5;
     case "one_room_or_half_garage":
+      return 0.75;
+    case "three_quarter_trailer":
       return 0.75;
     case "big_cleanout":
       return 1.5;

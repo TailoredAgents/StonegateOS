@@ -73,7 +73,20 @@ const RequestSchema = z.object({
       .optional()
       .default([]),
     perceivedSize: z
-      .enum(["few_items", "small_area", "one_room_or_half_garage", "big_cleanout", "not_sure"])
+      .enum([
+        // New customer-facing size categories
+        "single_item",
+        "min_pickup",
+        "half_trailer",
+        "three_quarter_trailer",
+        // Backwards-compatible legacy categories
+        "few_items",
+        "small_area",
+        "one_room_or_half_garage",
+        // Shared
+        "big_cleanout",
+        "not_sure"
+      ])
       .optional()
       .default("not_sure"),
     notes: z.string().optional().nullable(),
@@ -124,17 +137,17 @@ const QuoteResultSchema = z
         path: ["priceLow"]
       });
     }
-    if (value.priceLow < 75 || value.priceHigh < 75) {
+    if (value.priceLow < 100 || value.priceHigh < 100) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "prices must be >= 75",
+        message: "prices must be >= 100",
         path: ["priceLow"]
       });
     }
   });
 
 const VOLUME_PRICING = {
-  singleItem: 75,
+  singleItem: 100,
   quarter: 150,
   half: 300,
   threeQuarter: 450,
@@ -174,9 +187,22 @@ function getQuoteBounds(job: JobInput): QuoteBounds {
   let minHighUnits: number | undefined;
 
   switch (job.perceivedSize) {
+    case "single_item":
     case "few_items":
       minUnits = 0;
       maxUnits = 0;
+      break;
+    case "min_pickup":
+      minUnits = 1;
+      maxUnits = 1;
+      break;
+    case "half_trailer":
+      minUnits = 2;
+      maxUnits = 2;
+      break;
+    case "three_quarter_trailer":
+      minUnits = 3;
+      maxUnits = 3;
       break;
     case "small_area":
       minUnits = 1;
@@ -187,9 +213,9 @@ function getQuoteBounds(job: JobInput): QuoteBounds {
       maxUnits = 3;
       break;
     case "big_cleanout":
-      minUnits = 3;
-      maxUnits = 6;
-      minHighUnits = 5;
+      minUnits = 4;
+      maxUnits = 8;
+      minHighUnits = 6;
       break;
     case "not_sure":
     default:
@@ -235,6 +261,7 @@ function formatFraction(units: number): string {
 function formatTierLabel(minUnits: number, maxUnits: number): string {
   if (minUnits === maxUnits) {
     if (minUnits === 0) return "Single item pickup";
+    if (minUnits === 1) return "Minimum pickup (2-4 items)";
     if (minUnits <= 4) return minUnits === 4 ? "Full trailer" : `${formatFraction(minUnits)} trailer`;
     return `${formatLoadCount(minUnits)} trailer loads`;
   }
@@ -861,7 +888,7 @@ Stonegate uses one large 7x16x4 dump trailer. Pricing is based on either a singl
 Do NOT add charges for weight, stairs, distance, time, urgency, heavy/bulky items, or difficulty.
 
 Base prices:
-- Single item pickup: $75
+- Single item pickup: $100
 - 1/4 trailer: $150
 - 1/2 trailer: $300
 - 3/4 trailer: $450
@@ -875,10 +902,11 @@ Rules:
 - Respond ONLY with JSON: { "loadFractionEstimate": number, "priceLow": number, "priceHigh": number, "displayTierLabel": string, "reasonSummary": string, "needsInPersonEstimate": boolean }
 - Always return priceLow and priceHigh. They may be equal if the range is very tight.
 - Map perceived size to trailer fraction:
-  few_items -> single item (or up to 1/4 trailer if needed)
-  small_area -> 0.25-0.5
-  one_room_or_half_garage -> 0.5-0.75
-  big_cleanout -> 0.75-1.0+ (can be multiple loads)
+  single_item -> single item pickup
+  min_pickup -> 1/4 trailer minimum pickup
+  half_trailer -> 1/2 trailer
+  three_quarter_trailer -> 3/4 trailer
+  big_cleanout -> 1.0-2.0 trailer loads (can be multiple loads)
   not_sure -> err on 0.5+ unless clearly tiny
 - Use the base prices above; do not invent unrelated pricing schemes.
 - If the job seems uncertain or could be multiple loads, widen the range and set needsInPersonEstimate=true.

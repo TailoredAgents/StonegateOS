@@ -167,9 +167,13 @@ function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string
 
   const fallbackUnits = (() => {
     switch (quote.perceivedSize) {
+      case "single_item":
       case "few_items":
+      case "min_pickup":
       case "small_area":
         return 2;
+      case "half_trailer":
+      case "three_quarter_trailer":
       case "one_room_or_half_garage":
         return 3;
       case "big_cleanout":

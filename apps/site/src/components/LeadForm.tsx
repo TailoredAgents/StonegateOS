@@ -33,7 +33,13 @@ type AvailabilitySlot = { startAt: string; endAt: string; reason: string };
 type AvailabilityDay = { date: string; slots: AvailabilitySlot[] };
 
 type Timeframe = "today" | "tomorrow" | "this_week" | "flexible";
-type PerceivedSize = "few_items" | "small_area" | "one_room_or_half_garage" | "big_cleanout" | "not_sure";
+type PerceivedSize =
+  | "single_item"
+  | "min_pickup"
+  | "half_trailer"
+  | "three_quarter_trailer"
+  | "big_cleanout"
+  | "not_sure";
 type JunkType =
   | "furniture"
   | "appliances"
@@ -54,11 +60,12 @@ const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
 ];
 
 const SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
-  { id: "few_items", label: "Just a few items", hint: "1-3 items" },
-  { id: "small_area", label: "One small area", hint: "Corner, closet, or small pile" },
-  { id: "one_room_or_half_garage", label: "One full room or half a garage", hint: "" },
+  { id: "single_item", label: "Single item", hint: "One small/medium item (chair, dresser, small appliance)" },
+  { id: "min_pickup", label: "2-4 items (minimum pickup)", hint: "A few items, or 1-2 bulky pieces" },
+  { id: "half_trailer", label: "1/2 trailer", hint: "One room or half a garage" },
+  { id: "three_quarter_trailer", label: "3/4 trailer", hint: "Large pile or multiple rooms" },
   { id: "big_cleanout", label: "Big cleanout", hint: "Full garage, basement, or multiple rooms" },
-  { id: "not_sure", label: "Not sure yet", hint: "" }
+  { id: "not_sure", label: "Not sure", hint: "Photos help tighten the estimate" }
 ];
 
 const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
@@ -80,7 +87,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   const [types, setTypes] = React.useState<JunkType[]>([]);
   const [otherSelected, setOtherSelected] = React.useState(false);
   const [otherDetails, setOtherDetails] = React.useState("");
-  const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize>("few_items");
+  const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize>("min_pickup");
   const [notes, setNotes] = React.useState("");
   const [showNotes, setShowNotes] = React.useState(false);
   const [zip, setZip] = React.useState("");
@@ -1051,8 +1058,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-neutral-800">How big does the job feel?</label>
-              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How big does the job feel?">
+              <label className="text-sm font-semibold text-neutral-800">About how much do we need to haul?</label>
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="About how much do we need to haul?">
                 {SIZE_OPTIONS.map((opt) => {
                   const selected = perceivedSize === opt.id;
                   return (
