@@ -10,6 +10,7 @@ import {
   appointments,
   automationSettings,
   leads,
+  instantQuotes,
   contacts,
   crmTasks,
   policySettings,
@@ -1037,18 +1038,37 @@ async function buildLeadAlertMessage(leadId: string): Promise<{ text: string; ph
       phoneE164: contacts.phoneE164,
       email: contacts.email,
       source: leads.source,
+      instantQuoteId: leads.instantQuoteId,
+      quoteEstimate: leads.quoteEstimate,
+      quoteId: leads.quoteId,
       addressLine1: properties.addressLine1,
       city: properties.city,
       state: properties.state,
-      postalCode: properties.postalCode
+      postalCode: properties.postalCode,
+      instantQuoteAiResult: instantQuotes.aiResult
     })
     .from(leads)
     .leftJoin(contacts, eq(leads.contactId, contacts.id))
     .leftJoin(properties, eq(leads.propertyId, properties.id))
+    .leftJoin(instantQuotes, eq(leads.instantQuoteId, instantQuotes.id))
     .where(eq(leads.id, leadId))
     .limit(1);
 
   if (!row) return null;
+
+  const formatCurrency = (value: number): string => {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return String(value);
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0
+      }).format(amount);
+    } catch {
+      return `$${Math.round(amount)}`;
+    }
+  };
 
   const name = [row.firstName, row.lastName].filter(Boolean).join(" ").trim();
   const phone = row.phoneE164 ?? row.phone ?? null;
@@ -1058,9 +1078,31 @@ async function buildLeadAlertMessage(leadId: string): Promise<{ text: string; ph
   const address = addressParts.length ? addressParts.join(", ") : null;
   const source = typeof row.source === "string" && row.source.length ? row.source : null;
 
+  const quoteFromInstant = (() => {
+    const ai = isRecord(row.instantQuoteAiResult) ? row.instantQuoteAiResult : null;
+    const low = typeof ai?.["priceLow"] === "number" ? ai["priceLow"] : null;
+    const high = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
+    const tier = typeof ai?.["displayTierLabel"] === "string" ? ai["displayTierLabel"].trim() : "";
+    const needsEstimate = ai?.["needsInPersonEstimate"] === true;
+    if (typeof low !== "number" || !Number.isFinite(low)) return null;
+    if (typeof high !== "number" || !Number.isFinite(high)) return null;
+    const priceLabel = low === high ? formatCurrency(low) : `${formatCurrency(low)}-${formatCurrency(high)}`;
+    const tierLabel = tier.length ? ` (${tier})` : "";
+    const estimateFlag = needsEstimate ? " (needs estimate)" : "";
+    return `Quote: ${priceLabel}${tierLabel}${estimateFlag}`;
+  })();
+
+  const quoteFromEstimate =
+    typeof row.quoteEstimate === "string" && row.quoteEstimate.trim().length
+      ? `Quote: ${formatCurrency(Number(row.quoteEstimate))}`
+      : null;
+
+  const quote = quoteFromInstant ?? quoteFromEstimate ?? null;
+
   const pieces = [
     name ? `New lead: ${name}` : "New lead received",
     phone ? `Phone: ${phone}` : null,
+    quote,
     address ? `Address: ${address}` : null,
     source ? `Source: ${source}` : null
   ].filter(Boolean);
