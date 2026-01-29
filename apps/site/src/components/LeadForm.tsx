@@ -60,12 +60,12 @@ const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
 ];
 
 const SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
-  { id: "single_item", label: "Single item", hint: "One small/medium item (chair, dresser, small appliance)" },
-  { id: "min_pickup", label: "2-4 items (minimum pickup)", hint: "A few items, or 1-2 bulky pieces" },
-  { id: "half_trailer", label: "1/2 trailer", hint: "One room or half a garage" },
-  { id: "three_quarter_trailer", label: "3/4 trailer", hint: "Large pile or multiple rooms" },
+  { id: "single_item", label: "Single item", hint: "One item (chair, mattress, small appliance)" },
+  { id: "min_pickup", label: "A few items (2-4 items)", hint: "A small pile, or 1-2 bulky pieces" },
+  { id: "half_trailer", label: "One room", hint: "One room, or about half a garage" },
+  { id: "three_quarter_trailer", label: "A couple rooms", hint: "2+ rooms, or a large garage pile" },
   { id: "big_cleanout", label: "Big cleanout", hint: "Full garage, basement, or multiple rooms" },
-  { id: "not_sure", label: "Not sure", hint: "Photos help tighten the estimate" }
+  { id: "not_sure", label: "Not sure", hint: "No problem â€” photos help tighten the estimate" }
 ];
 
 const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
@@ -1058,8 +1058,8 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-neutral-800">About how much do we need to haul?</label>
-              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="About how much do we need to haul?">
+              <label className="text-sm font-semibold text-neutral-800">How much junk are we hauling away?</label>
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How much junk are we hauling away?">
                 {SIZE_OPTIONS.map((opt) => {
                   const selected = perceivedSize === opt.id;
                   return (
