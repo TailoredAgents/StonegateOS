@@ -35,7 +35,7 @@ const navItems = [
 
 export function Header() {
   const pathname = usePathname();
-  const isBookingLanding = pathname === "/book";
+  const isBookingLanding = pathname === "/book" || pathname === "/bookbrush";
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const companyName = process.env["NEXT_PUBLIC_COMPANY_NAME"] ?? FALLBACK_COMPANY_NAME;
   const phoneE164 = normalizePhoneE164(process.env["NEXT_PUBLIC_COMPANY_PHONE_E164"] ?? FALLBACK_PHONE_E164);
