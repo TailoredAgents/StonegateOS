@@ -1033,6 +1033,20 @@ function hashSha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>): Promise<number> {
+  const envRaw = process.env["INSTANT_QUOTE_DISCOUNT"];
+  const envValue = envRaw ? Number(envRaw) : Number.NaN;
+  if (Number.isFinite(envValue) && envValue > 0 && envValue < 1) {
+    return envValue;
+  }
+
+  const profile = await getCompanyProfilePolicy(db);
+  const percent = profile.discountPercent;
+  if (!Number.isFinite(percent)) return 0;
+  if (percent <= 0 || percent >= 1) return 0;
+  return percent;
+}
+
 async function buildLeadAlertMessage(
   leadId: string
 ): Promise<{ text: string; phone: string | null; mediaUrls: string[] | null } | null> {
@@ -1085,6 +1099,7 @@ async function buildLeadAlertMessage(
     .filter((part) => part.length > 0);
   const address = addressParts.length ? addressParts.join(", ") : null;
   const source = typeof row.source === "string" && row.source.length ? row.source : null;
+  const discountPercent = await resolveInstantQuoteDiscountPercent(db);
 
   const quoteFromInstant = (() => {
     const ai = isRecord(row.instantQuoteAiResult) ? row.instantQuoteAiResult : null;
@@ -1094,10 +1109,28 @@ async function buildLeadAlertMessage(
     const needsEstimate = ai?.["needsInPersonEstimate"] === true;
     if (typeof low !== "number" || !Number.isFinite(low)) return null;
     if (typeof high !== "number" || !Number.isFinite(high)) return null;
-    const priceLabel = low === high ? formatCurrency(low) : `${formatCurrency(low)}-${formatCurrency(high)}`;
+
+    const formatRange = (a: number, b: number): string =>
+      a === b ? formatCurrency(a) : `${formatCurrency(a)}-${formatCurrency(b)}`;
+
     const tierLabel = tier.length ? ` (${tier})` : "";
     const estimateFlag = needsEstimate ? " (needs estimate)" : "";
-    return `Quote: ${priceLabel}${tierLabel}${estimateFlag}`;
+
+    // Keep lead alert consistent with what the customer sees on-site (discounted range when enabled).
+    // This runs near real-time; if discount policy changes later, old lead alerts may differ from older quotes.
+    if (discountPercent > 0 && discountPercent < 1) {
+      const discountMultiplier = 1 - discountPercent;
+      const discountedLow = Math.max(0, Math.round(low * discountMultiplier));
+      const discountedHigh = Math.max(discountedLow, Math.round(high * discountMultiplier));
+      const discountLabel = `${Math.round(discountPercent * 100)}% off`;
+      const baseLabel = formatRange(low, high);
+      const discountedLabel = formatRange(discountedLow, discountedHigh);
+      if (discountedLabel !== baseLabel) {
+        return `Quote: ${discountedLabel}${tierLabel} (${discountLabel}; was ${baseLabel})${estimateFlag}`;
+      }
+    }
+
+    return `Quote: ${formatRange(low, high)}${tierLabel}${estimateFlag}`;
   })();
 
   const quoteFromEstimate =
