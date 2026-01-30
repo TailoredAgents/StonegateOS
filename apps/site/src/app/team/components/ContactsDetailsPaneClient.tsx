@@ -6,6 +6,7 @@ import { PIPELINE_STAGES, badgeClassForPipelineStage, labelForPipelineStage } fr
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { teamButtonClass } from "./team-ui";
 import { ContactNameEditorClient } from "./ContactNameEditorClient";
+import { ContactPhoneEditorClient } from "./ContactPhoneEditorClient";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
 import { SubmitButton } from "@/components/SubmitButton";
@@ -218,7 +219,10 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
             <span className="rounded-full bg-slate-100 px-3 py-1">Assigned: {assignedLabel}</span>
           </div>
         </div>
-        <ContactNameEditorClient contactId={contact.id} contactName={contact.name} />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <ContactPhoneEditorClient contactId={contact.id} phone={contact.phone} email={contact.email} />
+          <ContactNameEditorClient contactId={contact.id} contactName={contact.name} />
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
