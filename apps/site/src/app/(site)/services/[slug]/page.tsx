@@ -103,7 +103,9 @@ export default async function ServicePage({ params }: ServicePageProps) {
           </div>
         ) : null}
         <Button asChild>
-          <Link href="/estimate">Schedule an on-site estimate</Link>
+          <Link href={service.slug === "brush-clearing" ? "/bookbrush" : "/estimate"}>
+            {service.slug === "brush-clearing" ? "Get brush clearing estimate" : "Schedule an on-site estimate"}
+          </Link>
         </Button>
       </div>
     </Section>

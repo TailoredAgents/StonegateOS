@@ -25,7 +25,7 @@ function normalizePhoneE164(value: string): string {
 
 export function StickyCtaBar({ className }: StickyCtaBarProps) {
   const pathname = usePathname();
-  if (pathname === "/book" || pathname.startsWith("/book/") || pathname.startsWith("/quote")) {
+  if (pathname === "/book" || pathname === "/bookbrush" || pathname.startsWith("/book/") || pathname.startsWith("/quote")) {
     return null;
   }
 

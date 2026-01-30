@@ -34,7 +34,7 @@ const RESPONSE_DELAY_MAX_MS = 30_000;
 function fallbackResponse(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("price") || m.includes("cost") || m.includes("quote") || m.includes("estimate"))
-    return "We price by load size. Single item pickup starts at $75, quarter load $150, half load $300, 3/4 load $450, and a full load $600. We’ll confirm the exact price on-site.";
+    return "We price by load size. Single item pickup is $100, minimum pickup (2â€“4 items) is $150, half load $300, 3/4 load $450, and a full load $600. Weâ€™ll confirm the exact price on-site.";
   if (m.includes("mattress") || m.includes("paint") || m.includes("tire"))
     return "Base pricing is by volume. Some items have dump pass-through fees (for example, mattresses/box springs are +$40 each).";
   if (m.includes("insurance") || m.includes("licensed")) return "Yes - Stonegate is licensed and insured. COIs available on request.";
@@ -43,7 +43,7 @@ function fallbackResponse(message: string): string {
 
 export function ChatBot() {
   const pathname = usePathname();
-  if (pathname === "/book" || pathname.startsWith("/book/") || pathname.startsWith("/quote")) {
+  if (pathname === "/book" || pathname === "/bookbrush" || pathname.startsWith("/book/") || pathname.startsWith("/quote")) {
     return null;
   }
 
