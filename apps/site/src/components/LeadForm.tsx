@@ -56,6 +56,8 @@ type BrushScope =
   | "small_saplings"
   | "downed_branches"
   | "storm_debris";
+type BrushPrimary = BrushScope | "other";
+type BrushDifficulty = "easy" | "moderate" | "hard" | "not_sure";
 
 const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
   { id: "furniture", label: "Furniture" },
@@ -76,13 +78,13 @@ const JUNK_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string 
   { id: "not_sure", label: "Not sure", hint: "No problem. Photos help tighten the estimate." }
 ];
 
-const BRUSH_SCOPE_OPTIONS: Array<{ id: BrushScope; label: string }> = [
-  { id: "light_brush", label: "Light brush" },
-  { id: "overgrowth", label: "Overgrowth / thick brush" },
-  { id: "weeds_vines", label: "Weeds / vines" },
-  { id: "small_saplings", label: "Small saplings" },
-  { id: "downed_branches", label: "Downed branches" },
-  { id: "storm_debris", label: "Storm debris" }
+const BRUSH_PRIMARY_OPTIONS: Array<{ id: BrushScope; label: string; hint: string }> = [
+  { id: "overgrowth", label: "Overgrowth / thick brush", hint: "Thick brush, tangled growth, etc." },
+  { id: "weeds_vines", label: "Weeds / vines", hint: "Vines, weeds, kudzu, etc." },
+  { id: "light_brush", label: "Light brush", hint: "Light brush or small patches" },
+  { id: "downed_branches", label: "Downed branches", hint: "Branches, limbs, storm cleanup" },
+  { id: "storm_debris", label: "Storm debris", hint: "Mixed yard debris after a storm" },
+  { id: "small_saplings", label: "Small saplings", hint: "Small trees / saplings (may need estimate)" }
 ];
 
 const BRUSH_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
@@ -94,16 +96,11 @@ const BRUSH_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string
   { id: "not_sure", label: "Not sure", hint: "No problem. Photos help us tighten the estimate." }
 ];
 
-const BRUSH_DENSITY_OPTIONS: Array<{ id: "light" | "medium" | "heavy"; label: string }> = [
-  { id: "light", label: "Light" },
-  { id: "medium", label: "Medium" },
-  { id: "heavy", label: "Heavy" }
-];
-
-const BRUSH_ACCESS_OPTIONS: Array<{ id: "easy" | "tight" | "not_sure"; label: string }> = [
-  { id: "easy", label: "Easy access" },
-  { id: "tight", label: "Tight / limited access" },
-  { id: "not_sure", label: "Not sure" }
+const BRUSH_DIFFICULTY_OPTIONS: Array<{ id: BrushDifficulty; label: string; hint: string }> = [
+  { id: "easy", label: "Easy", hint: "Open access, mostly flat, light/medium brush" },
+  { id: "moderate", label: "Moderate", hint: "Some thick spots, light slope, normal access" },
+  { id: "hard", label: "Hard", hint: "Very thick, steep, tight access, or lots of saplings" },
+  { id: "not_sure", label: "Not sure", hint: "No problem — photos help us confirm" }
 ];
 
 const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
@@ -131,11 +128,9 @@ export function LeadForm({
   const [otherSelected, setOtherSelected] = React.useState(false);
   const [otherDetails, setOtherDetails] = React.useState("");
   const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize>("min_pickup");
-  const [brushScope, setBrushScope] = React.useState<BrushScope[]>(["overgrowth"]);
-  const [brushOtherSelected, setBrushOtherSelected] = React.useState(false);
+  const [brushPrimary, setBrushPrimary] = React.useState<BrushPrimary>("overgrowth");
   const [brushOtherDetails, setBrushOtherDetails] = React.useState("");
-  const [brushDensity, setBrushDensity] = React.useState<"light" | "medium" | "heavy">("medium");
-  const [brushAccess, setBrushAccess] = React.useState<"easy" | "tight" | "not_sure">("not_sure");
+  const [brushDifficulty, setBrushDifficulty] = React.useState<BrushDifficulty>("not_sure");
   const [brushHaulAway, setBrushHaulAway] = React.useState(true);
   const [notes, setNotes] = React.useState("");
   const [showNotes, setShowNotes] = React.useState(false);
@@ -356,10 +351,6 @@ export function LeadForm({
     setTypes((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
   };
 
-  const toggleBrushScope = (id: BrushScope) => {
-    setBrushScope((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
-  };
-
   const handlePhotos = async (files: FileList | null) => {
     if (!files) return;
     const selected = Array.from(files).slice(0, 4);
@@ -429,7 +420,7 @@ export function LeadForm({
 
       const otherLine = !isBrush && otherSelected && otherDetails.trim().length > 0 ? `Other: ${otherDetails.trim()}` : "";
       const brushOtherLine =
-        isBrush && brushOtherSelected && brushOtherDetails.trim().length > 0 ? `Other: ${brushOtherDetails.trim()}` : "";
+        isBrush && brushPrimary === "other" && brushOtherDetails.trim().length > 0 ? `Other: ${brushOtherDetails.trim()}` : "";
       const combinedNotes = [notes.trim(), otherLine, brushOtherLine].filter((v) => v.length > 0).join("\n");
       const quoteEndpoint = isBrush ? `${apiBase}/api/brush-quote` : `${apiBase}/api/junk-quote`;
       const res = await fetch(quoteEndpoint, {
@@ -441,15 +432,14 @@ export function LeadForm({
                 source: "public_site",
                 contact: { name: name.trim(), phone: phone.trim(), timeframe },
                 job: {
-                  scope: brushScope,
+                  primary: brushPrimary,
                   perceivedSize,
-                  density: brushDensity,
-                  access: brushAccess,
+                  difficulty: brushDifficulty,
                   haulAway: brushHaulAway,
                   notes: combinedNotes || undefined,
                   zip: zip.trim(),
                   photoUrls: photos,
-                  otherDetails: brushOtherSelected ? brushOtherDetails.trim() || undefined : undefined
+                  otherDetails: brushPrimary === "other" ? brushOtherDetails.trim() || undefined : undefined
                 },
                 utm
               }
@@ -1046,18 +1036,17 @@ export function LeadForm({
               setError("Pick at least one type of junk.");
               return;
             }
-            if (isBrush && !brushScope.length && !brushOtherSelected) {
-              setError("Pick at least one thing to clear.");
+            if (isBrush && brushPrimary === "other" && brushOtherDetails.trim().length < 3) {
+              setError("Please describe what you need cleared.");
               return;
             }
             const baseMeta = isBrush
               ? {
-                  scopeCount: brushScope.length + (brushOtherSelected ? 1 : 0),
-                  otherSelected: brushOtherSelected,
+                  primary: brushPrimary,
+                  otherSelected: brushPrimary === "other",
                   otherHasDetails: brushOtherDetails.trim().length > 0,
                   perceivedSize,
-                  density: brushDensity,
-                  access: brushAccess,
+                  difficulty: brushDifficulty,
                   haulAway: brushHaulAway,
                   hasPhotos: photos.length > 0,
                   photoCount: photos.length,
@@ -1088,74 +1077,70 @@ export function LeadForm({
           <div className="space-y-4">
             {isBrush ? (
               <div>
-                <label className="text-sm font-semibold text-neutral-800">What do you need cleared?</label>
-                <p className="text-xs text-neutral-500">Choose all that apply</p>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {BRUSH_SCOPE_OPTIONS.map((opt) => {
-                    const selected = brushScope.includes(opt.id);
-                    const checkboxId = `brush-scope-${opt.id}`;
+                <label className="text-sm font-semibold text-neutral-800">What are we clearing?</label>
+                <p className="text-xs text-neutral-500">Pick the best match</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="What are we clearing?">
+                  {BRUSH_PRIMARY_OPTIONS.map((opt) => {
+                    const selected = brushPrimary === opt.id;
                     return (
-                      <label
+                      <button
                         key={opt.id}
-                        htmlFor={checkboxId}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setBrushPrimary(opt.id)}
                         className={cn(
-                          "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
+                          "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
                           selected
-                            ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
-                            : "border-neutral-200 bg-white text-neutral-700"
+                            ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                            : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
                         )}
                       >
-                        <input
-                          id={checkboxId}
-                          type="checkbox"
-                          className="sr-only"
-                          checked={selected}
-                          onChange={() => toggleBrushScope(opt.id)}
-                          aria-label={opt.label}
-                        />
                         <span
                           className={cn(
-                            "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                            "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
                             selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
                           )}
                           aria-hidden="true"
                         >
                           <Check className="h-3.5 w-3.5" strokeWidth={3} />
                         </span>
-                        <span>{opt.label}</span>
-                      </label>
+                        <div className="space-y-0.5">
+                          <div className="font-semibold text-neutral-900">{opt.label}</div>
+                          <div className="text-xs text-neutral-500">{opt.hint}</div>
+                        </div>
+                      </button>
                     );
                   })}
-                  <label
-                    htmlFor="brush-scope-other"
+
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={brushPrimary === "other"}
+                    onClick={() => setBrushPrimary("other")}
                     className={cn(
-                      "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition sm:col-span-2",
-                      brushOtherSelected
-                        ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
-                        : "border-neutral-200 bg-white text-neutral-700"
+                      "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition sm:col-span-2",
+                      brushPrimary === "other"
+                        ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                        : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
                     )}
                   >
-                    <input
-                      id="brush-scope-other"
-                      type="checkbox"
-                      className="sr-only"
-                      checked={brushOtherSelected}
-                      onChange={() => setBrushOtherSelected((prev) => !prev)}
-                      aria-label="Other (describe below)"
-                    />
                     <span
                       className={cn(
-                        "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                        brushOtherSelected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                        "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                        brushPrimary === "other" ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
                       )}
                       aria-hidden="true"
                     >
                       <Check className="h-3.5 w-3.5" strokeWidth={3} />
                     </span>
-                    <span>Other (describe below)</span>
-                  </label>
+                    <div className="space-y-0.5">
+                      <div className="font-semibold text-neutral-900">Other</div>
+                      <div className="text-xs text-neutral-500">Tell us what you need cleared</div>
+                    </div>
+                  </button>
                 </div>
-                {brushOtherSelected ? (
+                {brushPrimary === "other" ? (
                   <textarea
                     rows={2}
                     value={brushOtherDetails}
@@ -1250,9 +1235,13 @@ export function LeadForm({
 
             <div className="space-y-2">
               <label htmlFor="lead-photos" className="text-sm font-semibold text-neutral-800">
-                Add 1-4 photos for the most accurate quote
+                {isBrush ? "Add 1-4 photos for the most accurate estimate" : "Add 1-4 photos for the most accurate quote"}
               </label>
-              <p className="text-xs text-neutral-500">Optional — photos help us price it faster and more accurately.</p>
+              <p className="text-xs text-neutral-500">
+                {isBrush
+                  ? "Recommended — photos help us tighten the range. Without photos, we may need an on-site estimate."
+                  : "Optional — photos help us price it faster and more accurately."}
+              </p>
               <input
                 id="lead-photos"
                 type="file"
@@ -1336,19 +1325,19 @@ export function LeadForm({
             {isBrush ? (
               <>
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-neutral-800">How thick is the brush?</label>
-                  <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="How thick is the brush?">
-                    {BRUSH_DENSITY_OPTIONS.map((opt) => {
-                      const selected = brushDensity === opt.id;
+                  <label className="text-sm font-semibold text-neutral-800">How difficult is the clearing?</label>
+                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How difficult is the clearing?">
+                    {BRUSH_DIFFICULTY_OPTIONS.map((opt) => {
+                      const selected = brushDifficulty === opt.id;
                       return (
                         <button
                           key={opt.id}
                           type="button"
                           role="radio"
                           aria-checked={selected}
-                          onClick={() => setBrushDensity(opt.id)}
+                          onClick={() => setBrushDifficulty(opt.id)}
                           className={cn(
-                            "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
+                            "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
                             selected
                               ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
                               : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
@@ -1356,49 +1345,17 @@ export function LeadForm({
                         >
                           <span
                             className={cn(
-                              "flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                              "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
                               selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
                             )}
                             aria-hidden="true"
                           >
-                            <Check className="h-3 w-3" strokeWidth={3} />
+                            <Check className="h-3.5 w-3.5" strokeWidth={3} />
                           </span>
-                          <span className="font-semibold text-neutral-900">{opt.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-neutral-800">Access to the area</label>
-                  <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Access to the area">
-                    {BRUSH_ACCESS_OPTIONS.map((opt) => {
-                      const selected = brushAccess === opt.id;
-                      return (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          onClick={() => setBrushAccess(opt.id)}
-                          className={cn(
-                            "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
-                            selected
-                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
-                            )}
-                            aria-hidden="true"
-                          >
-                            <Check className="h-3 w-3" strokeWidth={3} />
-                          </span>
-                          <span className="font-semibold text-neutral-900">{opt.label}</span>
+                          <div className="space-y-0.5">
+                            <div className="font-semibold text-neutral-900">{opt.label}</div>
+                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                          </div>
                         </button>
                       );
                     })}

@@ -54,14 +54,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-const BrushScopeSchema = z.enum([
+const BrushPrimarySchema = z.enum([
   "light_brush",
   "overgrowth",
   "weeds_vines",
   "small_saplings",
   "downed_branches",
-  "storm_debris"
+  "storm_debris",
+  "other"
 ]);
+
+const BrushDifficultySchema = z.enum(["easy", "moderate", "hard", "not_sure"]);
 
 const RequestSchema = z.object({
   source: z.string().optional().default("public_site"),
@@ -71,13 +74,12 @@ const RequestSchema = z.object({
     timeframe: z.enum(["today", "tomorrow", "this_week", "flexible"]).optional().default("flexible")
   }),
   job: z.object({
-    scope: z.array(BrushScopeSchema).optional().default([]),
+    primary: BrushPrimarySchema.optional().default("overgrowth"),
     perceivedSize: z
       .enum(["single_item", "min_pickup", "half_trailer", "three_quarter_trailer", "big_cleanout", "not_sure"])
       .optional()
       .default("not_sure"),
-    density: z.enum(["light", "medium", "heavy"]).optional().default("medium"),
-    access: z.enum(["easy", "tight", "not_sure"]).optional().default("not_sure"),
+    difficulty: BrushDifficultySchema.optional().default("not_sure"),
     haulAway: z.boolean().optional().default(true),
     otherDetails: z.string().optional().nullable(),
     notes: z.string().optional().nullable(),
@@ -156,33 +158,31 @@ function getBaseTier(perceivedSize: string): { low: number; high: number; label:
 
 function applyBrushModifiers(input: {
   tier: { low: number; high: number; label: string; load: number };
-  density: "light" | "medium" | "heavy";
-  access: "easy" | "tight" | "not_sure";
+  difficulty: "easy" | "moderate" | "hard" | "not_sure";
   haulAway: boolean;
 }): { low: number; high: number; load: number } {
-  const densityMult = input.density === "heavy" ? 1.25 : input.density === "light" ? 0.9 : 1.0;
-  const accessMult = input.access === "tight" ? 1.15 : 1.0;
+  const difficultyMult =
+    input.difficulty === "hard" ? 1.25 : input.difficulty === "easy" ? 0.9 : input.difficulty === "not_sure" ? 1.1 : 1.0;
   const haulMult = input.haulAway ? 1.0 : 0.85;
 
-  const low = input.tier.low * densityMult * accessMult * haulMult;
-  const high = input.tier.high * densityMult * accessMult * haulMult;
-  const load = input.tier.load * (input.density === "heavy" ? 1.1 : 1.0);
+  const low = input.tier.low * difficultyMult * haulMult;
+  const high = input.tier.high * difficultyMult * haulMult;
+  const load = input.tier.load * (input.difficulty === "hard" ? 1.1 : input.difficulty === "easy" ? 0.95 : 1.0);
 
   return { low, high, load };
 }
 
 function decideNeedsEstimate(input: {
   perceivedSize: string;
-  scope: string[];
-  density: string;
-  access: string;
+  primary: string;
+  difficulty: string;
   photoCount: number;
 }): boolean {
   if (input.perceivedSize === "big_cleanout" || input.perceivedSize === "not_sure") return true;
-  if (input.density === "heavy") return true;
-  if (input.access === "tight") return true;
-  if (input.scope.includes("small_saplings")) return true;
+  if (input.difficulty === "hard") return true;
+  if (input.primary === "small_saplings") return true;
   if (input.photoCount <= 0 && input.perceivedSize !== "single_item") return true;
+  if (input.photoCount <= 0 && input.difficulty === "not_sure") return true;
   return false;
 }
 
@@ -216,10 +216,9 @@ async function getQuoteFromAi(
   }
 
   const jobForAi = {
-    scope: body.job.scope,
+    primary: body.job.primary,
     perceivedSize: body.job.perceivedSize,
-    density: body.job.density,
-    access: body.job.access,
+    difficulty: body.job.difficulty,
     haulAway: body.job.haulAway,
     zip: body.job.zip,
     otherDetails:
@@ -358,17 +357,15 @@ export async function POST(request: NextRequest): Promise<Response> {
     const tier = getBaseTier(body.job.perceivedSize);
     const modified = applyBrushModifiers({
       tier,
-      density: body.job.density,
-      access: body.job.access,
+      difficulty: body.job.difficulty,
       haulAway: body.job.haulAway
     });
 
     const photoCount = Array.isArray(body.job.photoUrls) ? body.job.photoUrls.length : 0;
     const needsEstimate = decideNeedsEstimate({
       perceivedSize: body.job.perceivedSize,
-      scope: body.job.scope,
-      density: body.job.density,
-      access: body.job.access,
+      primary: body.job.primary,
+      difficulty: body.job.difficulty,
       photoCount
     });
 
@@ -404,6 +401,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     };
 
     const db = getDb();
+    const primaryType = body.job.primary === "other" ? "brush_other" : body.job.primary;
     const [quoteRow] = await db
       .insert(instantQuotes)
       .values({
@@ -412,7 +410,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         contactPhone: body.contact.phone.trim(),
         timeframe: body.contact.timeframe,
         zip: body.job.zip.trim(),
-        jobTypes: ["brush_clearing", ...body.job.scope],
+        jobTypes: ["brush_clearing", primaryType],
         perceivedSize: body.job.perceivedSize,
         notes: body.job.notes ?? null,
         photoUrls: body.job.photoUrls ?? [],
@@ -464,8 +462,8 @@ export async function POST(request: NextRequest): Promise<Response> {
           const notesParts = [
             body.job.notes ?? null,
             otherDetails ? `Other: ${otherDetails}` : null,
-            `Brush density: ${body.job.density}`,
-            `Access: ${body.job.access}`,
+            `Brush type: ${primaryType}`,
+            `Difficulty: ${body.job.difficulty}`,
             `Haul away: ${body.job.haulAway ? "yes" : "no"}`
           ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
 
@@ -474,7 +472,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             .values({
               contactId: contact.id,
               propertyId: property.id,
-              servicesRequested: ["brush_clearing", ...body.job.scope],
+              servicesRequested: ["brush_clearing", primaryType],
               notes: notesParts.length ? notesParts.join("\n") : null,
               status: "new",
               source: "brush_quote",
@@ -490,10 +488,9 @@ export async function POST(request: NextRequest): Promise<Response> {
                 instantQuoteId: quoteId,
                 timeframe: body.contact.timeframe,
                 zip: body.job.zip.trim(),
-                scope: body.job.scope,
+                primary: body.job.primary,
                 perceivedSize: body.job.perceivedSize,
-                density: body.job.density,
-                access: body.job.access,
+                difficulty: body.job.difficulty,
                 haulAway: body.job.haulAway,
                 notes: body.job.notes ?? null,
                 otherDetails,
@@ -583,4 +580,3 @@ export async function POST(request: NextRequest): Promise<Response> {
     return corsJson({ error: "server_error" }, null, { status: 500 });
   }
 }
-
