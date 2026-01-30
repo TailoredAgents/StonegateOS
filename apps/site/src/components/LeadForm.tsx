@@ -911,9 +911,13 @@ export function LeadForm({
       const data = (await res.json().catch(() => null)) as { startAt?: string | null } | null;
       const bookedAt = typeof data?.startAt === "string" && data.startAt.length ? data.startAt : selectedSlotStartAt;
       setBookingStatus("success");
-      setBookingMessage(
-        `You're booked for ${formatSlotLabel(bookedAt)}. We'll text${email.trim().length ? " (and email)" : ""} you a confirmation.`
-      );
+      setBookingMessage(() => {
+        const delivery = `We\u2019ll text${email.trim().length ? " (and email)" : ""} you a confirmation.`;
+        if (isBrush && quoteState.status === "ready" && quoteState.needsInPersonEstimate) {
+          return `Time requested for ${formatSlotLabel(bookedAt)} (pending confirmation). ${delivery}`;
+        }
+        return `You're booked for ${formatSlotLabel(bookedAt)}. ${delivery}`;
+      });
       setHoldStatus("idle");
       if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
         trackWebEvent({
@@ -1623,11 +1627,13 @@ export function LeadForm({
                   </div>
                 ) : null}
                 <div className="text-xs text-neutral-600">
-                  We&apos;ll confirm the exact price on-site before we start.
+                  {isBrush && quoteState.needsInPersonEstimate
+                    ? "This is a ballpark range. We\u2019ll call/text to confirm details and finalize before we arrive."
+                    : "We\u2019ll confirm the exact price on-site before we start."}
                 </div>
                   <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
                     <div className="text-xs font-semibold text-neutral-700">
-                      {isBrush ? "Book this clearing" : "Book this pickup"}
+                      {isBrush && quoteState.needsInPersonEstimate ? "Request a time (pending confirmation)" : isBrush ? "Book this clearing" : "Book this pickup"}
                     </div>
                     <div className="grid gap-2 md:grid-cols-2">
                       <input
@@ -1870,9 +1876,11 @@ export function LeadForm({
                     >
                       {bookingStatus === "loading"
                         ? "Booking..."
-                        : isBrush
-                          ? "Book this clearing"
-                          : "Book this pickup"}
+                        : isBrush && quoteState.status === "ready" && quoteState.needsInPersonEstimate
+                          ? "Request this time"
+                          : isBrush
+                            ? "Book this clearing"
+                            : "Book this pickup"}
                     </Button>
                     <Button asChild variant="secondary" className="justify-center">
                       <a href="tel:+14047772631" aria-label="Call to confirm and book">

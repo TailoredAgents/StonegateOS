@@ -158,14 +158,14 @@ function getBaseTier(perceivedSize: string): { low: number; high: number; label:
   }
 }
 
-function getHandClearingBaseTier(perceivedSize: string): { low: number; high: number; label: string; load: number } {
+function getSmallJobLaneTier(perceivedSize: string): { low: number; high: number; label: string; load: number } {
   switch (perceivedSize) {
     case "single_item":
-      return { low: 450, high: 650, label: "Small patch (hand-clearing)", load: 0.25 };
+      return { low: 450, high: 850, label: "Small patch", load: 0.25 };
     case "min_pickup":
-      return { low: 550, high: 850, label: "Fence line (hand-clearing)", load: 0.5 };
+      return { low: 550, high: 1050, label: "Fence line / side yard", load: 0.5 };
     default:
-      return { low: 650, high: 1100, label: "Brush clearing (hand-clearing)", load: 0.75 };
+      return { low: 650, high: 1400, label: "Brush clearing", load: 1.0 };
   }
 }
 
@@ -195,28 +195,31 @@ function getHaulAwayAddOn(perceivedSize: string): number {
     case "single_item":
       return 200;
     case "min_pickup":
-      return 400;
+      return 350;
     case "half_trailer":
-      return 600;
+      return 500;
     case "three_quarter_trailer":
-      return 850;
+      return 650;
     case "big_cleanout":
-      return 1250;
-    default:
       return 850;
+    default:
+      return 650;
   }
 }
 
-function shouldUseHandClearingMode(input: {
+function shouldUseSmallJobLane(input: {
   perceivedSize: string;
   difficulty: string;
   primary: string;
   access: string;
 }): boolean {
-  // Business choice: default to machine pricing for safety. Only allow hand-clearing on truly tight access + small/easy jobs.
-  if (input.access !== "tight_gate") return false;
+  // Business choice: default to standard pricing for safety.
+  // Allow a competitive lane only for truly small, non-hard jobs.
+  if (input.access === "standard_gate") return false;
+  if (input.access === "not_sure") return false;
   if (input.perceivedSize !== "single_item" && input.perceivedSize !== "min_pickup") return false;
   if (input.difficulty === "hard") return false;
+  if (input.difficulty === "not_sure") return false;
   if (input.primary === "small_saplings") return false;
   return true;
 }
@@ -227,11 +230,13 @@ function decideNeedsEstimate(input: {
   difficulty: string;
   access: string;
   photoCount: number;
+  haulAway: boolean;
 }): boolean {
   if (input.perceivedSize === "big_cleanout" || input.perceivedSize === "not_sure") return true;
   if (input.difficulty === "hard") return true;
   if (input.primary === "small_saplings") return true;
   if (input.access === "not_sure") return true;
+  if (input.haulAway && input.perceivedSize !== "single_item" && input.perceivedSize !== "min_pickup") return true;
   if (input.photoCount <= 0 && input.perceivedSize !== "single_item") return true;
   if (input.photoCount <= 0 && input.difficulty === "not_sure") return true;
   return false;
@@ -406,13 +411,13 @@ export async function POST(request: NextRequest): Promise<Response> {
       );
     }
 
-    const useHandClearingMode = shouldUseHandClearingMode({
+    const useSmallJobLane = shouldUseSmallJobLane({
       perceivedSize: body.job.perceivedSize,
       difficulty: body.job.difficulty,
       primary: body.job.primary,
       access: body.job.access
     });
-    const tier = useHandClearingMode ? getHandClearingBaseTier(body.job.perceivedSize) : getBaseTier(body.job.perceivedSize);
+    const tier = useSmallJobLane ? getSmallJobLaneTier(body.job.perceivedSize) : getBaseTier(body.job.perceivedSize);
     const modified = applyBrushModifiers({
       tier,
       difficulty: body.job.difficulty
@@ -424,11 +429,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       primary: body.job.primary,
       difficulty: body.job.difficulty,
       access: body.job.access,
-      photoCount
+      photoCount,
+      haulAway: body.job.haulAway
     });
 
-    const minLowFloor = useHandClearingMode ? (body.job.haulAway ? 650 : 450) : body.job.haulAway ? 850 : 650;
-    const minHighFloor = useHandClearingMode ? (body.job.haulAway ? 850 : 650) : body.job.haulAway ? 1100 : 850;
+    const minLowFloor = useSmallJobLane ? (body.job.haulAway ? 650 : 450) : body.job.haulAway ? 850 : 650;
+    const minHighFloor = useSmallJobLane ? (body.job.haulAway ? 850 : 650) : body.job.haulAway ? 1100 : 850;
 
     const haulAddOn = body.job.haulAway ? getHaulAwayAddOn(body.job.perceivedSize) : 0;
     const pricedLow = modified.low + haulAddOn;
