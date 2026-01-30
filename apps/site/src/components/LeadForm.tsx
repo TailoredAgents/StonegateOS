@@ -119,6 +119,7 @@ const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
 ];
 
 const GOOGLE_ADS_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_LEAD_SEND_TO"] ?? "";
+const GOOGLE_ADS_BRUSH_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_BRUSH_LEAD_SEND_TO"] ?? "";
 const GOOGLE_ADS_CONTACT_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO"] ?? "";
 const GOOGLE_REVIEW_URL = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_URL"] ?? "https://g.page/r/Ce6kQH50C8_dEAI/review";
 const GOOGLE_REVIEW_RATING = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_RATING"] ?? "5.0";
@@ -260,16 +261,17 @@ export function LeadForm({
   }, []);
 
   const trackGoogleLeadConversion = React.useCallback((quoteId: string | null) => {
-    if (!GOOGLE_ADS_LEAD_SEND_TO) return;
+    const sendTo = isBrush ? GOOGLE_ADS_BRUSH_LEAD_SEND_TO : GOOGLE_ADS_LEAD_SEND_TO;
+    if (!sendTo) return;
     if (!quoteId) return;
     if (trackedLeadQuoteIdRef.current === quoteId) return;
     trackedLeadQuoteIdRef.current = quoteId;
-    trackGoogleAdsConversion(GOOGLE_ADS_LEAD_SEND_TO, {
+    trackGoogleAdsConversion(sendTo, {
       value: 1,
       currency: "USD",
       transaction_id: quoteId
     });
-  }, []);
+  }, [isBrush]);
 
   const applyEnhancedConversionsUserData = React.useCallback(
     (input: {
