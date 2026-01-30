@@ -142,34 +142,56 @@ function clamp(value: number, min: number, max: number): number {
 function getBaseTier(perceivedSize: string): { low: number; high: number; label: string; load: number } {
   switch (perceivedSize) {
     case "single_item":
-      return { low: 250, high: 450, label: "Small patch", load: 0.25 };
+      return { low: 650, high: 1100, label: "Small patch", load: 0.25 };
     case "min_pickup":
-      return { low: 350, high: 650, label: "Fence line / side yard", load: 0.5 };
+      return { low: 850, high: 1600, label: "Fence line / side yard", load: 0.5 };
     case "half_trailer":
-      return { low: 550, high: 950, label: "Backyard section", load: 0.75 };
+      return { low: 1200, high: 2400, label: "Backyard section", load: 0.75 };
     case "three_quarter_trailer":
-      return { low: 750, high: 1250, label: "Most of a yard", load: 1.0 };
+      return { low: 2200, high: 4200, label: "Most of a yard", load: 1.0 };
     case "big_cleanout":
-      return { low: 1000, high: 2000, label: "Full lot / heavy clearing", load: 1.5 };
+      return { low: 3800, high: 7500, label: "Full lot / heavy clearing", load: 1.5 };
     default:
-      return { low: 600, high: 1400, label: "Brush clearing", load: 1.0 };
+      return { low: 1200, high: 2800, label: "Brush clearing", load: 1.0 };
   }
 }
 
 function applyBrushModifiers(input: {
   tier: { low: number; high: number; label: string; load: number };
   difficulty: "easy" | "moderate" | "hard" | "not_sure";
-  haulAway: boolean;
 }): { low: number; high: number; load: number } {
   const difficultyMult =
-    input.difficulty === "hard" ? 1.25 : input.difficulty === "easy" ? 0.9 : input.difficulty === "not_sure" ? 1.1 : 1.0;
-  const haulMult = input.haulAway ? 1.0 : 0.85;
+    input.difficulty === "hard"
+      ? 1.4
+      : input.difficulty === "easy"
+        ? 0.95
+        : input.difficulty === "not_sure"
+          ? 1.15
+          : 1.0;
 
-  const low = input.tier.low * difficultyMult * haulMult;
-  const high = input.tier.high * difficultyMult * haulMult;
-  const load = input.tier.load * (input.difficulty === "hard" ? 1.1 : input.difficulty === "easy" ? 0.95 : 1.0);
+  const low = input.tier.low * difficultyMult;
+  const high = input.tier.high * difficultyMult;
+  const load = input.tier.load * (input.difficulty === "hard" ? 1.1 : input.difficulty === "easy" ? 0.97 : 1.0);
 
   return { low, high, load };
+}
+
+function getHaulAwayAddOn(perceivedSize: string): number {
+  // Flat add-on is more realistic than a % discount since disposal/haul cost behaves like a fixed cost.
+  switch (perceivedSize) {
+    case "single_item":
+      return 250;
+    case "min_pickup":
+      return 450;
+    case "half_trailer":
+      return 650;
+    case "three_quarter_trailer":
+      return 850;
+    case "big_cleanout":
+      return 1250;
+    default:
+      return 850;
+  }
 }
 
 function decideNeedsEstimate(input: {
@@ -357,8 +379,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     const tier = getBaseTier(body.job.perceivedSize);
     const modified = applyBrushModifiers({
       tier,
-      difficulty: body.job.difficulty,
-      haulAway: body.job.haulAway
+      difficulty: body.job.difficulty
     });
 
     const photoCount = Array.isArray(body.job.photoUrls) ? body.job.photoUrls.length : 0;
@@ -369,9 +390,16 @@ export async function POST(request: NextRequest): Promise<Response> {
       photoCount
     });
 
+    const minLowFloor = body.job.haulAway ? 850 : 650;
+    const minHighFloor = body.job.haulAway ? 1100 : 850;
+
+    const haulAddOn = body.job.haulAway ? getHaulAwayAddOn(body.job.perceivedSize) : 0;
+    const pricedLow = modified.low + haulAddOn;
+    const pricedHigh = modified.high + haulAddOn;
+
     const bounds = {
-      minLow: clamp(roundToNearest(modified.low, 25), 150, 10_000),
-      maxHigh: clamp(roundToNearest(modified.high, 25), 200, 10_000),
+      minLow: clamp(roundToNearest(pricedLow, 25), minLowFloor, 10_000),
+      maxHigh: clamp(roundToNearest(pricedHigh, 25), minHighFloor, 10_000),
       tierLabel: tier.label,
       load: clamp(modified.load, 0.25, 2.5),
       needsEstimate
