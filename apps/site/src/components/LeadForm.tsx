@@ -58,6 +58,7 @@ type BrushScope =
   | "storm_debris";
 type BrushPrimary = BrushScope | "other";
 type BrushDifficulty = "easy" | "moderate" | "hard" | "not_sure";
+type BrushAccess = "open" | "standard_gate" | "tight_gate" | "not_sure";
 
 const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
   { id: "furniture", label: "Furniture" },
@@ -103,6 +104,13 @@ const BRUSH_DIFFICULTY_OPTIONS: Array<{ id: BrushDifficulty; label: string; hint
   { id: "not_sure", label: "Not sure", hint: "No problem — photos help us confirm" }
 ];
 
+const BRUSH_ACCESS_OPTIONS: Array<{ id: BrushAccess; label: string; hint: string }> = [
+  { id: "open", label: "Open access (6ft+)", hint: "Equipment can reach the area" },
+  { id: "standard_gate", label: "Standard gate (4ft)", hint: "Typical backyard gate" },
+  { id: "tight_gate", label: "Tight gate (3ft)", hint: "Narrow access (may be hand-clearing)" },
+  { id: "not_sure", label: "Not sure", hint: "No problem — photos help us confirm" }
+];
+
 const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
   { id: "today", label: "Today" },
   { id: "tomorrow", label: "Tomorrow" },
@@ -131,6 +139,7 @@ export function LeadForm({
   const [brushPrimary, setBrushPrimary] = React.useState<BrushPrimary>("overgrowth");
   const [brushOtherDetails, setBrushOtherDetails] = React.useState("");
   const [brushDifficulty, setBrushDifficulty] = React.useState<BrushDifficulty>("not_sure");
+  const [brushAccess, setBrushAccess] = React.useState<BrushAccess>("not_sure");
   const [brushHaulAway, setBrushHaulAway] = React.useState(true);
   const [notes, setNotes] = React.useState("");
   const [showNotes, setShowNotes] = React.useState(false);
@@ -435,6 +444,7 @@ export function LeadForm({
                   primary: brushPrimary,
                   perceivedSize,
                   difficulty: brushDifficulty,
+                  access: brushAccess,
                   haulAway: brushHaulAway,
                   notes: combinedNotes || undefined,
                   zip: zip.trim(),
@@ -1047,6 +1057,7 @@ export function LeadForm({
                   otherHasDetails: brushOtherDetails.trim().length > 0,
                   perceivedSize,
                   difficulty: brushDifficulty,
+                  access: brushAccess,
                   haulAway: brushHaulAway,
                   hasPhotos: photos.length > 0,
                   photoCount: photos.length,
@@ -1324,6 +1335,44 @@ export function LeadForm({
 
             {isBrush ? (
               <>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-neutral-800">Can equipment access the area?</label>
+                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Can equipment access the area?">
+                    {BRUSH_ACCESS_OPTIONS.map((opt) => {
+                      const selected = brushAccess === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setBrushAccess(opt.id)}
+                          className={cn(
+                            "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
+                            selected
+                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                            )}
+                            aria-hidden="true"
+                          >
+                            <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                          </span>
+                          <div className="space-y-0.5">
+                            <div className="font-semibold text-neutral-900">{opt.label}</div>
+                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-semibold text-neutral-800">How difficult is the clearing?</label>
                   <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How difficult is the clearing?">

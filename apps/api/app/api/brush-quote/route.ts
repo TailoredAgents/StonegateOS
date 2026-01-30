@@ -65,6 +65,7 @@ const BrushPrimarySchema = z.enum([
 ]);
 
 const BrushDifficultySchema = z.enum(["easy", "moderate", "hard", "not_sure"]);
+const BrushAccessSchema = z.enum(["open", "standard_gate", "tight_gate", "not_sure"]);
 
 const RequestSchema = z.object({
   source: z.string().optional().default("public_site"),
@@ -80,6 +81,7 @@ const RequestSchema = z.object({
       .optional()
       .default("not_sure"),
     difficulty: BrushDifficultySchema.optional().default("not_sure"),
+    access: BrushAccessSchema.optional().default("not_sure"),
     haulAway: z.boolean().optional().default(true),
     otherDetails: z.string().optional().nullable(),
     notes: z.string().optional().nullable(),
@@ -156,6 +158,17 @@ function getBaseTier(perceivedSize: string): { low: number; high: number; label:
   }
 }
 
+function getHandClearingBaseTier(perceivedSize: string): { low: number; high: number; label: string; load: number } {
+  switch (perceivedSize) {
+    case "single_item":
+      return { low: 450, high: 650, label: "Small patch (hand-clearing)", load: 0.25 };
+    case "min_pickup":
+      return { low: 550, high: 850, label: "Fence line (hand-clearing)", load: 0.5 };
+    default:
+      return { low: 650, high: 1100, label: "Brush clearing (hand-clearing)", load: 0.75 };
+  }
+}
+
 function applyBrushModifiers(input: {
   tier: { low: number; high: number; label: string; load: number };
   difficulty: "easy" | "moderate" | "hard" | "not_sure";
@@ -180,11 +193,11 @@ function getHaulAwayAddOn(perceivedSize: string): number {
   // Flat add-on is more realistic than a % discount since disposal/haul cost behaves like a fixed cost.
   switch (perceivedSize) {
     case "single_item":
-      return 250;
+      return 200;
     case "min_pickup":
-      return 450;
+      return 400;
     case "half_trailer":
-      return 650;
+      return 600;
     case "three_quarter_trailer":
       return 850;
     case "big_cleanout":
@@ -194,15 +207,31 @@ function getHaulAwayAddOn(perceivedSize: string): number {
   }
 }
 
+function shouldUseHandClearingMode(input: {
+  perceivedSize: string;
+  difficulty: string;
+  primary: string;
+  access: string;
+}): boolean {
+  // Business choice: default to machine pricing for safety. Only allow hand-clearing on truly tight access + small/easy jobs.
+  if (input.access !== "tight_gate") return false;
+  if (input.perceivedSize !== "single_item" && input.perceivedSize !== "min_pickup") return false;
+  if (input.difficulty === "hard") return false;
+  if (input.primary === "small_saplings") return false;
+  return true;
+}
+
 function decideNeedsEstimate(input: {
   perceivedSize: string;
   primary: string;
   difficulty: string;
+  access: string;
   photoCount: number;
 }): boolean {
   if (input.perceivedSize === "big_cleanout" || input.perceivedSize === "not_sure") return true;
   if (input.difficulty === "hard") return true;
   if (input.primary === "small_saplings") return true;
+  if (input.access === "not_sure") return true;
   if (input.photoCount <= 0 && input.perceivedSize !== "single_item") return true;
   if (input.photoCount <= 0 && input.difficulty === "not_sure") return true;
   return false;
@@ -241,6 +270,7 @@ async function getQuoteFromAi(
     primary: body.job.primary,
     perceivedSize: body.job.perceivedSize,
     difficulty: body.job.difficulty,
+    access: body.job.access,
     haulAway: body.job.haulAway,
     zip: body.job.zip,
     otherDetails:
@@ -376,7 +406,13 @@ export async function POST(request: NextRequest): Promise<Response> {
       );
     }
 
-    const tier = getBaseTier(body.job.perceivedSize);
+    const useHandClearingMode = shouldUseHandClearingMode({
+      perceivedSize: body.job.perceivedSize,
+      difficulty: body.job.difficulty,
+      primary: body.job.primary,
+      access: body.job.access
+    });
+    const tier = useHandClearingMode ? getHandClearingBaseTier(body.job.perceivedSize) : getBaseTier(body.job.perceivedSize);
     const modified = applyBrushModifiers({
       tier,
       difficulty: body.job.difficulty
@@ -387,11 +423,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       perceivedSize: body.job.perceivedSize,
       primary: body.job.primary,
       difficulty: body.job.difficulty,
+      access: body.job.access,
       photoCount
     });
 
-    const minLowFloor = body.job.haulAway ? 850 : 650;
-    const minHighFloor = body.job.haulAway ? 1100 : 850;
+    const minLowFloor = useHandClearingMode ? (body.job.haulAway ? 650 : 450) : body.job.haulAway ? 850 : 650;
+    const minHighFloor = useHandClearingMode ? (body.job.haulAway ? 850 : 650) : body.job.haulAway ? 1100 : 850;
 
     const haulAddOn = body.job.haulAway ? getHaulAwayAddOn(body.job.perceivedSize) : 0;
     const pricedLow = modified.low + haulAddOn;
@@ -491,6 +528,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             body.job.notes ?? null,
             otherDetails ? `Other: ${otherDetails}` : null,
             `Brush type: ${primaryType}`,
+            `Access: ${body.job.access}`,
             `Difficulty: ${body.job.difficulty}`,
             `Haul away: ${body.job.haulAway ? "yes" : "no"}`
           ].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
@@ -519,6 +557,7 @@ export async function POST(request: NextRequest): Promise<Response> {
                 primary: body.job.primary,
                 perceivedSize: body.job.perceivedSize,
                 difficulty: body.job.difficulty,
+                access: body.job.access,
                 haulAway: body.job.haulAway,
                 notes: body.job.notes ?? null,
                 otherDetails,
