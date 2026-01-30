@@ -40,6 +40,7 @@ type PerceivedSize =
   | "three_quarter_trailer"
   | "big_cleanout"
   | "not_sure";
+type LeadFormVariant = "junk" | "brush";
 type JunkType =
   | "furniture"
   | "appliances"
@@ -48,6 +49,13 @@ type JunkType =
   | "construction_debris"
   | "hot_tub_playset"
   | "business_commercial";
+type BrushScope =
+  | "light_brush"
+  | "overgrowth"
+  | "weeds_vines"
+  | "small_saplings"
+  | "downed_branches"
+  | "storm_debris";
 
 const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
   { id: "furniture", label: "Furniture" },
@@ -59,13 +67,43 @@ const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
   { id: "business_commercial", label: "Business / commercial cleanout" }
 ];
 
-const SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
+const JUNK_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
   { id: "single_item", label: "Single item", hint: "One item (chair, mattress, small appliance)" },
   { id: "min_pickup", label: "A few items (2-4 items)", hint: "A small pile, or 1-2 bulky pieces" },
   { id: "half_trailer", label: "One room", hint: "One room, or about half a garage" },
   { id: "three_quarter_trailer", label: "A couple rooms", hint: "2+ rooms, or a large garage pile" },
   { id: "big_cleanout", label: "Big cleanout", hint: "Full garage, basement, or multiple rooms" },
   { id: "not_sure", label: "Not sure", hint: "No problem. Photos help tighten the estimate." }
+];
+
+const BRUSH_SCOPE_OPTIONS: Array<{ id: BrushScope; label: string }> = [
+  { id: "light_brush", label: "Light brush" },
+  { id: "overgrowth", label: "Overgrowth / thick brush" },
+  { id: "weeds_vines", label: "Weeds / vines" },
+  { id: "small_saplings", label: "Small saplings" },
+  { id: "downed_branches", label: "Downed branches" },
+  { id: "storm_debris", label: "Storm debris" }
+];
+
+const BRUSH_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
+  { id: "single_item", label: "Small patch", hint: "One small area (around a shed, corner, etc.)" },
+  { id: "min_pickup", label: "Fence line / side yard", hint: "A strip of brush or narrow area" },
+  { id: "half_trailer", label: "Backyard section", hint: "One section of a yard or a larger patch" },
+  { id: "three_quarter_trailer", label: "Most of a yard", hint: "Multiple sections or a bigger area" },
+  { id: "big_cleanout", label: "Full lot / heavy clearing", hint: "Large area or very thick brush" },
+  { id: "not_sure", label: "Not sure", hint: "No problem. Photos help us tighten the estimate." }
+];
+
+const BRUSH_DENSITY_OPTIONS: Array<{ id: "light" | "medium" | "heavy"; label: string }> = [
+  { id: "light", label: "Light" },
+  { id: "medium", label: "Medium" },
+  { id: "heavy", label: "Heavy" }
+];
+
+const BRUSH_ACCESS_OPTIONS: Array<{ id: "easy" | "tight" | "not_sure"; label: string }> = [
+  { id: "easy", label: "Easy access" },
+  { id: "tight", label: "Tight / limited access" },
+  { id: "not_sure", label: "Not sure" }
 ];
 
 const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
@@ -81,13 +119,24 @@ const GOOGLE_REVIEW_URL = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_URL"] ?? "https
 const GOOGLE_REVIEW_RATING = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_RATING"] ?? "5.0";
 const GOOGLE_REVIEW_COUNT = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"] ?? "10";
 
-export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+export function LeadForm({
+  variant = "junk",
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & { variant?: LeadFormVariant }) {
   const utm = useUTM();
+  const isBrush = variant === "brush";
   const [step, setStep] = React.useState<1 | 2>(1);
   const [types, setTypes] = React.useState<JunkType[]>([]);
   const [otherSelected, setOtherSelected] = React.useState(false);
   const [otherDetails, setOtherDetails] = React.useState("");
   const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize>("min_pickup");
+  const [brushScope, setBrushScope] = React.useState<BrushScope[]>(["overgrowth"]);
+  const [brushOtherSelected, setBrushOtherSelected] = React.useState(false);
+  const [brushOtherDetails, setBrushOtherDetails] = React.useState("");
+  const [brushDensity, setBrushDensity] = React.useState<"light" | "medium" | "heavy">("medium");
+  const [brushAccess, setBrushAccess] = React.useState<"easy" | "tight" | "not_sure">("not_sure");
+  const [brushHaulAway, setBrushHaulAway] = React.useState(true);
   const [notes, setNotes] = React.useState("");
   const [showNotes, setShowNotes] = React.useState(false);
   const [zip, setZip] = React.useState("");
@@ -307,11 +356,15 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     setTypes((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
   };
 
+  const toggleBrushScope = (id: BrushScope) => {
+    setBrushScope((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
+  };
+
   const handlePhotos = async (files: FileList | null) => {
     if (!files) return;
     const selected = Array.from(files).slice(0, 4);
     const path = getAnalyticsPath();
-    const eventPrefix = path === "/book" ? "book" : "lead_form";
+    const eventPrefix = path === "/book" || path === "/bookbrush" ? "book" : "lead_form";
     trackWebEvent({ event: `${eventPrefix}_photo_upload_start`, path, meta: { count: selected.length } });
     if (!apiBase) {
       setPhotoUploadStatus("error");
@@ -360,38 +413,59 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     const analyticsZip = zip.trim();
     setError(null);
     setQuoteState({ status: "loading" });
-    if (analyticsPath === "/book") {
+    if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
       trackWebEvent({ event: "book_quote_start", path: analyticsPath, zip: analyticsZip });
     } else {
       trackWebEvent({ event: "lead_form_quote_start", path: analyticsPath });
     }
     try {
-      const resolvedTypes: JunkType[] = types.length ? types : otherSelected ? ["general_junk"] : [];
-      if (!resolvedTypes.length) {
+      const resolvedTypes: JunkType[] = !isBrush ? (types.length ? types : otherSelected ? ["general_junk"] : []) : [];
+      if (!isBrush && !resolvedTypes.length) {
         setStep(1);
         setQuoteState({ status: "idle" });
         setError("Pick at least one type of junk.");
         return;
       }
 
-      const otherLine =
-        otherSelected && otherDetails.trim().length > 0 ? `Other: ${otherDetails.trim()}` : "";
-      const combinedNotes = [notes.trim(), otherLine].filter((v) => v.length > 0).join("\n");
-      const res = await fetch(`${apiBase}/api/junk-quote`, {
+      const otherLine = !isBrush && otherSelected && otherDetails.trim().length > 0 ? `Other: ${otherDetails.trim()}` : "";
+      const brushOtherLine =
+        isBrush && brushOtherSelected && brushOtherDetails.trim().length > 0 ? `Other: ${brushOtherDetails.trim()}` : "";
+      const combinedNotes = [notes.trim(), otherLine, brushOtherLine].filter((v) => v.length > 0).join("\n");
+      const quoteEndpoint = isBrush ? `${apiBase}/api/brush-quote` : `${apiBase}/api/junk-quote`;
+      const res = await fetch(quoteEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source: "public_site",
-          contact: { name: name.trim(), phone: phone.trim(), timeframe },
-          job: {
-            types: resolvedTypes,
-            perceivedSize,
-            notes: combinedNotes || undefined,
-            zip: zip.trim(),
-            photoUrls: photos
-          },
-          utm
-        })
+        body: JSON.stringify(
+          isBrush
+            ? {
+                source: "public_site",
+                contact: { name: name.trim(), phone: phone.trim(), timeframe },
+                job: {
+                  scope: brushScope,
+                  perceivedSize,
+                  density: brushDensity,
+                  access: brushAccess,
+                  haulAway: brushHaulAway,
+                  notes: combinedNotes || undefined,
+                  zip: zip.trim(),
+                  photoUrls: photos,
+                  otherDetails: brushOtherSelected ? brushOtherDetails.trim() || undefined : undefined
+                },
+                utm
+              }
+            : {
+                source: "public_site",
+                contact: { name: name.trim(), phone: phone.trim(), timeframe },
+                job: {
+                  types: resolvedTypes,
+                  perceivedSize,
+                  notes: combinedNotes || undefined,
+                  zip: zip.trim(),
+                  photoUrls: photos
+                },
+                utm
+              }
+        )
       });
       const data = (await res.json().catch(() => null)) as {
         ok?: boolean;
@@ -444,7 +518,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         }
       });
       trackGoogleLeadConversion(nextQuoteId);
-      if (analyticsPath === "/book") {
+      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
         trackWebEvent({
           event: "book_quote_success",
           path: analyticsPath,
@@ -463,7 +537,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     } catch (err) {
       setQuoteState({ status: "error", message: (err as Error).message });
       const key = bucketWebAnalyticsError(err);
-      if (analyticsPath === "/book") {
+      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
         trackWebEvent({ event: "book_quote_fail", path: analyticsPath, zip: analyticsZip, key });
       } else {
         trackWebEvent({ event: "lead_form_quote_fail", path: analyticsPath, key });
@@ -717,7 +791,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
     }
     setBookingStatus("loading");
     setBookingMessage(null);
-    if (analyticsPath === "/book") {
+    if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
       trackWebEvent({ event: "book_booking_attempt", path: analyticsPath, zip: analyticsZip });
     } else {
       trackWebEvent({ event: "lead_form_booking_attempt", path: analyticsPath });
@@ -749,7 +823,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         if (errorPayload?.error === "slot_full") {
           setBookingStatus("error");
           setBookingMessage("That time just filled up. Please pick another time.");
-          if (analyticsPath === "/book") {
+          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
             trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "slot_full" });
           } else {
             trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "slot_full" });
@@ -760,7 +834,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         if (errorPayload?.error === "day_full") {
           setBookingStatus("error");
           setBookingMessage("We are fully booked that day. Please choose another time.");
-          if (analyticsPath === "/book") {
+          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
             trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "day_full" });
           } else {
             trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "day_full" });
@@ -775,7 +849,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         ) {
           setBookingStatus("error");
           setBookingMessage("That hold expired. Please pick another time.");
-          if (analyticsPath === "/book") {
+          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
             trackWebEvent({
               event: "book_booking_fail",
               path: analyticsPath,
@@ -797,7 +871,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             typeof errorPayload.errorId === "string" && errorPayload.errorId.length
               ? ` (ref ${errorPayload.errorId})`
               : "";
-          if (analyticsPath === "/book") {
+          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
             trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "server_error" });
           } else {
             trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "server_error" });
@@ -805,7 +879,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
           throw new Error(`Booking failed on our end. Please try again or call us.${suffix}`);
         }
         if (typeof errorPayload?.message === "string" && errorPayload.message.trim().length > 0) {
-          if (analyticsPath === "/book") {
+          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
             trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "message" });
           } else {
             trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "message" });
@@ -816,7 +890,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
           typeof errorPayload?.error === "string" && errorPayload.error.length
             ? errorPayload.error
             : `Booking failed (HTTP ${res.status})`;
-        if (analyticsPath === "/book") {
+        if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
           trackWebEvent({
             event: "book_booking_fail",
             path: analyticsPath,
@@ -839,7 +913,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         `You're booked for ${formatSlotLabel(bookedAt)}. We'll text${email.trim().length ? " (and email)" : ""} you a confirmation.`
       );
       setHoldStatus("idle");
-      if (analyticsPath === "/book") {
+      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
         trackWebEvent({
           event: "book_booking_success",
           path: analyticsPath,
@@ -874,7 +948,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       setBookingStatus("error");
       setBookingMessage((err as Error).message);
       const key = bucketWebAnalyticsError(err);
-      if (analyticsPath === "/book") {
+      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
         trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key });
       } else {
         trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key });
@@ -902,7 +976,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
 
   React.useEffect(() => {
     const path = getAnalyticsPath();
-    if (path === "/book") {
+    if (path === "/book" || path === "/bookbrush") {
       trackWebEvent({ event: "book_step_view", path, key: String(step) });
     } else {
       trackWebEvent({ event: "lead_form_step_view", path, key: String(step) });
@@ -920,8 +994,14 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         <span className="text-[10px] font-medium normal-case tracking-normal">Takes &lt; 1 minute. No spam.</span>
       </div>
 
-      <h2 className="font-display text-2xl text-primary-800">Show us what you need gone</h2>
-      <p className="mt-1 text-sm text-neutral-600">Answer a few quick questions to see your price before booking.</p>
+      <h2 className="font-display text-2xl text-primary-800">
+        {isBrush ? "Show us what you need cleared" : "Show us what you need gone"}
+      </h2>
+      <p className="mt-1 text-sm text-neutral-600">
+        {isBrush
+          ? "Answer a few quick questions to see a ballpark range before booking."
+          : "Answer a few quick questions to see your price before booking."}
+      </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700">
         <a
@@ -961,21 +1041,38 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
         onSubmit={(e) => {
           e.preventDefault();
           if (step === 1) {
-            if (!types.length && !otherSelected) {
+            const path = getAnalyticsPath();
+            if (!isBrush && !types.length && !otherSelected) {
               setError("Pick at least one type of junk.");
               return;
             }
-            const path = getAnalyticsPath();
-            const baseMeta = {
-              typeCount: types.length + (otherSelected ? 1 : 0),
-              otherSelected,
-              otherHasDetails: otherDetails.trim().length > 0,
-              perceivedSize,
-              hasPhotos: photos.length > 0,
-              photoCount: photos.length,
-              photoSkipped
-            };
-            if (path === "/book") {
+            if (isBrush && !brushScope.length && !brushOtherSelected) {
+              setError("Pick at least one thing to clear.");
+              return;
+            }
+            const baseMeta = isBrush
+              ? {
+                  scopeCount: brushScope.length + (brushOtherSelected ? 1 : 0),
+                  otherSelected: brushOtherSelected,
+                  otherHasDetails: brushOtherDetails.trim().length > 0,
+                  perceivedSize,
+                  density: brushDensity,
+                  access: brushAccess,
+                  haulAway: brushHaulAway,
+                  hasPhotos: photos.length > 0,
+                  photoCount: photos.length,
+                  photoSkipped
+                }
+              : {
+                  typeCount: types.length + (otherSelected ? 1 : 0),
+                  otherSelected,
+                  otherHasDetails: otherDetails.trim().length > 0,
+                  perceivedSize,
+                  hasPhotos: photos.length > 0,
+                  photoCount: photos.length,
+                  photoSkipped
+                };
+            if (path === "/book" || path === "/bookbrush") {
               trackWebEvent({ event: "book_step1_submit", path, zip: zip.trim(), meta: baseMeta });
             } else {
               trackWebEvent({ event: "lead_form_step1_submit", path, meta: baseMeta });
@@ -989,83 +1086,167 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
       >
         {step === 1 ? (
           <div className="space-y-4">
-            <div>
-              <label className="text-sm font-semibold text-neutral-800">What type of stuff is it?</label>
-              <p className="text-xs text-neutral-500">Choose all that apply</p>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {JUNK_OPTIONS.map((opt) => {
-                  const selected = types.includes(opt.id);
-                  const checkboxId = `junk-type-${opt.id}`;
-                  return (
-                    <label
-                      key={opt.id}
-                      htmlFor={checkboxId}
-                      className={cn(
-                        "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
-                        selected ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm" : "border-neutral-200 bg-white text-neutral-700"
-                      )}
-                    >
-                      <input
-                        id={checkboxId}
-                        type="checkbox"
-                        className="sr-only"
-                        checked={selected}
-                        onChange={() => toggleType(opt.id)}
-                        aria-label={opt.label}
-                      />
-                      <span
+            {isBrush ? (
+              <div>
+                <label className="text-sm font-semibold text-neutral-800">What do you need cleared?</label>
+                <p className="text-xs text-neutral-500">Choose all that apply</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {BRUSH_SCOPE_OPTIONS.map((opt) => {
+                    const selected = brushScope.includes(opt.id);
+                    const checkboxId = `brush-scope-${opt.id}`;
+                    return (
+                      <label
+                        key={opt.id}
+                        htmlFor={checkboxId}
                         className={cn(
-                          "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                          selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                          "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
+                          selected
+                            ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
+                            : "border-neutral-200 bg-white text-neutral-700"
                         )}
-                        aria-hidden="true"
                       >
-                        <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                      </span>
-                      <span>{opt.label}</span>
-                    </label>
-                  );
-                })}
-                <label
-                  htmlFor="junk-type-other"
-                  className={cn(
-                    "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition sm:col-span-2",
-                    otherSelected
-                      ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
-                      : "border-neutral-200 bg-white text-neutral-700"
-                  )}
-                >
-                  <input
-                    id="junk-type-other"
-                    type="checkbox"
-                    className="sr-only"
-                    checked={otherSelected}
-                    onChange={() => setOtherSelected((prev) => !prev)}
-                    aria-label="Other (describe below)"
-                  />
-                  <span
+                        <input
+                          id={checkboxId}
+                          type="checkbox"
+                          className="sr-only"
+                          checked={selected}
+                          onChange={() => toggleBrushScope(opt.id)}
+                          aria-label={opt.label}
+                        />
+                        <span
+                          className={cn(
+                            "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                            selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                          )}
+                          aria-hidden="true"
+                        >
+                          <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                        </span>
+                        <span>{opt.label}</span>
+                      </label>
+                    );
+                  })}
+                  <label
+                    htmlFor="brush-scope-other"
                     className={cn(
-                      "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                      otherSelected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                      "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition sm:col-span-2",
+                      brushOtherSelected
+                        ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
+                        : "border-neutral-200 bg-white text-neutral-700"
                     )}
-                    aria-hidden="true"
                   >
-                    <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                  </span>
-                  <span>Other (describe below)</span>
-                </label>
+                    <input
+                      id="brush-scope-other"
+                      type="checkbox"
+                      className="sr-only"
+                      checked={brushOtherSelected}
+                      onChange={() => setBrushOtherSelected((prev) => !prev)}
+                      aria-label="Other (describe below)"
+                    />
+                    <span
+                      className={cn(
+                        "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                        brushOtherSelected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                      )}
+                      aria-hidden="true"
+                    >
+                      <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                    </span>
+                    <span>Other (describe below)</span>
+                  </label>
+                </div>
+                {brushOtherSelected ? (
+                  <textarea
+                    rows={2}
+                    value={brushOtherDetails}
+                    onChange={(e) => setBrushOtherDetails(e.target.value)}
+                    className="mt-2 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                    placeholder="Example: kudzu, poison ivy, bamboo, etc."
+                    autoComplete="off"
+                  />
+                ) : null}
               </div>
-              {otherSelected ? (
-                <textarea
-                  rows={2}
-                  value={otherDetails}
-                  onChange={(e) => setOtherDetails(e.target.value)}
-                  className="mt-2 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                  placeholder="Example: pallets, yard equipment, glass table, etc."
-                  autoComplete="off"
-                />
-              ) : null}
-            </div>
+            ) : (
+              <div>
+                <label className="text-sm font-semibold text-neutral-800">What type of stuff is it?</label>
+                <p className="text-xs text-neutral-500">Choose all that apply</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {JUNK_OPTIONS.map((opt) => {
+                    const selected = types.includes(opt.id);
+                    const checkboxId = `junk-type-${opt.id}`;
+                    return (
+                      <label
+                        key={opt.id}
+                        htmlFor={checkboxId}
+                        className={cn(
+                          "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
+                          selected
+                            ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
+                            : "border-neutral-200 bg-white text-neutral-700"
+                        )}
+                      >
+                        <input
+                          id={checkboxId}
+                          type="checkbox"
+                          className="sr-only"
+                          checked={selected}
+                          onChange={() => toggleType(opt.id)}
+                          aria-label={opt.label}
+                        />
+                        <span
+                          className={cn(
+                            "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                            selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                          )}
+                          aria-hidden="true"
+                        >
+                          <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                        </span>
+                        <span>{opt.label}</span>
+                      </label>
+                    );
+                  })}
+                  <label
+                    htmlFor="junk-type-other"
+                    className={cn(
+                      "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition sm:col-span-2",
+                      otherSelected
+                        ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
+                        : "border-neutral-200 bg-white text-neutral-700"
+                    )}
+                  >
+                    <input
+                      id="junk-type-other"
+                      type="checkbox"
+                      className="sr-only"
+                      checked={otherSelected}
+                      onChange={() => setOtherSelected((prev) => !prev)}
+                      aria-label="Other (describe below)"
+                    />
+                    <span
+                      className={cn(
+                        "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                        otherSelected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                      )}
+                      aria-hidden="true"
+                    >
+                      <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                    </span>
+                    <span>Other (describe below)</span>
+                  </label>
+                </div>
+                {otherSelected ? (
+                  <textarea
+                    rows={2}
+                    value={otherDetails}
+                    onChange={(e) => setOtherDetails(e.target.value)}
+                    className="mt-2 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                    placeholder="Example: pallets, yard equipment, glass table, etc."
+                    autoComplete="off"
+                  />
+                ) : null}
+              </div>
+            )}
 
             <div className="space-y-2">
               <label htmlFor="lead-photos" className="text-sm font-semibold text-neutral-800">
@@ -1109,9 +1290,15 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-neutral-800">How much junk are we hauling away?</label>
-              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How much junk are we hauling away?">
-                {SIZE_OPTIONS.map((opt) => {
+              <label className="text-sm font-semibold text-neutral-800">
+                {isBrush ? "How big is the area?" : "How much junk are we hauling away?"}
+              </label>
+              <div
+                className="grid gap-2 sm:grid-cols-2"
+                role="radiogroup"
+                aria-label={isBrush ? "How big is the area?" : "How much junk are we hauling away?"}
+              >
+                {(isBrush ? BRUSH_SIZE_OPTIONS : JUNK_SIZE_OPTIONS).map((opt) => {
                   const selected = perceivedSize === opt.id;
                   return (
                     <button
@@ -1146,11 +1333,127 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               </div>
             </div>
 
+            {isBrush ? (
+              <>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-neutral-800">How thick is the brush?</label>
+                  <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="How thick is the brush?">
+                    {BRUSH_DENSITY_OPTIONS.map((opt) => {
+                      const selected = brushDensity === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setBrushDensity(opt.id)}
+                          className={cn(
+                            "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
+                            selected
+                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                            )}
+                            aria-hidden="true"
+                          >
+                            <Check className="h-3 w-3" strokeWidth={3} />
+                          </span>
+                          <span className="font-semibold text-neutral-900">{opt.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-neutral-800">Access to the area</label>
+                  <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Access to the area">
+                    {BRUSH_ACCESS_OPTIONS.map((opt) => {
+                      const selected = brushAccess === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setBrushAccess(opt.id)}
+                          className={cn(
+                            "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
+                            selected
+                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                            )}
+                            aria-hidden="true"
+                          >
+                            <Check className="h-3 w-3" strokeWidth={3} />
+                          </span>
+                          <span className="font-semibold text-neutral-900">{opt.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-neutral-800">Haul away the debris?</label>
+                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Haul away the debris?">
+                    {[
+                      { id: "yes", label: "Yes, haul it away", value: true },
+                      { id: "no", label: "No, leave it on site", value: false }
+                    ].map((opt) => {
+                      const selected = brushHaulAway === opt.value;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setBrushHaulAway(opt.value)}
+                          className={cn(
+                            "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
+                            selected
+                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                            )}
+                            aria-hidden="true"
+                          >
+                            <Check className="h-3 w-3" strokeWidth={3} />
+                          </span>
+                          <span className="font-semibold text-neutral-900">{opt.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : null}
+
             <div className="space-y-2">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-0.5">
                   <label className="text-sm font-semibold text-neutral-800">Anything else we should know?</label>
-                  <p className="text-xs text-neutral-500">Optional: gate codes, stairs, heavy items, etc.</p>
+                  <p className="text-xs text-neutral-500">
+                    {isBrush
+                      ? "Optional: slope, gates, access notes, what to keep/remove, etc."
+                      : "Optional: gate codes, stairs, heavy items, etc."}
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -1166,7 +1469,9 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                  placeholder="Gate codes, stairs, heavy items, etc."
+                  placeholder={
+                    isBrush ? "Slope, gates, access notes, what to keep/remove, etc." : "Gate codes, stairs, heavy items, etc."
+                  }
                 />
               ) : null}
             </div>
@@ -1190,7 +1495,9 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <Button type="submit" className="w-full justify-center sm:w-auto">
                 Continue to my price
               </Button>
-              <p className="text-xs text-neutral-500">Next: enter your contact info to see your price.</p>
+              <p className="text-xs text-neutral-500">
+                Next: enter your contact info to see your {isBrush ? "estimate" : "price"}.
+              </p>
             </div>
           </div>
         ) : (
@@ -1275,7 +1582,13 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
             </div>
 
             <Button type="submit" className="w-full justify-center" disabled={quoteState.status === "loading"}>
-              {quoteState.status === "loading" ? "Calculating your quote..." : "Get my instant quote"}
+              {quoteState.status === "loading"
+                ? isBrush
+                  ? "Calculating your estimate..."
+                  : "Calculating your quote..."
+                : isBrush
+                  ? "Get my estimate"
+                  : "Get my instant quote"}
             </Button>
 
             {quoteState.status === "ready" ? (
@@ -1286,7 +1599,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                       {Math.round(quoteState.discountPercent * 100)}% off
                     </span>
                   ) : null}
-                  Here&apos;s your instant quote
+                  {isBrush ? "Here's your estimate" : "Here's your instant quote"}
                 </div>
                 <div className="text-2xl font-semibold text-primary-900">
                   {discountedRange}
@@ -1296,14 +1609,18 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                 </div>
                 <div className="text-sm text-neutral-700">{quoteState.tier}</div>
                 <div className="text-xs text-neutral-600">{quoteState.reason}</div>
+                {!isBrush ? (
+                  <div className="text-xs text-neutral-600">
+                    Disposal fees may apply for certain items (for example, mattresses/box springs are +$40 each).
+                  </div>
+                ) : null}
                 <div className="text-xs text-neutral-600">
-                  Disposal fees may apply for certain items (for example, mattresses/box springs are +$40 each).
-                </div>
-                <div className="text-xs text-neutral-600">
-                  We&apos;ll confirm the exact price on-site before we start. If we use less space than expected, your price goes down.
+                  We&apos;ll confirm the exact price on-site before we start.
                 </div>
                   <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
-                    <div className="text-xs font-semibold text-neutral-700">Book this pickup</div>
+                    <div className="text-xs font-semibold text-neutral-700">
+                      {isBrush ? "Book this clearing" : "Book this pickup"}
+                    </div>
                     <div className="grid gap-2 md:grid-cols-2">
                       <input
                         name="addressLine1"
@@ -1543,7 +1860,11 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                       onClick={() => void submitBooking()}
                       disabled={bookingStatus === "loading" || !selectedSlotStartAt || availabilityStatus === "loading"}
                     >
-                      {bookingStatus === "loading" ? "Booking..." : "Book this pickup"}
+                      {bookingStatus === "loading"
+                        ? "Booking..."
+                        : isBrush
+                          ? "Book this clearing"
+                          : "Book this pickup"}
                     </Button>
                     <Button asChild variant="secondary" className="justify-center">
                       <a href="tel:+14047772631" aria-label="Call to confirm and book">
@@ -1562,7 +1883,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
                     </div>
                   ) : null}
                   <div className="text-[11px] text-neutral-500">
-                    We've saved your quote with your contact info so we can help if you have questions.
+                    We've saved your {isBrush ? "estimate" : "quote"} with your contact info so we can help if you have questions.
                   </div>
                 </div>
               </div>
@@ -1576,7 +1897,7 @@ export function LeadForm({ className, ...props }: React.HTMLAttributes<HTMLDivEl
               <Button type="button" variant="ghost" onClick={() => setStep(1)}>
                 Back
               </Button>
-              <p className="text-xs text-neutral-500">We'll save this quote for follow-up.</p>
+              <p className="text-xs text-neutral-500">We'll save this {isBrush ? "estimate" : "quote"} for follow-up.</p>
             </div>
           </div>
         )}

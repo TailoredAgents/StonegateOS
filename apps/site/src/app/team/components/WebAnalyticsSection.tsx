@@ -141,7 +141,7 @@ export async function WebAnalyticsSection(props: {
 
   const vitalsRows =
     vitals?.items
-      ?.filter((row) => row.path === "/book" || row.path === "/")
+      ?.filter((row) => row.path === "/book" || row.path === "/bookbrush" || row.path === "/")
       ?.sort((a, b) => (a.path + a.metric + (a.device ?? "")).localeCompare(b.path + b.metric + (b.device ?? ""))) ?? [];
 
   const errorsRows = errors?.items?.slice(0, 12) ?? [];
@@ -152,7 +152,7 @@ export async function WebAnalyticsSection(props: {
         <div>
           <h2 className={TEAM_SECTION_TITLE}>Website analytics</h2>
           <p className={TEAM_SECTION_SUBTITLE}>
-            First-party events from the public site only (raw retained for 30 days). Focus: /book funnel + call clicks.
+            First-party events from the public site only (raw retained for 30 days). Focus: /book + /bookbrush funnel + call clicks.
           </p>
         </div>
 
@@ -216,7 +216,7 @@ export async function WebAnalyticsSection(props: {
           <div className="grid gap-4 lg:grid-cols-3">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm font-semibold text-slate-900">/book funnel by service area</div>
+                <div className="text-sm font-semibold text-slate-900">/book + /bookbrush funnel by service area</div>
                 <div className="text-xs text-slate-500">ZIP is bucketed (never stored).</div>
               </div>
               <div className="mt-4 overflow-x-auto">
@@ -256,7 +256,7 @@ export async function WebAnalyticsSection(props: {
                     {!funnel?.byBucket?.length ? (
                       <tr>
                         <td className="px-3 py-5 text-sm text-slate-500" colSpan={5}>
-                          No /book events in this range yet.
+                          No /book or /bookbrush events in this range yet.
                         </td>
                       </tr>
                     ) : null}
@@ -356,7 +356,7 @@ export async function WebAnalyticsSection(props: {
                     {!vitalsRows.length ? (
                       <tr>
                         <td className="px-3 py-5 text-sm text-slate-500" colSpan={5}>
-                          No vitals captured yet. These populate as visitors browse / and /book.
+                          No vitals captured yet. These populate as visitors browse /, /book, and /bookbrush.
                         </td>
                       </tr>
                     ) : null}
