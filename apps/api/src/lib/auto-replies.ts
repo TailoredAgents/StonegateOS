@@ -532,7 +532,8 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
       contactLastName: contacts.lastName,
       contactEmail: contacts.email,
       contactPhone: contacts.phone,
-      contactPhoneE164: contacts.phoneE164
+      contactPhoneE164: contacts.phoneE164,
+      contactPartnerStatus: contacts.partnerStatus
     })
     .from(conversationMessages)
     .leftJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
@@ -592,6 +593,18 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
   });
   if (confirmationHandled) {
     return { status: "processed" };
+  }
+
+  const partnerStatus = typeof row.contactPartnerStatus === "string" ? row.contactPartnerStatus : null;
+  if (partnerStatus === "partner") {
+    await recordAuditEvent({
+      actor: { type: "system", label: "auto-reply" },
+      action: "auto_reply.skipped",
+      entityType: "conversation_message",
+      entityId: row.messageId,
+      meta: { reason: "partner_contact", inboundChannel }
+    });
+    return { status: "skipped" };
   }
 
   const salesAutopilot = await getSalesAutopilotPolicy(db);

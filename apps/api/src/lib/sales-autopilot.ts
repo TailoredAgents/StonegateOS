@@ -525,6 +525,7 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
       contactEmail: contacts.email,
       contactPhone: contacts.phone,
       contactPhoneE164: contacts.phoneE164,
+      contactPartnerStatus: contacts.partnerStatus,
       propertyId: conversationThreads.propertyId,
       propertyPostalCode: properties.postalCode,
       propertyAddressLine1: properties.addressLine1,
@@ -545,6 +546,18 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
 
   if (inbound.direction !== "inbound") {
     return { status: "skipped" };
+  }
+
+  const partnerStatus = typeof inbound.contactPartnerStatus === "string" ? inbound.contactPartnerStatus : null;
+  if (partnerStatus === "partner") {
+    await recordAuditEvent({
+      actor: { type: "system", label: "sales-autopilot" },
+      action: "sales.autopilot.skipped",
+      entityType: "conversation_message",
+      entityId: messageId,
+      meta: { reason: "partner_contact" }
+    });
+    return { status: "processed" };
   }
 
   const replyChannel = inbound.threadChannel as ReplyChannel;
