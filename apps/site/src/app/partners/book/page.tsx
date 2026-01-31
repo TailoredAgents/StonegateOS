@@ -92,22 +92,22 @@ export default async function PartnerBookPage({
       {properties.length === 0 ? (
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
           <h2 className="text-base font-semibold text-slate-900">Add a property first</h2>
-          <p className="mt-1 text-sm text-slate-600">You’ll need at least one address to request service for.</p>
+          <p className="mt-1 text-sm text-slate-600">You'll need at least one address to request service for.</p>
           <Link className="mt-4 inline-flex rounded-2xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700" href="/partners/properties">
             Add property
           </Link>
         </div>
       ) : (
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
-          <h2 className="text-base font-semibold text-slate-900">Step 1 — Select property + service</h2>
+          <h2 className="text-base font-semibold text-slate-900">Step 1 - Select property + service</h2>
           <form method="get" action="/partners/book" className="mt-4 grid gap-3 md:grid-cols-2">
             <label>
               <div className="text-xs font-semibold text-slate-700">Property</div>
               <select name="propertyId" defaultValue={selectedProperty?.id ?? ""} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
-                <option value="">Choose…</option>
+                <option value="">Choose...</option>
                 {properties.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.addressLine1} — {p.city}, {p.state}
+                    {p.addressLine1} - {p.city}, {p.state}
                   </option>
                 ))}
               </select>
@@ -115,7 +115,7 @@ export default async function PartnerBookPage({
             <label>
               <div className="text-xs font-semibold text-slate-700">Service</div>
               <select name="serviceKey" defaultValue={selectedService?.service ?? ""} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
-                <option value="">Choose…</option>
+                <option value="">Choose...</option>
                 {services.map((s) => (
                   <option key={s.service} value={s.service}>
                     {s.label}
@@ -130,7 +130,7 @@ export default async function PartnerBookPage({
 
           {selectedProperty && selectedService ? (
             <div className="mt-6 border-t border-slate-100 pt-6">
-              <h2 className="text-base font-semibold text-slate-900">Step 2 — Choose time</h2>
+              <h2 className="text-base font-semibold text-slate-900">Step 2 - Choose time</h2>
               <form action={partnerCreateBookingAction} className="mt-4 grid gap-3 md:grid-cols-2">
                 <input type="hidden" name="propertyId" value={selectedProperty.id} />
                 <input type="hidden" name="serviceKey" value={selectedService.service} />
@@ -141,7 +141,7 @@ export default async function PartnerBookPage({
                     <option value="">Call for pricing / use standard rate</option>
                     {tiersForService.map((tier) => (
                       <option key={tier.id} value={tier.tierKey}>
-                        {tier.label ? `${tier.label} — $${(tier.amountCents / 100).toFixed(2)}` : `${tier.tierKey} — $${(tier.amountCents / 100).toFixed(2)}`}
+                        {tier.label ? `${tier.label} - $${(tier.amountCents / 100).toFixed(2)}` : `${tier.tierKey} - $${(tier.amountCents / 100).toFixed(2)}`}
                       </option>
                     ))}
                   </select>
@@ -157,7 +157,7 @@ export default async function PartnerBookPage({
                   <select name="timeWindowId" required className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
                     {validWindows.map((w) => (
                       <option key={w.id} value={w.id}>
-                        {typeof (w as unknown as { label?: unknown }).label === "string" ? String((w as unknown as { label?: unknown }).label) : w.id} ({w.startHour}:00–{w.endHour}:00)
+                        {typeof (w as unknown as { label?: unknown }).label === "string" ? String((w as unknown as { label?: unknown }).label) : w.id} ({w.startHour}:00-{w.endHour}:00)
                       </option>
                     ))}
                   </select>

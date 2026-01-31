@@ -69,9 +69,9 @@ export default async function PartnerBookingsPage({
                   </span>
                 </div>
                 <div className="mt-1 text-xs text-slate-600">
-                  {b.appointment.startAt ? new Date(b.appointment.startAt).toLocaleString() : "TBD"} • {b.serviceKey ?? "service"}
+                  {b.appointment.startAt ? new Date(b.appointment.startAt).toLocaleString() : "TBD"} - {b.serviceKey ?? "service"}
                   {b.tierKey ? ` (${b.tierKey})` : ""}
-                  {typeof b.amountCents === "number" ? ` • $${(b.amountCents / 100).toFixed(2)}` : ""}
+                  {typeof b.amountCents === "number" ? ` - $${(b.amountCents / 100).toFixed(2)}` : ""}
                 </div>
               </li>
             ))}
@@ -81,4 +81,3 @@ export default async function PartnerBookingsPage({
     </div>
   );
 }
-

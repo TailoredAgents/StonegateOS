@@ -292,8 +292,8 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
                     {rateItems.map((item) => (
                       <li key={item.id}>
                         <span className="font-semibold">{item.serviceKey}</span> / {item.tierKey}
-                        {" — "}
-                        {item.label ? `${item.label} — ` : ""}${(item.amountCents / 100).toFixed(2)}
+                        {" - "}
+                        {item.label ? `${item.label} - ` : ""}${(item.amountCents / 100).toFixed(2)}
                       </li>
                     ))}
                   </ul>
@@ -493,7 +493,7 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
               <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-2 font-semibold text-slate-400">Next</span>
             )}
           </div>
-          <span className="text-[11px] text-slate-500">Tip: use “Log touch” after a call/email so the check-in cadence stays accurate.</span>
+          <span className="text-[11px] text-slate-500">Tip: use "Log touch" after a call/email so the check-in cadence stays accurate.</span>
         </div>
       </div>
     </section>

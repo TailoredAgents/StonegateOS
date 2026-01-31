@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { and, asc, eq, gt, isNull, lt, sql } from "drizzle-orm";
 import { availabilityWindows } from "@myst-os/pricing";
 import { sendSmsMessage } from "@/lib/messaging";
+import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 import {
   appointmentHolds,
   appointmentNotes,
@@ -14,10 +15,11 @@ import {
   partnerBookings,
   partnerRateCards,
   partnerRateItems,
+  partnerUsers,
   policySettings,
   properties
 } from "@/db";
-import { requirePartnerSession } from "@/lib/partner-portal-auth";
+import { requirePartnerSession, resolvePublicSiteBaseUrl } from "@/lib/partner-portal-auth";
 import { APPOINTMENT_TIME_ZONE, resolveAppointmentTiming } from "../../web/scheduling";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
 
@@ -324,6 +326,90 @@ export async function POST(request: NextRequest): Promise<Response> {
       .join("\n");
 
     await sendSmsMessage(devonPhone, message);
+  }
+
+  // Partner-facing confirmation (logged in Inbox under the org contact).
+  try {
+    const [partnerUser] = await db
+      .select({
+        id: partnerUsers.id,
+        name: partnerUsers.name,
+        email: partnerUsers.email,
+        phoneE164: partnerUsers.phoneE164
+      })
+      .from(partnerUsers)
+      .where(eq(partnerUsers.id, auth.partnerUser.id))
+      .limit(1);
+
+    const windowLabel =
+      typeof (window as unknown as { label?: unknown }).label === "string"
+        ? String((window as unknown as { label?: unknown }).label)
+        : window.id;
+
+    const when = `${formatLocalDateTime(startAt)} (${windowLabel})`;
+    const address = `${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}`;
+    const portalLink = (() => {
+      const base = resolvePublicSiteBaseUrl();
+      if (!base) return null;
+      const url = new URL("/partners/bookings", base);
+      return url.toString();
+    })();
+
+    const partnerName = partnerUser?.name?.trim().length ? partnerUser.name.trim() : "there";
+    const smsBody = `Stonegate: booking confirmed for ${when} at ${address}. Reply here if anything changes.`;
+    const emailSubject = "Stonegate Partner booking confirmed";
+    const emailBody = [
+      `Hi ${partnerName},`,
+      "",
+      "Your booking is confirmed:",
+      when,
+      address,
+      `Service: ${serviceKey}${tierKey ? ` (${tierKey})` : ""}`,
+      notes ? `Notes: ${notes}` : null,
+      portalLink ? "" : null,
+      portalLink ? `View bookings: ${portalLink}` : null,
+      "",
+      "Reply to this message if anything changes."
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n");
+
+    if (partnerUser?.email) {
+      await queueSystemOutboundMessage({
+        contactId: auth.partnerUser.orgContactId,
+        channel: "email",
+        toAddress: partnerUser.email,
+        subject: emailSubject,
+        body: emailBody,
+        metadata: {
+          confirmationLoop: true,
+          partnerPortal: true,
+          kind: "partner.booking.confirmation",
+          appointmentId: appointment.id,
+          partnerUserId: auth.partnerUser.id
+        },
+        dedupeKey: `partner.booking.confirmation:${appointment.id}:${auth.partnerUser.id}:email`
+      });
+    }
+
+    if (partnerUser?.phoneE164) {
+      await queueSystemOutboundMessage({
+        contactId: auth.partnerUser.orgContactId,
+        channel: "sms",
+        toAddress: partnerUser.phoneE164,
+        body: smsBody,
+        metadata: {
+          confirmationLoop: true,
+          partnerPortal: true,
+          kind: "partner.booking.confirmation",
+          appointmentId: appointment.id,
+          partnerUserId: auth.partnerUser.id
+        },
+        dedupeKey: `partner.booking.confirmation:${appointment.id}:${auth.partnerUser.id}:sms`
+      });
+    }
+  } catch {
+    // Best-effort; never fail booking creation due to notifications.
   }
 
   return NextResponse.json({

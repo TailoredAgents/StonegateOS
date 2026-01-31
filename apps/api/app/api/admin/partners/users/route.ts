@@ -81,7 +81,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const db = getDb();
   const [org] = await db
-    .select({ id: contacts.id })
+    .select({ id: contacts.id, partnerStatus: contacts.partnerStatus, partnerSince: contacts.partnerSince })
     .from(contacts)
     .where(eq(contacts.id, orgContactId))
     .limit(1);
@@ -90,6 +90,22 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const now = new Date();
+
+  // If we're inviting someone into the Partner Portal, treat this org as an active partner.
+  // Do not overwrite a more-specific status like "inactive" unless the owner explicitly changes it later.
+  const status = typeof org.partnerStatus === "string" ? org.partnerStatus : "none";
+  const promotable = status === "none" || status === "prospect" || status === "contacted";
+  if (promotable) {
+    await db
+      .update(contacts)
+      .set({
+        partnerStatus: "partner",
+        partnerSince: sql`coalesce(${contacts.partnerSince}, ${now})`,
+        updatedAt: now
+      })
+      .where(eq(contacts.id, orgContactId));
+  }
+
   let userId: string | null = null;
 
   const [existing] = await db
