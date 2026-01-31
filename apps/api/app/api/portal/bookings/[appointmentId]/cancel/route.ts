@@ -47,14 +47,15 @@ function formatLocalDateTime(date: Date): string {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { appointmentId?: string } }
+  context: { params: Promise<{ appointmentId: string }> }
 ): Promise<Response> {
   const auth = await requirePartnerSession(request);
   if (!auth.ok) {
     return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
   }
 
-  const appointmentId = params.appointmentId?.trim() ?? "";
+  const { appointmentId: rawAppointmentId } = await context.params;
+  const appointmentId = typeof rawAppointmentId === "string" ? rawAppointmentId.trim() : "";
   if (!appointmentId) {
     return NextResponse.json({ ok: false, error: "appointmentId_required" }, { status: 400 });
   }
