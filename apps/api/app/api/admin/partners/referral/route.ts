@@ -31,13 +31,14 @@ export async function POST(request: NextRequest): Promise<Response> {
   const db = getDb();
   const actor = getAuditActorFromRequest(request);
   const now = new Date();
+  const nowIso = now.toISOString();
 
   const [row] = await db
     .update(contacts)
     .set({
       partnerReferralCount: sql`${contacts.partnerReferralCount} + 1`,
       partnerLastReferralAt: now,
-      partnerLastTouchAt: sql`coalesce(${contacts.partnerLastTouchAt}, ${now})`,
+      partnerLastTouchAt: sql`coalesce(${contacts.partnerLastTouchAt}, ${nowIso})`,
       updatedAt: now
     })
     .where(eq(contacts.id, contactId))
@@ -57,4 +58,3 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   return NextResponse.json({ ok: true, contactId, at: now.toISOString() });
 }
-

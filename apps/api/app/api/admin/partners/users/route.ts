@@ -90,6 +90,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const now = new Date();
+  const nowIso = now.toISOString();
 
   // If we're inviting someone into the Partner Portal, treat this org as an active partner.
   // Do not overwrite a more-specific status like "inactive" unless the owner explicitly changes it later.
@@ -100,7 +101,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       .update(contacts)
       .set({
         partnerStatus: "partner",
-        partnerSince: sql`coalesce(${contacts.partnerSince}, ${now})`,
+        partnerSince: sql`coalesce(${contacts.partnerSince}, ${nowIso})`,
         updatedAt: now
       })
       .where(eq(contacts.id, orgContactId));

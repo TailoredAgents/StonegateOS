@@ -213,10 +213,11 @@ export async function POST(request: NextRequest): Promise<Response> {
         .toUTC()
         .toJSDate();
 
+      const nowIso = now.toISOString();
       await db.update(contacts).set({
         partnerStatus: "partner",
         partnerOwnerMemberId: task.assignedTo ?? null,
-        partnerSince: sql`coalesce(${contacts.partnerSince}, ${now})`,
+        partnerSince: sql`coalesce(${contacts.partnerSince}, ${nowIso})`,
         partnerLastTouchAt: now,
         partnerNextTouchAt: dueAt,
         updatedAt: now
