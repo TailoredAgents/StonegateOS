@@ -3,6 +3,7 @@ import { DateTime } from "luxon";
 import { generateEstimateNotificationCopy, generateQuoteNotificationCopy } from "@/lib/ai";
 import { joinServiceLabels, summarizeServiceLabels } from "@/lib/service-labels";
 import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
+import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 
 interface BaseContact {
   name: string;
@@ -53,7 +54,23 @@ export async function sendEstimateCancellation(payload: EstimateNotificationPayl
   const emailBody = `Your Stonegate Junk Removal appointment for ${when} was canceled.\n\nReply to this email (or text us) if you want to rebook.`;
 
   if (contact.phone) {
-    await sendSms(contact.phone, smsBody, { leadId: payload.leadId, appointmentId: appointment.id });
+    if (payload.contactId) {
+      await queueSystemOutboundMessage({
+        contactId: payload.contactId,
+        channel: "sms",
+        toAddress: contact.phone,
+        body: smsBody,
+        metadata: {
+          confirmationLoop: true,
+          kind: "estimate.canceled",
+          leadId: payload.leadId,
+          appointmentId: appointment.id
+        },
+        dedupeKey: `estimate.canceled:${appointment.id}`
+      });
+    } else {
+      await sendSms(contact.phone, smsBody, { leadId: payload.leadId, appointmentId: appointment.id });
+    }
   }
 
   await sendPlainEmail(contact.email, emailSubject, emailBody, { leadId: payload.leadId, appointmentId: appointment.id });
@@ -371,7 +388,24 @@ export async function sendEstimateConfirmation(
 
   if (contact.phone) {
     const smsBody = fallbackSms;
-    await sendSms(contact.phone, smsBody, { leadId: payload.leadId, appointmentId: appointment.id });
+    if (payload.contactId) {
+      await queueSystemOutboundMessage({
+        contactId: payload.contactId,
+        channel: "sms",
+        toAddress: contact.phone,
+        body: smsBody,
+        metadata: {
+          confirmationLoop: true,
+          kind: "estimate.confirmation",
+          reason,
+          leadId: payload.leadId,
+          appointmentId: appointment.id
+        },
+        dedupeKey: `estimate.confirmation:${appointment.id}:${reason}`
+      });
+    } else {
+      await sendSms(contact.phone, smsBody, { leadId: payload.leadId, appointmentId: appointment.id });
+    }
   }
 
   await sendEmail(
@@ -430,11 +464,28 @@ async function sendEstimateReminderInternal(
 
   if (contact.phone) {
     const smsBody = generated?.smsBody && generated.smsBody.length <= 320 ? generated.smsBody : fallbackSms;
-    await sendSms(contact.phone, smsBody, {
-      leadId: payload.leadId,
-      appointmentId: appointment.id,
-      reminderMinutes: options.windowMinutes
-    });
+    if (payload.contactId) {
+      await queueSystemOutboundMessage({
+        contactId: payload.contactId,
+        channel: "sms",
+        toAddress: contact.phone,
+        body: smsBody,
+        metadata: {
+          confirmationLoop: true,
+          kind: "estimate.reminder",
+          leadId: payload.leadId,
+          appointmentId: appointment.id,
+          reminderMinutes: options.windowMinutes
+        },
+        dedupeKey: `estimate.reminder:${appointment.id}:${options.windowMinutes}`
+      });
+    } else {
+      await sendSms(contact.phone, smsBody, {
+        leadId: payload.leadId,
+        appointmentId: appointment.id,
+        reminderMinutes: options.windowMinutes
+      });
+    }
   }
 
   const transporter = getTransport();
@@ -524,10 +575,24 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
   if (payload.contact.phone) {
     const smsBody =
       generated?.smsBody && generated.smsBody.length <= 240 ? generated.smsBody : fallbackSms;
-    await sendSms(payload.contact.phone, smsBody, {
-      quoteId: payload.quoteId,
-      type: "quote.sent"
-    });
+    if (payload.contactId) {
+      await queueSystemOutboundMessage({
+        contactId: payload.contactId,
+        channel: "sms",
+        toAddress: payload.contact.phone,
+        body: smsBody,
+        metadata: {
+          kind: "quote.sent",
+          quoteId: payload.quoteId
+        },
+        dedupeKey: `quote.sent:${payload.quoteId}`
+      });
+    } else {
+      await sendSms(payload.contact.phone, smsBody, {
+        quoteId: payload.quoteId,
+        type: "quote.sent"
+      });
+    }
   }
 
   const emailSubject =
@@ -618,12 +683,28 @@ export async function sendQuoteDecisionNotification(
   if (payload.contact.phone) {
     const smsBody =
       generated?.smsBody && generated.smsBody.length <= 240 ? generated.smsBody : fallbackSms;
-    await sendSms(payload.contact.phone, smsBody, {
-      quoteId: payload.quoteId,
-      type: "quote.decision",
-      decision: payload.decision,
-      source: payload.source
-    });
+    if (payload.contactId) {
+      await queueSystemOutboundMessage({
+        contactId: payload.contactId,
+        channel: "sms",
+        toAddress: payload.contact.phone,
+        body: smsBody,
+        metadata: {
+          kind: "quote.decision",
+          quoteId: payload.quoteId,
+          decision: payload.decision,
+          source: payload.source
+        },
+        dedupeKey: `quote.decision:${payload.quoteId}:${payload.decision}:${payload.source}`
+      });
+    } else {
+      await sendSms(payload.contact.phone, smsBody, {
+        quoteId: payload.quoteId,
+        type: "quote.decision",
+        decision: payload.decision,
+        source: payload.source
+      });
+    }
   }
 
   const emailSubject =
