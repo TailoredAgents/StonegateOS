@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { and, asc, eq, gt, isNull, lt, sql } from "drizzle-orm";
-import { availabilityWindows } from "@myst-os/pricing";
+import { availabilityWindows, weeklyAvailability } from "@myst-os/pricing";
 import { sendSmsMessage } from "@/lib/messaging";
 import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 import {
@@ -22,6 +22,9 @@ import {
 import { requirePartnerSession, resolvePublicSiteBaseUrl } from "@/lib/partner-portal-auth";
 import { APPOINTMENT_TIME_ZONE, resolveAppointmentTiming } from "../../web/scheduling";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
+
+const WEEKDAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+const SERVICE_DAYS = new Set(weeklyAvailability.serviceDays.map((d) => d.toLowerCase()));
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -58,6 +61,12 @@ async function resolveDevonPhone(db: ReturnType<typeof getDb>): Promise<string |
 
 function earliestPartnerBookableDate(now: Date): DateTime {
   const local = DateTime.fromJSDate(now, { zone: APPOINTMENT_TIME_ZONE });
+  let cursor = local.plus({ days: 1 }).startOf("day");
+  for (let i = 0; i < 14; i += 1) {
+    const key = WEEKDAY_KEYS[(cursor.weekday - 1) % 7] ?? null;
+    if (key && SERVICE_DAYS.has(key)) return cursor;
+    cursor = cursor.plus({ days: 1 });
+  }
   return local.plus({ days: 1 }).startOf("day");
 }
 
@@ -185,7 +194,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!window) {
     return NextResponse.json({ ok: false, error: "invalid_time_window" }, { status: 400 });
   }
-  if (window.startHour < 8 || window.endHour > 19) {
+  if (window.startHour < weeklyAvailability.startHour || window.endHour > weeklyAvailability.endHour) {
     return NextResponse.json({ ok: false, error: "outside_business_hours" }, { status: 400 });
   }
 
@@ -213,6 +222,14 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const now = new Date();
+  const preferredLocal = DateTime.fromISO(preferredDate, { zone: APPOINTMENT_TIME_ZONE });
+  if (preferredLocal.isValid) {
+    const key = WEEKDAY_KEYS[(preferredLocal.weekday - 1) % 7] ?? null;
+    if (key && !SERVICE_DAYS.has(key)) {
+      return NextResponse.json({ ok: false, error: "outside_service_days" }, { status: 400 });
+    }
+  }
+
   const earliest = earliestPartnerBookableDate(now);
   const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(APPOINTMENT_TIME_ZONE);
   if (startLocal < earliest) {

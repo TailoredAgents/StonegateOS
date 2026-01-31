@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { availabilityWindows, serviceRates } from "@myst-os/pricing";
+import { availabilityWindows, serviceRates, weeklyAvailability } from "@myst-os/pricing";
 import { callPartnerApi } from "../lib/api";
 import { partnerCreateBookingAction } from "../actions";
 
 const PARTNER_PORTAL_TIME_ZONE = "America/New_York";
+const SERVICE_DAYS = new Set(weeklyAvailability.serviceDays.map((d) => d.toLowerCase()));
 
 function ymdPartsInTimeZone(date: Date): { year: number; month: number; day: number } {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -28,11 +29,27 @@ function formatYmdInTimeZone(date: Date): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function computeTomorrowYmd(): string {
+function weekdayKeyInTimeZone(date: Date): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: PARTNER_PORTAL_TIME_ZONE, weekday: "long" })
+    .format(date)
+    .toLowerCase();
+}
+
+function computeNextServiceDayYmd(): string {
   const now = new Date();
   const { year, month, day } = ymdPartsInTimeZone(now);
   const utcNoonLocalDay = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  const tomorrow = new Date(utcNoonLocalDay.getTime() + 24 * 60 * 60 * 1000);
+
+  const dayMs = 24 * 60 * 60 * 1000;
+  for (let offset = 1; offset <= 14; offset += 1) {
+    const candidate = new Date(utcNoonLocalDay.getTime() + offset * dayMs);
+    const weekdayKey = weekdayKeyInTimeZone(candidate);
+    if (SERVICE_DAYS.has(weekdayKey)) {
+      return formatYmdInTimeZone(candidate);
+    }
+  }
+
+  const tomorrow = new Date(utcNoonLocalDay.getTime() + dayMs);
   return formatYmdInTimeZone(tomorrow);
 }
 
@@ -87,8 +104,10 @@ export default async function PartnerBookPage({
     : null;
   const rateItems = ratesPayload?.items ?? [];
 
-  const validWindows = availabilityWindows.filter((w) => w.startHour >= 8 && w.endHour <= 19);
-  const tomorrow = computeTomorrowYmd();
+  const validWindows = availabilityWindows.filter(
+    (w) => w.startHour >= weeklyAvailability.startHour && w.endHour <= weeklyAvailability.endHour
+  );
+  const tomorrow = computeNextServiceDayYmd();
 
   const services = serviceRates
     .map((r) => ({ service: r.service.toLowerCase(), label: r.label }))
@@ -114,7 +133,7 @@ export default async function PartnerBookPage({
     <div className="space-y-5">
       <header className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
         <h1 className="text-xl font-semibold text-slate-900">Book service</h1>
-        <p className="mt-1 text-sm text-slate-600">Bookings start next business day. Same-day requires calling.</p>
+        <p className="mt-1 text-sm text-slate-600">Bookings start next service day. Same-day requires calling.</p>
         {error ? (
           <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
             {error}
