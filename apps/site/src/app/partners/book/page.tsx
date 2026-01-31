@@ -3,6 +3,39 @@ import { availabilityWindows, serviceRates } from "@myst-os/pricing";
 import { callPartnerApi } from "../lib/api";
 import { partnerCreateBookingAction } from "../actions";
 
+const PARTNER_PORTAL_TIME_ZONE = "America/New_York";
+
+function ymdPartsInTimeZone(date: Date): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: PARTNER_PORTAL_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const year = Number(parts.find((p) => p.type === "year")?.value ?? "");
+  const month = Number(parts.find((p) => p.type === "month")?.value ?? "");
+  const day = Number(parts.find((p) => p.type === "day")?.value ?? "");
+
+  return { year, month, day };
+}
+
+function formatYmdInTimeZone(date: Date): string {
+  const { year, month, day } = ymdPartsInTimeZone(date);
+  const yyyy = String(year).padStart(4, "0");
+  const mm = String(month).padStart(2, "0");
+  const dd = String(day).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function computeTomorrowYmd(): string {
+  const now = new Date();
+  const { year, month, day } = ymdPartsInTimeZone(now);
+  const utcNoonLocalDay = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const tomorrow = new Date(utcNoonLocalDay.getTime() + 24 * 60 * 60 * 1000);
+  return formatYmdInTimeZone(tomorrow);
+}
+
 type PropertyRow = {
   id: string;
   addressLine1: string;
@@ -55,7 +88,7 @@ export default async function PartnerBookPage({
   const rateItems = ratesPayload?.items ?? [];
 
   const validWindows = availabilityWindows.filter((w) => w.startHour >= 8 && w.endHour <= 19);
-  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const tomorrow = computeTomorrowYmd();
 
   const services = serviceRates
     .map((r) => ({ service: r.service.toLowerCase(), label: r.label }))

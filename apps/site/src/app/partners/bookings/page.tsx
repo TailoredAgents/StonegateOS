@@ -12,6 +12,21 @@ type BookingRow = {
   property: { addressLine1: string; city: string; state: string; postalCode: string } | null;
 };
 
+const PARTNER_PORTAL_TIME_ZONE = "America/New_York";
+
+function formatPortalDateTime(isoString: string | null): string {
+  if (!isoString) return "TBD";
+
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return isoString;
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: PARTNER_PORTAL_TIME_ZONE,
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(date);
+}
+
 export default async function PartnerBookingsPage({
   searchParams
 }: {
@@ -69,7 +84,7 @@ export default async function PartnerBookingsPage({
                   </span>
                 </div>
                 <div className="mt-1 text-xs text-slate-600">
-                  {b.appointment.startAt ? new Date(b.appointment.startAt).toLocaleString() : "TBD"} - {b.serviceKey ?? "service"}
+                  {formatPortalDateTime(b.appointment.startAt)} - {b.serviceKey ?? "service"}
                   {b.tierKey ? ` (${b.tierKey})` : ""}
                   {typeof b.amountCents === "number" ? ` - $${(b.amountCents / 100).toFixed(2)}` : ""}
                 </div>
