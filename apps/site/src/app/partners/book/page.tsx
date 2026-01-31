@@ -73,11 +73,12 @@ type RateItemRow = {
 export default async function PartnerBookPage({
   searchParams
 }: {
-  searchParams?: Promise<{ propertyId?: string; serviceKey?: string; error?: string }>;
+  searchParams?: Promise<{ propertyId?: string; serviceKey?: string; rescheduleFrom?: string; error?: string }>;
 }) {
   const params = (await searchParams) ?? {};
   const propertyId = typeof params.propertyId === "string" ? params.propertyId.trim() : "";
   const serviceKeyParam = typeof params.serviceKey === "string" ? params.serviceKey.trim().toLowerCase() : "";
+  const rescheduleFrom = typeof params.rescheduleFrom === "string" ? params.rescheduleFrom.trim() : "";
   const error = typeof params.error === "string" && params.error.trim().length ? params.error.trim() : null;
 
   const [propertiesRes, ratesRes] = await Promise.all([
@@ -134,6 +135,11 @@ export default async function PartnerBookPage({
       <header className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
         <h1 className="text-xl font-semibold text-slate-900">Book service</h1>
         <p className="mt-1 text-sm text-slate-600">Bookings start next service day. Same-day requires calling.</p>
+        {rescheduleFrom ? (
+          <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Rescheduling: once you confirm, we'll cancel your previous booking.
+          </div>
+        ) : null}
         {error ? (
           <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
             {error}
@@ -186,6 +192,7 @@ export default async function PartnerBookPage({
               <form action={partnerCreateBookingAction} className="mt-4 grid gap-3 md:grid-cols-2">
                 <input type="hidden" name="propertyId" value={selectedProperty.id} />
                 <input type="hidden" name="serviceKey" value={selectedService.service} />
+                {rescheduleFrom ? <input type="hidden" name="rescheduleFromAppointmentId" value={rescheduleFrom} /> : null}
 
                 <label>
                   <div className="text-xs font-semibold text-slate-700">Rate tier (optional)</div>

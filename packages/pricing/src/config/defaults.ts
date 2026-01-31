@@ -189,7 +189,7 @@ export const availabilityWindows: AvailabilityWindow[] = [
 ] as const;
 
 export const weeklyAvailability: WeeklyAvailability = {
-  serviceDays: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+  serviceDays: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
   startHour: 8,
   endHour: 18,
   quietHours: {

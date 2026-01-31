@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { callPartnerApi } from "../lib/api";
+import { CancelBookingForm } from "./CancelBookingForm";
 
 type BookingRow = {
   id: string;
   appointmentId: string;
+  propertyId: string | null;
   serviceKey: string | null;
   tierKey: string | null;
   amountCents: number | null;
@@ -30,10 +32,13 @@ function formatPortalDateTime(isoString: string | null): string {
 export default async function PartnerBookingsPage({
   searchParams
 }: {
-  searchParams?: Promise<{ created?: string }>;
+  searchParams?: Promise<{ created?: string; canceled?: string; rescheduled?: string; error?: string }>;
 }) {
   const params = (await searchParams) ?? {};
   const created = params.created === "1";
+  const canceled = params.canceled === "1";
+  const rescheduled = params.rescheduled === "1";
+  const error = typeof params.error === "string" && params.error.trim().length ? params.error.trim() : null;
 
   const res = await callPartnerApi("/api/portal/bookings");
   if (!res.ok) {
@@ -58,6 +63,21 @@ export default async function PartnerBookingsPage({
         {created ? (
           <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
             Booking created.
+          </div>
+        ) : null}
+        {rescheduled ? (
+          <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            Booking rescheduled.
+          </div>
+        ) : null}
+        {canceled ? (
+          <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            Booking canceled.
+          </div>
+        ) : null}
+        {error ? (
+          <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+            {error}
           </div>
         ) : null}
       </header>
@@ -88,6 +108,22 @@ export default async function PartnerBookingsPage({
                   {b.tierKey ? ` (${b.tierKey})` : ""}
                   {typeof b.amountCents === "number" ? ` - $${(b.amountCents / 100).toFixed(2)}` : ""}
                 </div>
+
+                {b.appointment.status !== "canceled" ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                    <Link
+                      className="font-semibold text-primary-700 underline"
+                      href={`/partners/book?${new URLSearchParams({
+                        ...(b.propertyId ? { propertyId: b.propertyId } : {}),
+                        ...(b.serviceKey ? { serviceKey: b.serviceKey } : {}),
+                        rescheduleFrom: b.appointmentId
+                      }).toString()}`}
+                    >
+                      Reschedule
+                    </Link>
+                    <CancelBookingForm appointmentId={b.appointmentId} />
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>

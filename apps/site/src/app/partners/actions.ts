@@ -137,6 +137,10 @@ export async function partnerCreateBookingAction(formData: FormData) {
   const preferredDate = typeof formData.get("preferredDate") === "string" ? String(formData.get("preferredDate")).trim() : "";
   const timeWindowId = typeof formData.get("timeWindowId") === "string" ? String(formData.get("timeWindowId")).trim() : "";
   const notes = typeof formData.get("notes") === "string" ? String(formData.get("notes")).trim() : "";
+  const rescheduleFromAppointmentId =
+    typeof formData.get("rescheduleFromAppointmentId") === "string"
+      ? String(formData.get("rescheduleFromAppointmentId")).trim()
+      : "";
 
   const res = await callPartnerApi("/api/portal/bookings", {
     method: "POST",
@@ -155,5 +159,33 @@ export async function partnerCreateBookingAction(formData: FormData) {
     redirect(`/partners/book?error=${encodeURIComponent(msg)}`);
   }
 
+  if (rescheduleFromAppointmentId) {
+    await callPartnerApi(`/api/portal/bookings/${encodeURIComponent(rescheduleFromAppointmentId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({})
+    }).catch(() => null);
+    redirect("/partners/bookings?created=1&rescheduled=1");
+  }
+
   redirect("/partners/bookings?created=1");
+}
+
+export async function partnerCancelBookingAction(formData: FormData) {
+  const appointmentId =
+    typeof formData.get("appointmentId") === "string" ? String(formData.get("appointmentId")).trim() : "";
+  if (!appointmentId) {
+    redirect("/partners/bookings?error=missing_appointment_id");
+  }
+
+  const res = await callPartnerApi(`/api/portal/bookings/${encodeURIComponent(appointmentId)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+
+  if (!res.ok) {
+    const msg = await readErrorMessage(res, "cancel_failed");
+    redirect(`/partners/bookings?error=${encodeURIComponent(msg)}`);
+  }
+
+  redirect("/partners/bookings?canceled=1");
 }
