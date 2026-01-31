@@ -15,6 +15,7 @@ import {
   properties
 } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
+import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
 import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
 import {
   getCompanyProfilePolicy,
@@ -362,6 +363,15 @@ function extractPhoneFromText(text: string): { raw: string; e164: string } | nul
   return null;
 }
 
+function didCustomerAskAboutPrice(messages: MessageContext[]): boolean {
+  const text = messages
+    .filter((m) => m.direction === "inbound")
+    .map((m) => m.body)
+    .join("\n")
+    .toLowerCase();
+  return /\b(price|pricing|quote|cost|how much|estimate)\b/.test(text) || /\$\s*\d/.test(text);
+}
+
 function isMessengerLeadCard(body: string): boolean {
   const text = body.toLowerCase();
   const markers = ["phone number:", "email:", "zip code:", "first name:", "when do you want it gone?:"];
@@ -683,6 +693,12 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const automationMode = await getAutomationModeForReplyChannel(db, replyChannel);
   const autoSendEligible = automationMode === "auto";
   const extractedPhone = extractPhoneFromText(messages.map((m) => m.body).join("\n"));
+  const omni = await loadOmniThreadFacts(db, {
+    threadId,
+    contactId: threadContext.contactId,
+    threadPostalCode: threadContext.propertyPostalCode ?? null,
+    includeQuotePrice: didCustomerAskAboutPrice(messages)
+  });
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, { inboundChannel: replyChannel, replyChannel });
   const followUpExample = resolveTemplateForChannel(templates.follow_up, { inboundChannel: replyChannel, replyChannel });
@@ -699,7 +715,8 @@ ${persona.systemPrompt}
 Sales autopilot drafting rules (must follow):
 - The customer message must be short and natural. Avoid corporate phrases like "thanks for contacting" or "thanks for reaching out".
 - Do not ask for any info that is already present in the context (for example, do not ask for ZIP if a ZIP is provided).
-- Ask for the minimum needed to move forward: items and timing, and request photos when helpful.
+- Never mention price or dollar amounts unless the customer explicitly asks about price/quote/cost/estimate.
+- Ask only for the minimum missing info to move forward (at most one question). If an instant quote or appointment exists in context, do not ask for items/ZIP/photos/timing again.
 - Do not include a signature line at the end.
 Output ONLY JSON matching the schema.
 
@@ -718,6 +735,23 @@ Notes: ${companyProfile.agentNotes}
     `Channel: ${replyChannel}`,
     `Thread state: ${threadContext.state}`,
     `Customer name: ${threadContext.contactName ?? "Unknown"}`,
+    omni.pipelineStage ? `Pipeline stage: ${omni.pipelineStage}` : null,
+    omni.pipelineNotes ? `CRM notes:\n${omni.pipelineNotes}` : null,
+    omni.latestLead
+      ? `Latest lead: ${omni.latestLead.source ?? "unknown_source"} (${omni.latestLead.status}) at ${omni.latestLead.createdAt.toISOString()}`
+      : null,
+    omni.instantQuote
+      ? `Instant quote on file: job types=${omni.instantQuote.jobTypes.join(", ") || "unknown"}, size=${omni.instantQuote.perceivedSize}, timeframe=${omni.instantQuote.timeframe}, photos=${omni.instantQuote.photoUrls.length}${omni.instantQuote.priceLow !== null && omni.instantQuote.priceHigh !== null ? `, range=$${omni.instantQuote.priceLow}-$${omni.instantQuote.priceHigh}` : ", price hidden unless asked"}`
+      : null,
+    omni.nextAppointment
+      ? `Appointment on file: ${omni.nextAppointment.type} (${omni.nextAppointment.status}) at ${omni.nextAppointment.startAt ? omni.nextAppointment.startAt.toISOString() : "TBD"}`
+      : null,
+    omni.otherChannelThreads.length
+      ? `Other channels:\n${omni.otherChannelThreads
+          .map((t) => `- ${t.channel} last=${t.lastMessageAt ? t.lastMessageAt.toISOString() : "unknown"}: ${t.lastMessagePreview ?? ""}`)
+          .join("\n")}`
+      : null,
+    omni.missingFields.length ? `Missing info (ask at most one): ${omni.missingFields.join(", ")}` : `Missing info: none`,
     normalizedPostal ? `ZIP is already known: ${normalizedPostal} (do not ask for ZIP)` : `ZIP is unknown (ask for ZIP)`,
     normalizedPostal && outOfServiceArea === true ? `Location warning: ZIP may be out of our usual service area. Confirm job location before closing out.` : null,
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,

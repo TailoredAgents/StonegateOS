@@ -13,6 +13,7 @@ import { requirePermission } from "@/lib/permissions";
 import { getBusinessHoursPolicy, getCompanyProfilePolicy, getConversationPersonaPolicy, getServiceAreaPolicy, getTemplatesPolicy, isGeorgiaPostalCode, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
 
 type ReplyChannel = "sms" | "email" | "dm";
 
@@ -53,6 +54,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isReplyChannel(value: string): value is ReplyChannel {
   return value === "sms" || value === "email" || value === "dm";
+}
+
+function didCustomerAskAboutPrice(messages: MessageContext[]): boolean {
+  const text = messages
+    .filter((m) => m.direction === "inbound")
+    .map((m) => m.body)
+    .join("\n")
+    .toLowerCase();
+  return /\b(price|pricing|quote|cost|how much|estimate)\b/.test(text) || /\$\s*\d/.test(text);
 }
 
 function readEnvString(key: string): string | null {
@@ -460,10 +470,17 @@ export async function POST(
     getConversationPersonaPolicy(db)
   ]);
 
-  const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
+ const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
   const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
   const outsideUsualArea =
     normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
+
+  const omni = await loadOmniThreadFacts(db, {
+    threadId,
+    contactId: threadContext.contactId,
+    threadPostalCode: threadContext.propertyPostalCode ?? null,
+    includeQuotePrice: didCustomerAskAboutPrice(messages)
+  });
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, {
     inboundChannel: replyChannel,
@@ -481,6 +498,7 @@ export async function POST(
  const systemPrompt = `
  ${persona.systemPrompt}
  Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
+ Never mention price or dollar amounts unless the customer explicitly asks about price/quote/cost/estimate.
 
  Business hours policy timezone: ${businessHours.timezone}
  Company notes: We can message any time, and we typically schedule jobs during business hours.
@@ -500,6 +518,23 @@ export async function POST(
     `Channel: ${replyChannel}`,
     `Thread state: ${threadContext.state}`,
     `Customer name: ${threadContext.contactName ?? "Unknown"}`,
+    omni.pipelineStage ? `Pipeline stage: ${omni.pipelineStage}` : null,
+    omni.pipelineNotes ? `CRM notes:\n${omni.pipelineNotes}` : null,
+    omni.latestLead
+      ? `Latest lead: ${omni.latestLead.source ?? "unknown_source"} (${omni.latestLead.status}) at ${omni.latestLead.createdAt.toISOString()}`
+      : null,
+    omni.instantQuote
+      ? `Instant quote on file: job types=${omni.instantQuote.jobTypes.join(", ") || "unknown"}, size=${omni.instantQuote.perceivedSize}, timeframe=${omni.instantQuote.timeframe}, photos=${omni.instantQuote.photoUrls.length}${omni.instantQuote.priceLow !== null && omni.instantQuote.priceHigh !== null ? `, range=$${omni.instantQuote.priceLow}-$${omni.instantQuote.priceHigh}` : ", price hidden unless asked"}`
+      : null,
+    omni.nextAppointment
+      ? `Appointment on file: ${omni.nextAppointment.type} (${omni.nextAppointment.status}) at ${omni.nextAppointment.startAt ? omni.nextAppointment.startAt.toISOString() : "TBD"}`
+      : null,
+    omni.otherChannelThreads.length
+      ? `Other channels:\n${omni.otherChannelThreads
+          .map((t) => `- ${t.channel} last=${t.lastMessageAt ? t.lastMessageAt.toISOString() : "unknown"}: ${t.lastMessagePreview ?? ""}`)
+          .join("\n")}`
+      : null,
+    omni.missingFields.length ? `Missing info (ask at most one): ${omni.missingFields.join(", ")}` : `Missing info: none`,
     threadContext.contactPhoneE164 || threadContext.contactPhone ? `Customer phone: ${threadContext.contactPhoneE164 ?? threadContext.contactPhone}` : null,
     threadContext.contactEmail ? `Customer email: ${threadContext.contactEmail}` : null,
     threadContext.propertyAddressLine1 ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}` : null,
