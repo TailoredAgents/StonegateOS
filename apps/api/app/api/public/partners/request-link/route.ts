@@ -117,8 +117,8 @@ export async function POST(request: NextRequest): Promise<Response> {
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const isRecentDuplicate =
       Boolean(existingTask?.id) &&
-      existingTask.title === "Partner portal access request" &&
-      existingTask.createdAt >= oneDayAgo;
+      existingTask?.title === "Partner portal access request" &&
+      Boolean(existingTask?.createdAt && existingTask.createdAt >= oneDayAgo);
     if (isRecentDuplicate) return;
 
     await db.insert(crmTasks).values({
