@@ -9,8 +9,7 @@ const CREW_COOKIE = "myst-crew-session";
 export const dynamic = "force-dynamic";
 
 function buildContactsRedirect(request: NextRequest, contactId?: string | null): URL {
-  const origin = new URL(request.url).origin;
-  const url = new URL("/team", origin);
+  const url = getSafeRedirectUrl(request, "/team?tab=contacts");
   url.searchParams.set("tab", "contacts");
   if (contactId) url.searchParams.set("created", contactId);
   return url;
