@@ -4,6 +4,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { getDb, partnerRateCards, partnerRateItems } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
+import { isPartnerAllowedServiceKey, isPartnerJunkTierKey } from "@myst-os/pricing";
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -80,25 +81,41 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "orgContactId_required" }, { status: 400 });
   }
 
-  const normalized = items
-    .map((row) => {
-      const record = typeof row === "object" && row !== null ? (row as Record<string, unknown>) : null;
-      if (!record) return null;
-      const serviceKey = readString(record["serviceKey"]).toLowerCase();
-      const tierKey = readString(record["tierKey"]);
-      const label = readString(record["label"]) || null;
-      const amountCents = readNumber(record["amountCents"]);
-      const sortOrder = readNumber(record["sortOrder"]);
-      if (!serviceKey || !tierKey || amountCents === null) return null;
-      return {
-        serviceKey,
-        tierKey,
-        label,
-        amountCents: Math.max(0, Math.floor(amountCents)),
-        sortOrder: sortOrder === null ? 0 : Math.floor(sortOrder)
-      };
-    })
-    .filter((row): row is NonNullable<typeof row> => Boolean(row));
+  const normalized: Array<{
+    serviceKey: string;
+    tierKey: string;
+    label: string | null;
+    amountCents: number;
+    sortOrder: number;
+  }> = [];
+
+  for (const row of items) {
+    const record = typeof row === "object" && row !== null ? (row as Record<string, unknown>) : null;
+    if (!record) continue;
+
+    const serviceKeyRaw = readString(record["serviceKey"]).toLowerCase();
+    const tierKey = readString(record["tierKey"]);
+    const label = readString(record["label"]) || null;
+    const amountCents = readNumber(record["amountCents"]);
+    const sortOrder = readNumber(record["sortOrder"]);
+    if (!serviceKeyRaw || !tierKey || amountCents === null) continue;
+
+    if (!isPartnerAllowedServiceKey(serviceKeyRaw)) {
+      return NextResponse.json({ ok: false, error: `invalid_service_key:${serviceKeyRaw}` }, { status: 400 });
+    }
+
+    if (serviceKeyRaw === "junk-removal" && !isPartnerJunkTierKey(tierKey)) {
+      return NextResponse.json({ ok: false, error: `invalid_tier_key:${tierKey}` }, { status: 400 });
+    }
+
+    normalized.push({
+      serviceKey: serviceKeyRaw,
+      tierKey,
+      label,
+      amountCents: Math.max(0, Math.floor(amountCents)),
+      sortOrder: sortOrder === null ? 0 : Math.floor(sortOrder)
+    });
+  }
 
   const db = getDb();
   const now = new Date();
@@ -145,4 +162,3 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   return NextResponse.json({ ok: true, cardId: result });
 }
-

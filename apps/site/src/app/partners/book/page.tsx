@@ -1,5 +1,11 @@
 import Link from "next/link";
-import { availabilityWindows, serviceRates, weeklyAvailability } from "@myst-os/pricing";
+import {
+  availabilityWindows,
+  getPartnerServiceLabel,
+  isPartnerAllowedServiceKey,
+  PARTNER_JUNK_BASE_TIER_KEYS,
+  weeklyAvailability
+} from "@myst-os/pricing";
 import { callPartnerApi } from "../lib/api";
 import { partnerCreateBookingAction } from "../actions";
 
@@ -70,6 +76,8 @@ type RateItemRow = {
   sortOrder: number;
 };
 
+type ServiceOption = { key: string; label: string };
+
 export default async function PartnerBookPage({
   searchParams
 }: {
@@ -110,23 +118,33 @@ export default async function PartnerBookPage({
   );
   const tomorrow = computeNextServiceDayYmd();
 
-  const services = serviceRates
-    .map((r) => ({ service: r.service.toLowerCase(), label: r.label }))
+  const services: ServiceOption[] = Array.from(
+    new Set(
+      rateItems
+        .map((item) => (typeof item.serviceKey === "string" ? item.serviceKey.trim().toLowerCase() : ""))
+        .filter((key) => key.length > 0)
+        .filter((key) => isPartnerAllowedServiceKey(key))
+    )
+  )
+    .map((key) => ({ key, label: getPartnerServiceLabel(key) }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
   const serviceKey =
     serviceKeyParam.length > 0
       ? serviceKeyParam
-      : services.some((s) => s.service === "junk-removal")
-        ? "junk-removal"
-        : "";
+      : (services[0]?.key ?? "");
 
   const selectedProperty = properties.find((p) => p.id === propertyId) ?? null;
-  const selectedService = services.find((s) => s.service === serviceKey) ?? null;
+  const selectedService = services.find((s) => s.key === serviceKey) ?? null;
 
   const tiersForService = selectedService
     ? rateItems
-        .filter((i) => i.serviceKey.toLowerCase() === selectedService.service)
+        .filter((i) => i.serviceKey.toLowerCase() === selectedService.key)
+        .filter((i) =>
+          selectedService.key === "junk-removal"
+            ? (PARTNER_JUNK_BASE_TIER_KEYS as readonly string[]).includes(i.tierKey)
+            : true
+        )
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     : [];
 
@@ -158,6 +176,12 @@ export default async function PartnerBookPage({
       ) : (
         <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/50">
           <h2 className="text-base font-semibold text-slate-900">Step 1 - Select property + service</h2>
+          {services.length === 0 ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Your partner account is not configured for online booking yet. Please contact Stonegate to enable portal
+              services for your account.
+            </div>
+          ) : null}
           <form method="get" action="/partners/book" className="mt-4 grid gap-3 md:grid-cols-2">
             <label>
               <div className="text-xs font-semibold text-slate-700">Property</div>
@@ -172,10 +196,10 @@ export default async function PartnerBookPage({
             </label>
             <label>
               <div className="text-xs font-semibold text-slate-700">Service</div>
-              <select name="serviceKey" defaultValue={selectedService?.service ?? ""} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
+              <select name="serviceKey" defaultValue={selectedService?.key ?? ""} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
                 <option value="">Choose...</option>
                 {services.map((s) => (
-                  <option key={s.service} value={s.service}>
+                  <option key={s.key} value={s.key}>
                     {s.label}
                   </option>
                 ))}
@@ -191,7 +215,7 @@ export default async function PartnerBookPage({
               <h2 className="text-base font-semibold text-slate-900">Step 2 - Choose time</h2>
               <form action={partnerCreateBookingAction} className="mt-4 grid gap-3 md:grid-cols-2">
                 <input type="hidden" name="propertyId" value={selectedProperty.id} />
-                <input type="hidden" name="serviceKey" value={selectedService.service} />
+                <input type="hidden" name="serviceKey" value={selectedService.key} />
                 {rescheduleFrom ? <input type="hidden" name="rescheduleFromAppointmentId" value={rescheduleFrom} /> : null}
 
                 <label>

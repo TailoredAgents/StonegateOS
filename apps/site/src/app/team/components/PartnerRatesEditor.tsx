@@ -1,6 +1,22 @@
-"use client";
+﻿"use client";
 
 import React from "react";
+import {
+  getPartnerServiceLabel,
+  PARTNER_ALLOWED_SERVICE_KEYS,
+  PARTNER_JUNK_ADDON_TIER_KEYS,
+  PARTNER_JUNK_BASE_TIER_KEYS,
+  type PartnerServiceKey
+} from "@myst-os/pricing";
+
+type ServiceOption = { key: PartnerServiceKey; label: string };
+const SERVICE_OPTIONS: ServiceOption[] = (PARTNER_ALLOWED_SERVICE_KEYS as readonly PartnerServiceKey[]).map((key) => ({
+  key,
+  label: getPartnerServiceLabel(key)
+}));
+
+const JUNK_BASE_TIER_KEYS = PARTNER_JUNK_BASE_TIER_KEYS as readonly string[];
+const JUNK_ADDON_TIER_KEYS = PARTNER_JUNK_ADDON_TIER_KEYS as readonly string[];
 
 type RateItemRow = {
   id: string;
@@ -92,6 +108,27 @@ export function PartnerRatesEditor({
             tierKey: "full",
             label: "Full load",
             amount: "600.00"
+          },
+          {
+            id: "seed_mattress_fee",
+            serviceKey: "junk-removal",
+            tierKey: "mattress_fee",
+            label: "Mattress fee (each)",
+            amount: "30.00"
+          },
+          {
+            id: "seed_paint_fee",
+            serviceKey: "junk-removal",
+            tierKey: "paint_fee",
+            label: "Paint cans (each)",
+            amount: "10.00"
+          },
+          {
+            id: "seed_tire_fee",
+            serviceKey: "junk-removal",
+            tierKey: "tire_fee",
+            label: "Tires (each)",
+            amount: "10.00"
           }
         ]
   );
@@ -141,31 +178,68 @@ export function PartnerRatesEditor({
                 <div className="mb-1 sm:hidden text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                   Service
                 </div>
-                <input
+                <select
                   value={row.serviceKey}
                   onChange={(e) =>
                     setRows((prev) =>
-                      prev.map((r) => (r.id === row.id ? { ...r, serviceKey: e.target.value } : r))
+                      prev.map((r) =>
+                        r.id === row.id
+                          ? { ...r, serviceKey: e.target.value, tierKey: "", label: "" }
+                          : r
+                      )
                     )
                   }
                   className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                  placeholder="junk-removal"
-                />
+                >
+                  {SERVICE_OPTIONS.map((opt) => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="sm:col-span-2">
                 <div className="mb-1 sm:hidden text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                   Tier key
                 </div>
-                <input
-                  value={row.tierKey}
-                  onChange={(e) =>
-                    setRows((prev) =>
-                      prev.map((r) => (r.id === row.id ? { ...r, tierKey: e.target.value } : r))
-                    )
-                  }
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                  placeholder="quarter"
-                />
+                {row.serviceKey === "junk-removal" ? (
+                  <select
+                    value={row.tierKey}
+                    onChange={(e) =>
+                      setRows((prev) =>
+                        prev.map((r) => (r.id === row.id ? { ...r, tierKey: e.target.value } : r))
+                      )
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  >
+                    <option value="">Choose...</option>
+                    <optgroup label="Base tiers">
+                      {JUNK_BASE_TIER_KEYS.map((key) => (
+                        <option key={key} value={key}>
+                          {key}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Add-ons">
+                      {JUNK_ADDON_TIER_KEYS.map((key) => (
+                        <option key={key} value={key}>
+                          {key}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                ) : (
+                  <input
+                    value={row.tierKey}
+                    onChange={(e) =>
+                      setRows((prev) =>
+                        prev.map((r) => (r.id === row.id ? { ...r, tierKey: e.target.value } : r))
+                      )
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                    placeholder="tier_key"
+                  />
+                )}
               </div>
               <div className="sm:col-span-3">
                 <div className="mb-1 sm:hidden text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -206,7 +280,7 @@ export function PartnerRatesEditor({
                   aria-label="Remove tier"
                   title="Remove tier"
                 >
-                  ×
+                  x
                 </button>
                 </div>
               </div>
@@ -244,3 +318,4 @@ export function PartnerRatesEditor({
     </div>
   );
 }
+

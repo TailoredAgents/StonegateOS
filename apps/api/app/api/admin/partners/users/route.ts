@@ -179,6 +179,58 @@ export async function POST(request: NextRequest): Promise<Response> {
       .limit(1);
 
     const cardId = existingCard?.id ?? null;
+    const defaultItems = [
+      {
+        serviceKey: "junk-removal",
+        tierKey: "quarter",
+        label: "Quarter load",
+        amountCents: 15000,
+        sortOrder: 1
+      },
+      {
+        serviceKey: "junk-removal",
+        tierKey: "half",
+        label: "Half load",
+        amountCents: 30000,
+        sortOrder: 2
+      },
+      {
+        serviceKey: "junk-removal",
+        tierKey: "three_quarter",
+        label: "3/4 load",
+        amountCents: 45000,
+        sortOrder: 3
+      },
+      {
+        serviceKey: "junk-removal",
+        tierKey: "full",
+        label: "Full load",
+        amountCents: 60000,
+        sortOrder: 4
+      },
+      {
+        serviceKey: "junk-removal",
+        tierKey: "mattress_fee",
+        label: "Mattress fee (each)",
+        amountCents: 3000,
+        sortOrder: 50
+      },
+      {
+        serviceKey: "junk-removal",
+        tierKey: "paint_fee",
+        label: "Paint cans (each)",
+        amountCents: 1000,
+        sortOrder: 51
+      },
+      {
+        serviceKey: "junk-removal",
+        tierKey: "tire_fee",
+        label: "Tires (each)",
+        amountCents: 1000,
+        sortOrder: 52
+      }
+    ] as const;
+
     const [countRow] = cardId
       ? await db
           .select({ cnt: sql<number>`count(*)` })
@@ -194,92 +246,39 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       const newCardId = createdCard?.id ?? null;
       if (newCardId) {
-        await db.insert(partnerRateItems).values([
-          {
+        await db.insert(partnerRateItems).values(
+          defaultItems.map((item) => ({
             rateCardId: newCardId,
-            serviceKey: "junk-removal",
-            tierKey: "quarter",
-            label: "Quarter load",
-            amountCents: 15000,
-            sortOrder: 1
-          },
-          {
-            rateCardId: newCardId,
-            serviceKey: "junk-removal",
-            tierKey: "half",
-            label: "Half load",
-            amountCents: 30000,
-            sortOrder: 2
-          },
-          {
-            rateCardId: newCardId,
-            serviceKey: "junk-removal",
-            tierKey: "three_quarter",
-            label: "3/4 load",
-            amountCents: 45000,
-            sortOrder: 3
-          },
-          {
-            rateCardId: newCardId,
-            serviceKey: "junk-removal",
-            tierKey: "full",
-            label: "Full load",
-            amountCents: 60000,
-            sortOrder: 4
-          },
-          {
-            rateCardId: newCardId,
-            serviceKey: "junk-removal",
-            tierKey: "mattress_fee",
-            label: "Mattress fee",
-            amountCents: 4000,
-            sortOrder: 50
-          }
-        ]);
+            ...item
+          }))
+        );
       }
     } else if ((countRow?.cnt ?? 0) === 0) {
-      await db.insert(partnerRateItems).values([
-        {
+      await db.insert(partnerRateItems).values(
+        defaultItems.map((item) => ({
           rateCardId: cardId,
-          serviceKey: "junk-removal",
-          tierKey: "quarter",
-          label: "Quarter load",
-          amountCents: 15000,
-          sortOrder: 1
-        },
-        {
-          rateCardId: cardId,
-          serviceKey: "junk-removal",
-          tierKey: "half",
-          label: "Half load",
-          amountCents: 30000,
-          sortOrder: 2
-        },
-        {
-          rateCardId: cardId,
-          serviceKey: "junk-removal",
-          tierKey: "three_quarter",
-          label: "3/4 load",
-          amountCents: 45000,
-          sortOrder: 3
-        },
-        {
-          rateCardId: cardId,
-          serviceKey: "junk-removal",
-          tierKey: "full",
-          label: "Full load",
-          amountCents: 60000,
-          sortOrder: 4
-        },
-        {
-          rateCardId: cardId,
-          serviceKey: "junk-removal",
-          tierKey: "mattress_fee",
-          label: "Mattress fee",
-          amountCents: 4000,
-          sortOrder: 50
-        }
-      ]);
+          ...item
+        }))
+      );
+    } else {
+      // Backfill missing defaults for existing partners (idempotent; avoids duplicates).
+      const rows = await db
+        .select({ serviceKey: partnerRateItems.serviceKey, tierKey: partnerRateItems.tierKey })
+        .from(partnerRateItems)
+        .where(eq(partnerRateItems.rateCardId, cardId));
+
+      const existingKeys = new Set(rows.map((r) => `${(r.serviceKey ?? "").toLowerCase()}:${r.tierKey ?? ""}`));
+      const missing = defaultItems.filter((item) => !existingKeys.has(`${item.serviceKey}:${item.tierKey}`));
+
+      if (missing.length) {
+        await db.insert(partnerRateItems).values(
+          missing.map((item) => ({
+            rateCardId: cardId,
+            ...item,
+            createdAt: now
+          }))
+        );
+      }
     }
   } catch {
     // ignore
