@@ -3,7 +3,12 @@ import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { and, asc, eq, gt, isNull, lt, sql } from "drizzle-orm";
-import { availabilityWindows, weeklyAvailability } from "@myst-os/pricing";
+import {
+  availabilityWindows,
+  isPartnerAllowedServiceKey,
+  isPartnerTierKeyForService,
+  weeklyAvailability
+} from "@myst-os/pricing";
 import { sendSmsMessage } from "@/lib/messaging";
 import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 import {
@@ -188,6 +193,13 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   if (!propertyId || !preferredDate || !timeWindowId || !serviceKey) {
     return NextResponse.json({ ok: false, error: "missing_required_fields" }, { status: 400 });
+  }
+
+  if (!isPartnerAllowedServiceKey(serviceKey)) {
+    return NextResponse.json({ ok: false, error: "invalid_service_key" }, { status: 400 });
+  }
+  if (tierKey && !isPartnerTierKeyForService(serviceKey, tierKey)) {
+    return NextResponse.json({ ok: false, error: "invalid_tier_key" }, { status: 400 });
   }
 
   const window = availabilityWindows.find((w) => w.id === timeWindowId) ?? null;

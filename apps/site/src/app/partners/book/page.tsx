@@ -3,7 +3,9 @@ import {
   availabilityWindows,
   getPartnerServiceLabel,
   isPartnerAllowedServiceKey,
+  PARTNER_DEMO_TIER_KEYS,
   PARTNER_JUNK_BASE_TIER_KEYS,
+  PARTNER_LAND_CLEARING_TIER_KEYS,
   weeklyAvailability
 } from "@myst-os/pricing";
 import { callPartnerApi } from "../lib/api";
@@ -11,6 +13,22 @@ import { partnerCreateBookingAction } from "../actions";
 
 const PARTNER_PORTAL_TIME_ZONE = "America/New_York";
 const SERVICE_DAYS = new Set(weeklyAvailability.serviceDays.map((d) => d.toLowerCase()));
+
+function tierFieldLabelForService(serviceKey: string): string {
+  const key = serviceKey.trim().toLowerCase();
+  if (key === "junk-removal") return "Trailer size (optional)";
+  if (key === "demo-hauloff") return "Demo package (optional)";
+  if (key === "land-clearing") return "Job size (optional)";
+  return "Rate tier (optional)";
+}
+
+function notesPlaceholderForService(serviceKey: string): string {
+  const key = serviceKey.trim().toLowerCase();
+  if (key === "junk-removal") return "Item list, access notes, stairs, heavy items, parking, etc.";
+  if (key === "demo-hauloff") return "What are we demoing? Any tile/concrete/heavy materials? Access + parking notes.";
+  if (key === "land-clearing") return "Area size, access width, brush density, haul-away vs pile on-site, etc.";
+  return "Any access notes, item list, parking instructions, etc.";
+}
 
 function ymdPartsInTimeZone(date: Date): { year: number; month: number; day: number } {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -143,7 +161,11 @@ export default async function PartnerBookPage({
         .filter((i) =>
           selectedService.key === "junk-removal"
             ? (PARTNER_JUNK_BASE_TIER_KEYS as readonly string[]).includes(i.tierKey)
-            : true
+            : selectedService.key === "demo-hauloff"
+              ? (PARTNER_DEMO_TIER_KEYS as readonly string[]).includes(i.tierKey)
+              : selectedService.key === "land-clearing"
+                ? (PARTNER_LAND_CLEARING_TIER_KEYS as readonly string[]).includes(i.tierKey)
+                : false
         )
         .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     : [];
@@ -219,7 +241,7 @@ export default async function PartnerBookPage({
                 {rescheduleFrom ? <input type="hidden" name="rescheduleFromAppointmentId" value={rescheduleFrom} /> : null}
 
                 <label>
-                  <div className="text-xs font-semibold text-slate-700">Rate tier (optional)</div>
+                  <div className="text-xs font-semibold text-slate-700">{tierFieldLabelForService(selectedService.key)}</div>
                   <select name="tierKey" defaultValue="" className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm">
                     <option value="">Call for pricing / use standard rate</option>
                     {tiersForService.map((tier) => (
@@ -248,7 +270,11 @@ export default async function PartnerBookPage({
 
                 <label className="md:col-span-2">
                   <div className="text-xs font-semibold text-slate-700">Notes (optional)</div>
-                  <textarea name="notes" className="mt-1 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm" placeholder="Any access notes, item list, parking instructions, etc." />
+                  <textarea
+                    name="notes"
+                    className="mt-1 min-h-[120px] w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
+                    placeholder={notesPlaceholderForService(selectedService.key)}
+                  />
                 </label>
 
                 <button type="submit" className="md:col-span-2 rounded-2xl bg-primary-600 px-4 py-3 text-sm font-semibold text-white hover:bg-primary-700">

@@ -3,9 +3,14 @@
 import React from "react";
 import {
   getPartnerServiceLabel,
+  getPartnerTierLabel,
   PARTNER_ALLOWED_SERVICE_KEYS,
+  PARTNER_DEMO_TIER_KEYS,
   PARTNER_JUNK_ADDON_TIER_KEYS,
   PARTNER_JUNK_BASE_TIER_KEYS,
+  PARTNER_LAND_CLEARING_TIER_KEYS,
+  isPartnerAllowedServiceKey,
+  isPartnerTierKeyForService,
   type PartnerServiceKey
 } from "@myst-os/pricing";
 
@@ -17,6 +22,8 @@ const SERVICE_OPTIONS: ServiceOption[] = (PARTNER_ALLOWED_SERVICE_KEYS as readon
 
 const JUNK_BASE_TIER_KEYS = PARTNER_JUNK_BASE_TIER_KEYS as readonly string[];
 const JUNK_ADDON_TIER_KEYS = PARTNER_JUNK_ADDON_TIER_KEYS as readonly string[];
+const DEMO_TIER_KEYS = PARTNER_DEMO_TIER_KEYS as readonly string[];
+const LAND_CLEARING_TIER_KEYS = PARTNER_LAND_CLEARING_TIER_KEYS as readonly string[];
 
 type RateItemRow = {
   id: string;
@@ -60,6 +67,10 @@ function toCsv(rows: EditableRateRow[]): string {
 function fromInitial(items: RateItemRow[]): EditableRateRow[] {
   return items
     .slice()
+    .filter((item) => isPartnerAllowedServiceKey(String(item.serviceKey ?? "").trim().toLowerCase()))
+    .filter((item) =>
+      isPartnerTierKeyForService(String(item.serviceKey ?? "").trim().toLowerCase(), String(item.tierKey ?? "").trim())
+    )
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     .map((item) => ({
       id: item.id,
@@ -68,6 +79,71 @@ function fromInitial(items: RateItemRow[]): EditableRateRow[] {
       label: item.label ?? "",
       amount: centsToAmountString(item.amountCents ?? 0)
     }));
+}
+
+function buildStonegateDefaultRows(): EditableRateRow[] {
+  return [
+    { id: "seed_quarter", serviceKey: "junk-removal", tierKey: "quarter", label: "Quarter load", amount: "150.00" },
+    { id: "seed_half", serviceKey: "junk-removal", tierKey: "half", label: "Half load", amount: "300.00" },
+    {
+      id: "seed_three_quarter",
+      serviceKey: "junk-removal",
+      tierKey: "three_quarter",
+      label: "3/4 load",
+      amount: "450.00"
+    },
+    { id: "seed_full", serviceKey: "junk-removal", tierKey: "full", label: "Full load", amount: "600.00" },
+    {
+      id: "seed_mattress_fee",
+      serviceKey: "junk-removal",
+      tierKey: "mattress_fee",
+      label: "Mattress fee (each)",
+      amount: "30.00"
+    },
+    { id: "seed_paint_fee", serviceKey: "junk-removal", tierKey: "paint_fee", label: "Paint cans (each)", amount: "10.00" },
+    { id: "seed_tire_fee", serviceKey: "junk-removal", tierKey: "tire_fee", label: "Tires (each)", amount: "10.00" },
+
+    { id: "seed_demo_small", serviceKey: "demo-hauloff", tierKey: "small", label: "Small demo", amount: "650.00" },
+    { id: "seed_demo_medium", serviceKey: "demo-hauloff", tierKey: "medium", label: "Medium demo", amount: "1250.00" },
+    { id: "seed_demo_large", serviceKey: "demo-hauloff", tierKey: "large", label: "Large demo", amount: "2400.00" },
+
+    {
+      id: "seed_land_small_patch",
+      serviceKey: "land-clearing",
+      tierKey: "small_patch",
+      label: "Small patch",
+      amount: "850.00"
+    },
+    {
+      id: "seed_land_yard_section",
+      serviceKey: "land-clearing",
+      tierKey: "yard_section",
+      label: "Yard section",
+      amount: "1650.00"
+    },
+    {
+      id: "seed_land_most_of_yard",
+      serviceKey: "land-clearing",
+      tierKey: "most_of_yard",
+      label: "Most of a yard",
+      amount: "3200.00"
+    },
+    {
+      id: "seed_land_full_lot",
+      serviceKey: "land-clearing",
+      tierKey: "full_lot",
+      label: "Full lot (starting)",
+      amount: "5500.00"
+    },
+    { id: "seed_land_not_sure", serviceKey: "land-clearing", tierKey: "not_sure", label: "Not sure", amount: "1650.00" }
+  ];
+}
+
+function mergePresetRows(existing: EditableRateRow[], preset: EditableRateRow[]): EditableRateRow[] {
+  const keyOf = (row: EditableRateRow) => `${row.serviceKey.trim().toLowerCase()}:${row.tierKey.trim()}`;
+  const existingKeys = new Set(existing.map(keyOf));
+  const missing = preset.filter((row) => row.serviceKey.trim().length && row.tierKey.trim().length && !existingKeys.has(keyOf(row)));
+  return missing.length ? [...existing, ...missing] : existing;
 }
 
 export function PartnerRatesEditor({
@@ -80,57 +156,7 @@ export function PartnerRatesEditor({
   const [rows, setRows] = React.useState<EditableRateRow[]>(
     initialItems.length
       ? fromInitial(initialItems)
-      : [
-          {
-            id: "seed_quarter",
-            serviceKey: "junk-removal",
-            tierKey: "quarter",
-            label: "Quarter load",
-            amount: "150.00"
-          },
-          {
-            id: "seed_half",
-            serviceKey: "junk-removal",
-            tierKey: "half",
-            label: "Half load",
-            amount: "300.00"
-          },
-          {
-            id: "seed_three_quarter",
-            serviceKey: "junk-removal",
-            tierKey: "three_quarter",
-            label: "3/4 load",
-            amount: "450.00"
-          },
-          {
-            id: "seed_full",
-            serviceKey: "junk-removal",
-            tierKey: "full",
-            label: "Full load",
-            amount: "600.00"
-          },
-          {
-            id: "seed_mattress_fee",
-            serviceKey: "junk-removal",
-            tierKey: "mattress_fee",
-            label: "Mattress fee (each)",
-            amount: "30.00"
-          },
-          {
-            id: "seed_paint_fee",
-            serviceKey: "junk-removal",
-            tierKey: "paint_fee",
-            label: "Paint cans (each)",
-            amount: "10.00"
-          },
-          {
-            id: "seed_tire_fee",
-            serviceKey: "junk-removal",
-            tierKey: "tire_fee",
-            label: "Tires (each)",
-            amount: "10.00"
-          }
-        ]
+      : buildStonegateDefaultRows()
   );
 
   const csvValue = React.useMemo(() => toCsv(rows), [rows]);
@@ -139,24 +165,33 @@ export function PartnerRatesEditor({
     <div className="space-y-3">
       <textarea name="ratesCsv" value={csvValue} readOnly hidden />
 
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-3 py-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-            Negotiated tiers ({currency})
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-3 py-2">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Negotiated tiers ({currency})
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700"
+                onClick={() => setRows((prev) => mergePresetRows(prev, buildStonegateDefaultRows()))}
+              >
+                Insert Stonegate defaults
+              </button>
+              <button
+                type="button"
+                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700"
+                onClick={() =>
+                  setRows((prev) => [
+                    ...prev,
+                    { id: `new_${Date.now()}`, serviceKey: "junk-removal", tierKey: "", label: "", amount: "" }
+                  ])
+                }
+              >
+                + Add tier
+              </button>
+            </div>
           </div>
-          <button
-            type="button"
-            className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-primary-300 hover:text-primary-700"
-            onClick={() =>
-              setRows((prev) => [
-                ...prev,
-                { id: `new_${Date.now()}`, serviceKey: "junk-removal", tierKey: "", label: "", amount: "" }
-              ])
-            }
-          >
-            + Add tier
-          </button>
-        </div>
 
         <div className="grid grid-cols-1 gap-2 px-3 py-3 text-xs sm:grid-cols-12">
           <div className="hidden sm:block sm:col-span-4 font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -207,7 +242,15 @@ export function PartnerRatesEditor({
                     value={row.tierKey}
                     onChange={(e) =>
                       setRows((prev) =>
-                        prev.map((r) => (r.id === row.id ? { ...r, tierKey: e.target.value } : r))
+                        prev.map((r) =>
+                          r.id === row.id
+                            ? {
+                                ...r,
+                                tierKey: e.target.value,
+                                label: r.label.trim().length ? r.label : getPartnerTierLabel(r.serviceKey, e.target.value)
+                              }
+                            : r
+                        )
                       )
                     }
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
@@ -227,6 +270,56 @@ export function PartnerRatesEditor({
                         </option>
                       ))}
                     </optgroup>
+                  </select>
+                ) : row.serviceKey === "demo-hauloff" ? (
+                  <select
+                    value={row.tierKey}
+                    onChange={(e) =>
+                      setRows((prev) =>
+                        prev.map((r) =>
+                          r.id === row.id
+                            ? {
+                                ...r,
+                                tierKey: e.target.value,
+                                label: r.label.trim().length ? r.label : getPartnerTierLabel(r.serviceKey, e.target.value)
+                              }
+                            : r
+                        )
+                      )
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  >
+                    <option value="">Choose...</option>
+                    {DEMO_TIER_KEYS.map((key) => (
+                      <option key={key} value={key}>
+                        {getPartnerTierLabel("demo-hauloff", key)}
+                      </option>
+                    ))}
+                  </select>
+                ) : row.serviceKey === "land-clearing" ? (
+                  <select
+                    value={row.tierKey}
+                    onChange={(e) =>
+                      setRows((prev) =>
+                        prev.map((r) =>
+                          r.id === row.id
+                            ? {
+                                ...r,
+                                tierKey: e.target.value,
+                                label: r.label.trim().length ? r.label : getPartnerTierLabel(r.serviceKey, e.target.value)
+                              }
+                            : r
+                        )
+                      )
+                    }
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  >
+                    <option value="">Choose...</option>
+                    {LAND_CLEARING_TIER_KEYS.map((key) => (
+                      <option key={key} value={key}>
+                        {getPartnerTierLabel("land-clearing", key)}
+                      </option>
+                    ))}
                   </select>
                 ) : (
                   <input

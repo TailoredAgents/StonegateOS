@@ -228,6 +228,62 @@ export async function POST(request: NextRequest): Promise<Response> {
         label: "Tires (each)",
         amountCents: 1000,
         sortOrder: 52
+      },
+      {
+        serviceKey: "demo-hauloff",
+        tierKey: "small",
+        label: "Small demo",
+        amountCents: 65000,
+        sortOrder: 1
+      },
+      {
+        serviceKey: "demo-hauloff",
+        tierKey: "medium",
+        label: "Medium demo",
+        amountCents: 125000,
+        sortOrder: 2
+      },
+      {
+        serviceKey: "demo-hauloff",
+        tierKey: "large",
+        label: "Large demo",
+        amountCents: 240000,
+        sortOrder: 3
+      },
+      {
+        serviceKey: "land-clearing",
+        tierKey: "small_patch",
+        label: "Small patch",
+        amountCents: 85000,
+        sortOrder: 1
+      },
+      {
+        serviceKey: "land-clearing",
+        tierKey: "yard_section",
+        label: "Yard section",
+        amountCents: 165000,
+        sortOrder: 2
+      },
+      {
+        serviceKey: "land-clearing",
+        tierKey: "most_of_yard",
+        label: "Most of a yard",
+        amountCents: 320000,
+        sortOrder: 3
+      },
+      {
+        serviceKey: "land-clearing",
+        tierKey: "full_lot",
+        label: "Full lot (starting)",
+        amountCents: 550000,
+        sortOrder: 4
+      },
+      {
+        serviceKey: "land-clearing",
+        tierKey: "not_sure",
+        label: "Not sure",
+        amountCents: 165000,
+        sortOrder: 50
       }
     ] as const;
 

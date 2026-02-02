@@ -4,7 +4,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { getDb, partnerRateCards, partnerRateItems } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
-import { isPartnerAllowedServiceKey, isPartnerJunkTierKey } from "@myst-os/pricing";
+import { isPartnerAllowedServiceKey, isPartnerTierKeyForService } from "@myst-os/pricing";
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -104,7 +104,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       return NextResponse.json({ ok: false, error: `invalid_service_key:${serviceKeyRaw}` }, { status: 400 });
     }
 
-    if (serviceKeyRaw === "junk-removal" && !isPartnerJunkTierKey(tierKey)) {
+    if (!isPartnerTierKeyForService(serviceKeyRaw, tierKey)) {
       return NextResponse.json({ ok: false, error: `invalid_tier_key:${tierKey}` }, { status: 400 });
     }
 
