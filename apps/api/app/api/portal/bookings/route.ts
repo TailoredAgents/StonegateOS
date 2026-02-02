@@ -85,6 +85,12 @@ async function countOverlappingAppointments(input: {
   durationMinutes: number;
 }): Promise<number> {
   const endAtUtc = new Date(input.startAtUtc.getTime() + input.durationMinutes * 60 * 1000);
+  const startAtIso = input.startAtUtc.toISOString();
+  const endAtIso = endAtUtc.toISOString();
+  const nowIso = new Date().toISOString();
+  const startAtTz = sql`${startAtIso}::timestamptz`;
+  const endAtTz = sql`${endAtIso}::timestamptz`;
+  const nowTz = sql`${nowIso}::timestamptz`;
 
   const [apptRow] = await input.db
     .select({ count: sql<number>`count(*)::int` })
@@ -94,10 +100,10 @@ async function countOverlappingAppointments(input: {
         eq(appointments.status, "confirmed"),
         isNull(appointments.completedAt),
         // startAt < end && (startAt + duration) > start
-        lt(appointments.startAt, endAtUtc),
+        lt(appointments.startAt, endAtTz),
         gt(
           sql`${appointments.startAt} + (${appointments.durationMinutes} * interval '1 minute')`,
-          input.startAtUtc
+          startAtTz
         )
       )
     );
@@ -108,11 +114,11 @@ async function countOverlappingAppointments(input: {
     .where(
       and(
         eq(appointmentHolds.status, "active"),
-        gt(appointmentHolds.expiresAt, new Date()),
-        lt(appointmentHolds.startAt, endAtUtc),
+        gt(appointmentHolds.expiresAt, nowTz),
+        lt(appointmentHolds.startAt, endAtTz),
         gt(
           sql`${appointmentHolds.startAt} + (${appointmentHolds.durationMinutes} * interval '1 minute')`,
-          input.startAtUtc
+          startAtTz
         )
       )
     );
