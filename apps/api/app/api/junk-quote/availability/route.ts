@@ -5,6 +5,7 @@ import { DateTime } from "luxon";
 import { and, eq, gt, gte, lte, ne } from "drizzle-orm";
 import { appointmentHolds, getDb, appointments, instantQuotes, properties } from "@/db";
 import { forwardGeocode } from "@/lib/geocode";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import {
   getBusinessHourWindowsForDate,
   getBusinessHoursPolicy,
@@ -64,7 +65,6 @@ type Suggestion = {
 
 const WINDOW_DAYS = 14;
 const SLOT_INTERVAL_MIN = 60;
-const DEFAULT_CAPACITY = 2;
 const DEFAULT_RADIUS_KM = 30;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -271,7 +271,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
         ? bookingRules.bufferMinutes
         : DEFAULT_TRAVEL_BUFFER_MIN;
-    const capacity = DEFAULT_CAPACITY;
+    const capacity = getAppointmentCapacity();
 
     let resolvedLat: number | null = typeof body.targetLat === "number" ? body.targetLat : null;
     let resolvedLng: number | null = typeof body.targetLng === "number" ? body.targetLng : null;

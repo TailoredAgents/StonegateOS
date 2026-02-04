@@ -11,6 +11,7 @@ import {
 } from "@myst-os/pricing";
 import { sendSmsMessage } from "@/lib/messaging";
 import { queueSystemOutboundMessage } from "@/lib/system-outbound";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import {
   appointmentHolds,
   appointmentNotes,
@@ -255,7 +256,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const overlaps = await countOverlappingAppointments({ db, startAtUtc: startAt, durationMinutes });
-  if (overlaps >= 2) {
+  const capacity = getAppointmentCapacity();
+  if (overlaps >= capacity) {
     return NextResponse.json({ ok: false, error: "slot_full" }, { status: 409 });
   }
 

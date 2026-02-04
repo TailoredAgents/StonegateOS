@@ -5,6 +5,7 @@ import { z } from "zod";
 import { appointmentHolds, getDb, appointments, instantQuotes, leads, outboxEvents, properties } from "@/db";
 import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../../web/persistence";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import {
   getBusinessHourWindowsForDate,
   getBusinessHoursPolicy,
@@ -22,7 +23,6 @@ const RAW_ALLOWED_ORIGINS =
 
 const WINDOW_DAYS = 14;
 const SLOT_INTERVAL_MIN = 60;
-const DEFAULT_CAPACITY = 2;
 
 function resolveOrigin(requestOrigin: string | null): string {
   if (RAW_ALLOWED_ORIGINS === "*") return "*";
@@ -650,7 +650,8 @@ export async function POST(request: NextRequest) {
 
       blocks.push(...holdBlocks);
 
-      if (overlapsCount(blocks, startAt, slotEnd) >= DEFAULT_CAPACITY) {
+      const capacity = getAppointmentCapacity();
+      if (overlapsCount(blocks, startAt, slotEnd) >= capacity) {
         throw new BookingError("slot_full", 409);
       }
 

@@ -4,6 +4,7 @@ import { DateTime } from "luxon";
 import { z } from "zod";
 import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { appointmentHolds, appointments, getDb, instantQuotes, leads } from "@/db";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import {
   getBusinessHourWindowsForDate,
   getBusinessHoursPolicy,
@@ -20,7 +21,6 @@ const RAW_ALLOWED_ORIGINS =
 
 const WINDOW_DAYS = 14;
 const SLOT_INTERVAL_MIN = 60;
-const DEFAULT_CAPACITY = 2;
 const HOLD_WINDOW_MINUTES = 15;
 
 function resolveOrigin(requestOrigin: string | null): string {
@@ -336,7 +336,8 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       blocks.push(...holdBlocks);
 
-      if (overlapsCount(blocks, startAt, slotEnd) >= DEFAULT_CAPACITY) {
+      const capacity = getAppointmentCapacity();
+      if (overlapsCount(blocks, startAt, slotEnd) >= capacity) {
         throw new HoldError("slot_full", 409);
       }
 

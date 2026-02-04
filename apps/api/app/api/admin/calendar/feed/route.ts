@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, gte, inArray, lte, eq, desc } from "drizzle-orm";
 import { getDb, appointments, contacts, crmTasks, properties } from "@/db";
 import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "@/lib/calendar";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { isAdminRequest } from "../../../web/admin";
 
 type CalendarEvent = {
@@ -30,7 +31,6 @@ type CalendarFeedResponse = {
 
 const DEFAULT_DAYS_FORWARD = 30;
 const DEFAULT_DAYS_BACK = 1;
-const DEFAULT_APPOINTMENT_CAPACITY = 2;
 const MAX_RANGE_DAYS = 366;
 
 export async function GET(request: NextRequest): Promise<NextResponse<CalendarFeedResponse>> {
@@ -181,7 +181,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
   }
 
   const allEvents: CalendarEvent[] = [...appointmentsEvents, ...externalEvents];
-  const conflicts = computeCapacityConflicts(allEvents, DEFAULT_APPOINTMENT_CAPACITY);
+  const conflicts = computeCapacityConflicts(allEvents, getAppointmentCapacity());
 
   return NextResponse.json({
     ok: true,

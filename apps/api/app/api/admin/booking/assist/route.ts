@@ -5,6 +5,7 @@ import { getDb, appointments, properties } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { forwardGeocode } from "@/lib/geocode";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 
 type SuggestRequest = {
   durationMinutes?: number;
@@ -36,7 +37,6 @@ const DEFAULT_DURATION_MIN = 60;
 const DEFAULT_WINDOW_DAYS = 5;
 const DEFAULT_START_HOUR = 8;
 const DEFAULT_END_HOUR = 18;
-const DEFAULT_CAPACITY = 2;
 
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const capacity =
     typeof payload.capacity === "number" && Number.isFinite(payload.capacity) && payload.capacity > 0
       ? Math.min(8, Math.floor(payload.capacity))
-      : DEFAULT_CAPACITY;
+      : getAppointmentCapacity();
   const targetLat = typeof payload.targetLat === "number" ? payload.targetLat : null;
   const targetLng = typeof payload.targetLng === "number" ? payload.targetLng : null;
   const radiusKm =
