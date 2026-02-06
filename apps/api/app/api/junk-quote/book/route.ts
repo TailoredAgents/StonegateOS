@@ -6,6 +6,7 @@ import { appointmentHolds, getDb, appointments, instantQuotes, leads, outboxEven
 import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../../web/persistence";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
 import {
   getBusinessHourWindowsForDate,
   getBusinessHoursPolicy,
@@ -95,7 +96,9 @@ function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string
   const ai = isRecord(quote.aiResult) ? quote.aiResult : null;
   const priceHigh = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
   const maxUnits =
-    typeof priceHigh === "number" && Number.isFinite(priceHigh) && priceHigh > 0 ? Math.round(priceHigh / 200) : null;
+    typeof priceHigh === "number" && Number.isFinite(priceHigh) && priceHigh > 0
+      ? Math.round(priceHigh / JUNK_VOLUME_UNIT_PRICE)
+      : null;
 
   const fallbackUnits = (() => {
     switch (quote.perceivedSize) {

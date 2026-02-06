@@ -9,10 +9,10 @@ export type LoadTier = Readonly<{
 }>;
 
 export const LOAD_TIERS: readonly LoadTier[] = [
-  { id: "quarter", label: "¼ load", sliderValue: 25, min: 150, max: 200 },
-  { id: "half", label: "½ load", sliderValue: 50, min: 300, max: 400 },
-  { id: "threeQuarter", label: "¾ load", sliderValue: 75, min: 400, max: 500 },
-  { id: "full", label: "Full load", sliderValue: 100, min: 550, max: 700 }
+  { id: "quarter", label: "¼ load", sliderValue: 25, min: 175, max: 250 },
+  { id: "half", label: "½ load", sliderValue: 50, min: 350, max: 500 },
+  { id: "threeQuarter", label: "¾ load", sliderValue: 75, min: 525, max: 700 },
+  { id: "full", label: "Full load", sliderValue: 100, min: 700, max: 900 }
 ];
 
 export type AddonId = "mattress" | "paint" | "tire";

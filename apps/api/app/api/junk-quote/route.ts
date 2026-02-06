@@ -5,6 +5,7 @@ import { getCompanyProfilePolicy, isGeorgiaPostalCode, normalizePostalCode } fro
 import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
 import { normalizeName, normalizePhone } from "../web/utils";
+import { JUNK_VOLUME_PRICING, JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
 
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
@@ -146,15 +147,8 @@ const QuoteResultSchema = z
     }
   });
 
-const VOLUME_PRICING = {
-  singleItem: 100,
-  quarter: 150,
-  half: 300,
-  threeQuarter: 450,
-  full: 600
-} as const;
-
-const UNIT_PRICE = 150;
+const VOLUME_PRICING = JUNK_VOLUME_PRICING;
+const UNIT_PRICE = JUNK_VOLUME_UNIT_PRICE;
 type JobInput = z.infer<typeof RequestSchema>["job"];
 type QuoteResult = z.infer<typeof QuoteResultSchema>;
 
@@ -611,11 +605,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return corsJson({
-      ok: true,
-      quoteId,
-      quote: base
-    }, requestOrigin);
+    const discountPercent = await resolveInstantQuoteDiscountPercent(db);
+    const discountMultiplier = discountPercent > 0 ? 1 - discountPercent : 1;
+    const priceLowDiscounted =
+      discountPercent > 0 ? Math.max(0, Math.round(base.priceLow * discountMultiplier)) : undefined;
+    const priceHighDiscounted =
+      discountPercent > 0 ? Math.max(0, Math.round(base.priceHigh * discountMultiplier)) : undefined;
+
+    return corsJson(
+      {
+        ok: true,
+        quoteId,
+        quote: {
+          ...base,
+          discountPercent: discountPercent > 0 ? discountPercent : undefined,
+          priceLowDiscounted: priceLowDiscounted ?? undefined,
+          priceHighDiscounted: priceHighDiscounted ?? undefined
+        }
+      },
+      requestOrigin
+    );
   } catch (error) {
     console.error("[junk-quote] server_error", error);
     return corsJson({ error: "server_error" }, null, { status: 500 });
@@ -889,10 +898,10 @@ Do NOT add charges for weight, stairs, distance, time, urgency, heavy/bulky item
 
 Base prices:
 - Single item pickup: $100
-- 1/4 trailer: $150
-- 1/2 trailer: $300
-- 3/4 trailer: $450
-- Full trailer: $600
+- 1/4 trailer: $175
+- 1/2 trailer: $350
+- 3/4 trailer: $525
+- Full trailer: $700
 
 Multi-load jobs:
 - If you believe the job can require more than one trailer load, you may quote above $600.

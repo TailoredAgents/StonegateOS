@@ -20,20 +20,20 @@ test.describe("Pricing estimator", () => {
     const price = page.getByText(/Pricing:\s*\\$/i).first();
 
     await expect(slider).toBeVisible();
-    await expect(price).toContainText("$150");
-    await expect(price).toContainText("$200");
+    await expect(price).toContainText("$175");
+    await expect(price).toContainText("$250");
 
     await setRange(slider, 50);
-    await expect(price).toContainText("$300");
-    await expect(price).toContainText("$400");
-
-    await setRange(slider, 75);
-    await expect(price).toContainText("$400");
+    await expect(price).toContainText("$350");
     await expect(price).toContainText("$500");
 
-    await setRange(slider, 100);
-    await expect(price).toContainText("$550");
+    await setRange(slider, 75);
+    await expect(price).toContainText("$525");
     await expect(price).toContainText("$700");
+
+    await setRange(slider, 100);
+    await expect(price).toContainText("$700");
+    await expect(price).toContainText("$900");
   });
 
   test("applies add-ons and carries selection into estimate notes", async ({ page }) => {
@@ -46,8 +46,8 @@ test.describe("Pricing estimator", () => {
     await addMattress.click();
 
     const price = page.getByText(/Pricing:\s*\\$/i).first();
-    await expect(price).toContainText("$180");
-    await expect(price).toContainText("$230");
+    await expect(price).toContainText("$205");
+    await expect(price).toContainText("$280");
 
     await expect(page).toHaveURL(/pe_load=quarter/);
     await expect(page).toHaveURL(/pe_mattress=1/);
