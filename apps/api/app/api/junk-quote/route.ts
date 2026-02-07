@@ -255,7 +255,7 @@ function formatFraction(units: number): string {
 function formatTierLabel(minUnits: number, maxUnits: number): string {
   if (minUnits === maxUnits) {
     if (minUnits === 0) return "Single item pickup";
-    if (minUnits === 1) return "Minimum pickup (2-4 items)";
+    if (minUnits === 1) return "Small pickup (2-4 items)";
     if (minUnits <= 4) return minUnits === 4 ? "Full trailer" : `${formatFraction(minUnits)} trailer`;
     return `${formatLoadCount(minUnits)} trailer loads`;
   }

@@ -71,12 +71,12 @@ const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
 ];
 
 const JUNK_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
-  { id: "single_item", label: "Single item", hint: "One item (chair, mattress, small appliance)" },
-  { id: "min_pickup", label: "A few items (2-4 items)", hint: "A small pile, or 1-2 bulky pieces" },
-  { id: "half_trailer", label: "One room", hint: "One room, or about half a garage" },
-  { id: "three_quarter_trailer", label: "A couple rooms", hint: "2+ rooms, or a large garage pile" },
-  { id: "big_cleanout", label: "Big cleanout", hint: "Full garage, basement, or multiple rooms" },
-  { id: "not_sure", label: "Not sure", hint: "No problem. Photos help tighten the estimate." }
+  { id: "single_item", label: "Single item", hint: "1 small/medium item (chair, dresser, small appliance)" },
+  { id: "min_pickup", label: "Small pickup (2-4 items)", hint: "A few items or a small pile (for bulky items, choose Medium+ or Not sure)" },
+  { id: "half_trailer", label: "Medium load", hint: "1 room OR 1-2 bulky items + boxes/bags" },
+  { id: "three_quarter_trailer", label: "Large load", hint: "2 rooms OR several bulky items" },
+  { id: "big_cleanout", label: "Huge cleanout", hint: "Full garage, basement, or multiple rooms" },
+  { id: "not_sure", label: "Not sure", hint: "No problem — photos help us tighten the range." }
 ];
 
 const BRUSH_PRIMARY_OPTIONS: Array<{ id: BrushScope; label: string; hint: string }> = [
@@ -136,7 +136,7 @@ export function LeadForm({
   const [types, setTypes] = React.useState<JunkType[]>([]);
   const [otherSelected, setOtherSelected] = React.useState(false);
   const [otherDetails, setOtherDetails] = React.useState("");
-  const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize>("min_pickup");
+  const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize | null>(() => (variant === "brush" ? "min_pickup" : null));
   const [brushPrimary, setBrushPrimary] = React.useState<BrushPrimary>("overgrowth");
   const [brushOtherDetails, setBrushOtherDetails] = React.useState("");
   const [brushDifficulty, setBrushDifficulty] = React.useState<BrushDifficulty>("not_sure");
@@ -451,14 +451,14 @@ export function LeadForm({
             ? {
                 source: "public_site",
                 contact: { name: name.trim(), phone: phone.trim(), timeframe },
-                job: {
-                  primary: brushPrimary,
-                  perceivedSize,
-                  difficulty: brushDifficulty,
-                  access: brushAccess,
-                  haulAway: brushHaulAway,
-                  notes: combinedNotes || undefined,
-                  zip: zip.trim(),
+                 job: {
+                   primary: brushPrimary,
+                   perceivedSize: perceivedSize ?? "not_sure",
+                   difficulty: brushDifficulty,
+                   access: brushAccess,
+                   haulAway: brushHaulAway,
+                   notes: combinedNotes || undefined,
+                   zip: zip.trim(),
                   photoUrls: photos,
                   otherDetails: brushPrimary === "other" ? brushOtherDetails.trim() || undefined : undefined
                 },
@@ -467,13 +467,13 @@ export function LeadForm({
             : {
                 source: "public_site",
                 contact: { name: name.trim(), phone: phone.trim(), timeframe },
-                job: {
-                  types: resolvedTypes,
-                  perceivedSize,
-                  notes: combinedNotes || undefined,
-                  zip: zip.trim(),
-                  photoUrls: photos
-                },
+                 job: {
+                   types: resolvedTypes,
+                   perceivedSize: perceivedSize ?? "not_sure",
+                   notes: combinedNotes || undefined,
+                   zip: zip.trim(),
+                   photoUrls: photos
+                 },
                 utm
               }
         )
@@ -1080,6 +1080,10 @@ export function LeadForm({
               setError("Please describe what you need cleared.");
               return;
             }
+            if (!perceivedSize) {
+              setError(isBrush ? "Pick an approximate job size." : "Pick an approximate amount.");
+              return;
+            }
             const baseMeta = isBrush
               ? {
                   primary: brushPrimary,
@@ -1323,6 +1327,9 @@ export function LeadForm({
               <label className="text-sm font-semibold text-neutral-800">
                 {isBrush ? "How big is the area?" : "How much junk are we hauling away?"}
               </label>
+              {!isBrush ? (
+                <p className="text-xs text-neutral-500">Final price is confirmed on site before we start loading — no surprises.</p>
+              ) : null}
               <div
                 className="grid gap-2 sm:grid-cols-2"
                 role="radiogroup"
