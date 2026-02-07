@@ -182,6 +182,7 @@ export function LeadForm({
   const [photoSkipped, setPhotoSkipped] = React.useState(false);
   const trackedScheduleRef = React.useRef(false);
   const trackedLeadQuoteIdRef = React.useRef<string | null>(null);
+  const trackedMetaLeadQuoteIdRef = React.useRef<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const quoteCardRef = React.useRef<HTMLDivElement | null>(null);
   const nameInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -245,10 +246,18 @@ export function LeadForm({
     }
   }, [prefersReducedMotion, quoteState.status, scrollToElement, step]);
 
-  const trackMetaEvent = React.useCallback((eventName: string, params?: Record<string, unknown>) => {
+  const trackMetaEvent = React.useCallback((
+    eventName: string,
+    params?: Record<string, unknown>,
+    options?: { eventID?: string }
+  ) => {
     if (typeof window === "undefined") return;
     if (typeof window.fbq !== "function") return;
     try {
+      if (options?.eventID && options.eventID.trim().length > 0) {
+        window.fbq("track", eventName, params ?? {}, { eventID: options.eventID });
+        return;
+      }
       window.fbq("track", eventName, params ?? {});
     } catch {
       // ignore
@@ -520,6 +529,21 @@ export function LeadForm({
         }
       });
       trackGoogleLeadConversion(nextQuoteId);
+      if (nextQuoteId && trackedMetaLeadQuoteIdRef.current !== nextQuoteId) {
+        trackedMetaLeadQuoteIdRef.current = nextQuoteId;
+        const leadValue =
+          typeof data.quote.priceLowDiscounted === "number" ? data.quote.priceLowDiscounted : data.quote.priceLow;
+        trackMetaEvent(
+          "Lead",
+          {
+            content_name: isBrush ? "Brush quote" : "Junk quote",
+            content_category: isBrush ? "brush" : "junk_removal",
+            value: Number.isFinite(leadValue) ? leadValue : undefined,
+            currency: "USD"
+          },
+          { eventID: nextQuoteId }
+        );
+      }
       if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
         trackWebEvent({
           event: "book_quote_success",
