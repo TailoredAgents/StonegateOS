@@ -63,12 +63,25 @@ type BrushAccess = "open" | "standard_gate" | "tight_gate" | "not_sure";
 const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
   { id: "furniture", label: "Furniture" },
   { id: "appliances", label: "Appliances" },
-  { id: "general_junk", label: "General household junk" },
-  { id: "yard_waste", label: "Yard waste / outdoor items" },
+  { id: "general_junk", label: "Mixed household items" },
+  { id: "yard_waste", label: "Yard debris / outdoor items" },
   { id: "construction_debris", label: "Construction / renovation debris" },
   { id: "hot_tub_playset", label: "Hot tub / playset" },
-  { id: "business_commercial", label: "Business / commercial cleanout" }
+  { id: "business_commercial", label: "Office / business items" }
 ];
+
+const JUNK_PRIMARY_TYPE_IDS: readonly JunkType[] = [
+  "furniture",
+  "appliances",
+  "general_junk",
+  "yard_waste",
+  "construction_debris"
+] as const;
+
+const JUNK_SECONDARY_TYPE_IDS: readonly JunkType[] = ["hot_tub_playset", "business_commercial"] as const;
+
+const JUNK_PRIMARY_OPTIONS = JUNK_PRIMARY_TYPE_IDS.map((id) => JUNK_OPTIONS.find((opt) => opt.id === id)!).filter(Boolean);
+const JUNK_SECONDARY_OPTIONS = JUNK_SECONDARY_TYPE_IDS.map((id) => JUNK_OPTIONS.find((opt) => opt.id === id)!).filter(Boolean);
 
 const JUNK_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
   { id: "single_item", label: "Single item", hint: "1 small/medium item (chair, dresser, small appliance)" },
@@ -134,6 +147,7 @@ export function LeadForm({
   const isBrush = variant === "brush";
   const [step, setStep] = React.useState<1 | 2>(1);
   const [types, setTypes] = React.useState<JunkType[]>([]);
+  const [showMoreJunkTypes, setShowMoreJunkTypes] = React.useState(false);
   const [otherSelected, setOtherSelected] = React.useState(false);
   const [otherDetails, setOtherDetails] = React.useState("");
   const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize | null>(() => (variant === "brush" ? "min_pickup" : null));
@@ -1198,10 +1212,14 @@ export function LeadForm({
               </div>
             ) : (
               <div>
-                <label className="text-sm font-semibold text-neutral-800">What type of stuff is it?</label>
-                <p className="text-xs text-neutral-500">Choose all that apply</p>
+                <label className="text-sm font-semibold text-neutral-800">What are we picking up?</label>
+                <p className="text-xs text-neutral-500">Choose all that apply (helps us quote accurately).</p>
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {JUNK_OPTIONS.map((opt) => {
+                  {(() => {
+                    const hasSecondarySelection = types.some((t) => (JUNK_SECONDARY_TYPE_IDS as readonly string[]).includes(t));
+                    const isMoreOpen = showMoreJunkTypes || otherSelected || hasSecondarySelection;
+                    const options = isMoreOpen ? [...JUNK_PRIMARY_OPTIONS, ...JUNK_SECONDARY_OPTIONS] : JUNK_PRIMARY_OPTIONS;
+                    return options.map((opt) => {
                     const selected = types.includes(opt.id);
                     const checkboxId = `junk-type-${opt.id}`;
                     return (
@@ -1235,35 +1253,67 @@ export function LeadForm({
                         <span>{opt.label}</span>
                       </label>
                     );
-                  })}
-                  <label
-                    htmlFor="junk-type-other"
-                    className={cn(
-                      "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition sm:col-span-2",
-                      otherSelected
-                        ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
-                        : "border-neutral-200 bg-white text-neutral-700"
-                    )}
-                  >
-                    <input
-                      id="junk-type-other"
-                      type="checkbox"
-                      className="sr-only"
-                      checked={otherSelected}
-                      onChange={() => setOtherSelected((prev) => !prev)}
-                      aria-label="Other (describe below)"
-                    />
-                    <span
-                      className={cn(
-                        "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                        otherSelected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
-                      )}
-                      aria-hidden="true"
-                    >
-                      <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                    </span>
-                    <span>Other (describe below)</span>
-                  </label>
+                  });
+                  })()}
+
+                  {(() => {
+                    const hasSecondarySelection = types.some((t) => (JUNK_SECONDARY_TYPE_IDS as readonly string[]).includes(t));
+                    const isMoreOpen = showMoreJunkTypes || otherSelected || hasSecondarySelection;
+                    const canHide = isMoreOpen && !otherSelected && !hasSecondarySelection;
+                    return (
+                      <div className="sm:col-span-2">
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-primary-700 underline"
+                          onClick={() => {
+                            if (canHide) {
+                              setShowMoreJunkTypes(false);
+                              return;
+                            }
+                            setShowMoreJunkTypes(true);
+                          }}
+                        >
+                          {canHide ? "Hide extra options" : isMoreOpen ? "Extra options" : "More options"}
+                        </button>
+                      </div>
+                    );
+                  })()}
+
+                  {(() => {
+                    const hasSecondarySelection = types.some((t) => (JUNK_SECONDARY_TYPE_IDS as readonly string[]).includes(t));
+                    const isMoreOpen = showMoreJunkTypes || otherSelected || hasSecondarySelection;
+                    if (!isMoreOpen) return null;
+                    return (
+                      <label
+                        htmlFor="junk-type-other"
+                        className={cn(
+                          "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition sm:col-span-2",
+                          otherSelected
+                            ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
+                            : "border-neutral-200 bg-white text-neutral-700"
+                        )}
+                      >
+                        <input
+                          id="junk-type-other"
+                          type="checkbox"
+                          className="sr-only"
+                          checked={otherSelected}
+                          onChange={() => setOtherSelected((prev) => !prev)}
+                          aria-label="Other (describe below)"
+                        />
+                        <span
+                          className={cn(
+                            "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                            otherSelected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                          )}
+                          aria-hidden="true"
+                        >
+                          <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                        </span>
+                        <span>Other (describe below)</span>
+                      </label>
+                    );
+                  })()}
                 </div>
                 {otherSelected ? (
                   <textarea
