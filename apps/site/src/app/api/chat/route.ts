@@ -169,9 +169,33 @@ type CreateBookingAction = {
     travelBufferMinutes?: number;
     services?: string[];
     note?: string | null;
+    quotedTotalCents?: number | null;
   };
   context?: {
     propertyLabel?: string;
+  };
+};
+
+type SendTextAction = {
+  id: string;
+  type: "send_text";
+  summary: string;
+  payload: {
+    contactId: string;
+    body: string;
+    channel?: "sms" | "dm" | "email";
+  };
+};
+
+type RescheduleAppointmentAction = {
+  id: string;
+  type: "reschedule_appointment";
+  summary: string;
+  payload: {
+    appointmentId: string;
+    startAt: string;
+    durationMinutes?: number;
+    travelBufferMinutes?: number;
   };
 };
 
@@ -203,6 +227,8 @@ type ActionSuggestion = (
   | CreateQuoteAction
   | CreateTaskAction
   | CreateBookingAction
+  | SendTextAction
+  | RescheduleAppointmentAction
   | AddContactNoteAction
   | CreateReminderAction
 ) & {
@@ -1079,7 +1105,8 @@ export async function POST(request: NextRequest) {
             property
           },
           booking,
-          classification
+          classification,
+          reply
         )
       : [];
     const actionNote = actions.length ? actions.map((action) => `Action: ${action.summary}`).join("\n") : null;
@@ -1442,7 +1469,8 @@ async function buildActionSuggestions(
     property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
   },
   booking?: BookingPayload | null,
-  classification?: IntentClassification | null
+  classification?: IntentClassification | null,
+  replyText?: string | null
 ): Promise<ActionSuggestion[]> {
   const actions: ActionSuggestion[] = [];
   const note = extractActionNote(message) ?? classification?.note ?? null;
@@ -1476,8 +1504,18 @@ async function buildActionSuggestions(
     actions.push(contactNoteAction);
   }
 
+  const sendTextAction = extractSendTextSuggestion(message, ctx, replyText ?? null);
+  if (sendTextAction) {
+    actions.push(sendTextAction);
+  }
+
+  const rescheduleAction = extractRescheduleAppointmentSuggestion(message, when ?? null);
+  if (rescheduleAction) {
+    actions.push(rescheduleAction);
+  }
+
   if (booking) {
-    const bookingActions = buildBookingActions(booking, ctx, when);
+    const bookingActions = buildBookingActions(booking, ctx, when, extractUsdToCents(message));
     actions.push(
       ...bookingActions.map((action) => ({
         ...action,
@@ -1487,6 +1525,121 @@ async function buildActionSuggestions(
   }
 
   return actions.slice(0, 3);
+}
+
+function extractSendTextSuggestion(
+  message: string,
+  ctx: { contactId?: string },
+  replyText: string | null
+): SendTextAction | null {
+  if (!ctx.contactId) return null;
+  const lower = message.toLowerCase();
+  const wantsText =
+    (lower.includes("text") || lower.includes("sms")) &&
+    (lower.includes("send") || lower.includes("reply") || lower.includes("message"));
+  if (!wantsText) return null;
+
+  const explicit =
+    extractQuotedContent(message) ??
+    extractAfterKeyword(message, ["that says", "says", "text:", "sms:", "message:"]);
+  const wantsGenerated = lower.includes("good reply") || lower.includes("good response");
+  const generated = wantsGenerated ? pickSmsDraft(replyText) : null;
+  const body = (explicit ?? generated ?? "").trim();
+  if (!body) return null;
+
+  const snippet = body.length > 42 ? `${body.slice(0, 42)}...` : body;
+  return {
+    id: newActionId(),
+    type: "send_text",
+    summary: `Send text: “${snippet}”`,
+    payload: {
+      contactId: ctx.contactId,
+      body,
+      channel: "sms"
+    }
+  };
+}
+
+function pickSmsDraft(replyText: string | null): string | null {
+  if (!replyText) return null;
+  const raw = replyText.trim();
+  if (!raw) return null;
+
+  const quoted = extractQuotedContent(raw);
+  if (quoted) return quoted;
+
+  const unfenced = raw
+    .replace(/^```[\s\S]*?\n/, "")
+    .replace(/\n```$/, "")
+    .trim();
+
+  const firstParagraph = unfenced.split(/\n\s*\n/)[0]?.trim() ?? "";
+  const candidate = firstParagraph.length ? firstParagraph : unfenced;
+
+  const cleaned = candidate
+    .replace(/^(here(?:'s| is)\s+)?(a\s+)?(text|sms|message)\s*(you\s+can\s+send|to\s+send)\s*[:\-]\s*/i, "")
+    .replace(/^(sure|ok|okay|got it)[\s,:\-]+/i, "")
+    .trim();
+
+  if (!cleaned) return null;
+  return cleaned.slice(0, 480);
+}
+
+function extractRescheduleAppointmentSuggestion(message: string, whenHint: string | null): RescheduleAppointmentAction | null {
+  const lower = message.toLowerCase();
+  const hasIntent = lower.includes("reschedule") || lower.includes("move appointment") || lower.includes("change appointment");
+  if (!hasIntent) return null;
+
+  const appointmentId = extractUuidFromText(message);
+  if (!appointmentId) return null;
+
+  const when = (whenHint && whenHint.trim().length ? whenHint : message).trim();
+  const parsed = parseWhen(when);
+  if (!parsed?.iso) return null;
+
+  return {
+    id: newActionId(),
+    type: "reschedule_appointment",
+    summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()}`,
+    payload: {
+      appointmentId,
+      startAt: parsed.iso
+    }
+  };
+}
+
+function extractQuotedContent(message: string): string | null {
+  const match = message.match(/[“"']([^“"']{1,480})[”"']/);
+  if (!match) return null;
+  const text = (match[1] ?? "").trim();
+  return text.length ? text : null;
+}
+
+function extractAfterKeyword(message: string, keywords: string[]): string | null {
+  const lower = message.toLowerCase();
+  for (const keyword of keywords) {
+    const idx = lower.indexOf(keyword);
+    if (idx === -1) continue;
+    const raw = message.slice(idx + keyword.length).trim();
+    if (raw.length) return raw.slice(0, 800);
+  }
+  return null;
+}
+
+function extractUuidFromText(text: string): string | null {
+  const match = text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+  return match ? match[0] : null;
+}
+
+function extractUsdToCents(message: string): number | null {
+  const normalized = message.replace(/,/g, "");
+  const match = normalized.match(/\$\s*(\d{1,6})(?:\.(\d{1,2}))?/);
+  if (!match) return null;
+  const dollars = Number(match[1]);
+  const cents = match[2] ? Number(match[2].padEnd(2, "0")) : 0;
+  if (!Number.isFinite(dollars) || dollars < 0) return null;
+  if (!Number.isFinite(cents) || cents < 0 || cents > 99) return null;
+  return dollars * 100 + cents;
 }
 
 function extractContactSuggestion(
@@ -1672,7 +1825,8 @@ function buildBookingActions(
     propertyId?: string;
     property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
   },
-  whenHint?: string | null
+  whenHint?: string | null,
+  quotedTotalCents?: number | null
 ): ActionSuggestion[] {
   if (!booking?.suggestions?.length || !booking.contactId || !booking.propertyId) return [];
 
@@ -1695,7 +1849,10 @@ function buildBookingActions(
       startAt: parsed?.iso ?? suggestion.startAt,
       durationMinutes: 60,
       travelBufferMinutes: 30,
-      services: normalizeServiceArray(suggestion.services)
+      services: normalizeServiceArray(suggestion.services),
+      ...(typeof quotedTotalCents === "number" && Number.isFinite(quotedTotalCents) && quotedTotalCents >= 0
+        ? { quotedTotalCents }
+        : {})
     },
     context: propertyLabel ? { propertyLabel } : undefined
   }));

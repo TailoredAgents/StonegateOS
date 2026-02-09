@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
-import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
+import { requireTeamRole } from "@/app/api/team/auth";
 
 type CreateContactPayload = {
   contactName: string;
@@ -51,10 +51,24 @@ type BookAppointmentPayload = {
   travelBufferMinutes?: number;
   services?: string[];
   note?: string | null;
+  quotedTotalCents?: number | null;
 };
 
 type CancelAppointmentPayload = {
   appointmentId: string;
+};
+
+type RescheduleAppointmentPayload = {
+  appointmentId: string;
+  startAt: string;
+  durationMinutes?: number;
+  travelBufferMinutes?: number;
+};
+
+type SendTextPayload = {
+  contactId: string;
+  body: string;
+  channel?: "sms" | "dm" | "email";
 };
 
 type ActionRequest =
@@ -64,17 +78,13 @@ type ActionRequest =
   | { type: "add_contact_note"; payload: AddContactNotePayload }
   | { type: "create_reminder"; payload: CreateReminderPayload }
   | { type: "book_appointment"; payload: BookAppointmentPayload }
-  | { type: "cancel_appointment"; payload: CancelAppointmentPayload };
+  | { type: "cancel_appointment"; payload: CancelAppointmentPayload }
+  | { type: "reschedule_appointment"; payload: RescheduleAppointmentPayload }
+  | { type: "send_text"; payload: SendTextPayload };
 
 const ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
 const ACTION_RATE_LIMIT_MS = Number(process.env["CHAT_ACTION_RATE_MS"] ?? 0);
 const lastActionByType = new Map<string, number>();
-
-function hasOwnerSession(request: NextRequest): boolean {
-  const adminKey = getAdminKey();
-  if (!adminKey) return false;
-  return request.cookies.get(ADMIN_SESSION_COOKIE)?.value === adminKey;
-}
 
 function getAdminContext() {
   const apiBase =
@@ -86,9 +96,8 @@ function getAdminContext() {
 }
 
 export async function POST(request: NextRequest) {
-  if (!hasOwnerSession(request)) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const auth = await requireTeamRole(request, { returnJson: true, roles: ["owner", "office"] });
+  if (!auth.ok) return auth.response;
 
   const payload = (await request.json().catch(() => null)) as ActionRequest | null;
   if (!payload || typeof payload !== "object" || !("type" in payload)) {
@@ -314,6 +323,13 @@ export async function POST(request: NextRequest) {
     if (body.travelBufferMinutes !== undefined && (!Number.isFinite(body.travelBufferMinutes) || body.travelBufferMinutes < 0)) {
       return NextResponse.json({ error: "invalid_travel_buffer" }, { status: 400 });
     }
+    if (
+      body.quotedTotalCents !== undefined &&
+      body.quotedTotalCents !== null &&
+      (!Number.isFinite(body.quotedTotalCents) || body.quotedTotalCents < 0 || !Number.isInteger(body.quotedTotalCents))
+    ) {
+      return NextResponse.json({ error: "invalid_quote_total" }, { status: 400 });
+    }
 
     const res = await fetch(`${apiBase}/api/admin/booking/book`, {
       method: "POST",
@@ -330,7 +346,10 @@ export async function POST(request: NextRequest) {
         services: Array.isArray(body.services)
           ? body.services.filter((s) => typeof s === "string" && s.trim().length).slice(0, 3)
           : [],
-        note: typeof body.note === "string" && body.note.trim().length ? body.note.trim() : undefined
+        note: typeof body.note === "string" && body.note.trim().length ? body.note.trim() : undefined,
+        ...(typeof body.quotedTotalCents === "number" && Number.isFinite(body.quotedTotalCents) && Number.isInteger(body.quotedTotalCents)
+          ? { quotedTotalCents: body.quotedTotalCents }
+          : {})
       })
     });
 
@@ -342,6 +361,94 @@ export async function POST(request: NextRequest) {
     const data = await res.json().catch(() => ({}));
     console.info("[chat-actions] appointment booked", { result: data });
     return NextResponse.json({ ok: true, type: payload.type, result: data });
+  }
+
+  if (payload.type === "reschedule_appointment") {
+    const body = payload.payload;
+    if (!body || typeof body.appointmentId !== "string" || typeof body.startAt !== "string") {
+      return NextResponse.json({ error: "missing_reschedule_fields" }, { status: 400 });
+    }
+    if (body.durationMinutes !== undefined && (!Number.isFinite(body.durationMinutes) || body.durationMinutes <= 0)) {
+      return NextResponse.json({ error: "invalid_duration" }, { status: 400 });
+    }
+    if (body.travelBufferMinutes !== undefined && (!Number.isFinite(body.travelBufferMinutes) || body.travelBufferMinutes < 0)) {
+      return NextResponse.json({ error: "invalid_travel_buffer" }, { status: 400 });
+    }
+
+    const res = await fetch(`${apiBase}/api/web/appointments/${encodeURIComponent(body.appointmentId.trim())}/reschedule`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        startAt: body.startAt,
+        ...(typeof body.durationMinutes === "number" ? { durationMinutes: body.durationMinutes } : {}),
+        ...(typeof body.travelBufferMinutes === "number" ? { travelBufferMinutes: body.travelBufferMinutes } : {})
+      })
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return NextResponse.json({ error: "reschedule_failed", detail: detail.slice(0, 200) }, { status: res.status });
+    }
+
+    const data = await res.json().catch(() => ({}));
+    console.info("[chat-actions] appointment rescheduled", { result: data });
+    return NextResponse.json({ ok: true, type: payload.type, result: data });
+  }
+
+  if (payload.type === "send_text") {
+    const body = payload.payload;
+    if (!body || typeof body.contactId !== "string" || typeof body.body !== "string") {
+      return NextResponse.json({ error: "missing_sms_fields" }, { status: 400 });
+    }
+    const contactId = body.contactId.trim();
+    const text = body.body.trim();
+    if (!contactId) return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
+    if (!text) return NextResponse.json({ error: "body_required" }, { status: 400 });
+
+    const channel = body.channel === "email" || body.channel === "dm" ? body.channel : "sms";
+
+    const ensureRes = await fetch(`${apiBase}/api/admin/inbox/threads/ensure`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({ contactId, channel })
+    });
+
+    if (!ensureRes.ok) {
+      const detail = await ensureRes.text().catch(() => "");
+      return NextResponse.json({ error: "thread_ensure_failed", detail: detail.slice(0, 200) }, { status: ensureRes.status });
+    }
+
+    const ensurePayload = (await ensureRes.json().catch(() => null)) as { threadId?: string } | null;
+    const threadId = typeof ensurePayload?.threadId === "string" ? ensurePayload.threadId.trim() : "";
+    if (!threadId) return NextResponse.json({ error: "thread_ensure_failed" }, { status: 502 });
+
+    const sendRes = await fetch(`${apiBase}/api/admin/inbox/threads/${encodeURIComponent(threadId)}/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        body: text,
+        direction: "outbound",
+        channel
+      })
+    });
+
+    if (!sendRes.ok) {
+      const detail = await sendRes.text().catch(() => "");
+      return NextResponse.json({ error: "sms_send_failed", detail: detail.slice(0, 200) }, { status: sendRes.status });
+    }
+
+    const data = await sendRes.json().catch(() => ({}));
+    console.info("[chat-actions] sms queued", { threadId, contactId });
+    return NextResponse.json({ ok: true, type: payload.type, result: { threadId, ...(data && typeof data === "object" ? data : {}) } });
   }
 
   if (payload.type === "cancel_appointment") {

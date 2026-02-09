@@ -10,7 +10,15 @@ type BookingOption = BookingSuggestion & { services?: string[]; selectedService?
 
 type ActionSuggestion = {
   id: string;
-  type: "create_contact" | "create_quote" | "create_task" | "book_appointment" | "create_reminder" | "add_contact_note";
+  type:
+    | "create_contact"
+    | "create_quote"
+    | "create_task"
+    | "book_appointment"
+    | "reschedule_appointment"
+    | "send_text"
+    | "create_reminder"
+    | "add_contact_note";
   summary: string;
   payload: Record<string, any>;
   context?: {
@@ -55,6 +63,8 @@ type ContactOption = {
 const TEAM_SUGGESTIONS: string[] = [
   "Summarize today's schedule for the crew.",
   "Draft a follow-up text after a quote visit.",
+  "Send a good reply text to this contact.",
+  "Send a text that says “On my way — see you soon.”",
   "Summarize recent notes for a lead.",
   "Share tips for handling a tough stain."
 ];
@@ -288,7 +298,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         setActionDurations((prev) => {
           const next = { ...prev };
           for (const action of actions) {
-            if (action.type === "book_appointment" && !next[action.id]) {
+            if ((action.type === "book_appointment" || action.type === "reschedule_appointment") && !next[action.id]) {
               next[action.id] =
                 typeof action.payload?.["durationMinutes"] === "number" && action.payload["durationMinutes"] > 0
                   ? action.payload["durationMinutes"]
@@ -300,7 +310,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         setActionTravel((prev) => {
           const next = { ...prev };
           for (const action of actions) {
-            if (action.type === "book_appointment" && !next[action.id]) {
+            if ((action.type === "book_appointment" || action.type === "reschedule_appointment") && !next[action.id]) {
               next[action.id] =
                 typeof action.payload?.["travelBufferMinutes"] === "number" && action.payload["travelBufferMinutes"] >= 0
                   ? action.payload["travelBufferMinutes"]
@@ -312,7 +322,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         setActionStartDate((prev) => {
           const next = { ...prev };
           for (const action of actions) {
-            if (action.type === "book_appointment" && !next[action.id]) {
+            if ((action.type === "book_appointment" || action.type === "reschedule_appointment") && !next[action.id]) {
               const start = action.payload?.["startAt"] ? new Date(action.payload["startAt"]) : null;
               next[action.id] = start ? start.toISOString().slice(0, 10) : "";
             }
@@ -322,7 +332,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         setActionStartTime((prev) => {
           const next = { ...prev };
           for (const action of actions) {
-            if (action.type === "book_appointment" && !next[action.id]) {
+            if ((action.type === "book_appointment" || action.type === "reschedule_appointment") && !next[action.id]) {
               const start = action.payload?.["startAt"] ? new Date(action.payload["startAt"]) : null;
               next[action.id] = start
                 ? start.toLocaleTimeString([], {
@@ -532,7 +542,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         const payload = { ...action.payload };
         const note = actionNotes[action.id]?.trim();
         if (note && note.length > 0) {
-          if (action.type === "add_contact_note") {
+          if (action.type === "send_text") {
+            payload["body"] = note;
+          } else if (action.type === "add_contact_note") {
             payload["body"] = note;
           } else if (action.type === "create_reminder") {
             payload["notes"] = note;
@@ -563,6 +575,24 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
               : Array.isArray(action.payload?.["services"]) && action.payload["services"].length
                 ? action.payload["services"]
                 : ["junk_removal_primary"];
+          const chosenDuration = actionDurations[action.id];
+          payload["durationMinutes"] =
+            typeof chosenDuration === "number" && chosenDuration > 0
+              ? chosenDuration
+              : action.payload?.["durationMinutes"] ?? 60;
+          const chosenTravel = actionTravel[action.id];
+          payload["travelBufferMinutes"] =
+            typeof chosenTravel === "number" && chosenTravel >= 0
+              ? chosenTravel
+              : action.payload?.["travelBufferMinutes"] ?? 30;
+          const datePart = actionStartDate[action.id];
+          const timePart = actionStartTime[action.id];
+          if (datePart) {
+            const iso = timePart ? `${datePart}T${timePart}:00` : `${datePart}T09:00:00`;
+            payload["startAt"] = new Date(iso).toISOString();
+          }
+        }
+        if (action.type === "reschedule_appointment") {
           const chosenDuration = actionDurations[action.id];
           payload["durationMinutes"] =
             typeof chosenDuration === "number" && chosenDuration > 0
@@ -677,9 +707,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <header className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Stonegate Assist Chat</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Stonegate Agent</h2>
             <p className="text-sm text-slate-500">
-              Quick answers for owners and crew. Ask about workflow steps, pricing ranges, or customer messaging.
+              Ask questions or request actions. The agent proposes changes and waits for your confirmation before executing.
             </p>
           </div>
         </header>
@@ -938,6 +968,85 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                                     }))
                                   }
                                   placeholder="Add a short note for this booking"
+                                />
+                              </label>
+                            </div>
+                          ) : null}
+                          {action.type === "reschedule_appointment" ? (
+                            <div className="grid gap-2 text-[11px] text-slate-600 sm:grid-cols-3">
+                              <label className="flex flex-col gap-1 sm:col-span-2">
+                                <span className="font-semibold text-slate-700">New date</span>
+                                <input
+                                  type="date"
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionStartDate[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionStartDate((prev) => ({ ...prev, [action.id]: e.target.value }))
+                                  }
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Time</span>
+                                <input
+                                  type="time"
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionStartTime[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionStartTime((prev) => ({ ...prev, [action.id]: e.target.value }))
+                                  }
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Duration (min)</span>
+                                <input
+                                  type="number"
+                                  min={15}
+                                  max={240}
+                                  step={15}
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionDurations[action.id] ?? 60}
+                                  onChange={(e) =>
+                                    setActionDurations((prev) => ({
+                                      ...prev,
+                                      [action.id]: Number(e.target.value)
+                                    }))
+                                  }
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Travel buffer (min)</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={180}
+                                  step={5}
+                                  className="rounded-md border border-slate-200 px-2 py-1 text-[11px]"
+                                  value={actionTravel[action.id] ?? 30}
+                                  onChange={(e) =>
+                                    setActionTravel((prev) => ({
+                                      ...prev,
+                                      [action.id]: Number(e.target.value)
+                                    }))
+                                  }
+                                />
+                              </label>
+                            </div>
+                          ) : null}
+                          {action.type === "send_text" ? (
+                            <div className="grid gap-2 text-[11px] text-slate-600">
+                              <label className="flex flex-col gap-1">
+                                <span className="font-semibold text-slate-700">Text message (SMS)</span>
+                                <textarea
+                                  rows={3}
+                                  className="w-full resize-y rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px]"
+                                  value={actionNotes[action.id] ?? ""}
+                                  onChange={(e) =>
+                                    setActionNotes((prev) => ({
+                                      ...prev,
+                                      [action.id]: e.target.value
+                                    }))
+                                  }
+                                  placeholder="Type the SMS you want to send"
                                 />
                               </label>
                             </div>

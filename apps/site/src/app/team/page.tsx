@@ -271,7 +271,7 @@ export default async function TeamPage({
     { id: "expenses", label: "Expenses", href: "/team?tab=expenses", requires: "expenses.read" },
     { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "appointments.read" },
     { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "messages.send" },
-    { id: "chat", label: "Chat", href: "/team?tab=chat", requires: "messages.send" },
+    { id: "chat", label: "Agent", href: "/team?tab=chat", requires: "messages.send" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "bookings.manage" },
     { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "messages.send" },
     { id: "outbound", label: "Outbound", href: "/team?tab=outbound", requires: "messages.send" },
