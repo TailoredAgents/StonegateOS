@@ -737,7 +737,7 @@ export default async function TeamPage({
 
   const allowedTabs = resolvedTabs.filter((item) => isAllowed(item.requires));
   const tabMap = new Map(allowedTabs.map((item) => [item.id, item]));
-  const quickIds = ["inbox", "chat", "contacts", "calendar", "sales-hq"];
+  const quickIds = ["inbox", "chat", "contacts", "calendar"];
   const quickIdSet = new Set(quickIds);
   const groups: TeamNavGroup[] = tabGroups
     .filter((group) => group.id !== "account")
