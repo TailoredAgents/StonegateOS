@@ -162,7 +162,7 @@ type CreateBookingAction = {
   type: "book_appointment";
   summary: string;
   payload: {
-    contactId: string;
+    contactId?: string;
     propertyId?: string;
     startAt: string;
     durationMinutes?: number;
@@ -170,6 +170,8 @@ type CreateBookingAction = {
     services?: string[];
     note?: string | null;
     quotedTotalCents?: number | null;
+    contactLabel?: string;
+    contactCandidates?: ContactCandidate[];
   };
   context?: {
     propertyLabel?: string;
@@ -181,9 +183,11 @@ type SendTextAction = {
   type: "send_text";
   summary: string;
   payload: {
-    contactId: string;
+    contactId?: string;
     body: string;
     channel?: "sms" | "dm" | "email";
+    contactLabel?: string;
+    contactCandidates?: ContactCandidate[];
   };
 };
 
@@ -255,6 +259,14 @@ type ContactTarget = {
   email: string | null;
 };
 
+type ContactCandidate = ContactTarget & {
+  lastActivityAt: string | null;
+  addressLine1: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+};
+
 function getAdminContext() {
   const apiBase =
     process.env["API_BASE_URL"] ??
@@ -270,11 +282,26 @@ function normalizePhoneDigits(value: string): string {
 
 function extractContactQueryFromMessage(
   message: string
-): { kind: "phone"; value: string } | { kind: "email"; value: string } | { kind: "name"; value: string } | null {
+):
+  | { kind: "phone"; value: string }
+  | { kind: "email"; value: string }
+  | { kind: "address"; value: string }
+  | { kind: "zip"; value: string }
+  | { kind: "name"; value: string }
+  | null {
   const phone = extractPhoneFromText(message);
   if (phone) return { kind: "phone", value: phone };
   const email = extractEmailFromText(message);
   if (email) return { kind: "email", value: email };
+
+  const zip =
+    message.match(/\b(?:zip|zipcode|postal)\s*(?:code)?\s*[:#]?\s*(\d{5})\b/i) ??
+    message.match(/\bin\s+(\d{5})\b/i);
+  if (typeof zip?.[1] === "string" && zip[1].trim().length === 5) return { kind: "zip", value: zip[1].trim() };
+
+  const addressMatch = message.match(/\b(?:at|address)\s+([^.\n]{6,80})/i);
+  const rawAddress = typeof addressMatch?.[1] === "string" ? addressMatch[1].trim() : "";
+  if (rawAddress) return { kind: "address", value: rawAddress };
 
   const nameMatch = message.match(/\b(?:to|for|contact)\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,4})\b/i);
   const rawName = typeof nameMatch?.[1] === "string" ? nameMatch[1].trim() : "";
@@ -299,15 +326,24 @@ function pickContactResults(payload: unknown): Array<Record<string, unknown>> {
   return [];
 }
 
-async function resolveContactTarget(message: string): Promise<ContactTarget | null> {
+function toCandidateLabel(candidate: ContactCandidate): string {
+  const name = candidate.name?.trim() ?? "";
+  const phone = (candidate.phoneE164 ?? candidate.phone ?? "").trim();
+  const zip = (candidate.postalCode ?? "").trim();
+  return [name, phone || null, zip ? `(${zip})` : null].filter(Boolean).join(" ");
+}
+
+async function resolveContactTarget(
+  message: string
+): Promise<{ resolved: ContactCandidate | null; candidates: ContactCandidate[] }> {
   const query = extractContactQueryFromMessage(message);
-  if (!query) return null;
+  if (!query) return { resolved: null, candidates: [] };
 
   const { apiBase, adminKey } = getAdminContext();
-  if (!adminKey) return null;
+  if (!adminKey) return { resolved: null, candidates: [] };
 
   const qValue = query.value.trim();
-  if (!qValue.length) return null;
+  if (!qValue.length) return { resolved: null, candidates: [] };
 
   const search = new URLSearchParams();
   search.set("limit", "5");
@@ -318,10 +354,10 @@ async function resolveContactTarget(message: string): Promise<ContactTarget | nu
       headers: { "x-api-key": adminKey },
       cache: "no-store"
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { resolved: null, candidates: [] };
     const payload = (await res.json().catch(() => null)) as unknown;
     const results = pickContactResults(payload);
-    if (!results.length) return null;
+    if (!results.length) return { resolved: null, candidates: [] };
 
     const mapped = results
       .map((c) => {
@@ -332,12 +368,20 @@ async function resolveContactTarget(message: string): Promise<ContactTarget | nu
         const phone = typeof c["phone"] === "string" ? (c["phone"] as string) : null;
         const phoneE164 = typeof c["phoneE164"] === "string" ? (c["phoneE164"] as string) : null;
         const email = typeof c["email"] === "string" ? (c["email"] as string) : null;
-        if (!id) return null;
-        return { id, name, phone, phoneE164, email } satisfies ContactTarget;
-      })
-      .filter((c): c is ContactTarget => Boolean(c));
+        const lastActivityAt = typeof c["lastActivityAt"] === "string" ? (c["lastActivityAt"] as string) : null;
 
-    if (!mapped.length) return null;
+        const props = Array.isArray(c["properties"]) ? (c["properties"] as Array<Record<string, unknown>>) : [];
+        const firstProp = props.length > 0 && props[0] && typeof props[0] === "object" ? props[0] : null;
+        const addressLine1 = firstProp && typeof firstProp["addressLine1"] === "string" ? (firstProp["addressLine1"] as string) : null;
+        const city = firstProp && typeof firstProp["city"] === "string" ? (firstProp["city"] as string) : null;
+        const state = firstProp && typeof firstProp["state"] === "string" ? (firstProp["state"] as string) : null;
+        const postalCode = firstProp && typeof firstProp["postalCode"] === "string" ? (firstProp["postalCode"] as string) : null;
+        if (!id) return null;
+        return { id, name, phone, phoneE164, email, lastActivityAt, addressLine1, city, state, postalCode } satisfies ContactCandidate;
+      })
+      .filter((c): c is ContactCandidate => Boolean(c));
+
+    if (!mapped.length) return { resolved: null, candidates: [] };
 
     if (query.kind === "phone") {
       const qDigits = normalizePhoneDigits(query.value);
@@ -347,19 +391,19 @@ async function resolveContactTarget(message: string): Promise<ContactTarget | nu
         const tail = digits.length > 10 ? digits.slice(-10) : digits;
         return tail.length >= 7 && qTail.length >= 7 && tail === qTail;
       });
-      return matches.length === 1 ? matches[0] ?? null : null;
+      return { resolved: matches.length === 1 ? matches[0] ?? null : null, candidates: mapped };
     }
 
     if (query.kind === "email") {
       const qLower = query.value.toLowerCase();
       const matches = mapped.filter((c) => (c.email ?? "").toLowerCase() === qLower);
-      return matches.length === 1 ? matches[0] ?? null : null;
+      return { resolved: matches.length === 1 ? matches[0] ?? null : null, candidates: mapped };
     }
 
-    return mapped.length === 1 ? mapped[0] ?? null : null;
+    return { resolved: mapped.length === 1 ? mapped[0] ?? null : null, candidates: mapped };
   } catch (error) {
     console.warn("[chat] contact_resolve_failed", { error });
-    return null;
+    return { resolved: null, candidates: [] };
   }
 }
 
@@ -1583,8 +1627,24 @@ async function buildActionSuggestions(
   const note = extractActionNote(message) ?? classification?.note ?? null;
   const when = classification?.when;
   const quotedTotalCents = extractUsdToCents(message);
-  const contactTarget = await resolveContactTarget(message);
-  const resolvedCtx = contactTarget?.id ? { ...ctx, contactId: contactTarget.id } : ctx;
+  const lower = message.toLowerCase();
+  const maybeTargetedAction =
+    lower.includes("text") ||
+    lower.includes("sms") ||
+    lower.includes("send") ||
+    lower.includes("reply") ||
+    lower.includes("message") ||
+    lower.includes("book") ||
+    lower.includes("schedule") ||
+    lower.includes("appointment") ||
+    lower.includes("reschedule") ||
+    lower.includes("note");
+  const contactQuery = maybeTargetedAction ? extractContactQueryFromMessage(message) : null;
+  const contactResolve = contactQuery ? await resolveContactTarget(message) : { resolved: null, candidates: [] };
+  const contactTarget = contactResolve.resolved;
+  const baseCtx = contactQuery && !contactTarget ? { ...ctx, contactId: undefined } : ctx;
+  const contactCandidates = contactTarget ? [] : contactResolve.candidates;
+  const resolvedCtx = contactTarget?.id ? { ...baseCtx, contactId: contactTarget.id } : baseCtx;
 
   const contactAction = extractContactSuggestion(message, note, {
     contactName: classification?.contactName,
@@ -1614,12 +1674,24 @@ async function buildActionSuggestions(
     actions.push(contactNoteAction);
   }
 
-  const directBooking = extractDirectBookingSuggestion(message, resolvedCtx, classification, quotedTotalCents);
+  const directBooking = extractDirectBookingSuggestion(
+    message,
+    resolvedCtx,
+    classification,
+    quotedTotalCents,
+    contactCandidates
+  );
   if (directBooking) {
     actions.push(directBooking);
   }
 
-  const sendTextAction = extractSendTextSuggestion(message, resolvedCtx, replyText ?? null, contactTarget);
+  const sendTextAction = extractSendTextSuggestion(
+    message,
+    resolvedCtx,
+    replyText ?? null,
+    contactTarget,
+    contactCandidates
+  );
   if (sendTextAction) {
     actions.push(sendTextAction);
   }
@@ -1646,9 +1718,9 @@ function extractDirectBookingSuggestion(
   message: string,
   ctx: { contactId?: string; propertyId?: string },
   classification: IntentClassification | null | undefined,
-  quotedTotalCents: number | null
+  quotedTotalCents: number | null,
+  contactCandidates: ContactCandidate[]
 ): CreateBookingAction | null {
-  if (!ctx.contactId) return null;
   const lower = message.toLowerCase();
   const hasIntent =
     lower.includes("book") ||
@@ -1667,17 +1739,22 @@ function extractDirectBookingSuggestion(
 
   const services = normalizeServiceArray(classification?.services);
 
+  const contactId = ctx.contactId;
+  const candidates = contactId ? [] : contactCandidates.slice(0, 5);
+  if (!contactId && candidates.length === 0) return null;
+
   return {
     id: newActionId(),
     type: "book_appointment",
     summary: `Book appointment at ${new Date(parsed.iso).toLocaleString()}`,
     payload: {
-      contactId: ctx.contactId,
+      ...(contactId ? { contactId } : {}),
       ...(ctx.propertyId ? { propertyId: ctx.propertyId } : {}),
       startAt: parsed.iso,
       durationMinutes: 60,
       travelBufferMinutes: 30,
       services,
+      ...(candidates.length > 0 ? { contactCandidates: candidates } : {}),
       ...(typeof quotedTotalCents === "number" && Number.isFinite(quotedTotalCents) && quotedTotalCents >= 0
         ? { quotedTotalCents }
         : {})
@@ -1701,9 +1778,9 @@ function extractSendTextSuggestion(
   message: string,
   ctx: { contactId?: string },
   replyText: string | null,
-  contactTarget: ContactTarget | null
+  contactTarget: ContactTarget | null,
+  contactCandidates: ContactCandidate[]
 ): SendTextAction | null {
-  if (!ctx.contactId) return null;
   const lower = message.toLowerCase();
   const wantsText =
     (lower.includes("text") || lower.includes("sms")) &&
@@ -1719,12 +1796,15 @@ function extractSendTextSuggestion(
   if (!body) return null;
 
   const snippet = body.length > 42 ? `${body.slice(0, 42)}...` : body;
+  const contactId = ctx.contactId;
+  const candidates = contactId ? [] : contactCandidates.slice(0, 5);
+  if (!contactId && candidates.length === 0) return null;
   return {
     id: newActionId(),
     type: "send_text",
     summary: `Send text: “${snippet}”`,
     payload: {
-      contactId: ctx.contactId,
+      ...(contactId ? { contactId } : {}),
       body,
       channel: "sms",
       ...(contactTarget
@@ -1734,6 +1814,8 @@ function extractSendTextSuggestion(
               .join(" ")
           }
         : {})
+      ,
+      ...(candidates.length > 0 ? { contactCandidates: candidates } : {})
     }
   };
 }
