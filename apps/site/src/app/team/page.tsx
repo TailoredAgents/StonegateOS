@@ -252,6 +252,9 @@ export default async function TeamPage({
   const flash = cookieStore.get("myst-flash")?.value ?? null;
   const flashError = cookieStore.get("myst-flash-error")?.value ?? null;
   const dismissedNewLeadId = cookieStore.get("myst-new-lead-dismissed")?.value ?? null;
+  const hiddenUntilRaw = cookieStore.get("myst-new-lead-hidden-until")?.value ?? null;
+  const hiddenUntilMs = hiddenUntilRaw ? Number(hiddenUntilRaw) : NaN;
+  const isNewLeadHidden = Number.isFinite(hiddenUntilMs) && hiddenUntilMs > Date.now();
 
   let systemHealth: SystemHealthApiResponse | null = null;
   if (hasOwner || hasOffice || hasCrew) {
@@ -338,6 +341,9 @@ export default async function TeamPage({
 
   let newLead: LeadContactSummary | null = null;
   if (hasOwner || hasOffice || hasCrew) {
+    if (isNewLeadHidden) {
+      newLead = null;
+    } else {
     try {
       const response = await callAdminApi("/api/admin/contacts?limit=12");
       if (response.ok) {
@@ -353,6 +359,7 @@ export default async function TeamPage({
       }
     } catch {
       newLead = null;
+    }
     }
   }
 

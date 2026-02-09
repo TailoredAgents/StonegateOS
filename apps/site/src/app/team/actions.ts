@@ -2753,6 +2753,14 @@ export async function dismissNewLeadAction(formData: FormData) {
     return;
   }
 
+  // Hide the banner regardless of which "new" lead is currently at the top.
+  jar.set({
+    name: "myst-new-lead-hidden-until",
+    value: String(Date.now() + 24 * 60 * 60 * 1000),
+    path: "/",
+    maxAge: 60 * 60 * 24
+  });
+
   jar.set({
     name: "myst-new-lead-dismissed",
     value: contactId.trim(),
