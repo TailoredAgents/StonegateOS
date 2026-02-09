@@ -1,6 +1,5 @@
 "use client";
 
-import type { MouseEventHandler } from "react";
 import { useEffect, useRef } from "react";
 import { useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -10,15 +9,13 @@ export function SubmitButton({
   label,
   pendingLabel,
   className,
-  disabled,
-  onClick
+  disabled
 }: {
   children?: React.ReactNode;
   label?: string;
   pendingLabel?: string;
   className?: string;
   disabled?: boolean;
-  onClick?: MouseEventHandler<HTMLButtonElement>;
 }) {
   const { pending } = useFormStatus();
   const router = useRouter();
@@ -69,7 +66,7 @@ export function SubmitButton({
 
   const isDisabled = pending || disabled;
   return (
-    <button type="submit" className={className} disabled={isDisabled} onClick={onClick}>
+    <button type="submit" className={className} disabled={isDisabled}>
       {pending ? pendingLabel ?? "Saving..." : children ?? label ?? "Save"}
     </button>
   );

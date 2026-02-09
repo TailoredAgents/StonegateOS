@@ -229,27 +229,22 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
       <div className="flex flex-wrap items-center gap-2">
         <form
           action={startContactCallAction}
-          method="post"
           className="inline"
+          onSubmit={(event) => {
+            if (!canCall) {
+              event.preventDefault();
+              return;
+            }
+            const label = contact.phone ?? "this contact";
+            if (!window.confirm(`Call ${contact.name} (${label}) from the Stonegate number?`)) {
+              event.preventDefault();
+            }
+          }}
         >
           <input type="hidden" name="contactId" value={contact.id} />
-          <SubmitButton
-            className={teamButtonClass("primary", "sm")}
-            pendingLabel="Calling..."
-            disabled={!canCall}
-            onClick={(event) => {
-              if (!canCall) {
-                event.preventDefault();
-                return;
-              }
-              const label = contact.phone ?? "this contact";
-              if (!window.confirm(`Call ${contact.name} (${label}) from the Stonegate number?`)) {
-                event.preventDefault();
-              }
-            }}
-          >
+          <button type="submit" className={teamButtonClass("primary", "sm")} disabled={!canCall}>
             Call
-          </SubmitButton>
+          </button>
         </form>
         <a className={teamButtonClass("secondary", "sm")} href={`/team?tab=inbox&contactId=${encodeURIComponent(contact.id)}`}>
           Message
