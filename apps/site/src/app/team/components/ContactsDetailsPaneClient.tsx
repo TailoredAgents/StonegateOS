@@ -229,6 +229,7 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
       <div className="flex flex-wrap items-center gap-2">
         <form
           action={startContactCallAction}
+          method="post"
           className="inline"
           onSubmit={(event) => {
             if (!canCall) {

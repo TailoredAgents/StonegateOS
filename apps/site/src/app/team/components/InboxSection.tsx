@@ -1152,7 +1152,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                               {message.subject}
                             </div>
                           ) : null}
-                          {showBody ? <p className="whitespace-pre-wrap">{message.body}</p> : null}
+                          {showBody ? <p className="whitespace-pre-wrap break-words">{message.body}</p> : null}
                           {hasMedia ? <InboxMediaGallery messageId={message.id} count={message.mediaUrls!.length} /> : null}
                           <div className="mt-2 flex items-center justify-between text-[10px] text-slate-500">
                             <span>{message.participantName ?? message.direction}</span>
@@ -1182,7 +1182,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 <InboxAutoScroll containerId="inbox-thread-scroll" bottomId="inbox-thread-bottom" depsKey={scrollKey} />
               </div>
 
-              <div className="-mx-5 border-t border-slate-200 bg-white/95 px-5 pt-3 pb-[calc(env(safe-area-inset-bottom)+1rem)] backdrop-blur">
+              <div className="-mx-5 relative z-10 border-t border-slate-200 bg-white/95 px-5 pt-3 pb-[calc(env(safe-area-inset-bottom)+1rem)] backdrop-blur">
                 <form action={suggestThreadReplyAction} className="flex justify-end gap-2">
                   <input type="hidden" name="contactId" value={activeContactId} />
                   <input type="hidden" name="channel" value={requestedChannel} />
@@ -1204,7 +1204,12 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                   </SubmitButton>
                 </form>
 
-                <form action={sendThreadMessageAction} className="mt-3 space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                <form
+                  action={sendThreadMessageAction}
+                  method="post"
+                  encType="multipart/form-data"
+                  className="mt-3 space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4"
+                >
                   <input type="hidden" name="contactId" value={activeContactId} />
                   <input type="hidden" name="channel" value={requestedChannel} />
                   {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
@@ -1384,7 +1389,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                 <div className="space-y-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</div>
                   <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <form action={startContactCallAction} className="inline">
+                    <form action={startContactCallAction} method="post" className="inline">
                       <input type="hidden" name="contactId" value={activeContactId ?? ""} />
                       <SubmitButton
                         className={`rounded-full border px-3 py-2 text-xs font-semibold ${
