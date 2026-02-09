@@ -346,7 +346,8 @@ async function resolveContactTarget(
   if (!qValue.length) return { resolved: null, candidates: [] };
 
   const search = new URLSearchParams();
-  search.set("limit", "5");
+  // Fetch more matches so we can bias toward the most recent contact while still letting the user confirm.
+  search.set("limit", "40");
   search.set("q", qValue);
 
   try {
@@ -382,6 +383,14 @@ async function resolveContactTarget(
       .filter((c): c is ContactCandidate => Boolean(c));
 
     if (!mapped.length) return { resolved: null, candidates: [] };
+
+    mapped.sort((a, b) => {
+      const at = typeof a.lastActivityAt === "string" ? Date.parse(a.lastActivityAt) : NaN;
+      const bt = typeof b.lastActivityAt === "string" ? Date.parse(b.lastActivityAt) : NaN;
+      const aTime = Number.isFinite(at) ? at : 0;
+      const bTime = Number.isFinite(bt) ? bt : 0;
+      return bTime - aTime;
+    });
 
     if (query.kind === "phone") {
       const qDigits = normalizePhoneDigits(query.value);

@@ -144,8 +144,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const [isSending, setIsSending] = React.useState(false);
   const [isRecording, setIsRecording] = React.useState(false);
   const [supportsRecording, setSupportsRecording] = React.useState(false);
-  const [selectedContactId, setSelectedContactId] = React.useState<string>(contacts[0]?.id ?? "");
-  const [selectedPropertyId, setSelectedPropertyId] = React.useState<string>(contacts[0]?.properties[0]?.id ?? "");
+  const defaultContextContact = contacts.length === 1 ? contacts[0] : null;
+  const defaultContextProperty = defaultContextContact?.properties?.length === 1 ? defaultContextContact.properties[0] : null;
   const [bookingInFlight, setBookingInFlight] = React.useState(false);
   const [bookingStatus, setBookingStatus] = React.useState<
     | { state: "idle" }
@@ -186,6 +186,18 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
     setSupportsRecording(Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
   }, []);
 
+  const pickBestCandidate = React.useCallback((candidates: ContactCandidate[]): ContactCandidate | null => {
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+    const sorted = [...candidates].sort((a, b) => {
+      const at = typeof a?.lastActivityAt === "string" ? Date.parse(a.lastActivityAt) : NaN;
+      const bt = typeof b?.lastActivityAt === "string" ? Date.parse(b.lastActivityAt) : NaN;
+      const aTime = Number.isFinite(at) ? at : 0;
+      const bTime = Number.isFinite(bt) ? bt : 0;
+      return bTime - aTime;
+    });
+    return sorted[0] ?? null;
+  }, []);
+
   const formatCandidateLabel = React.useCallback((candidate: ContactCandidate | null | undefined): string => {
     if (!candidate) return "";
     const name = (candidate.name ?? "").toString().trim();
@@ -202,19 +214,16 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
       setMessages((prev) => [...prev, { id: crypto.randomUUID(), sender: "user", text }]);
       setInput("");
 
-      const selectedContact = contacts.find((c) => c.id === selectedContactId);
-      const selectedProperty = selectedContact?.properties.find((p) => p.id === selectedPropertyId);
-
       const payload = await callAssistant(
         text,
-        selectedContactId || undefined,
-        selectedPropertyId || undefined,
-        selectedProperty
+        defaultContextContact?.id ?? undefined,
+        defaultContextProperty?.id ?? undefined,
+        defaultContextProperty
           ? {
-              addressLine1: selectedProperty.addressLine1,
-              city: selectedProperty.city,
-              state: selectedProperty.state,
-              postalCode: selectedProperty.postalCode
+              addressLine1: defaultContextProperty.addressLine1,
+              city: defaultContextProperty.city,
+              state: defaultContextProperty.state,
+              postalCode: defaultContextProperty.postalCode
             }
           : undefined
       );
@@ -368,6 +377,22 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           }
           return next;
         });
+
+        setActionPickedContacts((prev) => {
+          const next = { ...prev };
+          for (const action of actions) {
+            if (next[action.id]) continue;
+            const requiresContact = action.type === "send_text" || action.type === "book_appointment";
+            const hasContactId = typeof action.payload?.["contactId"] === "string" && action.payload["contactId"].trim().length > 0;
+            if (!requiresContact || hasContactId) continue;
+            const candidates = Array.isArray(action.payload?.["contactCandidates"])
+              ? (action.payload["contactCandidates"] as ContactCandidate[])
+              : [];
+            const best = pickBestCandidate(candidates);
+            if (best) next[action.id] = best;
+          }
+          return next;
+        });
       }
       setMessages((prev) => [
         ...prev,
@@ -382,7 +407,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
       lastBotMessageRef.current = combinedReply;
       setIsSending(false);
     },
-    [contacts, isSending, selectedContactId, selectedPropertyId]
+    [defaultContextContact, defaultContextProperty, isSending, pickBestCandidate]
   );
 
   const handleSubmit = React.useCallback(
@@ -754,54 +779,6 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           </div>
         </header>
 
-        {contacts.length > 0 ? (
-          <details className="group mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-            <summary className="cursor-pointer select-none text-xs font-semibold text-slate-600">
-              Optional context (helps bookings)
-            </summary>
-            <div className="mt-3 grid gap-2">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-semibold text-slate-600">Contact</span>
-                  <select
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                    value={selectedContactId}
-                    onChange={(e) => {
-                      const cid = e.target.value;
-                      setSelectedContactId(cid);
-                      const contact = contacts.find((c) => c.id === cid);
-                      setSelectedPropertyId(contact?.properties[0]?.id ?? "");
-                    }}
-                  >
-                    {contacts.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs font-semibold text-slate-600">Property</span>
-                  <select
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                    value={selectedPropertyId}
-                    onChange={(e) => setSelectedPropertyId(e.target.value)}
-                  >
-                    {(contacts.find((c) => c.id === selectedContactId)?.properties ?? []).map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <p className="text-[11px] text-slate-500">
-                Tip: include a phone, email, or address in your message to auto-find the right contact.
-              </p>
-            </div>
-          </details>
-        ) : null}
-
         <div className="mt-5 flex h-[420px] flex-col rounded-2xl border border-slate-200 bg-white/95">
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4 text-sm">
             {messages.map((message) => (
@@ -927,46 +904,80 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                           </div>
                           {action.type === "book_appointment" ? (
                             <div className="grid gap-2 text-[11px] text-slate-600 sm:grid-cols-3">
-                              {Array.isArray(action.payload?.["contactCandidates"]) &&
-                              action.payload["contactCandidates"].length > 0 &&
-                              !(typeof action.payload?.["contactId"] === "string" && action.payload["contactId"].trim().length) ? (
-                                <div className="space-y-2 sm:col-span-3">
-                                  <div className="text-[11px] font-semibold text-slate-700">Pick contact</div>
-                                  <div className="flex flex-wrap gap-2">
-                                    {action.payload["contactCandidates"].map((raw: any) => {
-                                      const candidate = (raw ?? {}) as ContactCandidate;
-                                      const label = formatCandidateLabel(candidate) || candidate.id;
-                                      const pickedId = actionPickedContacts[action.id]?.id ?? "";
-                                      const isPicked = pickedId && candidate.id && pickedId === candidate.id;
-                                      return (
-                                        <button
-                                          key={candidate.id ?? label}
-                                          type="button"
-                                          className={cn(
-                                            "rounded-full border px-3 py-1 text-[11px] font-semibold transition",
-                                            isPicked
-                                              ? "border-primary-300 bg-primary-100 text-primary-900"
-                                              : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-                                          )}
-                                          onClick={() =>
-                                            setActionPickedContacts((prev) => ({
-                                              ...prev,
-                                              [action.id]: candidate
-                                            }))
-                                          }
-                                        >
-                                          {label}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                  {actionPickedContacts[action.id] ? (
-                                    <div className="text-[11px] text-slate-500">
-                                      For: {formatCandidateLabel(actionPickedContacts[action.id])}
+                              {(() => {
+                                const candidates = Array.isArray(action.payload?.["contactCandidates"])
+                                  ? (action.payload["contactCandidates"] as ContactCandidate[])
+                                  : [];
+                                const hasContactId =
+                                  typeof action.payload?.["contactId"] === "string" && action.payload["contactId"].trim().length > 0;
+                                if (hasContactId || candidates.length === 0) return null;
+                                const picked = actionPickedContacts[action.id];
+                                if (!picked) {
+                                  return (
+                                    <div className="space-y-2 sm:col-span-3">
+                                      <div className="text-[11px] font-semibold text-slate-700">Pick contact</div>
+                                      <div className="flex flex-wrap gap-2">
+                                        {candidates.map((candidate) => {
+                                          const label = formatCandidateLabel(candidate) || candidate.id;
+                                          return (
+                                            <button
+                                              key={candidate.id ?? label}
+                                              type="button"
+                                              className={cn(
+                                                "rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-300"
+                                              )}
+                                              onClick={() =>
+                                                setActionPickedContacts((prev) => ({
+                                                  ...prev,
+                                                  [action.id]: candidate
+                                                }))
+                                              }
+                                            >
+                                              {label}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
                                     </div>
-                                  ) : null}
-                                </div>
-                              ) : null}
+                                  );
+                                }
+                                return (
+                                  <div className="space-y-2 sm:col-span-3">
+                                    <div className="text-[11px] text-slate-500">For: {formatCandidateLabel(picked)}</div>
+                                    <details className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                      <summary className="cursor-pointer select-none text-[11px] font-semibold text-slate-600">
+                                        Change contact
+                                      </summary>
+                                      <div className="mt-2 flex flex-wrap gap-2">
+                                        {candidates.map((candidate) => {
+                                          const label = formatCandidateLabel(candidate) || candidate.id;
+                                          const isPicked = picked?.id && candidate.id && picked.id === candidate.id;
+                                          return (
+                                            <button
+                                              key={candidate.id ?? label}
+                                              type="button"
+                                              className={cn(
+                                                "rounded-full border px-3 py-1 text-[11px] font-semibold transition",
+                                                isPicked
+                                                  ? "border-primary-300 bg-primary-100 text-primary-900"
+                                                  : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                                              )}
+                                              onClick={() =>
+                                                setActionPickedContacts((prev) => ({
+                                                  ...prev,
+                                                  [action.id]: candidate
+                                                }))
+                                              }
+                                            >
+                                              {label}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    </details>
+                                  </div>
+                                );
+                              })()}
                               <label className="flex flex-col gap-1">
                                 <span className="font-semibold text-slate-700">Service</span>
                                 <select
@@ -1127,41 +1138,77 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                           ) : null}
                           {action.type === "send_text" ? (
                             <div className="grid gap-2 text-[11px] text-slate-600">
-                              {Array.isArray(action.payload?.["contactCandidates"]) &&
-                              action.payload["contactCandidates"].length > 0 &&
-                              !(typeof action.payload?.["contactId"] === "string" && action.payload["contactId"].trim().length) ? (
-                                <div className="space-y-2">
-                                  <div className="text-[11px] font-semibold text-slate-700">Pick contact</div>
-                                  <div className="flex flex-wrap gap-2">
-                                    {action.payload["contactCandidates"].map((raw: any) => {
-                                      const candidate = (raw ?? {}) as ContactCandidate;
-                                      const label = formatCandidateLabel(candidate) || candidate.id;
-                                      const pickedId = actionPickedContacts[action.id]?.id ?? "";
-                                      const isPicked = pickedId && candidate.id && pickedId === candidate.id;
-                                      return (
-                                        <button
-                                          key={candidate.id ?? label}
-                                          type="button"
-                                          className={cn(
-                                            "rounded-full border px-3 py-1 text-[11px] font-semibold transition",
-                                            isPicked
-                                              ? "border-primary-300 bg-primary-100 text-primary-900"
-                                              : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-                                          )}
-                                          onClick={() =>
-                                            setActionPickedContacts((prev) => ({
-                                              ...prev,
-                                              [action.id]: candidate
-                                            }))
-                                          }
-                                        >
-                                          {label}
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              ) : null}
+                              {(() => {
+                                const candidates = Array.isArray(action.payload?.["contactCandidates"])
+                                  ? (action.payload["contactCandidates"] as ContactCandidate[])
+                                  : [];
+                                const hasContactId =
+                                  typeof action.payload?.["contactId"] === "string" && action.payload["contactId"].trim().length > 0;
+                                if (hasContactId || candidates.length === 0) return null;
+                                const picked = actionPickedContacts[action.id];
+                                if (!picked) {
+                                  return (
+                                    <div className="space-y-2">
+                                      <div className="text-[11px] font-semibold text-slate-700">Pick contact</div>
+                                      <div className="flex flex-wrap gap-2">
+                                        {candidates.map((candidate) => {
+                                          const label = formatCandidateLabel(candidate) || candidate.id;
+                                          return (
+                                            <button
+                                              key={candidate.id ?? label}
+                                              type="button"
+                                              className={cn(
+                                                "rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-slate-300"
+                                              )}
+                                              onClick={() =>
+                                                setActionPickedContacts((prev) => ({
+                                                  ...prev,
+                                                  [action.id]: candidate
+                                                }))
+                                              }
+                                            >
+                                              {label}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <details className="rounded-md border border-slate-200 bg-white px-2 py-2">
+                                    <summary className="cursor-pointer select-none text-[11px] font-semibold text-slate-600">
+                                      Change contact
+                                    </summary>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                      {candidates.map((candidate) => {
+                                        const label = formatCandidateLabel(candidate) || candidate.id;
+                                        const isPicked = picked?.id && candidate.id && picked.id === candidate.id;
+                                        return (
+                                          <button
+                                            key={candidate.id ?? label}
+                                            type="button"
+                                            className={cn(
+                                              "rounded-full border px-3 py-1 text-[11px] font-semibold transition",
+                                              isPicked
+                                                ? "border-primary-300 bg-primary-100 text-primary-900"
+                                                : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                                            )}
+                                            onClick={() =>
+                                              setActionPickedContacts((prev) => ({
+                                                ...prev,
+                                                [action.id]: candidate
+                                              }))
+                                            }
+                                          >
+                                            {label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </details>
+                                );
+                              })()}
                               {(() => {
                                 const payloadLabel =
                                   typeof action.payload?.["contactLabel"] === "string" ? action.payload["contactLabel"].trim() : "";
