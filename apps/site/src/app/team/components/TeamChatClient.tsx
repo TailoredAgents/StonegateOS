@@ -143,6 +143,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const [input, setInput] = React.useState("");
   const [isSending, setIsSending] = React.useState(false);
   const [isRecording, setIsRecording] = React.useState(false);
+  const [isTranscribing, setIsTranscribing] = React.useState(false);
   const [supportsRecording, setSupportsRecording] = React.useState(false);
   const defaultContextContact = contacts.length === 1 ? contacts[0] : null;
   const defaultContextProperty = defaultContextContact?.properties?.length === 1 ? defaultContextContact.properties[0] : null;
@@ -185,6 +186,13 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
     if (typeof window === "undefined") return;
     setSupportsRecording(Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
   }, []);
+
+  const lastBotMessageId = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]?.sender === "bot") return messages[i]!.id;
+    }
+    return null;
+  }, [messages]);
 
   const pickBestCandidate = React.useCallback((candidates: ContactCandidate[]): ContactCandidate | null => {
     if (!Array.isArray(candidates) || candidates.length === 0) return null;
@@ -447,8 +455,8 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const handleMicToggle = React.useCallback(async () => {
     if (!supportsRecording) return;
     if (isRecording) {
+      setIsTranscribing(true);
       stopRecording();
-      setIsRecording(false);
       return;
     }
     try {
@@ -460,26 +468,33 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
           chunksRef.current.push(e.data);
         }
       };
-      mr.onstop = () => {
+      mr.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        uploadAudio(blob);
-        stream.getTracks().forEach((t) => t.stop());
-        setIsRecording(false);
+        try {
+          await uploadAudio(blob);
+        } finally {
+          stream.getTracks().forEach((t) => t.stop());
+          setIsRecording(false);
+          setIsTranscribing(false);
+        }
       };
       mr.onerror = () => {
         setIsRecording(false);
+        setIsTranscribing(false);
         stream.getTracks().forEach((t) => t.stop());
       };
       mediaRecorderRef.current = mr;
       setIsRecording(true);
+      setIsTranscribing(false);
       mr.start();
     } catch {
       setIsRecording(false);
+      setIsTranscribing(false);
     }
   }, [supportsRecording, isRecording, stopRecording, uploadAudio]);
 
-  const handleSpeak = React.useCallback(async () => {
-    const text = lastBotMessageRef.current.trim();
+  const handleSpeak = React.useCallback(async (override?: string) => {
+    const text = (override ?? lastBotMessageRef.current).trim();
     if (!text) return;
     try {
       const res = await fetch("/api/chat/tts", {
@@ -492,10 +507,10 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
       const blob = new Blob([arrayBuffer], { type: "audio/mpeg" });
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
-      audio.play().catch(() => undefined);
-    } catch {
-      // ignore
-    }
+        audio.play().catch(() => undefined);
+      } catch {
+        // ignore
+      }
   }, []);
 
   const formatSlot = React.useCallback((suggestion: BookingSuggestion): string => {
@@ -795,6 +810,13 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                     {message.text}
                   </div>
                 </div>
+                {message.sender === "bot" && message.id === lastBotMessageId ? (
+                  <div className="flex items-center">
+                    <Button type="button" size="sm" variant="ghost" onClick={() => void handleSpeak(message.text)}>
+                      Listen
+                    </Button>
+                  </div>
+                ) : null}
 
                 {message.booking ? (
                   <div className="space-y-2 rounded-xl border border-primary-50 bg-primary-50/60 px-3 py-2">
@@ -1422,16 +1444,13 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Type a question..."
+                placeholder="Type or talk..."
                 className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
               <Button type="button" size="sm" disabled={!supportsRecording} onClick={handleMicToggle}>
-                {supportsRecording ? (isRecording ? "Stop" : "Record") : "No mic"}
+                {supportsRecording ? (isRecording ? "Stop" : isTranscribing ? "Working..." : "Talk") : "No mic"}
               </Button>
-              <Button type="button" size="sm" variant="ghost" onClick={handleSpeak}>
-                Speak reply
-              </Button>
-              <Button type="submit" size="sm" disabled={isSending}>
+              <Button type="submit" size="sm" disabled={isSending || isRecording || isTranscribing}>
                 {isSending ? "Sending..." : "Send"}
               </Button>
             </form>
