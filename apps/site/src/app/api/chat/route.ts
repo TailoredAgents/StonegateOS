@@ -1504,6 +1504,11 @@ async function buildActionSuggestions(
     actions.push(contactNoteAction);
   }
 
+  const directBooking = extractDirectBookingSuggestion(message, ctx, classification, extractUsdToCents(message));
+  if (directBooking) {
+    actions.push(directBooking);
+  }
+
   const sendTextAction = extractSendTextSuggestion(message, ctx, replyText ?? null);
   if (sendTextAction) {
     actions.push(sendTextAction);
@@ -1514,7 +1519,7 @@ async function buildActionSuggestions(
     actions.push(rescheduleAction);
   }
 
-  if (booking) {
+  if (booking && !directBooking) {
     const bookingActions = buildBookingActions(booking, ctx, when, extractUsdToCents(message));
     actions.push(
       ...bookingActions.map((action) => ({
@@ -1525,6 +1530,61 @@ async function buildActionSuggestions(
   }
 
   return actions.slice(0, 3);
+}
+
+function extractDirectBookingSuggestion(
+  message: string,
+  ctx: { contactId?: string; propertyId?: string },
+  classification: IntentClassification | null | undefined,
+  quotedTotalCents: number | null
+): CreateBookingAction | null {
+  if (!ctx.contactId || !ctx.propertyId) return null;
+  const lower = message.toLowerCase();
+  const hasIntent =
+    lower.includes("book") ||
+    lower.includes("schedule") ||
+    lower.includes("set up") ||
+    lower.includes("reschedule to") ||
+    lower.includes("appointment");
+  if (!hasIntent) return null;
+
+  const whenTextRaw = classification?.when?.trim().length ? (classification!.when as string) : null;
+  const whenText = whenTextRaw ?? (looksLikeTimeHint(message) ? message : null);
+  if (!whenText) return null;
+
+  const parsed = parseWhen(whenText);
+  if (!parsed?.iso) return null;
+
+  const services = normalizeServiceArray(classification?.services);
+
+  return {
+    id: newActionId(),
+    type: "book_appointment",
+    summary: `Book appointment at ${new Date(parsed.iso).toLocaleString()}`,
+    payload: {
+      contactId: ctx.contactId,
+      propertyId: ctx.propertyId,
+      startAt: parsed.iso,
+      durationMinutes: 60,
+      travelBufferMinutes: 30,
+      services,
+      ...(typeof quotedTotalCents === "number" && Number.isFinite(quotedTotalCents) && quotedTotalCents >= 0
+        ? { quotedTotalCents }
+        : {})
+    }
+  };
+}
+
+function looksLikeTimeHint(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (lower.includes("tomorrow") || lower.includes("morning") || lower.includes("afternoon") || lower.includes("evening")) {
+    return true;
+  }
+  if (/\b(?:mon|tue|wed|thu|fri|sat|sun)\b/i.test(text)) return true;
+  if (/\b\d{1,2}:\d{2}\b/.test(text)) return true;
+  if (/\b\d{1,2}\s*(?:am|pm)\b/i.test(text)) return true;
+  if (/\b(?:today|next)\b/i.test(text)) return true;
+  return false;
 }
 
 function extractSendTextSuggestion(
