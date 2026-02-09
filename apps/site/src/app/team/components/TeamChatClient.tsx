@@ -1034,6 +1034,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                           ) : null}
                           {action.type === "send_text" ? (
                             <div className="grid gap-2 text-[11px] text-slate-600">
+                              {typeof action.payload?.["contactLabel"] === "string" && action.payload["contactLabel"].trim().length ? (
+                                <div className="text-[11px] text-slate-500">To: {action.payload["contactLabel"]}</div>
+                              ) : null}
                               <label className="flex flex-col gap-1">
                                 <span className="font-semibold text-slate-700">Text message (SMS)</span>
                                 <textarea

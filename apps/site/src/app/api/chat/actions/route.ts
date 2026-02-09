@@ -45,7 +45,7 @@ type CreateReminderPayload = {
 
 type BookAppointmentPayload = {
   contactId: string;
-  propertyId: string;
+  propertyId?: string;
   startAt: string;
   durationMinutes?: number;
   travelBufferMinutes?: number;
@@ -306,8 +306,11 @@ export async function POST(request: NextRequest) {
 
   if (payload.type === "book_appointment") {
     const body = payload.payload;
-    if (!body || typeof body.contactId !== "string" || typeof body.propertyId !== "string" || typeof body.startAt !== "string") {
+    if (!body || typeof body.contactId !== "string" || typeof body.startAt !== "string") {
       return NextResponse.json({ error: "missing_booking_fields" }, { status: 400 });
+    }
+    if (body.propertyId !== undefined && typeof body.propertyId !== "string") {
+      return NextResponse.json({ error: "invalid_property_id" }, { status: 400 });
     }
     if (body.durationMinutes !== undefined && (!Number.isFinite(body.durationMinutes) || body.durationMinutes <= 0)) {
       return NextResponse.json({ error: "invalid_duration" }, { status: 400 });
@@ -327,7 +330,7 @@ export async function POST(request: NextRequest) {
       method: "POST",
       body: JSON.stringify({
         contactId: body.contactId,
-        propertyId: body.propertyId,
+        ...(typeof body.propertyId === "string" && body.propertyId.trim().length ? { propertyId: body.propertyId } : {}),
         startAt: body.startAt,
         durationMinutes: typeof body.durationMinutes === "number" ? body.durationMinutes : 60,
         travelBufferMinutes: typeof body.travelBufferMinutes === "number" ? body.travelBufferMinutes : 30,

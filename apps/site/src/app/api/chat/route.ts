@@ -163,7 +163,7 @@ type CreateBookingAction = {
   summary: string;
   payload: {
     contactId: string;
-    propertyId: string;
+    propertyId?: string;
     startAt: string;
     durationMinutes?: number;
     travelBufferMinutes?: number;
@@ -247,6 +247,14 @@ type IntentClassification = {
 const CLASSIFIER_ENABLED = process.env["CHAT_CLASSIFIER_ENABLED"] !== "false";
 const CHAT_ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
 
+type ContactTarget = {
+  id: string;
+  name: string | null;
+  phone: string | null;
+  phoneE164: string | null;
+  email: string | null;
+};
+
 function getAdminContext() {
   const apiBase =
     process.env["API_BASE_URL"] ??
@@ -254,6 +262,105 @@ function getAdminContext() {
     "http://localhost:3001";
   const adminKey = process.env["ADMIN_API_KEY"];
   return { apiBase: apiBase.replace(/\/$/, ""), adminKey };
+}
+
+function normalizePhoneDigits(value: string): string {
+  return value.replace(/[^\d]/g, "");
+}
+
+function extractContactQueryFromMessage(
+  message: string
+): { kind: "phone"; value: string } | { kind: "email"; value: string } | { kind: "name"; value: string } | null {
+  const phone = extractPhoneFromText(message);
+  if (phone) return { kind: "phone", value: phone };
+  const email = extractEmailFromText(message);
+  if (email) return { kind: "email", value: email };
+
+  const nameMatch = message.match(/\b(?:to|for|contact)\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,4})\b/i);
+  const rawName = typeof nameMatch?.[1] === "string" ? nameMatch[1].trim() : "";
+  if (!rawName) return null;
+
+  const lowered = rawName.toLowerCase();
+  if (/\b(?:this|that|them|lead|contact|customer|person|someone|anyone|me|us|you)\b/i.test(lowered)) return null;
+
+  return { kind: "name", value: rawName };
+}
+
+function pickContactResults(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) return payload.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+  if (!payload || typeof payload !== "object") return [];
+  const obj = payload as Record<string, unknown>;
+  const candidates = [obj["contacts"], obj["items"], obj["results"], obj["data"]];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+    }
+  }
+  return [];
+}
+
+async function resolveContactTarget(message: string): Promise<ContactTarget | null> {
+  const query = extractContactQueryFromMessage(message);
+  if (!query) return null;
+
+  const { apiBase, adminKey } = getAdminContext();
+  if (!adminKey) return null;
+
+  const qValue = query.value.trim();
+  if (!qValue.length) return null;
+
+  const search = new URLSearchParams();
+  search.set("limit", "5");
+  search.set("q", qValue);
+
+  try {
+    const res = await fetch(`${apiBase}/api/admin/contacts?${search.toString()}`, {
+      headers: { "x-api-key": adminKey },
+      cache: "no-store"
+    });
+    if (!res.ok) return null;
+    const payload = (await res.json().catch(() => null)) as unknown;
+    const results = pickContactResults(payload);
+    if (!results.length) return null;
+
+    const mapped = results
+      .map((c) => {
+        const id = typeof c["id"] === "string" ? (c["id"] as string) : null;
+        const name =
+          (typeof c["name"] === "string" ? (c["name"] as string) : null) ??
+          (typeof c["contactName"] === "string" ? (c["contactName"] as string) : null);
+        const phone = typeof c["phone"] === "string" ? (c["phone"] as string) : null;
+        const phoneE164 = typeof c["phoneE164"] === "string" ? (c["phoneE164"] as string) : null;
+        const email = typeof c["email"] === "string" ? (c["email"] as string) : null;
+        if (!id) return null;
+        return { id, name, phone, phoneE164, email } satisfies ContactTarget;
+      })
+      .filter((c): c is ContactTarget => Boolean(c));
+
+    if (!mapped.length) return null;
+
+    if (query.kind === "phone") {
+      const qDigits = normalizePhoneDigits(query.value);
+      const qTail = qDigits.length > 10 ? qDigits.slice(-10) : qDigits;
+      const matches = mapped.filter((c) => {
+        const digits = normalizePhoneDigits(c.phoneE164 ?? c.phone ?? "");
+        const tail = digits.length > 10 ? digits.slice(-10) : digits;
+        return tail.length >= 7 && qTail.length >= 7 && tail === qTail;
+      });
+      return matches.length === 1 ? matches[0] ?? null : null;
+    }
+
+    if (query.kind === "email") {
+      const qLower = query.value.toLowerCase();
+      const matches = mapped.filter((c) => (c.email ?? "").toLowerCase() === qLower);
+      return matches.length === 1 ? matches[0] ?? null : null;
+    }
+
+    return mapped.length === 1 ? mapped[0] ?? null : null;
+  } catch (error) {
+    console.warn("[chat] contact_resolve_failed", { error });
+    return null;
+  }
 }
 
 function hasOwnerSession(request: NextRequest): boolean {
@@ -1475,6 +1582,9 @@ async function buildActionSuggestions(
   const actions: ActionSuggestion[] = [];
   const note = extractActionNote(message) ?? classification?.note ?? null;
   const when = classification?.when;
+  const quotedTotalCents = extractUsdToCents(message);
+  const contactTarget = await resolveContactTarget(message);
+  const resolvedCtx = contactTarget?.id ? { ...ctx, contactId: contactTarget.id } : ctx;
 
   const contactAction = extractContactSuggestion(message, note, {
     contactName: classification?.contactName,
@@ -1484,32 +1594,32 @@ async function buildActionSuggestions(
     actions.push(contactAction);
   }
 
-  const quoteAction = extractQuoteSuggestion(message, ctx, note, classification?.services);
+  const quoteAction = extractQuoteSuggestion(message, resolvedCtx, note, classification?.services);
   if (quoteAction) {
     actions.push(quoteAction);
   }
 
-  const taskAction = await extractTaskSuggestion(message, ctx, note);
+  const taskAction = await extractTaskSuggestion(message, resolvedCtx, note);
   if (taskAction) {
     actions.push(taskAction);
   }
 
-  const reminderAction = extractReminderSuggestion(message, ctx, note);
+  const reminderAction = extractReminderSuggestion(message, resolvedCtx, note);
   if (reminderAction) {
     actions.push(reminderAction);
   }
 
-  const contactNoteAction = extractContactNoteSuggestion(message, ctx, note);
+  const contactNoteAction = extractContactNoteSuggestion(message, resolvedCtx, note);
   if (contactNoteAction) {
     actions.push(contactNoteAction);
   }
 
-  const directBooking = extractDirectBookingSuggestion(message, ctx, classification, extractUsdToCents(message));
+  const directBooking = extractDirectBookingSuggestion(message, resolvedCtx, classification, quotedTotalCents);
   if (directBooking) {
     actions.push(directBooking);
   }
 
-  const sendTextAction = extractSendTextSuggestion(message, ctx, replyText ?? null);
+  const sendTextAction = extractSendTextSuggestion(message, resolvedCtx, replyText ?? null, contactTarget);
   if (sendTextAction) {
     actions.push(sendTextAction);
   }
@@ -1520,7 +1630,7 @@ async function buildActionSuggestions(
   }
 
   if (booking && !directBooking) {
-    const bookingActions = buildBookingActions(booking, ctx, when, extractUsdToCents(message));
+    const bookingActions = buildBookingActions(booking, resolvedCtx, when, quotedTotalCents);
     actions.push(
       ...bookingActions.map((action) => ({
         ...action,
@@ -1538,7 +1648,7 @@ function extractDirectBookingSuggestion(
   classification: IntentClassification | null | undefined,
   quotedTotalCents: number | null
 ): CreateBookingAction | null {
-  if (!ctx.contactId || !ctx.propertyId) return null;
+  if (!ctx.contactId) return null;
   const lower = message.toLowerCase();
   const hasIntent =
     lower.includes("book") ||
@@ -1563,7 +1673,7 @@ function extractDirectBookingSuggestion(
     summary: `Book appointment at ${new Date(parsed.iso).toLocaleString()}`,
     payload: {
       contactId: ctx.contactId,
-      propertyId: ctx.propertyId,
+      ...(ctx.propertyId ? { propertyId: ctx.propertyId } : {}),
       startAt: parsed.iso,
       durationMinutes: 60,
       travelBufferMinutes: 30,
@@ -1590,7 +1700,8 @@ function looksLikeTimeHint(text: string): boolean {
 function extractSendTextSuggestion(
   message: string,
   ctx: { contactId?: string },
-  replyText: string | null
+  replyText: string | null,
+  contactTarget: ContactTarget | null
 ): SendTextAction | null {
   if (!ctx.contactId) return null;
   const lower = message.toLowerCase();
@@ -1615,7 +1726,14 @@ function extractSendTextSuggestion(
     payload: {
       contactId: ctx.contactId,
       body,
-      channel: "sms"
+      channel: "sms",
+      ...(contactTarget
+        ? {
+            contactLabel: [contactTarget.name, contactTarget.phoneE164 ?? contactTarget.phone]
+              .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+              .join(" ")
+          }
+        : {})
     }
   };
 }
