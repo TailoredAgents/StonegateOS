@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { headers } from "next/headers";
 import { requireTeamRole } from "@/app/api/team/auth";
+import { callAdminApi } from "@/app/team/lib/api";
 
 type CreateContactPayload = {
   contactName: string;
@@ -86,15 +86,6 @@ const ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
 const ACTION_RATE_LIMIT_MS = Number(process.env["CHAT_ACTION_RATE_MS"] ?? 0);
 const lastActionByType = new Map<string, number>();
 
-function getAdminContext() {
-  const apiBase =
-    process.env["API_BASE_URL"] ??
-    process.env["NEXT_PUBLIC_API_BASE_URL"] ??
-    "http://localhost:3001";
-  const adminKey = process.env["ADMIN_API_KEY"];
-  return { apiBase: apiBase.replace(/\/$/, ""), adminKey };
-}
-
 export async function POST(request: NextRequest) {
   const auth = await requireTeamRole(request, { returnJson: true, roles: ["owner", "office"] });
   if (!auth.ok) return auth.response;
@@ -108,12 +99,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "actions_disabled" }, { status: 403 });
   }
 
-  const { apiBase, adminKey } = getAdminContext();
-  const hdrs = await headers();
-  const apiKey = adminKey ?? hdrs.get("x-api-key");
-  if (!apiKey) {
-    return NextResponse.json({ error: "admin_key_missing" }, { status: 401 });
-  }
+  const safeAdminCall = async (path: string, init?: RequestInit): Promise<Response | null> => {
+    try {
+      return await callAdminApi(path, init);
+    } catch {
+      return null;
+    }
+  };
 
   const now = Date.now();
   const last = lastActionByType.get(payload.type);
@@ -135,12 +127,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "missing_contact_fields" }, { status: 400 });
     }
 
-    const res = await fetch(`${apiBase}/api/admin/tools/contact`, {
+    const res = await safeAdminCall(`/api/admin/tools/contact`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
       body: JSON.stringify({
         contactName: body.contactName.trim(),
         addressLine1: body.addressLine1.trim(),
@@ -152,6 +140,10 @@ export async function POST(request: NextRequest) {
         email: typeof body.email === "string" ? body.email.trim() : undefined
       })
     });
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -174,17 +166,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "missing_quote_fields" }, { status: 400 });
     }
 
-    const res = await fetch(`${apiBase}/api/admin/tools/quote`, {
+    const res = await safeAdminCall(`/api/admin/tools/quote`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
       body: JSON.stringify({
         ...body,
         notes: typeof body.notes === "string" && body.notes.trim().length ? body.notes.trim() : body.note ?? null
       })
     });
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -207,14 +199,14 @@ export async function POST(request: NextRequest) {
         ? `${body.title} — ${body.note.trim()}`
         : body.title;
 
-    const res = await fetch(`${apiBase}/api/appointments/${body.appointmentId}/tasks`, {
+    const res = await safeAdminCall(`/api/appointments/${body.appointmentId}/tasks`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
       body: JSON.stringify({ title: titleWithNote })
     });
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -239,12 +231,8 @@ export async function POST(request: NextRequest) {
 
     const title = noteBody.length <= 60 ? noteBody : `${noteBody.slice(0, 57)}...`;
 
-    const res = await fetch(`${apiBase}/api/admin/crm/tasks`, {
+    const res = await safeAdminCall(`/api/admin/crm/tasks`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
       body: JSON.stringify({
         contactId: body.contactId,
         title,
@@ -252,6 +240,10 @@ export async function POST(request: NextRequest) {
         status: "completed"
       })
     });
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -280,12 +272,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "invalid_due_at" }, { status: 400 });
     }
 
-    const res = await fetch(`${apiBase}/api/admin/crm/reminders`, {
+    const res = await safeAdminCall(`/api/admin/crm/reminders`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
       body: JSON.stringify({
         contactId: body.contactId,
         title,
@@ -294,6 +282,10 @@ export async function POST(request: NextRequest) {
         assignedTo: typeof body.assignedTo === "string" && body.assignedTo.trim().length ? body.assignedTo.trim() : undefined
       })
     });
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -331,12 +323,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "invalid_quote_total" }, { status: 400 });
     }
 
-    const res = await fetch(`${apiBase}/api/admin/booking/book`, {
+    const res = await safeAdminCall(`/api/admin/booking/book`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
       body: JSON.stringify({
         contactId: body.contactId,
         propertyId: body.propertyId,
@@ -352,6 +340,10 @@ export async function POST(request: NextRequest) {
           : {})
       })
     });
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -375,18 +367,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "invalid_travel_buffer" }, { status: 400 });
     }
 
-    const res = await fetch(`${apiBase}/api/web/appointments/${encodeURIComponent(body.appointmentId.trim())}/reschedule`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
+    const res = await safeAdminCall(
+      `/api/web/appointments/${encodeURIComponent(body.appointmentId.trim())}/reschedule`,
+      {
+        method: "POST",
       body: JSON.stringify({
         startAt: body.startAt,
         ...(typeof body.durationMinutes === "number" ? { durationMinutes: body.durationMinutes } : {}),
         ...(typeof body.travelBufferMinutes === "number" ? { travelBufferMinutes: body.travelBufferMinutes } : {})
       })
-    });
+      }
+    );
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
@@ -410,14 +405,14 @@ export async function POST(request: NextRequest) {
 
     const channel = body.channel === "email" || body.channel === "dm" ? body.channel : "sms";
 
-    const ensureRes = await fetch(`${apiBase}/api/admin/inbox/threads/ensure`, {
+    const ensureRes = await safeAdminCall(`/api/admin/inbox/threads/ensure`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
       body: JSON.stringify({ contactId, channel })
     });
+
+    if (!ensureRes) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!ensureRes.ok) {
       const detail = await ensureRes.text().catch(() => "");
@@ -428,18 +423,18 @@ export async function POST(request: NextRequest) {
     const threadId = typeof ensurePayload?.threadId === "string" ? ensurePayload.threadId.trim() : "";
     if (!threadId) return NextResponse.json({ error: "thread_ensure_failed" }, { status: 502 });
 
-    const sendRes = await fetch(`${apiBase}/api/admin/inbox/threads/${encodeURIComponent(threadId)}/messages`, {
+    const sendRes = await safeAdminCall(`/api/admin/inbox/threads/${encodeURIComponent(threadId)}/messages`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
       body: JSON.stringify({
         body: text,
         direction: "outbound",
         channel
       })
     });
+
+    if (!sendRes) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!sendRes.ok) {
       const detail = await sendRes.text().catch(() => "");
@@ -457,14 +452,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "missing_cancel_fields" }, { status: 400 });
     }
 
-    const res = await fetch(`${apiBase}/api/appointments/${body.appointmentId}/status`, {
+    const res = await safeAdminCall(`/api/appointments/${body.appointmentId}/status`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey
-      },
       body: JSON.stringify({ status: "canceled" })
     });
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
 
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
