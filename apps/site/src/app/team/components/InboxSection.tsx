@@ -8,6 +8,7 @@ import { InboxMediaGallery } from "./InboxMediaGallery";
 import { TEAM_EMPTY_STATE, TEAM_INPUT_COMPACT, TEAM_SELECT, teamButtonClass } from "./team-ui";
 import type { ContactNoteSummary } from "./contacts.types";
 import type { ContactReminderSummary } from "./contacts.types";
+import { InboxSpeechToTextButtonClient } from "./InboxSpeechToTextButtonClient";
 import {
   createThreadAction,
   retryFailedMessageAction,
@@ -1224,8 +1225,11 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     </label>
                   ) : null}
                   <label className="flex flex-col gap-1 text-xs text-slate-600">
-                    <span>Message</span>
-                    <textarea name="body" rows={3} className={TEAM_INPUT_COMPACT} />
+                    <span className="flex items-center justify-between gap-3">
+                      <span>Message</span>
+                      <InboxSpeechToTextButtonClient textareaId="inbox-thread-body" />
+                    </span>
+                    <textarea id="inbox-thread-body" name="body" rows={3} className={TEAM_INPUT_COMPACT} />
                   </label>
                   {requestedChannel === "sms" || requestedChannel === "dm" ? (
                     <label className="flex flex-col gap-1 text-xs text-slate-600">
