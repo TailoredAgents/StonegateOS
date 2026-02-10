@@ -199,7 +199,7 @@ export function LeadForm({
   const trackedMetaLeadQuoteIdRef = React.useRef<string | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const quoteCardRef = React.useRef<HTMLDivElement | null>(null);
-  const nameInputRef = React.useRef<HTMLInputElement | null>(null);
+  const phoneInputRef = React.useRef<HTMLInputElement | null>(null);
   const prevStepRef = React.useRef<1 | 2 | null>(null);
   const prevQuoteStatusRef = React.useRef<QuoteState["status"] | null>(null);
 
@@ -244,7 +244,7 @@ export function LeadForm({
 
     if (step === 2) {
       window.setTimeout(() => {
-        nameInputRef.current?.focus();
+        phoneInputRef.current?.focus();
       }, prefersReducedMotion() ? 0 : 100);
     }
   }, [prefersReducedMotion, scrollToElement, step]);
@@ -430,12 +430,35 @@ export function LeadForm({
   };
 
   const submitQuote = async () => {
-    if (!name.trim() || !phone.trim() || !zip.trim()) {
-      setError("Please fill name, phone, and ZIP.");
-      return;
-    }
     const analyticsPath = getAnalyticsPath();
     const analyticsZip = zip.trim();
+    const missingName = !name.trim();
+    const missingPhone = !phone.trim();
+    const missingZip = !analyticsZip;
+
+    if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+      trackWebEvent({
+        event: "book_quote_attempt",
+        path: analyticsPath,
+        zip: analyticsZip,
+        meta: { missingName, missingPhone, missingZip, hasEmail: Boolean(email.trim()) }
+      });
+    }
+
+    if (missingPhone || missingZip) {
+      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+        trackWebEvent({
+          event: "book_quote_blocked_missing_fields",
+          path: analyticsPath,
+          zip: analyticsZip,
+          meta: { missingName, missingPhone, missingZip, hasEmail: Boolean(email.trim()) }
+        });
+      }
+      setError("Please enter your mobile number to see your price.");
+      return;
+    }
+
+    const safeName = name.trim() || "New customer";
     setError(null);
     setQuoteState({ status: "loading" });
     if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
@@ -464,7 +487,7 @@ export function LeadForm({
           isBrush
             ? {
                 source: "public_site",
-                contact: { name: name.trim(), phone: phone.trim(), timeframe },
+                contact: { name: safeName, phone: phone.trim(), timeframe },
                  job: {
                    primary: brushPrimary,
                    perceivedSize: perceivedSize ?? "not_sure",
@@ -480,7 +503,7 @@ export function LeadForm({
               }
             : {
                 source: "public_site",
-                contact: { name: name.trim(), phone: phone.trim(), timeframe },
+                contact: { name: safeName, phone: phone.trim(), timeframe },
                  job: {
                    types: resolvedTypes,
                    perceivedSize: perceivedSize ?? "not_sure",
@@ -533,7 +556,7 @@ export function LeadForm({
         needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate)
       });
       applyEnhancedConversionsUserData({
-        name,
+        name: name.trim(),
         phone,
         email,
         address: {
@@ -1039,12 +1062,20 @@ export function LeadForm({
       </div>
 
       <h2 className="font-display text-2xl text-primary-800">
-        {isBrush ? "Show us what you need cleared" : "Show us what you need gone"}
+        {step === 1
+          ? isBrush
+            ? "Show us what you need cleared"
+            : "Show us what you need gone"
+          : isBrush
+            ? "Where should we text your estimate?"
+            : "Where should we text your quote?"}
       </h2>
       <p className="mt-1 text-sm text-neutral-600">
-        {isBrush
-          ? "Answer a few quick questions to see a ballpark range before booking."
-          : "Answer a few quick questions to see your price before booking."}
+        {step === 1
+          ? isBrush
+            ? "Answer a few quick questions to see a ballpark range before booking."
+            : "Answer a few quick questions to see your price before booking."
+          : "Enter a mobile number to see your price. Name is optional."}
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700">
@@ -1589,7 +1620,7 @@ export function LeadForm({
                 Continue to my price
               </Button>
               <p className="text-xs text-neutral-500">
-                Next: enter your contact info to see your {isBrush ? "estimate" : "price"}.
+                Next: enter your mobile number to see your {isBrush ? "estimate" : "price"}.
               </p>
             </div>
           </div>
@@ -1597,22 +1628,21 @@ export function LeadForm({
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label className="text-sm font-semibold text-neutral-800">Name</label>
+                <label className="text-sm font-semibold text-neutral-800">First name (optional)</label>
                 <input
-                  ref={nameInputRef}
                   name="name"
                   type="text"
                   autoComplete="name"
-                  required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                  placeholder="Jamie Customer"
+                  placeholder="Jamie"
                 />
               </div>
               <div>
                 <label className="text-sm font-semibold text-neutral-800">Mobile number</label>
                 <input
+                  ref={phoneInputRef}
                   name="phone"
                   type="tel"
                   autoComplete="tel"
@@ -1623,6 +1653,7 @@ export function LeadForm({
                   className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                   placeholder="(404) 777-2631"
                 />
+                <p className="mt-1 text-[11px] text-neutral-500">We’ll text your price here. No spam.</p>
               </div>
               <div className="sm:col-span-2">
                 <label className="text-sm font-semibold text-neutral-800">Email (optional)</label>

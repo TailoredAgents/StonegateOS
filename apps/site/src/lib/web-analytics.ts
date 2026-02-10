@@ -21,6 +21,8 @@ export type WebEventName =
   | "book_photo_upload_success"
   | "book_photo_upload_fail"
   | "book_quote_start"
+  | "book_quote_attempt"
+  | "book_quote_blocked_missing_fields"
   | "book_quote_success"
   | "book_quote_fail"
   | "book_booking_attempt"
