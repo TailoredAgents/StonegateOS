@@ -15,6 +15,7 @@ type WebAnalyticsSummaryPayload = {
     bookStep1Submits: number;
     bookQuoteSuccess: number;
     bookBookingSuccess: number;
+    bookedAnyChannel: number;
     days: number;
   };
   topPages: Array<{ path: string; pageViews: number }>;
@@ -132,6 +133,7 @@ export async function WebAnalyticsSection(props: {
     bookStep1Submits: 0,
     bookQuoteSuccess: 0,
     bookBookingSuccess: 0,
+    bookedAnyChannel: 0,
     days: 0
   };
 
@@ -183,7 +185,7 @@ export async function WebAnalyticsSection(props: {
         </div>
       ) : (
         <div className="mt-6 space-y-6">
-          <div className="grid gap-3 md:grid-cols-6">
+          <div className="grid gap-3 md:grid-cols-7">
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Visits</div>
               <div className="mt-2 text-2xl font-semibold text-slate-900">{fmtNumber(totals.visits)}</div>
@@ -209,7 +211,12 @@ export async function WebAnalyticsSection(props: {
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Bookings</div>
               <div className="mt-2 text-2xl font-semibold text-slate-900">{fmtNumber(totals.bookBookingSuccess)}</div>
-              <div className="mt-1 text-xs text-slate-500">{fmtPercent(bookingRate)} of quotes</div>
+              <div className="mt-1 text-xs text-slate-500">{fmtPercent(bookingRate)} of quotes (self-serve)</div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Booked (any)</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">{fmtNumber(totals.bookedAnyChannel)}</div>
+              <div className="mt-1 text-xs text-slate-500">Any channel</div>
             </div>
           </div>
 

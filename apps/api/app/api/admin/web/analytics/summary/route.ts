@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { getDb, webEventCountsDaily } from "@/db";
+import { appointments, getDb, webEventCountsDaily } from "@/db";
 import { isAdminRequest } from "../../../../web/admin";
 
 function parseRangeDays(request: NextRequest): number {
@@ -35,6 +35,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const db = getDb();
+  const sinceTs = now.minus({ days: rangeDays - 1 }).startOf("day").toJSDate();
 
   const scopeClause = scopeCampaign
     ? and(eq(webEventCountsDaily.utmCampaign, scopeCampaign), gte(webEventCountsDaily.dateStart, since))
@@ -93,21 +94,32 @@ export async function GET(request: NextRequest): Promise<Response> {
     .orderBy(desc(sql`sum(${webEventCountsDaily.count})`))
     .limit(20);
 
+  const bookedAnyChannelRow = await db
+    .select({
+      bookedAnyChannel: sql<number>`coalesce(count(*),0)`.mapWith(Number)
+    })
+    .from(appointments)
+    .where(and(gte(appointments.createdAt, sinceTs), sql`${appointments.status} <> 'canceled'`))
+    .then((rows) => rows[0] ?? null);
+
   return NextResponse.json({
     ok: true,
     rangeDays,
     since,
     scope: { utmCampaign: scopeCampaign },
     totals:
-      totalsRow ?? {
-        visits: 0,
-        pageViews: 0,
-        callClicks: 0,
-        bookStep1Views: 0,
-        bookStep1Submits: 0,
-        bookQuoteSuccess: 0,
-        bookBookingSuccess: 0,
-        days: 0
+      {
+        ...(totalsRow ?? {
+          visits: 0,
+          pageViews: 0,
+          callClicks: 0,
+          bookStep1Views: 0,
+          bookStep1Submits: 0,
+          bookQuoteSuccess: 0,
+          bookBookingSuccess: 0,
+          days: 0
+        }),
+        bookedAnyChannel: bookedAnyChannelRow?.bookedAnyChannel ?? 0
       },
     topPages,
     topSources

@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { getDb, webEventCountsDaily } from "@/db";
+import { getDb } from "@/db";
 import { isAdminRequest } from "../../../../web/admin";
 
 function parseRangeDays(request: NextRequest): number {
@@ -25,31 +25,46 @@ export async function GET(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "invalid_time" }, { status: 500 });
   }
 
+  const sinceTs = now.minus({ days: rangeDays - 1 }).startOf("day").toJSDate();
   const db = getDb();
-  const baseWhere = gte(webEventCountsDaily.dateStart, since);
 
-  const rows = await db
-    .select({
-      event: webEventCountsDaily.event,
-      key: webEventCountsDaily.key,
-      inAreaBucket: webEventCountsDaily.inAreaBucket,
-      count: sql<number>`coalesce(sum(${webEventCountsDaily.count}),0)`.mapWith(Number)
-    })
-    .from(webEventCountsDaily)
-    .where(
-      and(
-        baseWhere,
-        sql`${webEventCountsDaily.event} in ('book_step_view','book_step1_submit','book_quote_success','book_booking_success')`
+  const rows = (await db.execute(
+    sql`
+      with visit_bucket as (
+        select v.visit_id,
+          coalesce(b.in_area_bucket, '') as bucket
+        from (
+          select distinct visit_id
+          from web_events
+          where created_at >= ${sinceTs}
+        ) v
+        left join lateral (
+          select in_area_bucket
+          from web_events e
+          where e.visit_id = v.visit_id and e.in_area_bucket is not null and e.in_area_bucket <> ''
+          order by e.created_at desc
+          limit 1
+        ) b on true
       )
-    )
-    .groupBy(webEventCountsDaily.event, webEventCountsDaily.key, webEventCountsDaily.inAreaBucket);
+      select
+        vb.bucket as bucket,
+        e.event as event,
+        coalesce(e.key, '') as key,
+        count(*)::int as count
+      from web_events e
+      join visit_bucket vb on vb.visit_id = e.visit_id
+      where e.created_at >= ${sinceTs}
+        and e.event in ('book_step_view','book_step1_submit','book_quote_success','book_booking_success')
+      group by vb.bucket, e.event, coalesce(e.key, '')
+    `
+  )) as Array<{ bucket?: string | null; event?: string | null; key?: string | null; count?: number | null }>;
 
   function sumFor(event: string, key?: string | null, bucket?: string | null): number {
     return rows
-      .filter((row) => row.event === event)
+      .filter((row) => (row.event ?? "") === event)
       .filter((row) => (key === undefined ? true : (row.key ?? "") === (key ?? "")))
-      .filter((row) => (bucket === undefined ? true : (row.inAreaBucket ?? "") === (bucket ?? "")))
-      .reduce((acc, row) => acc + (Number.isFinite(row.count) ? row.count : 0), 0);
+      .filter((row) => (bucket === undefined ? true : (row.bucket ?? "") === (bucket ?? "")))
+      .reduce((acc, row) => acc + (Number.isFinite(Number(row.count)) ? Number(row.count) : 0), 0);
   }
 
   const buckets = ["in_area", "borderline", "out_of_area", ""] as const;
