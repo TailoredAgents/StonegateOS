@@ -913,7 +913,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
           }`}
         >
           {activeContactId ? (
-            <div className="flex max-h-[78dvh] flex-col gap-4 overflow-hidden p-5 lg:max-h-none">
+            <div className="flex max-h-none flex-col gap-4 overflow-hidden p-5 lg:max-h-[78dvh]">
               <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <a
