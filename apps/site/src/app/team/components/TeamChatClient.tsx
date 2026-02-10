@@ -166,7 +166,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
     {
       id: "intro",
       sender: "bot",
-      text: "Hi! I'm Stonegate Assist. Ask about schedules, follow-ups, pricing ranges, or workflow tips."
+      text: "Hi! I'm Stonegate Assist. I can draft replies and suggest actions (send a text, book/reschedule, add notes, create contacts). Nothing happens until you confirm."
     }
   ]);
   const [input, setInput] = React.useState("");

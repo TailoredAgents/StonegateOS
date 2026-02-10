@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
-import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 import { formatServiceLabel } from "@/lib/service-labels";
+import { requireTeamRole } from "@/app/api/team/auth";
 
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const PUBLIC_VOICE_MODEL = "gpt-4.1-mini";
@@ -416,10 +416,37 @@ async function resolveContactTarget(
   }
 }
 
-function hasOwnerSession(request: NextRequest): boolean {
-  const adminKey = getAdminKey();
-  if (!adminKey) return false;
-  return request.cookies.get(ADMIN_SESSION_COOKIE)?.value === adminKey;
+function looksLikeHelpQuestion(message: string): boolean {
+  const lower = message.toLowerCase().trim();
+  if (!lower) return false;
+  return (
+    lower === "help" ||
+    lower.includes("what can you do") ||
+    lower.includes("what do you do") ||
+    lower.includes("what can i do") ||
+    lower.includes("commands") ||
+    lower.includes("capabilities") ||
+    lower.includes("how does this work")
+  );
+}
+
+function teamHelpText(): string {
+  return [
+    "I can suggest and run quick actions in the CRM (nothing happens until you confirm).",
+    "",
+    "Try:",
+    '- "Draft a good reply to this lead."',
+    '- "Send a text to Amy that says: …"',
+    '- "Book Jennifer Wood for Thu at 2pm at 123 Main St."',
+    '- "Add a note to Peter: quoted $350 half load."'
+  ].join("\n");
+}
+
+function publicHelpText(): string {
+  return [
+    "I can answer pricing and service-area questions, and help you book an appointment.",
+    "If you want a quote, tell me what you need removed and your ZIP code."
+  ].join("\n");
 }
 
 const PUBLIC_BOOKING_COOKIE = "myst-public-booking";
@@ -1088,8 +1115,17 @@ export async function POST(request: NextRequest) {
     const requestedAudience = body.mode === "team" ? "team" : "public";
     const action = body.action ?? null;
 
-    const audience = requestedAudience === "team" && hasOwnerSession(request) ? "team" : "public";
-    const isTeamChat = audience === "team";
+    if (requestedAudience === "team") {
+      const auth = await requireTeamRole(request, {
+        returnJson: true,
+        roles: ["owner", "office", "crew"],
+        flashError: "Please sign in again to use the agent."
+      });
+      if (!auth.ok) return auth.response as NextResponse;
+    }
+
+    const audience = requestedAudience === "team" ? "team" : "public";
+    const isTeamChat = requestedAudience === "team";
 
     if (audience === "public") {
       const actionType = typeof action?.type === "string" ? action.type : null;
@@ -1149,6 +1185,10 @@ export async function POST(request: NextRequest) {
 
     if (!trimmedMessage) {
       return NextResponse.json({ error: "missing_message" }, { status: 400 });
+    }
+
+    if (looksLikeHelpQuestion(trimmedMessage)) {
+      return NextResponse.json({ ok: true, reply: isTeamChat ? teamHelpText() : publicHelpText() });
     }
 
     const apiKey = process.env["OPENAI_API_KEY"];
