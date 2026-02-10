@@ -73,6 +73,35 @@ type ContactCandidate = {
   postalCode?: string | null;
 };
 
+function pickBestAudioMimeType(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  if (typeof MediaRecorder === "undefined") return undefined;
+  const isTypeSupported = typeof MediaRecorder.isTypeSupported === "function" ? MediaRecorder.isTypeSupported.bind(MediaRecorder) : null;
+  if (!isTypeSupported) return undefined;
+
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+    "audio/mpeg"
+  ];
+
+  for (const mime of candidates) {
+    if (isTypeSupported(mime)) return mime;
+  }
+  return undefined;
+}
+
+function filenameForMimeType(mimeType?: string | null): string {
+  const mime = (mimeType ?? "").toLowerCase();
+  if (mime.includes("mp4")) return "audio.mp4";
+  if (mime.includes("mpeg")) return "audio.mp3";
+  if (mime.includes("ogg")) return "audio.ogg";
+  return "audio.webm";
+}
+
 const TEAM_SUGGESTIONS: string[] = [
   "Summarize today's schedule for the crew.",
   "Draft a follow-up text after a quote visit.",
@@ -144,6 +173,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
   const [isSending, setIsSending] = React.useState(false);
   const [isRecording, setIsRecording] = React.useState(false);
   const [isTranscribing, setIsTranscribing] = React.useState(false);
+  const [talkError, setTalkError] = React.useState<string | null>(null);
   const [supportsRecording, setSupportsRecording] = React.useState(false);
   const defaultContextContact = contacts.length === 1 ? contacts[0] : null;
   const defaultContextProperty = defaultContextContact?.properties?.length === 1 ? defaultContextContact.properties[0] : null;
@@ -184,7 +214,9 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
-    setSupportsRecording(Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+    const hasGetUserMedia = "mediaDevices" in navigator && typeof (navigator as any).mediaDevices?.getUserMedia === "function";
+    const hasMediaRecorder = typeof (window as any).MediaRecorder === "function";
+    setSupportsRecording(hasGetUserMedia && hasMediaRecorder);
   }, []);
 
   const lastBotMessageId = React.useMemo(() => {
@@ -426,42 +458,53 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
     [handleSend, input]
   );
 
-  const stopRecording = React.useCallback(() => {
-    if (mediaRecorderRef.current) {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch {
-        // ignore
-      }
+  const uploadAudio = React.useCallback(async (blob: Blob, filename: string) => {
+    const form = new FormData();
+    form.append("audio", blob, filename);
+    const res = await fetch("/api/chat/stt", { method: "POST", body: form });
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      throw new Error(`stt_failed_http_${res.status}:${bodyText.slice(0, 140)}`);
     }
-  }, []);
-
-  const uploadAudio = React.useCallback(async (blob: Blob) => {
-    try {
-      const form = new FormData();
-      form.append("audio", blob, "audio.webm");
-      const res = await fetch("/api/chat/stt", { method: "POST", body: form });
-      if (!res.ok) return;
-      const data = (await res.json()) as { transcript?: string };
-      const transcript = data.transcript?.trim() ?? "";
-      if (transcript.length > 0) {
-        setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
-      }
-    } catch {
-      // ignore
-    }
+    const data = (await res.json().catch(() => null)) as { transcript?: string } | null;
+    const transcript = data?.transcript?.trim() ?? "";
+    if (!transcript.length) throw new Error("empty_transcript");
+    setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
   }, []);
 
   const handleMicToggle = React.useCallback(async () => {
     if (!supportsRecording) return;
+    if (isTranscribing) return;
     if (isRecording) {
+      const mr = mediaRecorderRef.current as MediaRecorder | null;
+      setIsRecording(false);
       setIsTranscribing(true);
-      stopRecording();
+      if (!mr) {
+        setTalkError("Recording session not found. Try again.");
+        setIsTranscribing(false);
+        return;
+      }
+      try {
+        if (typeof (mr as any).requestData === "function") {
+          (mr as any).requestData();
+        }
+        if (mr.state !== "inactive") {
+          mr.stop();
+        } else {
+          setTalkError("Recording already stopped. Try again.");
+          setIsTranscribing(false);
+        }
+      } catch (error) {
+        setTalkError((error as Error).message || "Failed to stop recording. Try again.");
+        setIsTranscribing(false);
+      }
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
+      setTalkError(null);
+      const preferredMimeType = pickBestAudioMimeType();
+      const mr = preferredMimeType ? new MediaRecorder(stream, { mimeType: preferredMimeType }) : new MediaRecorder(stream);
       chunksRef.current = [];
       mr.ondataavailable = (e: BlobEvent) => {
         if (e.data.size > 0) {
@@ -469,29 +512,40 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
         }
       };
       mr.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
         try {
-          await uploadAudio(blob);
+          const firstChunk = chunksRef.current[0] as Blob | undefined;
+          const mimeType = (firstChunk && "type" in firstChunk ? (firstChunk as Blob).type : "") || mr.mimeType || "audio/webm";
+          const blob = new Blob(chunksRef.current, { type: mimeType });
+          if (!blob.size) {
+            setTalkError("No audio captured. Check mic permissions and try again.");
+            return;
+          }
+          const filename = filenameForMimeType(mimeType);
+          await uploadAudio(blob, filename);
+        } catch (error) {
+          setTalkError((error as Error).message || "Transcription failed. Try again.");
         } finally {
+          mediaRecorderRef.current = null;
           stream.getTracks().forEach((t) => t.stop());
-          setIsRecording(false);
           setIsTranscribing(false);
         }
       };
       mr.onerror = () => {
-        setIsRecording(false);
+        setTalkError("Recording failed. Try again.");
         setIsTranscribing(false);
+        mediaRecorderRef.current = null;
         stream.getTracks().forEach((t) => t.stop());
       };
       mediaRecorderRef.current = mr;
       setIsRecording(true);
       setIsTranscribing(false);
-      mr.start();
+      mr.start(250);
     } catch {
+      setTalkError("Mic permission blocked or unavailable on this device/browser.");
       setIsRecording(false);
       setIsTranscribing(false);
     }
-  }, [supportsRecording, isRecording, stopRecording, uploadAudio]);
+  }, [supportsRecording, isTranscribing, isRecording, uploadAudio]);
 
   const handleSpeak = React.useCallback(async (override?: string) => {
     const text = (override ?? lastBotMessageRef.current).trim();
@@ -1454,6 +1508,7 @@ export function TeamChatClient({ contacts }: { contacts: ContactOption[] }) {
                 {isSending ? "Sending..." : "Send"}
               </Button>
             </form>
+            {talkError ? <p className="mt-2 text-xs text-rose-700">{talkError}</p> : null}
           </div>
         </div>
       </div>
