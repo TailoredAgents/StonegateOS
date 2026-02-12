@@ -181,7 +181,16 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
   }
 
   const allEvents: CalendarEvent[] = [...appointmentsEvents, ...externalEvents];
-  const conflicts = computeCapacityConflicts(allEvents, getAppointmentCapacity());
+
+  const isBlockingForCapacity = (evt: CalendarEvent): boolean => {
+    if (evt.source !== "db") return true;
+    const status = typeof evt.status === "string" ? evt.status.trim().toLowerCase() : "";
+    // Canceled/completed/no-show appointments should not consume capacity or be shown as conflicts.
+    if (status === "canceled" || status === "cancelled" || status === "completed" || status === "no_show") return false;
+    return true;
+  };
+
+  const conflicts = computeCapacityConflicts(allEvents.filter(isBlockingForCapacity), getAppointmentCapacity());
 
   return NextResponse.json({
     ok: true,

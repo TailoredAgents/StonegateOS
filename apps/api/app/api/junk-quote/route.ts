@@ -195,8 +195,10 @@ function getQuoteBounds(job: JobInput): QuoteBounds {
       maxUnits = 2;
       break;
     case "three_quarter_trailer":
+      // Many customers interpret "large" as "about a full trailer" (especially when items are spread out).
+      // Allow a 3/4-to-full range to reduce accidental oversizing into the multi-load category.
       minUnits = 3;
-      maxUnits = 3;
+      maxUnits = 4;
       break;
     case "small_area":
       minUnits = 1;
@@ -209,7 +211,6 @@ function getQuoteBounds(job: JobInput): QuoteBounds {
     case "big_cleanout":
       minUnits = 4;
       maxUnits = 8;
-      minHighUnits = 6;
       break;
     case "not_sure":
     default:
@@ -320,6 +321,12 @@ function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBoun
   priceLow = pickClosest(priceLow);
   priceHigh = pickClosest(priceHigh);
 
+  // "Big cleanout" quotes should keep the *low end* anchored at a single full trailer load.
+  // Many customers select this when items are spread across multiple rooms but still fit in ~1 load.
+  if (job.perceivedSize === "big_cleanout" && priceLow > minPrice) {
+    priceLow = minPrice;
+  }
+
   if (minHighPrice && priceHigh < minHighPrice) {
     priceHigh = pickNextUp(minHighPrice);
   }
@@ -341,7 +348,7 @@ function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBoun
 
   const forcedMultiLoad = shouldMentionMultiLoad(job, bounds, priceHigh);
   const genericReason = forcedMultiLoad
-    ? "Based on your answers, this may take more than one trailer load, so the range includes possible multiple loads."
+    ? "Based on your answers, this range may span multiple trailer loads depending on actual volume. Final price is confirmed on site before we start loading."
     : "Based on your answers, this range matches our trailer volume pricing.";
 
   const mentionsMultipleLoads = (text: string): boolean => {
@@ -394,7 +401,7 @@ function getFallbackQuote(job: JobInput, bounds: QuoteBounds): QuoteResult {
 
   const mentionMultiLoad = shouldMentionMultiLoad(job, bounds, priceHigh);
   const reasonSummary = mentionMultiLoad
-    ? "Based on your selected size, this may take more than one trailer load, so the range includes possible multiple loads."
+    ? "Based on your selected size, this range may span multiple trailer loads depending on actual volume. Final price is confirmed on site before we start loading."
     : "Based on your selected size, this range matches our trailer volume pricing.";
 
   return {
