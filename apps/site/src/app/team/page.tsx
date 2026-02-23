@@ -77,6 +77,8 @@ export default async function TeamPage({
   searchParams: Promise<{
     tab?: string;
     q?: string;
+    inbox_q?: string;
+    inbox_offset?: string;
     offset?: string;
     includeOutbound?: string;
     contactId?: string;
@@ -222,6 +224,8 @@ export default async function TeamPage({
   const inboxThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
   const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
+  const inboxQuery = typeof params?.inbox_q === "string" ? params.inbox_q : undefined;
+  const inboxOffset = typeof params?.inbox_offset === "string" ? params.inbox_offset : undefined;
   const memberIdParam = typeof params?.memberId === "string" ? params.memberId : undefined;
   const quoteModeParam = forcedQuoteMode ?? requestedQuoteMode;
   const settingsSetup = params?.setup === "1";
@@ -430,7 +434,14 @@ export default async function TeamPage({
 
       {tab === "inbox" && (hasOffice || hasOwner) ? (
         <React.Suspense fallback={<TeamSkeletonCard title="Loading inbox" />}>
-          <InboxSection threadId={inboxThreadId} status={inboxStatus} contactId={contactIdParam} channel={inboxChannel} />
+          <InboxSection
+            threadId={inboxThreadId}
+            status={inboxStatus}
+            contactId={contactIdParam}
+            channel={inboxChannel}
+            q={inboxQuery}
+            offset={inboxOffset}
+          />
         </React.Suspense>
       ) : null}
 

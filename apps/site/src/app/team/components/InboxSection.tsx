@@ -275,6 +275,8 @@ function buildInboxHref(input: {
   threadId?: string | null;
   contactId?: string | null;
   channel?: string | null;
+  q?: string | null;
+  offset?: string | number | null;
 }): string {
   const params = new URLSearchParams();
   params.set("tab", "inbox");
@@ -282,6 +284,12 @@ function buildInboxHref(input: {
   if (input.threadId) params.set("threadId", input.threadId);
   if (input.contactId) params.set("contactId", input.contactId);
   if (input.channel) params.set("channel", input.channel);
+  if (input.q) params.set("inbox_q", input.q);
+  if (typeof input.offset === "number" && Number.isFinite(input.offset) && input.offset > 0) {
+    params.set("inbox_offset", String(Math.floor(input.offset)));
+  } else if (typeof input.offset === "string" && input.offset.trim().length > 0) {
+    params.set("inbox_offset", input.offset.trim());
+  }
   return `/team?${params.toString()}`;
 }
 
@@ -290,18 +298,29 @@ type InboxSectionProps = {
   status?: string;
   contactId?: string;
   channel?: string;
+  q?: string;
+  offset?: string;
 };
 
 function isSupportedChannel(value: string | null | undefined): value is "sms" | "email" | "dm" {
   return value === "sms" || value === "email" || value === "dm";
 }
 
-export async function InboxSection({ threadId, status, contactId, channel }: InboxSectionProps): Promise<React.ReactElement> {
-  const activeStatus = status ?? "open";
+export async function InboxSection({ threadId, status, contactId, channel, q, offset }: InboxSectionProps): Promise<React.ReactElement> {
+  const searchQuery = (q ?? "").trim().replace(/\s+/g, " ");
+  const activeStatus = status ?? (searchQuery ? "all" : "open");
   const requestedChannel = isSupportedChannel(channel) ? channel : "sms";
 
   const params = new URLSearchParams();
-  params.set("limit", "50");
+  params.set("limit", searchQuery ? "200" : "50");
+  if (searchQuery) {
+    params.set("q", searchQuery);
+  }
+  const parsedOffset = offset ? Number(offset) : NaN;
+  if (Number.isFinite(parsedOffset) && parsedOffset > 0) {
+    params.set("offset", String(Math.floor(parsedOffset)));
+  }
+
   if (activeStatus !== "all") {
     params.set("status", activeStatus);
   }
@@ -581,6 +600,13 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
         }`}
       >
         <input type="hidden" name="tab" value="inbox" />
+        <input
+          name="inbox_q"
+          type="search"
+          defaultValue={searchQuery}
+          placeholder="Search name, phone, or email…"
+          className="min-w-[220px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+        />
         <select
           name="status"
           defaultValue={activeStatus}
@@ -597,7 +623,7 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
           type="submit"
           className={teamButtonClass("secondary")}
         >
-          Filter
+          Search
         </button>
       </form>
 
@@ -731,11 +757,13 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                     ? buildInboxHref({
                         status: activeStatus === "all" ? null : activeStatus,
                         contactId: group.contactId,
-                        channel: landingChannel
+                        channel: landingChannel,
+                        q: searchQuery || null
                       })
                     : buildInboxHref({
                         status: activeStatus === "all" ? null : activeStatus,
-                        threadId: group.threads[0]?.id ?? null
+                        threadId: group.threads[0]?.id ?? null,
+                        q: searchQuery || null
                       });
 
                   return (
@@ -783,11 +811,13 @@ export async function InboxSection({ threadId, status, contactId, channel }: Inb
                               ? buildInboxHref({
                                   status: activeStatus === "all" ? null : activeStatus,
                                   contactId: t.contact.id,
-                                  channel: t.channel
+                                  channel: t.channel,
+                                  q: searchQuery || null
                                 })
                               : buildInboxHref({
                                   status: activeStatus === "all" ? null : activeStatus,
-                                  threadId: t.id
+                                  threadId: t.id,
+                                  q: searchQuery || null
                                 });
                             const isChannelActive = isActive && t.channel === requestedChannel;
                             return (
