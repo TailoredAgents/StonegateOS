@@ -368,7 +368,7 @@ export default function HomePage() {
           </div>
         </Section>
 
-        <Section className="mt-4">
+        <Section className="mt-4 bg-neutral-50/55">
           <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="font-display text-headline text-primary-800">
@@ -424,7 +424,7 @@ export default function HomePage() {
 
         {/* Removed "Why Stonegate?" section per request */}
 
-        <Section>
+        <Section className="bg-primary-50/25">
           <div className="grid gap-5 sm:gap-6">
             <div>
               <h2 className="font-display text-headline text-primary-800">
@@ -464,7 +464,7 @@ export default function HomePage() {
           </div>
         </Section>
 
-        <Section>
+        <Section className="bg-neutral-50/65">
           <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="font-display text-headline text-primary-800">
