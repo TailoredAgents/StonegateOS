@@ -2,25 +2,27 @@ import plugin from "tailwindcss/plugin";
 
 export const colors = {
   primary: {
-    50: "#F8FAFC",
-    100: "#F1F5F9",
-    200: "#E2E8F0",
-    300: "#CBD5E1",
-    400: "#94A3B8",
-    500: "#64748B",
-    600: "#475569",
-    900: "#0B1220",
-    800: "#0F172A",
-    700: "#1E293B"
+    50: "#F5F8FA",
+    100: "#EBF1F5",
+    200: "#D3E0E8",
+    300: "#AFC4D2",
+    400: "#86A3B7",
+    500: "#5E8299",
+    600: "#43697F",
+    900: "#0F2536",
+    800: "#1F3E52",
+    700: "#2E5267",
   },
   accent: {
-    600: "#14B8A6",
-    500: "#2DD4BF",
-    200: "#99F6E4"
+    800: "#0B4E41",
+    700: "#116452",
+    600: "#167E69",
+    500: "#1E9F84",
+    200: "#BFEDE2",
   },
   sand: {
     300: "#F1E9D2",
-    100: "#FAF7EF"
+    100: "#FAF7EF",
   },
   neutral: {
     50: "#F8FAFC",
@@ -31,41 +33,41 @@ export const colors = {
     400: "#94A3B8",
     300: "#CBD5E1",
     200: "#E2E8F0",
-    100: "#F1F5F9"
+    100: "#F1F5F9",
   },
   feedback: {
     success: "#22C55E",
     warning: "#F59E0B",
-    danger: "#EF4444"
-  }
+    danger: "#EF4444",
+  },
 } as const;
 
 export const gradients = {
-  hero: "linear-gradient(135deg, #0F172A 0%, #14B8A6 100%)"
+  hero: "linear-gradient(135deg, #1F3E52 0%, #1E9F84 100%)",
 } as const;
 
 export const typography = {
   fonts: {
     display: '"Playfair Display", "Times New Roman", serif',
-    sans: '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    sans: '"Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
   weights: {
     sans: {
       regular: 400,
       medium: 500,
-      semibold: 600
+      semibold: 600,
     },
     display: {
-      bold: 700
-    }
+      bold: 700,
+    },
   },
   scale: {
     h1: "clamp(2.25rem, 4vw + 1rem, 3.25rem)",
     h2: "clamp(1.75rem, 2.5vw + 0.5rem, 2.25rem)",
     body: "1rem",
     label: "0.875rem",
-    overline: "0.75rem"
-  }
+    overline: "0.75rem",
+  },
 } as const;
 
 export const spacing = {
@@ -76,19 +78,19 @@ export const spacing = {
   lg: "24px",
   xl: "32px",
   "2xl": "48px",
-  "3xl": "64px"
+  "3xl": "64px",
 } as const;
 
 export const radii = {
   sm: "10px",
   md: "16px",
   xl: "24px",
-  pill: "999px"
+  pill: "999px",
 } as const;
 
 export const shadows = {
   soft: "0px 20px 40px rgba(15, 23, 42, 0.12)",
-  float: "0px 35px 65px rgba(15, 23, 42, 0.18)"
+  float: "0px 35px 65px rgba(15, 23, 42, 0.18)",
 } as const;
 
 export const designTokens = {
@@ -97,26 +99,38 @@ export const designTokens = {
   typography,
   spacing,
   radii,
-  shadows
+  shadows,
 } as const;
 
 const cssVariableEntries = {
-  ...Object.entries(colors.primary).reduce<Record<string, string>>((acc, [key, value]) => {
-    acc[`--color-primary-${key}`] = value;
-    return acc;
-  }, {}),
-  ...Object.entries(colors.accent).reduce<Record<string, string>>((acc, [key, value]) => {
-    acc[`--color-accent-${key}`] = value;
-    return acc;
-  }, {}),
-  ...Object.entries(colors.sand).reduce<Record<string, string>>((acc, [key, value]) => {
-    acc[`--color-sand-${key}`] = value;
-    return acc;
-  }, {}),
-  ...Object.entries(colors.neutral).reduce<Record<string, string>>((acc, [key, value]) => {
-    acc[`--color-neutral-${key}`] = value;
-    return acc;
-  }, {}),
+  ...Object.entries(colors.primary).reduce<Record<string, string>>(
+    (acc, [key, value]) => {
+      acc[`--color-primary-${key}`] = value;
+      return acc;
+    },
+    {},
+  ),
+  ...Object.entries(colors.accent).reduce<Record<string, string>>(
+    (acc, [key, value]) => {
+      acc[`--color-accent-${key}`] = value;
+      return acc;
+    },
+    {},
+  ),
+  ...Object.entries(colors.sand).reduce<Record<string, string>>(
+    (acc, [key, value]) => {
+      acc[`--color-sand-${key}`] = value;
+      return acc;
+    },
+    {},
+  ),
+  ...Object.entries(colors.neutral).reduce<Record<string, string>>(
+    (acc, [key, value]) => {
+      acc[`--color-neutral-${key}`] = value;
+      return acc;
+    },
+    {},
+  ),
   "--color-success": colors.feedback.success,
   "--color-warning": colors.feedback.warning,
   "--color-danger": colors.feedback.danger,
@@ -132,16 +146,19 @@ const cssVariableEntries = {
   "--text-size-body": typography.scale.body,
   "--text-size-label": typography.scale.label,
   "--text-size-overline": typography.scale.overline,
-  ...Object.entries(spacing).reduce<Record<string, string>>((acc, [key, value]) => {
-    acc[`--spacing-${key}`] = value;
-    return acc;
-  }, {}),
+  ...Object.entries(spacing).reduce<Record<string, string>>(
+    (acc, [key, value]) => {
+      acc[`--spacing-${key}`] = value;
+      return acc;
+    },
+    {},
+  ),
   "--radius-sm": radii.sm,
   "--radius-md": radii.md,
   "--radius-xl": radii.xl,
   "--radius-pill": radii.pill,
   "--shadow-soft": shadows.soft,
-  "--shadow-float": shadows.float
+  "--shadow-float": shadows.float,
 };
 
 export const createDesignSystemPlugin = () =>
@@ -149,10 +166,9 @@ export const createDesignSystemPlugin = () =>
     addBase({
       ":root": {
         colorScheme: "light",
-        ...cssVariableEntries
-      }
+        ...cssVariableEntries,
+      },
     });
   });
 
 export type DesignTokens = typeof designTokens;
-

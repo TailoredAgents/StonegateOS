@@ -4,10 +4,7 @@ import typography from "@tailwindcss/typography";
 import { createDesignSystemPlugin } from "../../packages/ui/src/theme/tokens";
 
 const config: Config = {
-  content: [
-    "./src/**/*.{ts,tsx,mdx}",
-    "../../packages/ui/src/**/*.{ts,tsx}"
-  ],
+  content: ["./src/**/*.{ts,tsx,mdx}", "../../packages/ui/src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
@@ -21,16 +18,18 @@ const config: Config = {
           600: "var(--color-primary-600)",
           900: "var(--color-primary-900)",
           800: "var(--color-primary-800)",
-          700: "var(--color-primary-700)"
+          700: "var(--color-primary-700)",
         },
         accent: {
+          800: "var(--color-accent-800)",
+          700: "var(--color-accent-700)",
           600: "var(--color-accent-600)",
           500: "var(--color-accent-500)",
-          200: "var(--color-accent-200)"
+          200: "var(--color-accent-200)",
         },
         sand: {
           300: "var(--color-sand-300)",
-          100: "var(--color-sand-100)"
+          100: "var(--color-sand-100)",
         },
         neutral: {
           50: "var(--color-neutral-50)",
@@ -41,28 +40,28 @@ const config: Config = {
           400: "var(--color-neutral-400)",
           300: "var(--color-neutral-300)",
           200: "var(--color-neutral-200)",
-          100: "var(--color-neutral-100)"
+          100: "var(--color-neutral-100)",
         },
         success: "var(--color-success)",
         warning: "var(--color-warning)",
-        danger: "var(--color-danger)"
+        danger: "var(--color-danger)",
       },
       fontFamily: {
         sans: ["var(--font-sans)", "Inter", "system-ui", "sans-serif"],
-        display: ["var(--font-display)", "\"Playfair Display\"", "serif"]
+        display: ["var(--font-display)", '"Playfair Display"', "serif"],
       },
       fontSize: {
         display: "var(--text-size-h1)",
         headline: "var(--text-size-h2)",
         body: "var(--text-size-body)",
         label: "var(--text-size-label)",
-        overline: "var(--text-size-overline)"
+        overline: "var(--text-size-overline)",
       },
       borderRadius: {
         sm: "var(--radius-sm)",
         md: "var(--radius-md)",
         xl: "var(--radius-xl)",
-        pill: "var(--radius-pill)"
+        pill: "var(--radius-pill)",
       },
       spacing: {
         xs: "var(--spacing-xs)",
@@ -71,18 +70,18 @@ const config: Config = {
         lg: "var(--spacing-lg)",
         xl: "var(--spacing-xl)",
         "2xl": "var(--spacing-2xl)",
-        "3xl": "var(--spacing-3xl)"
+        "3xl": "var(--spacing-3xl)",
       },
       boxShadow: {
         soft: "var(--shadow-soft)",
-        float: "var(--shadow-float)"
+        float: "var(--shadow-float)",
       },
       backgroundImage: {
-        hero: "var(--gradient-hero)"
-      }
-    }
+        hero: "var(--gradient-hero)",
+      },
+    },
   },
-  plugins: [createDesignSystemPlugin(), tailwindcssAnimate, typography]
+  plugins: [createDesignSystemPlugin(), tailwindcssAnimate, typography],
 };
 
 export default config;

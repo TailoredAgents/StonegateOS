@@ -1,14 +1,17 @@
-'use client';
+"use client";
 
 import * as React from "react";
 import Image from "next/image";
 import { cn } from "../utils/cn";
 
-export interface BeforeAfterSliderProps extends React.HTMLAttributes<HTMLDivElement> {
+export interface BeforeAfterSliderProps
+  extends React.HTMLAttributes<HTMLDivElement> {
   beforeImage: string;
   afterImage: string;
   alt: string;
   initialPosition?: number;
+  aspectRatio?: "16/9" | "4/3";
+  imageSizes?: string;
 }
 
 export function BeforeAfterSlider({
@@ -16,10 +19,13 @@ export function BeforeAfterSlider({
   afterImage,
   alt,
   initialPosition = 50,
+  aspectRatio = "16/9",
+  imageSizes = "(min-width: 1280px) 31vw, (min-width: 768px) 46vw, 100vw",
   className,
   ...props
 }: BeforeAfterSliderProps) {
   const [position, setPosition] = React.useState(initialPosition);
+  const sliderId = React.useId();
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const next = Number.parseInt(event.target.value, 10);
@@ -31,13 +37,18 @@ export function BeforeAfterSlider({
 
   return (
     <div className={cn("w-full", className)} {...props}>
-      <div className="relative aspect-[16/9] overflow-hidden rounded-xl shadow-soft">
+      <div
+        className={cn(
+          "relative overflow-hidden rounded-lg shadow-soft sm:rounded-xl",
+          aspectRatio === "4/3" ? "aspect-[4/3]" : "aspect-[16/9]",
+        )}
+      >
         <Image
           src={afterImage}
           alt={`${alt} after cleaning`}
           fill
           className="object-cover"
-          sizes="(min-width: 768px) 640px, 100vw"
+          sizes={imageSizes}
           priority={false}
         />
         <div
@@ -50,7 +61,7 @@ export function BeforeAfterSlider({
             alt={`${alt} before cleaning`}
             fill
             className="object-cover"
-            sizes="(min-width: 768px) 640px, 100vw"
+            sizes={imageSizes}
             priority={false}
           />
         </div>
@@ -60,12 +71,12 @@ export function BeforeAfterSlider({
         >
           <div className="h-full w-0.5 bg-white/80 shadow-[0_0_12px_rgba(15,23,42,0.35)]" />
         </div>
-        <div className="absolute inset-x-0 bottom-4 flex items-center justify-center">
-          <label className="sr-only" htmlFor="before-after-slider">
+        <div className="absolute inset-x-0 bottom-3 flex items-center justify-center sm:bottom-4">
+          <label className="sr-only" htmlFor={sliderId}>
             Compare before and after image
           </label>
           <input
-            id="before-after-slider"
+            id={sliderId}
             type="range"
             min="0"
             max="100"
@@ -79,11 +90,10 @@ export function BeforeAfterSlider({
           />
         </div>
       </div>
-      <div className="mt-3 flex justify-between text-xs uppercase tracking-[0.25em] text-neutral-500">
+      <div className="mt-2 flex justify-between text-xs uppercase tracking-[0.18em] text-neutral-500 sm:mt-3 sm:tracking-[0.25em]">
         <span>Before</span>
         <span>After</span>
       </div>
     </div>
   );
 }
-
