@@ -2,6 +2,7 @@ import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
+import { SystemHealthBanner } from "./SystemHealthBanner";
 import {
   updateBookingRulesPolicyAction,
   updateBusinessHoursPolicyAction,
@@ -24,6 +25,21 @@ type PolicySetting = {
   key: string;
   value: Record<string, unknown>;
   updatedAt: string | null;
+};
+
+type SystemHealthFinding = {
+  id: string;
+  severity: "blocker" | "warning";
+  title: string;
+  detail: string;
+  fix: string[];
+};
+
+type SystemHealthPayload = {
+  ok?: boolean;
+  generatedAt?: string;
+  blockers: SystemHealthFinding[];
+  warnings: SystemHealthFinding[];
 };
 
 type PolicyKey =
@@ -188,7 +204,11 @@ function AdvancedJsonEditor(props: { setting: PolicySetting | undefined }) {
   );
 }
 
-export async function PolicyCenterSection(): Promise<React.ReactElement> {
+export async function PolicyCenterSection({
+  systemHealth
+}: {
+  systemHealth?: SystemHealthPayload | null;
+}): Promise<React.ReactElement> {
   const response = await callAdminApi("/api/admin/policy");
   if (!response.ok) {
     throw new Error("Failed to load policy settings");
@@ -348,8 +368,12 @@ export async function PolicyCenterSection(): Promise<React.ReactElement> {
       ? reviewRequestValue["reviewUrl"]
       : "https://g.page/r/Ce6kQH50C8_dEAI/review";
 
+  const normalizedHealth =
+    systemHealth && Array.isArray(systemHealth.blockers) && Array.isArray(systemHealth.warnings) ? systemHealth : null;
+
   return (
     <section className="space-y-6">
+      {normalizedHealth ? <SystemHealthBanner health={normalizedHealth} /> : null}
       <header className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <h2 className="text-xl font-semibold text-slate-900">Policy Center</h2>
         <p className="mt-1 text-sm text-slate-600">

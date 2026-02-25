@@ -30,7 +30,6 @@ import { OutboundSection } from "./components/OutboundSection";
 import { PartnersSection } from "./components/PartnersSection";
 import { SeoAgentSection } from "./components/SeoAgentSection";
 import { QuotesHubSection } from "./components/QuotesHubSection";
-import { SystemHealthBanner } from "./components/SystemHealthBanner";
 import { TabNav, type TabNavGroup, type TabNavItem } from "./components/TabNav";
 import { TeamAppShell, type TeamNavGroup, type TeamNavItem as ShellNavItem } from "./components/TeamAppShell";
 import { getCompanyShortName, getPublicCompanyProfile } from "../../lib/company";
@@ -261,7 +260,7 @@ export default async function TeamPage({
   const isNewLeadHidden = Number.isFinite(hiddenUntilMs) && hiddenUntilMs > Date.now();
 
   let systemHealth: SystemHealthApiResponse | null = null;
-  if (hasOwner || hasOffice || hasCrew) {
+  if (tab === "policy" && hasOwner) {
     try {
       const response = await callAdminApi("/api/admin/system/health", { timeoutMs: 8_000 });
       if (response.ok) {
@@ -380,7 +379,6 @@ export default async function TeamPage({
         </div>
       ) : null}
       {flash || flashError ? <FlashClearer /> : null}
-      {systemHealth ? <SystemHealthBanner health={systemHealth} /> : null}
       {newLead ? (
         <section className="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4 shadow-sm shadow-emerald-100">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -501,7 +499,7 @@ export default async function TeamPage({
 
       {tab === "policy" && hasOwner ? (
         <React.Suspense fallback={<TeamSkeletonCard title="Loading policy center" />}>
-          <PolicyCenterSection />
+          <PolicyCenterSection systemHealth={systemHealth} />
         </React.Suspense>
       ) : null}
 
