@@ -136,7 +136,7 @@ const GOOGLE_ADS_BRUSH_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_BRUSH_
 const GOOGLE_ADS_CONTACT_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO"] ?? "";
 const GOOGLE_REVIEW_URL = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_URL"] ?? "https://g.page/r/Ce6kQH50C8_dEAI/review";
 const GOOGLE_REVIEW_RATING = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_RATING"] ?? "5.0";
-const GOOGLE_REVIEW_COUNT = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"] ?? "10";
+const GOOGLE_REVIEW_COUNT = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"] ?? "15";
 
 export function LeadForm({
   variant = "junk",
@@ -157,6 +157,8 @@ export function LeadForm({
   const [brushAccess, setBrushAccess] = React.useState<BrushAccess>("not_sure");
   const [brushHaulAway, setBrushHaulAway] = React.useState(true);
   const [notes, setNotes] = React.useState("");
+  const [showPhotoUploader, setShowPhotoUploader] = React.useState(false);
+  const [showBrushPlanningDetails, setShowBrushPlanningDetails] = React.useState(false);
   const [showNotes, setShowNotes] = React.useState(false);
   const [zip, setZip] = React.useState("");
   const [photos, setPhotos] = React.useState<string[]>([]);
@@ -1360,39 +1362,59 @@ export function LeadForm({
             )}
 
             <div className="space-y-2">
-              <label htmlFor="lead-photos" className="text-sm font-semibold text-neutral-800">
-                {isBrush ? "Add 1-4 photos for the most accurate estimate" : "Add 1-4 photos for the most accurate quote"}
-              </label>
-              <p className="text-xs text-neutral-500">
-                {isBrush
-                  ? "Recommended — photos help us tighten the range. Without photos, we may need an on-site estimate."
-                  : "Optional — photos help us price it faster and more accurately."}
-              </p>
-              <input
-                id="lead-photos"
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={(e) => void handlePhotos(e.target.files)}
-                className="block w-full cursor-pointer rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
-              />
-              {photoUploadStatus === "uploading" ? (
-                <div className="text-xs text-neutral-600">Uploading photos...</div>
-              ) : photoUploadStatus === "error" ? (
-                <div className="text-xs text-amber-700">{photoUploadMessage ?? "Unable to upload photos."}</div>
-              ) : null}
-              <button
-                type="button"
-                className="text-xs text-primary-700 underline"
-                onClick={() => {
-                  setPhotos([]);
-                  setPhotoUploadStatus("idle");
-                  setPhotoUploadMessage(null);
-                  setPhotoSkipped(true);
-                }}
-              >
-                I can&apos;t add photos right now
-              </button>
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-0.5">
+                  <label htmlFor="lead-photos" className="text-sm font-semibold text-neutral-800">
+                    {isBrush ? "Add 1-4 photos for the most accurate estimate" : "Add 1-4 photos for the most accurate quote"}
+                  </label>
+                  <p className="text-xs text-neutral-500">
+                    {isBrush
+                      ? "Optional — photos tighten the range and reduce follow-up questions."
+                      : "Optional — photos help us price it faster and more accurately."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPhotoUploader((prev) => !prev)}
+                  className="text-xs font-semibold text-primary-700 underline"
+                >
+                  {showPhotoUploader || photos.length ? "Hide" : "Add photos"}
+                </button>
+              </div>
+              {showPhotoUploader || photos.length ? (
+                <>
+                  <input
+                    id="lead-photos"
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(e) => void handlePhotos(e.target.files)}
+                    className="block w-full cursor-pointer rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
+                  />
+                  {photoUploadStatus === "uploading" ? (
+                    <div className="text-xs text-neutral-600">Uploading photos...</div>
+                  ) : photoUploadStatus === "error" ? (
+                    <div className="text-xs text-amber-700">{photoUploadMessage ?? "Unable to upload photos."}</div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="text-xs text-primary-700 underline"
+                    onClick={() => {
+                      setPhotos([]);
+                      setPhotoUploadStatus("idle");
+                      setPhotoUploadMessage(null);
+                      setPhotoSkipped(true);
+                      setShowPhotoUploader(false);
+                    }}
+                  >
+                    I can&apos;t add photos right now
+                  </button>
+                </>
+              ) : (
+                <p className="text-xs text-neutral-500">
+                  You can continue without photos.
+                </p>
+              )}
               {photos.length ? (
                 <div className="flex flex-wrap gap-2 text-xs text-neutral-600">
                   {photos.map((_, idx) => (
@@ -1452,6 +1474,28 @@ export function LeadForm({
             </div>
 
             {isBrush ? (
+              <div className="space-y-2">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <label className="text-sm font-semibold text-neutral-800">
+                      Access and difficulty details
+                    </label>
+                    <p className="text-xs text-neutral-500">
+                      Optional — add these now for tighter scheduling and pricing.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowBrushPlanningDetails((prev) => !prev)}
+                    className="text-xs font-semibold text-primary-700 underline"
+                  >
+                    {showBrushPlanningDetails ? "Hide" : "Add details"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {isBrush && showBrushPlanningDetails ? (
               <>
                 <div className="space-y-2">
                   <label className="text-sm font-semibold text-neutral-800">Can equipment access the area?</label>
@@ -1613,6 +1657,11 @@ export function LeadForm({
                 placeholder="30189"
                 className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
               />
+              <p className="text-xs text-neutral-500">
+                No travel fees in our core area. Half-load and larger jobs are
+                covered up to 25 miles from Woodstock, and small pickups up to
+                15 miles.
+              </p>
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

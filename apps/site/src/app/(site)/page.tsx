@@ -35,6 +35,11 @@ type TransformationShowcase = {
   afterImage: string;
 };
 
+const GOOGLE_REVIEW_RATING =
+  process.env["NEXT_PUBLIC_GOOGLE_REVIEW_RATING"]?.trim() || "5.0";
+const GOOGLE_REVIEW_COUNT =
+  process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"]?.trim() || "15";
+
 const resultTiles: ResultTile[] = [
   {
     title: "Garage Cleanout",
@@ -79,8 +84,8 @@ const testimonials = [
 const stats = [
   {
     label: "Google Rating",
-    value: "5.0 / 5",
-    secondary: "Based on 13 verified Google reviews",
+    value: `${GOOGLE_REVIEW_RATING} / 5`,
+    secondary: `Based on ${GOOGLE_REVIEW_COUNT} verified Google reviews`,
   },
   {
     label: "Response Time",
@@ -245,7 +250,7 @@ export default function HomePage() {
       />
       <div className="relative flex flex-col gap-14 pb-20 sm:gap-16 sm:pb-24">
         <Section className="pt-10 md:pt-12">
-          <HeroV2 variant="lean" />
+          <HeroV2 variant="full" />
         </Section>
         <Section className="relative" containerClassName="">
           <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">

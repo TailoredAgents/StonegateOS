@@ -13,17 +13,10 @@ declare global {
 
 type HeroCtaType = "schedule" | "call" | "text";
 
-const trustBadges: Array<{
-  label: string;
-  tone: "highlight" | "default" | "neutral";
-}> = [
-  { label: "Google 5.0 • 13 reviews", tone: "highlight" },
-  { label: "No-Surprise Pricing", tone: "default" },
-  { label: "Licensed & Insured", tone: "default" },
-  { label: "Background-checked", tone: "neutral" },
-  { label: "Same-day available", tone: "neutral" },
-  { label: "<24h response", tone: "neutral" },
-];
+const GOOGLE_REVIEW_RATING =
+  process.env["NEXT_PUBLIC_GOOGLE_REVIEW_RATING"]?.trim() || "5.0";
+const GOOGLE_REVIEW_COUNT =
+  process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"]?.trim() || "15";
 
 function trackHeroEvent(type: HeroCtaType) {
   try {
@@ -54,6 +47,20 @@ export function HeroV2({
   variant?: "lean" | "full";
 }) {
   const isLean = variant === "lean";
+  const trustBadges: Array<{
+    label: string;
+    tone: "highlight" | "default" | "neutral";
+  }> = [
+    {
+      label: `Google ${GOOGLE_REVIEW_RATING} • ${GOOGLE_REVIEW_COUNT} reviews`,
+      tone: "highlight",
+    },
+    { label: "No-Surprise Pricing", tone: "default" },
+    { label: "Licensed & Insured", tone: "default" },
+    { label: "Background-checked", tone: "neutral" },
+    { label: "Same-day available", tone: "neutral" },
+    { label: "<24h response", tone: "neutral" },
+  ];
   const handleSchedule = useCallback(() => trackHeroEvent("schedule"), []);
   const handleCall = useCallback(() => trackHeroEvent("call"), []);
   const handleText = useCallback(() => trackHeroEvent("text"), []);
@@ -85,6 +92,11 @@ export function HeroV2({
               Book online in under a minute. Licensed and insured crews with
               same-day availability in Woodstock and nearby North Metro
               communities.
+            </p>
+            <p className="max-w-xl text-sm text-neutral-500">
+              No travel fees in our core service area. Coverage is up to 25
+              miles for half-load and larger jobs, and up to 15 miles for
+              single-item and quarter-load pickups.
             </p>
           </div>
 
@@ -129,6 +141,16 @@ export function HeroV2({
                 {badge.label}
               </Badge>
             ))}
+          </div>
+
+          <div className="rounded-xl border border-neutral-200 bg-white/90 p-4 text-sm text-neutral-600 md:hidden">
+            <p className="font-semibold text-neutral-700">
+              &ldquo;Removed garage contents. On time and professional. Would
+              use their services again!&rdquo;
+            </p>
+            <p className="mt-2 text-[11px] uppercase tracking-[0.18em] text-neutral-500">
+              Sharon Martin • Google Review
+            </p>
           </div>
         </div>
 
