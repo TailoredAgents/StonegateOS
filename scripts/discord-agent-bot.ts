@@ -183,6 +183,7 @@ async function main() {
   const approverRoleIds = new Set(parseCsv(process.env["DISCORD_APPROVER_ROLE_IDS"]));
   const commandPrefix = (process.env["DISCORD_COMMAND_PREFIX"] ?? "!sg").trim();
   const requireMention = process.env["DISCORD_REQUIRE_MENTION"] !== "false";
+  const respondAll = process.env["DISCORD_RESPOND_ALL"] === "true";
   const wakeWords = parseCsv(process.env["DISCORD_WAKE_WORDS"] ?? "jarvis,stonegate assist,stonegate");
   const intentTtlMinutes = Number(process.env["DISCORD_INTENT_TTL_MIN"] ?? 30);
 
@@ -344,6 +345,7 @@ async function main() {
         await message.reply([ok ? "Done." : "Stopped (an action failed).", "", ...summaryLines].join("\n"));
         return;
       }
+      if (approval && !referencedId) return;
 
       const isDm = !message.inGuild?.();
       const botUserId = client.user?.id;
@@ -354,7 +356,7 @@ async function main() {
       const prefixed = trimmed.toLowerCase().startsWith(commandPrefix.toLowerCase());
       const wake = stripWakeWord(trimmed, wakeWords);
 
-      if (!isDm) {
+      if (!isDm && !respondAll) {
         if (requireMention && !mentioned && !prefixed && !wake.matched) return;
         if (!requireMention && !mentioned && !prefixed && !wake.matched) return;
       }
