@@ -1,6 +1,24 @@
 import "dotenv/config";
+import Module from "node:module";
+import path from "node:path";
 import { Client, Events, GatewayIntentBits, Partials } from "discord.js";
 import { DateTime } from "luxon";
+
+function registerAliases() {
+  const originalResolve = (Module as unknown as { _resolveFilename: Module["_resolveFilename"] })._resolveFilename;
+  (Module as unknown as { _resolveFilename: Module["_resolveFilename"] })._resolveFilename = function (
+    request: string,
+    parent: any,
+    isMain: boolean,
+    options: any
+  ) {
+    if (request.startsWith("@/")) {
+      const absolute = path.resolve("apps/api/src", request.slice(2));
+      return originalResolve.call(this, absolute, parent, isMain, options);
+    }
+    return originalResolve.call(this, request, parent, isMain, options);
+  };
+}
 
 function mustEnv(key: string): string {
   const value = process.env[key];
@@ -450,6 +468,7 @@ function detectForgetIntent(text: string): { q: string } | null {
 }
 
 async function main() {
+  registerAliases();
   const {
     createDiscordActionIntent,
     findPendingDiscordActionIntentByBotMessageId,
