@@ -473,6 +473,7 @@ async function main() {
     createDiscordActionIntent,
     findPendingDiscordActionIntentByBotMessageId,
     findLatestPendingDiscordActionIntent,
+    findLatestPendingDiscordActionIntentForChannel,
     markDiscordActionIntentApproved,
     cancelDiscordActionIntent,
     markDiscordActionIntentExecuted
@@ -487,6 +488,7 @@ async function main() {
 
   const { buildDailyOpsReportMarkdown } = await import("../apps/api/src/lib/ops-reports");
   const { computeOpsMonitorAlerts, formatOpsMonitorAlertsMarkdown } = await import("../apps/api/src/lib/ops-monitor");
+  const { buildOpsDiagnosticsMarkdown } = await import("../apps/api/src/lib/ops-diagnostics");
 
   const {
     createDiscordAgentMemory,
@@ -524,9 +526,11 @@ async function main() {
   const monitorEnabled = process.env["DISCORD_MONITOR_ENABLED"] !== "false";
   const monitorCheckMs = Number(process.env["DISCORD_MONITOR_CHECK_MS"] ?? 120_000);
   const monitorCooldownMin = Number(process.env["DISCORD_MONITOR_COOLDOWN_MIN"] ?? 30);
+  const monitorDiagnosticsEnabled = process.env["DISCORD_MONITOR_DIAGNOSTICS_ENABLED"] !== "false";
 
   const memoryCache = new Map<string, { at: number; items: MemoryCandidate[] }>();
   const monitorState = new Map<string, { at: number; fingerprint: string }>();
+  const monitorDiagnosticsState = new Map<string, { at: number; fingerprint: string }>();
   async function getMemoryContext(input: { guildId: string | null; channelId: string }): Promise<string> {
     if (!memoryEnabled) return "";
     const key = `${input.channelId}:${input.guildId ?? ""}`;
@@ -685,7 +689,45 @@ async function main() {
               const channel = await client.channels.fetch(channelId).catch(() => null);
               if (!channel || typeof (channel as any).isTextBased !== "function" || !(channel as any).isTextBased()) continue;
 
-              await (channel as any).send(String(body).slice(0, 1900));
+              const hasCritical = alerts.some((a) => a && typeof a.severity === "string" && a.severity === "critical");
+              const nowMs = Date.now();
+              const diagPrior = monitorDiagnosticsState.get(channelId);
+              const diagWithinCooldown = diagPrior && nowMs - diagPrior.at < cooldownMs;
+              const shouldOfferDiagnostics =
+                monitorDiagnosticsEnabled && hasCritical && !(diagWithinCooldown && diagPrior?.fingerprint === fingerprint);
+
+              if (shouldOfferDiagnostics) {
+                const cta = '\n\nReply "approve" to run an ops diagnostic snapshot (or "cancel").';
+                const maxLen = Math.max(0, 1900 - cta.length);
+                const combined = `${String(body).slice(0, maxLen)}${cta}`;
+                const sent = await (channel as any).send(combined);
+                const sentId = sent?.id ? String(sent.id) : "";
+
+                if (sentId) {
+                  const expiresAt = intentTtlMinutes > 0 ? new Date(Date.now() + intentTtlMinutes * 60_000) : null;
+                  const subForChannel = subs.find((s) => String(s.discordChannelId) === channelId);
+                  await createDiscordActionIntent({
+                    discordGuildId: subForChannel?.discordGuildId ? String(subForChannel.discordGuildId) : null,
+                    discordChannelId: String(channelId),
+                    discordIntentMessageId: sentId,
+                    requestedByDiscordUserId: "system",
+                    requestText: "ops_monitor_alerts",
+                    agentReply: "ops_diagnose",
+                    actions: [
+                      {
+                        type: "ops_diagnose",
+                        summary: "Run ops diagnostic snapshot",
+                        payload: { discordChannelId: String(channelId), tz }
+                      }
+                    ],
+                    expiresAt
+                  });
+                }
+
+                monitorDiagnosticsState.set(channelId, { at: nowMs, fingerprint });
+              } else {
+                await (channel as any).send(String(body).slice(0, 1900));
+              }
               monitorState.set(channelId, { at: nowMs, fingerprint });
             }
 
@@ -708,10 +750,14 @@ async function main() {
       if (approval) {
         const intent = referencedId
           ? await findPendingDiscordActionIntentByBotMessageId(String(referencedId))
-          : await findLatestPendingDiscordActionIntent({
+          : (await findLatestPendingDiscordActionIntent({
               discordChannelId: String(message.channelId),
               requestedByDiscordUserId: String(message.author.id)
-            });
+            })) ??
+            (await findLatestPendingDiscordActionIntentForChannel({
+              discordChannelId: String(message.channelId),
+              requestedByDiscordUserId: "system"
+            }));
         if (!intent) {
           await message.reply("I don’t see a pending action to approve/cancel.");
           return;
@@ -872,6 +918,18 @@ async function main() {
                           () => ({ ok: true, status: 200, data: { ok: true } }),
                           (err: any) => ({ ok: false, status: 500, data: { error: String(err) } })
                         );
+                      })()
+                  : type === "ops_diagnose"
+                    ? (async () => {
+                        const tz = typeof payload["tz"] === "string" ? String(payload["tz"]) : defaultReportTz;
+                        const channelId =
+                          typeof payload["discordChannelId"] === "string" ? String(payload["discordChannelId"]) : String(message.channelId);
+                        const content = await buildOpsDiagnosticsMarkdown({ tz }).catch((e: any) => `ops_diagnose_failed: ${String(e)}`);
+                        const channel = await client.channels.fetch(channelId).catch(() => null);
+                        if (channel && typeof (channel as any).isTextBased === "function" && (channel as any).isTextBased()) {
+                          await (channel as any).send(String(content).slice(0, 1900));
+                        }
+                        return { ok: true, status: 200, data: { ok: true } };
                       })()
                 : await executeAgentAction({
                     siteUrl,
