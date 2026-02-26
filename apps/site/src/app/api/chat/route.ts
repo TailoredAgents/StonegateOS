@@ -120,6 +120,7 @@ type RevenueForecast = {
 
 type ChatRequest = {
   message?: string;
+  system?: string;
   contactId?: string;
   propertyId?: string;
   property?: {
@@ -1127,6 +1128,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => ({}))) as ChatRequest;
     const message = typeof body.message === "string" ? body.message : "";
     const trimmedMessage = message.trim();
+    const systemOverride = typeof body.system === "string" ? body.system.trim() : "";
     const contactId = body.contactId;
     const propertyId = body.propertyId;
     const property = body.property;
@@ -1234,6 +1236,8 @@ export async function POST(request: NextRequest) {
           property
         })
       : null;
+    const combinedSystem =
+      [teamContext, systemOverride].filter((v) => typeof v === "string" && v.trim().length).join("\n\n") || null;
 
     const systemPrompt = isTeamChat ? TEAM_SYSTEM_PROMPT : PUBLIC_SYSTEM_PROMPT;
     const teamEffortRaw = (process.env["OPENAI_TEAM_REASONING_EFFORT"] ?? "").trim().toLowerCase();
@@ -1296,7 +1300,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, reply: brainRes.text.trim() });
     }
 
-    const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel, teamContext), brainModel);
+    const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel, combinedSystem), brainModel);
     if (!brainRes.ok) {
       return NextResponse.json(
         {

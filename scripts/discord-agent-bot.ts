@@ -55,6 +55,49 @@ type AgentChatResponse = {
   message?: string;
 };
 
+type DiscordTranscriptLine = { role: "user" | "assistant"; content: string };
+
+async function buildDiscordDmTranscript(message: any, limit: number): Promise<DiscordTranscriptLine[]> {
+  try {
+    const channel = message.channel;
+    if (!channel || typeof channel.messages?.fetch !== "function") return [];
+
+    const fetched = await channel.messages.fetch({ limit: Math.max(1, Math.min(50, limit)) }).catch(() => null);
+    if (!fetched) return [];
+
+    const botId = message.client?.user?.id ? String(message.client.user.id) : null;
+    const sorted = Array.from(fetched.values()).sort(
+      (a: any, b: any) => Number(a.createdTimestamp) - Number(b.createdTimestamp)
+    );
+
+    const lines: DiscordTranscriptLine[] = [];
+    for (const msg of sorted) {
+      if (!msg) continue;
+      const content = typeof msg.content === "string" ? msg.content.trim() : "";
+      if (!content) continue;
+      if (msg.author?.bot && botId && String(msg.author.id) !== botId) continue;
+
+      const role: DiscordTranscriptLine["role"] =
+        botId && String(msg.author?.id ?? "") === botId ? "assistant" : "user";
+      lines.push({ role, content });
+    }
+
+    return lines.slice(-limit);
+  } catch {
+    return [];
+  }
+}
+
+function formatTranscriptForSystem(lines: DiscordTranscriptLine[]): string {
+  if (!lines.length) return "";
+  const rendered = lines.map((l) => `${l.role === "assistant" ? "Assistant" : "User"}: ${l.content}`).join("\n");
+  return [
+    "Discord DM transcript (most recent messages).",
+    "Use this for context. Do not mention Discord or the transcript unless asked.",
+    rendered
+  ].join("\n");
+}
+
 type ActionCandidate = {
   id: string;
   name?: string | null;
@@ -109,6 +152,7 @@ async function callAgentChat(input: {
   siteUrl: string;
   botKey: string;
   message: string;
+  system?: string;
 }): Promise<AgentChatResponse> {
   const res = await fetch(`${input.siteUrl}/api/chat`, {
     method: "POST",
@@ -116,7 +160,11 @@ async function callAgentChat(input: {
       "Content-Type": "application/json",
       "x-stonegate-bot-key": input.botKey
     },
-    body: JSON.stringify({ mode: "team", message: input.message })
+    body: JSON.stringify({
+      mode: "team",
+      message: input.message,
+      ...(input.system ? { system: input.system } : {})
+    })
   });
 
   const data = (await res.json().catch(() => null)) as AgentChatResponse | null;
@@ -165,6 +213,7 @@ async function main() {
   const {
     createDiscordActionIntent,
     findPendingDiscordActionIntentByBotMessageId,
+    findLatestPendingDiscordActionIntent,
     markDiscordActionIntentApproved,
     cancelDiscordActionIntent,
     markDiscordActionIntentExecuted
@@ -184,8 +233,10 @@ async function main() {
   const commandPrefix = (process.env["DISCORD_COMMAND_PREFIX"] ?? "!sg").trim();
   const requireMention = process.env["DISCORD_REQUIRE_MENTION"] !== "false";
   const respondAll = process.env["DISCORD_RESPOND_ALL"] === "true";
+  const dmOnly = process.env["DISCORD_DM_ONLY"] !== "false";
   const wakeWords = parseCsv(process.env["DISCORD_WAKE_WORDS"] ?? "jarvis,stonegate assist,stonegate");
   const intentTtlMinutes = Number(process.env["DISCORD_INTENT_TTL_MIN"] ?? 30);
+  const contextLimit = Number(process.env["DISCORD_CONTEXT_MESSAGE_LIMIT"] ?? 20);
 
   const client = new Client({
     intents: [
@@ -248,12 +299,23 @@ async function main() {
     try {
       if (!(await isAuthorized(message))) return;
 
+      const isDm = !message.inGuild?.();
       const approval = parseApproval(message.content);
       const referencedId = message.reference?.messageId;
-      if (approval && referencedId) {
-        const intent = await findPendingDiscordActionIntentByBotMessageId(String(referencedId));
+      if (approval) {
+        if (!referencedId && !isDm) {
+          await message.reply("To approve/cancel, reply to my proposed action message (or DM me).");
+          return;
+        }
+
+        const intent = referencedId
+          ? await findPendingDiscordActionIntentByBotMessageId(String(referencedId))
+          : await findLatestPendingDiscordActionIntent({
+              discordChannelId: String(message.channelId),
+              requestedByDiscordUserId: String(message.author.id)
+            });
         if (!intent) {
-          await message.reply("I don’t see a pending action for that message.");
+          await message.reply("I don’t see a pending action to approve/cancel.");
           return;
         }
 
@@ -345,9 +407,8 @@ async function main() {
         await message.reply([ok ? "Done." : "Stopped (an action failed).", "", ...summaryLines].join("\n"));
         return;
       }
-      if (approval && !referencedId) return;
 
-      const isDm = !message.inGuild?.();
+      if (dmOnly && !isDm) return;
       const botUserId = client.user?.id;
       if (!botUserId) return;
 
@@ -374,7 +435,13 @@ async function main() {
         return;
       }
 
-      const agentRes = await callAgentChat({ siteUrl, botKey, message: prompt });
+      const transcript =
+        isDm && Number.isFinite(contextLimit) && contextLimit > 0
+          ? await buildDiscordDmTranscript(message, Math.floor(contextLimit))
+          : [];
+      const system = transcript.length ? formatTranscriptForSystem(transcript) : "";
+
+      const agentRes = await callAgentChat({ siteUrl, botKey, message: prompt, system });
       const replyText = (agentRes.reply ?? "").trim() || "Okay.";
       const actions = splitActions(agentRes.actions ?? []);
 

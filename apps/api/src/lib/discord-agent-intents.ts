@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, or } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import { discordActionIntents, getDb } from "../db";
 
 export type DiscordActionIntentStatus =
@@ -65,6 +65,30 @@ export async function findPendingDiscordActionIntentByBotMessageId(discordIntent
         or(isNull(discordActionIntents.expiresAt), gt(discordActionIntents.expiresAt, current))
       )
     )
+    .limit(1);
+
+  return (rows[0] as unknown as DiscordActionIntentRecord | undefined) ?? null;
+}
+
+export async function findLatestPendingDiscordActionIntent(input: {
+  discordChannelId: string;
+  requestedByDiscordUserId: string;
+}) {
+  const db = getDb();
+  const current = now();
+
+  const rows = await db
+    .select()
+    .from(discordActionIntents)
+    .where(
+      and(
+        eq(discordActionIntents.discordChannelId, input.discordChannelId),
+        eq(discordActionIntents.requestedByDiscordUserId, input.requestedByDiscordUserId),
+        eq(discordActionIntents.status, "pending"),
+        or(isNull(discordActionIntents.expiresAt), gt(discordActionIntents.expiresAt, current))
+      )
+    )
+    .orderBy(desc(discordActionIntents.createdAt))
     .limit(1);
 
   return (rows[0] as unknown as DiscordActionIntentRecord | undefined) ?? null;
