@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { formatServiceLabel } from "@/lib/service-labels";
 import { requireTeamRole } from "@/app/api/team/auth";
+import { isAgentBotRequest } from "./bot-auth";
 
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const PUBLIC_VOICE_MODEL = "gpt-4.1-mini";
@@ -1116,12 +1117,14 @@ export async function POST(request: NextRequest) {
     const action = body.action ?? null;
 
     if (requestedAudience === "team") {
-      const auth = await requireTeamRole(request, {
-        returnJson: true,
-        roles: ["owner", "office", "crew"],
-        flashError: "Please sign in again to use the agent."
-      });
-      if (!auth.ok) return auth.response as NextResponse;
+      if (!isAgentBotRequest(request)) {
+        const auth = await requireTeamRole(request, {
+          returnJson: true,
+          roles: ["owner", "office", "crew"],
+          flashError: "Please sign in again to use the agent."
+        });
+        if (!auth.ok) return auth.response as NextResponse;
+      }
     }
 
     const audience = requestedAudience === "team" ? "team" : "public";

@@ -25,6 +25,8 @@
         "db:migrate": "node apps/api/scripts/fix-drizzle-migrations-seq.js && drizzle-kit migrate",
         "outbox:worker": "tsx scripts/outbox-worker.ts",
         "outbox:worker:prod": "NODE_ENV=production tsx scripts/outbox-worker.ts",
+        "discord:agent": "tsx scripts/discord-agent-bot.ts",
+        "discord:agent:prod": "NODE_ENV=production tsx scripts/discord-agent-bot.ts",
         "smoke": "tsx scripts/smoke.ts",
         "geocode:backfill": "tsx scripts/geocode-backfill.ts"
     },
@@ -61,6 +63,7 @@
     },
     "dependencies": {
         "@types/nanoid": "^3.0.0",
+        "discord.js": "^14.22.1",
         "tsx": "^4.19.2"
     }
 }

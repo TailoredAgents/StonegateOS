@@ -8,6 +8,7 @@ This repo includes a Render blueprint in `render.yaml` that provisions the site,
    - Postgres `stonegate-db` (Basic 1GB, Virginia)
    - Web services `stonegate-site` and `stonegate-api`
    - Worker `stonegate-outbox-worker` (runs outbox + SEO autopublish)
+   - Worker `stonegate-discord-agent` (Discord “Jarvis” agent with approval-before-action)
 4. Set environment variables before the first deploy.
    - All expected env vars are listed in `render.yaml` (with `sync: false` so they appear in the Render dashboard).
    - For a complete reference, also see `.env.example`.
@@ -24,6 +25,11 @@ This repo includes a Render blueprint in `render.yaml` that provisions the site,
      - Provider credentials as needed (Twilio, SMTP, OpenAI, Meta, Google Ads, etc.)
    - Worker (`stonegate-outbox-worker`)
      - Provider credentials to match what the worker should run (Twilio/SMTP/OpenAI/Meta/Google Ads)
+   - Worker (`stonegate-discord-agent`)
+     - `DISCORD_BOT_TOKEN`
+     - `AGENT_BOT_SHARED_SECRET` (must match the Site env var)
+     - `DISCORD_GUILD_ID` (or `DISCORD_GUILD_IDS`)
+     - `DISCORD_AGENT_SITE_URL` (or set `SITE_URL` / `NEXT_PUBLIC_SITE_URL`)
 
    **Optional (tracking / ads)**
    - Meta pixel: `NEXT_PUBLIC_META_PIXEL_ID`

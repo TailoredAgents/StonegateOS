@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { requireTeamRole } from "@/app/api/team/auth";
 import { callAdminApi } from "@/app/team/lib/api";
+import { isAgentBotRequest } from "../bot-auth";
 
 type CreateContactPayload = {
   contactName: string;
@@ -87,8 +88,10 @@ const ACTION_RATE_LIMIT_MS = Number(process.env["CHAT_ACTION_RATE_MS"] ?? 0);
 const lastActionByType = new Map<string, number>();
 
 export async function POST(request: NextRequest) {
-  const auth = await requireTeamRole(request, { returnJson: true, roles: ["owner", "office"] });
-  if (!auth.ok) return auth.response;
+  if (!isAgentBotRequest(request)) {
+    const auth = await requireTeamRole(request, { returnJson: true, roles: ["owner", "office"] });
+    if (!auth.ok) return auth.response;
+  }
 
   const payload = (await request.json().catch(() => null)) as ActionRequest | null;
   if (!payload || typeof payload !== "object" || !("type" in payload)) {

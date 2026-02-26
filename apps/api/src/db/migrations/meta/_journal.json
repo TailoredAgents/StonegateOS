@@ -225,6 +225,13 @@
       "when": 1769302800000,
       "tag": "0031_web_analytics",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1772059661950,
+      "tag": "0032_discord_action_intents",
+      "breakpoints": true
     }
   ]
 }

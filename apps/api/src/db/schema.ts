@@ -1687,3 +1687,41 @@ export const payments = pgTable(
     appointmentIdx: index("payments_appointment_idx").on(table.appointmentId)
   })
 );
+
+// Discord agent: staged actions requiring explicit approval.
+export const discordActionIntents = pgTable(
+  "discord_action_intents",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    status: text("status").default("pending").notNull(), // pending | approved | executed | canceled | expired | failed
+
+    discordGuildId: text("discord_guild_id"),
+    discordChannelId: text("discord_channel_id").notNull(),
+    discordIntentMessageId: text("discord_intent_message_id").notNull(), // bot read-back message id
+    requestedByDiscordUserId: text("requested_by_discord_user_id").notNull(),
+
+    requestText: text("request_text"),
+    agentReply: text("agent_reply"),
+    actions: jsonb("actions").$type<Array<Record<string, unknown>> | null>(),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    executedAt: timestamp("executed_at", { withTimezone: true }),
+    canceledAt: timestamp("canceled_at", { withTimezone: true }),
+
+    executedByDiscordUserId: text("executed_by_discord_user_id"),
+    error: text("error"),
+    result: jsonb("result").$type<Record<string, unknown> | null>(),
+
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    msgIdx: uniqueIndex("discord_action_intents_message_idx").on(table.discordIntentMessageId),
+    statusIdx: index("discord_action_intents_status_idx").on(table.status),
+    createdAtIdx: index("discord_action_intents_created_at_idx").on(table.createdAt)
+  })
+);

@@ -63,6 +63,12 @@ services:
         sync: false
       - key: ADMIN_API_KEY
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: AGENT_BOT_SHARED_SECRET
+        sync: false
     buildFilter:
       paths:
         - apps/site/**
@@ -324,6 +330,53 @@ services:
       - key: GOOGLE_ADS_SYNC_INTERVAL_MS
         sync: false
       - key: GOOGLE_ADS_SYNC_DISABLED
+        sync: false
+  - type: worker
+    name: stonegate-discord-agent
+    env: node
+    plan: starter
+    region: virginia
+    buildCommand: |
+      export PNPM_HOME="$HOME/.local/share/pnpm"
+      export PATH="$PNPM_HOME:$PATH"
+      export HUSKY=0
+      npx -y pnpm@9.15.9 install --frozen-lockfile --prod=false
+    startCommand: |
+      set -eux
+      export PNPM_HOME="$HOME/.local/share/pnpm"
+      mkdir -p "$PNPM_HOME"
+      export PATH="$PNPM_HOME:$PATH"
+      npx -y pnpm@9.15.9 discord:agent:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: stonegate-db
+          property: connectionString
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_GUILD_IDS
+        sync: false
+      - key: DISCORD_APPROVER_ROLE_IDS
+        sync: false
+      - key: DISCORD_COMMAND_PREFIX
+        sync: false
+      - key: DISCORD_REQUIRE_MENTION
+        sync: false
+      - key: DISCORD_INTENT_TTL_MIN
+        sync: false
+      - key: DISCORD_AGENT_SITE_URL
+        sync: false
+      - key: SITE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SITE_URL
+        sync: false
+      - key: AGENT_BOT_SHARED_SECRET
         sync: false
 databases:
   - name: stonegate-db
