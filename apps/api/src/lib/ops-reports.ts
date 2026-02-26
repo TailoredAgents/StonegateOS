@@ -226,31 +226,33 @@ export async function fetchGoogleAdsSummary(input: { rangeDays: number; tz: stri
   };
 }
 
-export async function buildDailyOpsReportMarkdown(input?: { tz?: string }) {
+export async function buildDailyOpsReportMarkdown(input?: { tz?: string; comparisonRangeDays?: number }) {
   const tz = input?.tz || process.env["APPOINTMENT_TIMEZONE"] || "America/New_York";
+  const comparisonRangeDays = input?.comparisonRangeDays ?? 7;
+  const comparisonDays = Math.min(Math.max(Math.floor(Number(comparisonRangeDays) || 7), 1), 30);
 
-  const [todayTotals, todayFunnel, todayErrors, weekTotals, weekFunnel, adsWeek] = await Promise.all([
+  const [todayTotals, todayFunnel, todayErrors, periodTotals, periodFunnel, adsPeriod] = await Promise.all([
     fetchWebTotals({ rangeDays: 1, tz }),
     fetchWebFunnelByBucket({ rangeDays: 1, tz }),
     fetchWebErrors({ rangeDays: 1, tz }),
-    fetchWebTotals({ rangeDays: 7, tz }),
-    fetchWebFunnelByBucket({ rangeDays: 7, tz }),
-    fetchGoogleAdsSummary({ rangeDays: 7, tz })
+    fetchWebTotals({ rangeDays: comparisonDays, tz }),
+    fetchWebFunnelByBucket({ rangeDays: comparisonDays, tz }),
+    fetchGoogleAdsSummary({ rangeDays: comparisonDays, tz })
   ]);
 
   const now = DateTime.now().setZone(tz);
   const dayLabel = now.toFormat("ccc, LLL d");
 
   const t = todayTotals.totals;
-  const w = weekTotals.totals;
+  const p = periodTotals.totals;
 
   const submitRateToday = safeDiv(t.bookStep1Submits, t.bookStep1Views);
   const quoteRateToday = safeDiv(t.bookQuoteSuccess, t.bookStep1Submits);
   const bookRateToday = safeDiv(t.bookBookingSuccess, t.bookQuoteSuccess);
 
-  const submitRateWeek = safeDiv(w.bookStep1Submits, w.bookStep1Views);
-  const quoteRateWeek = safeDiv(w.bookQuoteSuccess, w.bookStep1Submits);
-  const bookRateWeek = safeDiv(w.bookBookingSuccess, w.bookQuoteSuccess);
+  const submitRatePeriod = safeDiv(p.bookStep1Submits, p.bookStep1Views);
+  const quoteRatePeriod = safeDiv(p.bookQuoteSuccess, p.bookStep1Submits);
+  const bookRatePeriod = safeDiv(p.bookBookingSuccess, p.bookQuoteSuccess);
 
   const lines: string[] = [];
   lines.push(`**Daily Ops Report — ${dayLabel} (${tz})**`);
@@ -262,15 +264,15 @@ export async function buildDailyOpsReportMarkdown(input?: { tz?: string }) {
   lines.push(`- Booked (any channel): ${t.bookedAnyChannel} | Call clicks: ${t.callClicks}`);
   lines.push("");
 
-  lines.push("**Website (last 7 days)**");
-  lines.push(`- Visits: ${w.visits} | /book step 1: ${w.bookStep1Views} | Submits: ${w.bookStep1Submits} (${toPercent(submitRateWeek)})`);
-  lines.push(`- Quotes shown: ${w.bookQuoteSuccess} (${toPercent(quoteRateWeek)} of submits) | Self-serve bookings: ${w.bookBookingSuccess} (${toPercent(bookRateWeek)} of quotes)`);
-  lines.push(`- Booked (any channel): ${w.bookedAnyChannel} | Call clicks: ${w.callClicks}`);
+  lines.push(`**Website (last ${comparisonDays} days)**`);
+  lines.push(`- Visits: ${p.visits} | /book step 1: ${p.bookStep1Views} | Submits: ${p.bookStep1Submits} (${toPercent(submitRatePeriod)})`);
+  lines.push(`- Quotes shown: ${p.bookQuoteSuccess} (${toPercent(quoteRatePeriod)} of submits) | Self-serve bookings: ${p.bookBookingSuccess} (${toPercent(bookRatePeriod)} of quotes)`);
+  lines.push(`- Booked (any channel): ${p.bookedAnyChannel} | Call clicks: ${p.callClicks}`);
   lines.push("");
 
-  if (adsWeek) {
-    lines.push("**Google Ads (last 7 days)**");
-    lines.push(`- Clicks: ${adsWeek.clicks} | Impressions: ${adsWeek.impressions} | Cost: ${fmtMoneyFromNumericString(adsWeek.cost)} | Conversions: ${adsWeek.conversions}`);
+  if (adsPeriod) {
+    lines.push(`**Google Ads (last ${comparisonDays} days)**`);
+    lines.push(`- Clicks: ${adsPeriod.clicks} | Impressions: ${adsPeriod.impressions} | Cost: ${fmtMoneyFromNumericString(adsPeriod.cost)} | Conversions: ${adsPeriod.conversions}`);
     lines.push("");
   }
 
@@ -301,14 +303,14 @@ export async function buildDailyOpsReportMarkdown(input?: { tz?: string }) {
   }
 
   // Small appendix for bucket visibility (kept short).
-  const bucketTop = weekFunnel.byBucket
+  const bucketTop = periodFunnel.byBucket
     .filter((b) => b.step1Views > 0)
     .sort((a, b) => b.step1Views - a.step1Views)
     .slice(0, 3)
     .map((b) => `${b.bucket}: ${b.step1Views} step1`)
     .join(", ");
   if (bucketTop) {
-    lines.push(`Bucket mix (7d): ${bucketTop}`);
+    lines.push(`Bucket mix (${comparisonDays}d): ${bucketTop}`);
   }
 
   return lines.join("\n").trim();

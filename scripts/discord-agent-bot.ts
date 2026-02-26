@@ -41,21 +41,97 @@ function pickTimezoneFromText(text: string, fallback: string): string {
   return fallback;
 }
 
-function isSubscribeDailyReport(text: string): boolean {
-  const lower = text.toLowerCase();
-  return lower.includes("subscribe") && lower.includes("daily") && lower.includes("report");
+function normalizeIntentText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s:]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function isUnsubscribeDailyReport(text: string): boolean {
-  const lower = text.toLowerCase();
-  return (lower.includes("unsubscribe") || lower.includes("stop")) && lower.includes("daily") && lower.includes("report");
+function parseRangeDaysFromText(text: string): number | null {
+  const normalized = normalizeIntentText(text);
+  const numMatch = normalized.match(/\b(?:last|past)\s+(\d{1,2})\s+days?\b/);
+  if (numMatch?.[1]) {
+    const n = Number(numMatch[1]);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.floor(n), 1), 30) : null;
+  }
+
+  const weekMatch = normalized.match(/\b(?:last|past)\s+(\d{1,2})\s+weeks?\b/);
+  if (weekMatch?.[1]) {
+    const n = Number(weekMatch[1]);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return Math.min(Math.max(Math.floor(n * 7), 1), 30);
+  }
+
+  if (/\blast week\b/.test(normalized) || /\bpast week\b/.test(normalized)) return 7;
+  if (/\blast 14\b/.test(normalized)) return 14;
+  return null;
 }
 
-function isRunDailyReportNow(text: string): boolean {
-  const lower = text.toLowerCase();
-  if (lower.includes("report now")) return true;
-  if (lower.includes("daily report") && (lower.includes("run") || lower.includes("show") || lower.includes("send"))) return true;
-  return lower.trim() === "daily report";
+type ReportIntent = {
+  kind: "run" | "subscribe" | "unsubscribe";
+  comparisonRangeDays?: number | null;
+  timeOfDay?: string | null;
+  timezone?: string | null;
+};
+
+function detectDailyReportIntent(text: string): ReportIntent | null {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) return null;
+
+  const mentionsReport =
+    normalized.includes("report") ||
+    normalized.includes("stats") ||
+    normalized.includes("numbers") ||
+    normalized.includes("metrics") ||
+    normalized.includes("summary");
+  if (!mentionsReport) return null;
+
+  const mentionsDaily =
+    normalized.includes("daily") ||
+    normalized.includes("weekly") ||
+    normalized.includes("week") ||
+    normalized.includes("past week") ||
+    normalized.includes("last week") ||
+    normalized.includes("every morning") ||
+    normalized.includes("each morning") ||
+    normalized.includes("today") ||
+    normalized.includes("yesterday") ||
+    normalized.includes("this morning") ||
+    normalized.includes("ops");
+  if (!mentionsDaily) return null;
+
+  const wantsStop =
+    normalized.includes("unsubscribe") ||
+    normalized.includes("stop sending") ||
+    normalized.includes("stop posting") ||
+    normalized.includes("dont send") ||
+    normalized.includes("do not send") ||
+    normalized.includes("turn off");
+
+  if (wantsStop) {
+    return { kind: "unsubscribe" };
+  }
+
+  const wantsSchedule =
+    normalized.includes("subscribe") ||
+    normalized.includes("every day") ||
+    normalized.includes("each day") ||
+    normalized.includes("daily at") ||
+    (normalized.includes("every") && normalized.includes("morning")) ||
+    (normalized.includes("send") && normalized.includes("daily")) ||
+    (normalized.includes("post") && normalized.includes("daily"));
+
+  const comparisonRangeDays = parseRangeDaysFromText(text);
+  const timeOfDay = parseTimeOfDayFromText(text);
+
+  if (wantsSchedule) {
+    return { kind: "subscribe", comparisonRangeDays, timeOfDay };
+  }
+
+  // Default: run now for any "daily report" ask.
+  return { kind: "run", comparisonRangeDays };
 }
 
 function normalizeBaseUrl(url: string) {
@@ -545,14 +621,53 @@ async function main() {
 
         const results: Array<{ type: string; ok: boolean; status: number; error?: string }> = [];
         for (const action of normalizedActions) {
-          const exec = await executeAgentAction({
-            siteUrl,
-            botKey,
-            type: action.type,
-            payload: action.payload
-          });
+          const type = action.type;
+          const payload = action.payload;
+          const exec =
+            type === "subscribe_daily_ops_report"
+              ? (() => {
+                  const channelId = String(payload["discordChannelId"] ?? "");
+                  const reportType = String(payload["reportType"] ?? "");
+                  const timezone = typeof payload["timezone"] === "string" ? String(payload["timezone"]) : defaultReportTz;
+                  const timeOfDay = typeof payload["timeOfDay"] === "string" ? String(payload["timeOfDay"]) : defaultReportTime;
+                  if (!channelId || reportType !== "daily_ops") {
+                    return Promise.resolve({ ok: false, status: 400, data: { error: "invalid_subscription_payload" } });
+                  }
+                  return upsertDiscordReportSubscription({
+                    discordGuildId: typeof payload["discordGuildId"] === "string" ? String(payload["discordGuildId"]) : null,
+                    discordChannelId: channelId,
+                    reportType: "daily_ops",
+                    timezone,
+                    timeOfDay,
+                    createdByDiscordUserId: String(message.author.id)
+                  }).then(
+                    () => ({ ok: true, status: 200, data: { ok: true } }),
+                    (err: any) => ({ ok: false, status: 500, data: { error: String(err) } })
+                  );
+                })()
+              : type === "unsubscribe_daily_ops_report"
+                ? (() => {
+                    const channelId = String(payload["discordChannelId"] ?? "");
+                    const reportType = String(payload["reportType"] ?? "");
+                    if (!channelId || reportType !== "daily_ops") {
+                      return Promise.resolve({ ok: false, status: 400, data: { error: "invalid_unsubscribe_payload" } });
+                    }
+                    return disableDiscordReportSubscription({
+                      discordChannelId: channelId,
+                      reportType: "daily_ops"
+                    }).then(
+                      () => ({ ok: true, status: 200, data: { ok: true } }),
+                      (err: any) => ({ ok: false, status: 500, data: { error: String(err) } })
+                    );
+                  })()
+                : await executeAgentAction({
+                    siteUrl,
+                    botKey,
+                    type,
+                    payload
+                  });
           results.push({
-            type: action.type,
+            type,
             ok: exec.ok,
             status: exec.status,
             error: exec.ok ? undefined : exec.data?.error ?? "failed"
@@ -578,33 +693,75 @@ async function main() {
 
       const trimmed = message.content.trim();
       if (reportsEnabled && trimmed) {
-        if (isSubscribeDailyReport(trimmed)) {
-          const timeOfDay = parseTimeOfDayFromText(trimmed) ?? defaultReportTime;
+        const reportIntent = detectDailyReportIntent(trimmed);
+        if (reportIntent?.kind === "run") {
+          const rangeDays =
+            typeof reportIntent.comparisonRangeDays === "number" && Number.isFinite(reportIntent.comparisonRangeDays)
+              ? reportIntent.comparisonRangeDays
+              : 7;
+          const content = await buildDailyOpsReportMarkdown({ tz: defaultReportTz, comparisonRangeDays: rangeDays });
+          await message.reply(String(content).slice(0, 1900));
+          return;
+        }
+
+        if (reportIntent?.kind === "subscribe") {
+          const timeOfDay = reportIntent.timeOfDay ?? defaultReportTime;
           const timezone = pickTimezoneFromText(trimmed, defaultReportTz);
-          await upsertDiscordReportSubscription({
+          const response = await message.reply(
+            `Got it. I can post the daily ops report in this channel every day at ${timeOfDay} (${timezone}). Reply \`approve\` to turn it on (or \`cancel\`).`
+          );
+
+          const expiresAt = intentTtlMinutes > 0 ? new Date(Date.now() + intentTtlMinutes * 60_000) : null;
+          await createDiscordActionIntent({
             discordGuildId: message.guildId ? String(message.guildId) : null,
             discordChannelId: String(message.channelId),
-            reportType: "daily_ops",
-            timezone,
-            timeOfDay,
-            createdByDiscordUserId: String(message.author.id)
+            discordIntentMessageId: String(response.id),
+            requestedByDiscordUserId: String(message.author.id),
+            requestText: trimmed,
+            agentReply: "subscribe_daily_ops_report",
+            actions: [
+              {
+                type: "subscribe_daily_ops_report",
+                summary: `Subscribe this channel to daily ops report at ${timeOfDay} (${timezone})`,
+                payload: {
+                  discordGuildId: message.guildId ? String(message.guildId) : null,
+                  discordChannelId: String(message.channelId),
+                  reportType: "daily_ops",
+                  timezone,
+                  timeOfDay
+                }
+              }
+            ],
+            expiresAt
           });
-          await message.reply(`Subscribed this channel to the daily ops report at ${timeOfDay} (${timezone}).`);
           return;
         }
 
-        if (isUnsubscribeDailyReport(trimmed)) {
-          await disableDiscordReportSubscription({
+        if (reportIntent?.kind === "unsubscribe") {
+          const response = await message.reply(
+            "Okay — I can stop posting the daily ops report in this channel. Reply `approve` to confirm (or `cancel`)."
+          );
+
+          const expiresAt = intentTtlMinutes > 0 ? new Date(Date.now() + intentTtlMinutes * 60_000) : null;
+          await createDiscordActionIntent({
+            discordGuildId: message.guildId ? String(message.guildId) : null,
             discordChannelId: String(message.channelId),
-            reportType: "daily_ops"
+            discordIntentMessageId: String(response.id),
+            requestedByDiscordUserId: String(message.author.id),
+            requestText: trimmed,
+            agentReply: "unsubscribe_daily_ops_report",
+            actions: [
+              {
+                type: "unsubscribe_daily_ops_report",
+                summary: "Unsubscribe this channel from daily ops report",
+                payload: {
+                  discordChannelId: String(message.channelId),
+                  reportType: "daily_ops"
+                }
+              }
+            ],
+            expiresAt
           });
-          await message.reply("Unsubscribed this channel from the daily ops report.");
-          return;
-        }
-
-        if (isRunDailyReportNow(trimmed)) {
-          const content = await buildDailyOpsReportMarkdown({ tz: defaultReportTz });
-          await message.reply(String(content).slice(0, 1900));
           return;
         }
       }
