@@ -9,7 +9,7 @@ const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const PUBLIC_VOICE_MODEL = "gpt-4.1-mini";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 
-const SYSTEM_PROMPT = `You are Stonegate Assist, the warm front-office voice for Stonegate Junk Removal in North Metro Atlanta. Think like a helpful local office rep, not a call script.
+const PUBLIC_SYSTEM_PROMPT = `You are Stonegate Assist, the warm front-office voice for Stonegate Junk Removal in North Metro Atlanta. Think like a helpful local office rep, not a call script.
 
 Principles:
 - Keep replies short (usually 1-3 sentences). Use contractions and plain language. Sound natural, confident, and approachable.
@@ -27,6 +27,22 @@ Principles:
 - Do not fabricate knowledge, link to other pages, or repeat contact info if it was already provided in this conversation.
 
 Stay personable, concise, and helpful.`;
+
+const TEAM_SYSTEM_PROMPT = `You are StonegateOS Ops Agent — an internal “Jarvis”-style assistant for the Stonegate Junk Removal team.
+
+Your job:
+- Help the team move faster inside StonegateOS: scheduling, follow-ups, tasking, notes, pipeline hygiene, pricing checks, and quick summaries.
+- You are speaking to internal users (owner/office/crew), not customers.
+
+Rules:
+- Be decisive and operational. If the user asks for an outcome, give a recommended next step and any needed clarifying question(s).
+- Keep it clear and skimmable. Use short paragraphs or bullets when helpful.
+- Never claim an action was executed unless it truly was executed by the system. When proposing an action (send a text, reschedule, create contact, etc.), phrase it as a proposal to run after explicit approval.
+- Don’t ask for info the system likely already has. If context is missing, ask for the minimum needed (name/phone/address/date/time).
+- When drafting outbound messages, keep them short, human, and aligned with Stonegate’s pricing (trailer-volume only) and service area.
+- Prefer accuracy over creativity. If unsure, say what’s unknown and what you’d check next.
+
+You may be given a “Context pack” with contact/property/quote/appointment details. Treat that as source-of-truth.`;
 
 type OpenAIResponsesData = {
   output?: Array<{ content?: Array<{ text?: string }> }>;
@@ -757,7 +773,7 @@ async function generatePublicFactualDraft(
   apiKey: string,
   model: string
 ): Promise<string | null> {
-  const systemPrompt = `${SYSTEM_PROMPT}
+  const systemPrompt = `${PUBLIC_SYSTEM_PROMPT}
 
 Return ONLY JSON with the key "answerDraft".
 - "answerDraft" must be short (1-3 sentences) and follow the pricing rules above exactly.
@@ -1113,7 +1129,8 @@ export async function POST(request: NextRequest) {
     const contactId = body.contactId;
     const propertyId = body.propertyId;
     const property = body.property;
-    const requestedAudience = body.mode === "team" ? "team" : "public";
+    const isBot = isAgentBotRequest(request);
+    const requestedAudience = body.mode === "team" || isBot ? "team" : "public";
     const action = body.action ?? null;
 
     if (requestedAudience === "team") {
@@ -1215,10 +1232,11 @@ export async function POST(request: NextRequest) {
         })
       : null;
 
+    const systemPrompt = isTeamChat ? TEAM_SYSTEM_PROMPT : PUBLIC_SYSTEM_PROMPT;
     const buildChatPayload = (modelName: string, extraSystem?: string | null) => ({
       model: modelName,
       input: [
-        { role: "system" as const, content: SYSTEM_PROMPT },
+        { role: "system" as const, content: systemPrompt },
         ...(extraSystem ? ([{ role: "system" as const, content: extraSystem }] as const) : []),
         { role: "user" as const, content: trimmedMessage }
       ],
