@@ -4,6 +4,13 @@ import { headers } from "next/headers";
 import { formatServiceLabel } from "@/lib/service-labels";
 import { requireTeamRole } from "@/app/api/team/auth";
 import { isAgentBotRequest } from "./bot-auth";
+import {
+  formatJarvisToolResultsForSystem,
+  runJarvisReadTool,
+  type JarvisReadToolCall,
+  type JarvisReadToolResult,
+  type JarvisReadToolName
+} from "./jarvis-read-tools";
 
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const PUBLIC_VOICE_MODEL = "gpt-4.1-mini";
@@ -142,6 +149,11 @@ type RevenueForecast = {
   totalCents: number;
   currency: string | null;
   count: number;
+};
+
+type JarvisReadToolPlan = {
+  toolCalls: JarvisReadToolCall[];
+  clarification: { question: string; options: string[] } | null;
 };
 
 type ChatRequest = {
@@ -307,6 +319,7 @@ type IntentClassification = {
 
 const CLASSIFIER_ENABLED = process.env["CHAT_CLASSIFIER_ENABLED"] !== "false";
 const CHAT_ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
+const JARVIS_READ_TOOLS_ENABLED = process.env["JARVIS_READ_TOOLS_ENABLED"] !== "false";
 
 type ContactTarget = {
   id: string;
@@ -500,12 +513,15 @@ function looksLikeHelpQuestion(message: string): boolean {
 function teamHelpText(): string {
   return [
     "I can suggest and run quick actions in the CRM (nothing happens until you confirm).",
+    "I can also pull live data from StonegateOS (ads, web analytics, revenue, expenses, pipeline, inbox, schedule).",
     "",
     "Try:",
     '- "Draft a good reply to this lead."',
     '- "Send a text to Amy that says: …"',
     '- "Book Jennifer Wood for Thu at 2pm at 123 Main St."',
-    '- "Add a note to Peter: quoted $350 half load."'
+    '- "Add a note to Peter: quoted $350 half load."',
+    '- "What did we spend on Google Ads yesterday?"',
+    '- "How is /book converting the last 7 days?"'
   ].join("\n");
 }
 
@@ -1262,11 +1278,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, reply: isTeamChat ? teamHelpText() : publicHelpText() });
     }
 
-    if (isTeamChat && looksLikeGoogleAdsSpendQuestion(trimmedMessage)) {
-      const reply = await fetchGoogleAdsSpendReply(trimmedMessage);
-      return NextResponse.json({ ok: true, reply });
-    }
-
     const apiKey = process.env["OPENAI_API_KEY"];
     const baseModel = (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() || DEFAULT_BRAIN_MODEL;
     const teamModel = (process.env["OPENAI_TEAM_MODEL"] ?? "").trim();
@@ -1289,8 +1300,35 @@ export async function POST(request: NextRequest) {
           property
         })
       : null;
+
+    let liveDataContext: string | null = null;
+    let liveDataResults: JarvisReadToolResult[] = [];
+    if (isTeamChat && JARVIS_READ_TOOLS_ENABLED) {
+      const plan = await planJarvisReadTools({
+        apiKey,
+        model: brainModel,
+        message: trimmedMessage,
+        contextHint: [teamContext, systemOverride].filter((v) => typeof v === "string" && v.trim().length).join("\n\n")
+      });
+
+      if (plan?.clarification) {
+        const opts = plan.clarification.options.map((o) => `- ${o}`).join("\n");
+        return NextResponse.json({ ok: true, reply: `${plan.clarification.question}\n${opts}`.trim() });
+      }
+
+      const fallbackCalls = deriveFallbackReadToolCalls(trimmedMessage);
+      const plannedCalls = plan?.toolCalls?.length ? plan.toolCalls : [];
+      const calls = (plannedCalls.length ? plannedCalls : fallbackCalls).slice(0, 4);
+
+      if (calls.length) {
+        const { apiBase, adminKey } = getAdminContext();
+        liveDataResults = await Promise.all(calls.map((call) => runJarvisReadTool({ apiBase, adminKey }, call)));
+        liveDataContext = formatJarvisToolResultsForSystem(liveDataResults);
+      }
+    }
+
     const combinedSystem =
-      [teamContext, systemOverride].filter((v) => typeof v === "string" && v.trim().length).join("\n\n") || null;
+      [teamContext, systemOverride, liveDataContext].filter((v) => typeof v === "string" && v.trim().length).join("\n\n") || null;
 
     const systemPrompt = isTeamChat ? TEAM_SYSTEM_PROMPT_V2 : PUBLIC_SYSTEM_PROMPT;
     const teamEffortRaw = (process.env["OPENAI_TEAM_REASONING_EFFORT"] ?? "").trim().toLowerCase();
@@ -1372,14 +1410,6 @@ export async function POST(request: NextRequest) {
       property
     });
     const classification = CLASSIFIER_ENABLED ? await classifyIntent(trimmedMessage) : null;
-    const wantsSchedule = looksLikeScheduleQuestion(trimmedMessage);
-    const wantsRevenue = looksLikeRevenueQuestion(trimmedMessage);
-    const range = wantsSchedule || wantsRevenue ? pickRange(trimmedMessage) : "this_week";
-
-    const [scheduleText, revenueText] = await Promise.all([
-      wantsSchedule ? fetchScheduleSummary(range, { statuses: ["confirmed"] }) : Promise.resolve(null),
-      wantsRevenue ? fetchRevenueForecast(range) : Promise.resolve(null)
-    ]);
 
     const actions = CHAT_ACTIONS_ENABLED
       ? await buildActionSuggestions(
@@ -1395,19 +1425,20 @@ export async function POST(request: NextRequest) {
         )
       : [];
     const actionNote = actions.length ? actions.map((action) => `Action: ${action.summary}`).join("\n") : null;
-
-    const replyParts = [reply];
-    if (scheduleText) replyParts.push(scheduleText);
-    if (revenueText) replyParts.push(revenueText);
-
-    const finalReply = replyParts.join("\n\n").trim();
+    const liveDataMeta = liveDataResults.map((r) => ({
+      tool: r.tool,
+      status: r.status,
+      ...(typeof r.httpStatus === "number" ? { httpStatus: r.httpStatus } : {}),
+      ...(typeof r.error === "string" ? { error: r.error } : {})
+    }));
 
     return NextResponse.json({
       ok: true,
-      reply: finalReply,
+      reply,
       ...(booking ? { booking } : {}),
       ...(actions.length ? { actions } : {}),
-      ...(actionNote ? { actionNote } : {})
+      ...(actionNote ? { actionNote } : {}),
+      ...(liveDataMeta.length ? { liveData: liveDataMeta } : {})
     });
   } catch (error) {
     console.error("[chat] Server error:", error);
@@ -1532,6 +1563,299 @@ function looksLikeRevenueQuestion(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ["revenue", "forecast", "sales", "booked out", "projected", "income", "today", "tomorrow"];
   return keywords.some((kw) => lower.includes(kw));
+}
+
+function parseRangeDaysFromMessage(message: string): number | null {
+  const lower = message.toLowerCase();
+  const m =
+    lower.match(/\b(last|past)\s+(\d{1,2})\s+days\b/) ??
+    lower.match(/\b(\d{1,2})\s+day(s)?\b/);
+  const raw = m?.[2] ?? m?.[1];
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  const days = Math.floor(n);
+  if (days < 1 || days > 30) return null;
+  return days;
+}
+
+function shouldPlanReadTools(message: string): boolean {
+  const lower = message.toLowerCase().trim();
+  if (!lower) return false;
+  if (lower === "approve" || lower.startsWith("approve ")) return false;
+  if (lower === "cancel" || lower === "deny") return false;
+
+  const keywords = [
+    "google ads",
+    "adwords",
+    "ads spend",
+    "ad spend",
+    "adspend",
+    "meta",
+    "facebook",
+    "instagram",
+    "website analytics",
+    "analytics",
+    "funnel",
+    "web vitals",
+    "performance",
+    "revenue",
+    "profit",
+    "p&l",
+    "expenses",
+    "spend",
+    "schedule",
+    "calendar",
+    "appointments",
+    "pipeline",
+    "contacts",
+    "inbox",
+    "texts",
+    "threads",
+    "outbound",
+    "partners",
+    "seo",
+    "policy",
+    "hours",
+    "service area",
+    "report",
+    "kpi",
+    "dashboard"
+  ];
+  return keywords.some((kw) => lower.includes(kw));
+}
+
+async function planJarvisReadTools(input: {
+  apiKey: string;
+  model: string;
+  message: string;
+  contextHint?: string | null;
+}): Promise<JarvisReadToolPlan | null> {
+  if (!shouldPlanReadTools(input.message)) return { toolCalls: [], clarification: null };
+
+  const toolNames: JarvisReadToolName[] = [
+    "policy.get_all",
+    "system.health",
+    "web.analytics.summary",
+    "web.analytics.funnel",
+    "web.analytics.errors",
+    "web.analytics.vitals",
+    "finance.revenue.summary",
+    "finance.expenses.summary",
+    "finance.expenses.list",
+    "finance.pnl",
+    "schedule.summary",
+    "appointments.list",
+    "commissions.summary",
+    "crm.pipeline",
+    "crm.contacts.search",
+    "inbox.threads.list",
+    "inbox.thread.messages",
+    "inbox.thread.suggest_reply",
+    "outbound.queue",
+    "partners.list",
+    "seo.status",
+    "meta.ads.summary",
+    "google.ads.spend",
+    "google.ads.summary",
+    "google.ads.status"
+  ];
+
+  const systemPrompt = `You are a tool router for Jarvis (StonegateOS).
+Return ONLY JSON (per the schema) selecting up to 4 READ tools to answer the user's question with real system data.
+
+Rules:
+- Prefer the smallest set of tools that answers the question.
+- If a tool needs a time window, use rangeDays (1-30) or schedule range {today,tomorrow,this_week,next_week}.
+- If the request is ambiguous and you truly cannot choose, return ONE clarification question with 2-5 options.
+- Do not suggest write actions here.
+
+Tool hints:
+- Google Ads spend yesterday/today/date => google.ads.spend
+- Google Ads status/connected => google.ads.status
+- Web analytics + /book funnel => web.analytics.summary or web.analytics.funnel
+- Revenue (completed jobs) => finance.revenue.summary; Profit/P&L => finance.pnl
+- Expenses totals => finance.expenses.summary; list => finance.expenses.list
+- Schedule counts => schedule.summary; appointment list => appointments.list
+- Pipeline => crm.pipeline; contact lookup => crm.contacts.search
+- Inbox list/messages/suggest => inbox.*
+- Outbound queue => outbound.queue; Partners => partners.list; SEO => seo.status; Meta ads => meta.ads.summary
+`.trim();
+
+  const contextHint = typeof input.contextHint === "string" && input.contextHint.trim().length ? truncateText(input.contextHint, 1600) : null;
+
+  const payload = {
+    model: input.model,
+    input: [
+      { role: "system" as const, content: systemPrompt },
+      ...(contextHint ? ([{ role: "system" as const, content: `Context (may help disambiguate):\n${contextHint}` }] as const) : []),
+      { role: "user" as const, content: input.message }
+    ],
+    reasoning: { effort: "low" as const },
+    text: {
+      verbosity: "low" as const,
+      format: {
+        type: "json_schema" as const,
+        name: "jarvis_read_tool_plan",
+        strict: true,
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            toolCalls: {
+              type: "array",
+              maxItems: 4,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  tool: { type: "string", enum: toolNames },
+                  args: { type: "object" }
+                },
+                required: ["tool", "args"]
+              }
+            },
+            clarification: {
+              anyOf: [
+                { type: "null" },
+                {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    question: { type: "string" },
+                    options: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 5 }
+                  },
+                  required: ["question", "options"]
+                }
+              ]
+            }
+          },
+          required: ["toolCalls", "clarification"]
+        }
+      }
+    },
+    max_output_tokens: 260
+  };
+
+  const res = await fetchOpenAIText(input.apiKey, payload, input.model);
+  if (!res.ok) {
+    console.warn("[chat] jarvis tool plan failed", res.status, res.error.slice(0, 120));
+    return null;
+  }
+
+  const parsed = safeJsonParse(res.text);
+  if (!parsed) return null;
+  const rawCalls = Array.isArray(parsed["toolCalls"]) ? (parsed["toolCalls"] as any[]) : [];
+  const toolCalls: JarvisReadToolCall[] = rawCalls
+    .map((c) => {
+      const tool = typeof c?.tool === "string" ? (c.tool as JarvisReadToolName) : null;
+      const args = c?.args && typeof c.args === "object" ? (c.args as Record<string, unknown>) : {};
+      if (!tool || !(toolNames as readonly string[]).includes(tool)) return null;
+      return { tool, args };
+    })
+    .filter((c): c is JarvisReadToolCall => Boolean(c));
+
+  const clarification =
+    parsed["clarification"] && typeof parsed["clarification"] === "object"
+      ? {
+          question: typeof (parsed["clarification"] as any).question === "string" ? ((parsed["clarification"] as any).question as string) : "",
+          options: Array.isArray((parsed["clarification"] as any).options)
+            ? ((parsed["clarification"] as any).options as unknown[]).filter((o) => typeof o === "string") as string[]
+            : []
+        }
+      : null;
+
+  const finalClarification =
+    clarification && clarification.question.trim().length && clarification.options.length >= 2 ? clarification : null;
+
+  return { toolCalls: toolCalls.slice(0, 4), clarification: finalClarification };
+}
+
+function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
+  const lower = message.toLowerCase();
+  const calls: JarvisReadToolCall[] = [];
+
+  if (looksLikeGoogleAdsSpendQuestion(message)) {
+    calls.push({
+      tool: "google.ads.spend",
+      args: { relative: pickGoogleAdsSpendRelative(message) ?? "yesterday" }
+    });
+    return calls;
+  }
+
+  if (lower.includes("google") && lower.includes("ads") && (lower.includes("status") || lower.includes("connected") || lower.includes("configured"))) {
+    calls.push({ tool: "google.ads.status", args: {} });
+    return calls;
+  }
+
+  if (lower.includes("web") && lower.includes("vitals")) {
+    calls.push({ tool: "web.analytics.vitals", args: { rangeDays: parseRangeDaysFromMessage(message) ?? 7 } });
+    return calls;
+  }
+
+  if (lower.includes("analytics") || lower.includes("funnel") || lower.includes("/book")) {
+    const rangeDays = parseRangeDaysFromMessage(message) ?? 7;
+    calls.push({ tool: lower.includes("funnel") ? "web.analytics.funnel" : "web.analytics.summary", args: { rangeDays } });
+    return calls;
+  }
+
+  if (looksLikeScheduleQuestion(message)) {
+    calls.push({ tool: "schedule.summary", args: { range: pickRange(message) } });
+    return calls;
+  }
+
+  if (lower.includes("p&l") || lower.includes("profit")) {
+    calls.push({ tool: "finance.pnl", args: {} });
+    return calls;
+  }
+
+  if (looksLikeRevenueQuestion(message)) {
+    calls.push({ tool: "finance.revenue.summary", args: {} });
+    return calls;
+  }
+
+  if (lower.includes("expense") || (lower.includes("spend") && !lower.includes("ads"))) {
+    calls.push({ tool: "finance.expenses.summary", args: {} });
+    return calls;
+  }
+
+  if (lower.includes("pipeline") || lower.includes("quoted") || lower.includes("new leads")) {
+    calls.push({ tool: "crm.pipeline", args: {} });
+    return calls;
+  }
+
+  if (lower.includes("inbox") || lower.includes("texts") || lower.includes("threads")) {
+    calls.push({ tool: "inbox.threads.list", args: { status: "open", limit: 12 } });
+    return calls;
+  }
+
+  if (lower.includes("outbound")) {
+    calls.push({ tool: "outbound.queue", args: { limit: 12 } });
+    return calls;
+  }
+
+  if (lower.includes("partner")) {
+    calls.push({ tool: "partners.list", args: { limit: 25 } });
+    return calls;
+  }
+
+  if (lower.includes("seo")) {
+    calls.push({ tool: "seo.status", args: {} });
+    return calls;
+  }
+
+  if (lower.includes("meta") || lower.includes("facebook") || lower.includes("instagram")) {
+    calls.push({ tool: "meta.ads.summary", args: { level: "campaign" } });
+    return calls;
+  }
+
+  const contactQuery = extractContactQueryFromMessage(message);
+  if (contactQuery?.value?.trim().length) {
+    calls.push({ tool: "crm.contacts.search", args: { q: contactQuery.value.trim(), limit: 12 } });
+    return calls;
+  }
+
+  return calls;
 }
 
 function looksLikeGoogleAdsSpendQuestion(message: string): boolean {
