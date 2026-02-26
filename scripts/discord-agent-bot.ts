@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { Client, Events, GatewayIntentBits, Partials } from "discord.js";
+import { DateTime } from "luxon";
 
 function mustEnv(key: string): string {
   const value = process.env[key];
@@ -14,6 +15,47 @@ function parseCsv(input: string | undefined | null): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+function parseTimeOfDayFromText(text: string): string | null {
+  const match = text.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = match[2] ? Number(match[2]) : 0;
+  const meridiem = (match[3] ?? "").toLowerCase();
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  if (minute < 0 || minute > 59) return null;
+  if (meridiem === "am" || meridiem === "pm") {
+    if (hour < 1 || hour > 12) return null;
+    if (meridiem === "am") hour = hour === 12 ? 0 : hour;
+    if (meridiem === "pm") hour = hour === 12 ? 12 : hour + 12;
+  } else {
+    if (hour < 0 || hour > 23) return null;
+  }
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function pickTimezoneFromText(text: string, fallback: string): string {
+  const lower = text.toLowerCase();
+  if (/\b(et|est|edt)\b/.test(lower)) return "America/New_York";
+  return fallback;
+}
+
+function isSubscribeDailyReport(text: string): boolean {
+  const lower = text.toLowerCase();
+  return lower.includes("subscribe") && lower.includes("daily") && lower.includes("report");
+}
+
+function isUnsubscribeDailyReport(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (lower.includes("unsubscribe") || lower.includes("stop")) && lower.includes("daily") && lower.includes("report");
+}
+
+function isRunDailyReportNow(text: string): boolean {
+  const lower = text.toLowerCase();
+  if (lower.includes("report now")) return true;
+  if (lower.includes("daily report") && (lower.includes("run") || lower.includes("show") || lower.includes("send"))) return true;
+  return lower.trim() === "daily report";
 }
 
 function normalizeBaseUrl(url: string) {
@@ -270,6 +312,15 @@ async function main() {
     markDiscordActionIntentExecuted
   } = await import("../apps/api/src/lib/discord-agent-intents");
 
+  const {
+    upsertDiscordReportSubscription,
+    disableDiscordReportSubscription,
+    listEnabledDiscordReportSubscriptions,
+    markDiscordReportSubscriptionSent
+  } = await import("../apps/api/src/lib/discord-report-subscriptions");
+
+  const { buildDailyOpsReportMarkdown } = await import("../apps/api/src/lib/ops-reports");
+
   const discordToken = mustEnv("DISCORD_BOT_TOKEN");
   const botKey = mustEnv("AGENT_BOT_SHARED_SECRET");
   const siteUrl = normalizeBaseUrl(
@@ -288,6 +339,12 @@ async function main() {
   const wakeWords = parseCsv(process.env["DISCORD_WAKE_WORDS"] ?? "jarvis,stonegate assist,stonegate");
   const intentTtlMinutes = Number(process.env["DISCORD_INTENT_TTL_MIN"] ?? 30);
   const contextLimit = Number(process.env["DISCORD_CONTEXT_MESSAGE_LIMIT"] ?? 20);
+  const reportsEnabled = process.env["DISCORD_REPORTS_ENABLED"] !== "false";
+  const reportCheckMs = Number(process.env["DISCORD_REPORT_CHECK_MS"] ?? 30_000);
+  const defaultReportTz =
+    (process.env["DISCORD_REPORT_TIMEZONE"] ?? process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York").trim() ||
+    "America/New_York";
+  const defaultReportTime = (process.env["DISCORD_DAILY_REPORT_AT"] ?? "08:30").trim() || "08:30";
 
   const client = new Client({
     intents: [
@@ -344,6 +401,46 @@ async function main() {
         2
       )
     );
+
+    if (reportsEnabled) {
+      const interval = Number.isFinite(reportCheckMs) && reportCheckMs > 5_000 ? Math.floor(reportCheckMs) : 30_000;
+      setInterval(async () => {
+        try {
+          const subs = await listEnabledDiscordReportSubscriptions("daily_ops");
+          if (!subs.length) return;
+
+          for (const sub of subs) {
+            const tz = (sub.timezone ?? defaultReportTz).trim() || defaultReportTz;
+            const timeOfDay = (sub.timeOfDay ?? defaultReportTime).trim() || defaultReportTime;
+            const [hhRaw, mmRaw] = timeOfDay.split(":");
+            const hh = Number(hhRaw);
+            const mm = Number(mmRaw);
+            if (!Number.isFinite(hh) || !Number.isFinite(mm)) continue;
+
+            const now = DateTime.now().setZone(tz);
+            if (!now.isValid) continue;
+            const target = now.set({ hour: hh, minute: mm, second: 0, millisecond: 0 });
+            if (now < target) continue;
+            const minutesLate = now.diff(target, "minutes").minutes;
+            if (!Number.isFinite(minutesLate) || minutesLate > 5) continue;
+
+            if (sub.lastSentAt) {
+              const last = DateTime.fromJSDate(new Date(sub.lastSentAt as any)).setZone(tz);
+              if (last.isValid && last.toISODate() === now.toISODate()) continue;
+            }
+
+            const content = await buildDailyOpsReportMarkdown({ tz });
+            const channel = await client.channels.fetch(String(sub.discordChannelId)).catch(() => null);
+            if (!channel || typeof (channel as any).isTextBased !== "function" || !(channel as any).isTextBased()) continue;
+
+            await (channel as any).send(String(content).slice(0, 1900));
+            await markDiscordReportSubscriptionSent({ id: String(sub.id) });
+          }
+        } catch (error) {
+          console.warn("[discord-agent] report_tick_failed", String(error));
+        }
+      }, interval);
+    }
   });
 
   client.on(Events.MessageCreate, async (message) => {
@@ -480,6 +577,37 @@ async function main() {
       if (!botUserId) return;
 
       const trimmed = message.content.trim();
+      if (reportsEnabled && trimmed) {
+        if (isSubscribeDailyReport(trimmed)) {
+          const timeOfDay = parseTimeOfDayFromText(trimmed) ?? defaultReportTime;
+          const timezone = pickTimezoneFromText(trimmed, defaultReportTz);
+          await upsertDiscordReportSubscription({
+            discordGuildId: message.guildId ? String(message.guildId) : null,
+            discordChannelId: String(message.channelId),
+            reportType: "daily_ops",
+            timezone,
+            timeOfDay,
+            createdByDiscordUserId: String(message.author.id)
+          });
+          await message.reply(`Subscribed this channel to the daily ops report at ${timeOfDay} (${timezone}).`);
+          return;
+        }
+
+        if (isUnsubscribeDailyReport(trimmed)) {
+          await disableDiscordReportSubscription({
+            discordChannelId: String(message.channelId),
+            reportType: "daily_ops"
+          });
+          await message.reply("Unsubscribed this channel from the daily ops report.");
+          return;
+        }
+
+        if (isRunDailyReportNow(trimmed)) {
+          const content = await buildDailyOpsReportMarkdown({ tz: defaultReportTz });
+          await message.reply(String(content).slice(0, 1900));
+          return;
+        }
+      }
       const mentioned = message.mentions?.has?.(botUserId) ?? false;
       const prefixed = trimmed.toLowerCase().startsWith(commandPrefix.toLowerCase());
       const wake = stripWakeWord(trimmed, wakeWords);

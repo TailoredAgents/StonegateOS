@@ -1725,3 +1725,29 @@ export const discordActionIntents = pgTable(
     createdAtIdx: index("discord_action_intents_created_at_idx").on(table.createdAt)
   })
 );
+
+// Discord agent: scheduled report targets (channels/DMs) and their schedules.
+export const discordReportSubscriptions = pgTable(
+  "discord_report_subscriptions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    discordGuildId: text("discord_guild_id"),
+    discordChannelId: text("discord_channel_id").notNull(),
+    reportType: text("report_type").notNull(),
+    timezone: text("timezone").default("America/New_York").notNull(),
+    timeOfDay: text("time_of_day").default("08:30").notNull(), // HH:MM (24h)
+    enabled: boolean("enabled").default(true).notNull(),
+    lastSentAt: timestamp("last_sent_at", { withTimezone: true }),
+    createdByDiscordUserId: text("created_by_discord_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    uniqueIdx: uniqueIndex("discord_report_subscriptions_unique_idx").on(table.discordChannelId, table.reportType),
+    enabledIdx: index("discord_report_subscriptions_enabled_idx").on(table.enabled),
+    lastSentIdx: index("discord_report_subscriptions_last_sent_idx").on(table.lastSentAt)
+  })
+);
