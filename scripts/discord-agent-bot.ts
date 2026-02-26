@@ -25,6 +25,28 @@ function stripBotMention(text: string, botUserId: string) {
   return text.replace(pattern, "").trim();
 }
 
+function stripWakeWord(text: string, wakeWords: string[]): { matched: boolean; prompt: string } {
+  const trimmed = text.trim();
+  if (!trimmed) return { matched: false, prompt: "" };
+
+  const lower = trimmed.toLowerCase();
+  const sorted = [...wakeWords]
+    .map((w) => w.trim().toLowerCase())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+
+  for (const wake of sorted) {
+    if (!lower.startsWith(wake)) continue;
+    const next = trimmed.slice(wake.length);
+    // Ensure we matched a whole wake phrase, not a prefix inside a word.
+    if (next.length && !/^[\s,:;\-—]/.test(next)) continue;
+    const prompt = next.replace(/^[\s,:;\-—]+/, "").trim();
+    return { matched: true, prompt };
+  }
+
+  return { matched: false, prompt: trimmed };
+}
+
 type AgentChatResponse = {
   ok?: boolean;
   reply?: string;
@@ -161,6 +183,7 @@ async function main() {
   const approverRoleIds = new Set(parseCsv(process.env["DISCORD_APPROVER_ROLE_IDS"]));
   const commandPrefix = (process.env["DISCORD_COMMAND_PREFIX"] ?? "!sg").trim();
   const requireMention = process.env["DISCORD_REQUIRE_MENTION"] !== "false";
+  const wakeWords = parseCsv(process.env["DISCORD_WAKE_WORDS"] ?? "jarvis,stonegate assist,stonegate");
   const intentTtlMinutes = Number(process.env["DISCORD_INTENT_TTL_MIN"] ?? 30);
 
   const client = new Client({
@@ -329,10 +352,11 @@ async function main() {
       const trimmed = message.content.trim();
       const mentioned = message.mentions?.has?.(botUserId) ?? false;
       const prefixed = trimmed.toLowerCase().startsWith(commandPrefix.toLowerCase());
+      const wake = stripWakeWord(trimmed, wakeWords);
 
       if (!isDm) {
-        if (requireMention && !mentioned && !prefixed) return;
-        if (!requireMention && !mentioned && !prefixed) return;
+        if (requireMention && !mentioned && !prefixed && !wake.matched) return;
+        if (!requireMention && !mentioned && !prefixed && !wake.matched) return;
       }
 
       let prompt = trimmed;
@@ -340,8 +364,13 @@ async function main() {
         prompt = prompt.slice(commandPrefix.length).trim();
       } else if (mentioned) {
         prompt = stripBotMention(prompt, botUserId);
+      } else if (wake.matched) {
+        prompt = wake.prompt;
       }
-      if (!prompt) return;
+      if (!prompt) {
+        await message.reply("Yep — what do you need?");
+        return;
+      }
 
       const agentRes = await callAgentChat({ siteUrl, botKey, message: prompt });
       const replyText = (agentRes.reply ?? "").trim() || "Okay.";
