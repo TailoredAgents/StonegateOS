@@ -1,23 +1,5 @@
 import "dotenv/config";
-import Module from "node:module";
-import path from "node:path";
 import { Client, Events, GatewayIntentBits, Partials } from "discord.js";
-
-function registerApiAliases() {
-  const originalResolve = (Module as unknown as { _resolveFilename: Module["_resolveFilename"] })._resolveFilename;
-  (Module as unknown as { _resolveFilename: Module["_resolveFilename"] })._resolveFilename = function (
-    request: string,
-    parent: any,
-    isMain: boolean,
-    options: any
-  ) {
-    if (request.startsWith("@/")) {
-      const absolute = path.resolve("apps/api/src", request.slice(2));
-      return originalResolve.call(this, absolute, parent, isMain, options);
-    }
-    return originalResolve.call(this, request, parent, isMain, options);
-  };
-}
 
 function mustEnv(key: string): string {
   const value = process.env[key];
@@ -158,14 +140,13 @@ function splitActions(actions: Array<{ type?: string; summary?: string; payload?
 }
 
 async function main() {
-  registerApiAliases();
   const {
     createDiscordActionIntent,
     findPendingDiscordActionIntentByBotMessageId,
     markDiscordActionIntentApproved,
     cancelDiscordActionIntent,
     markDiscordActionIntentExecuted
-  } = await import("@/lib/discord-agent-intents");
+  } = await import("../apps/api/src/lib/discord-agent-intents");
 
   const discordToken = mustEnv("DISCORD_BOT_TOKEN");
   const botKey = mustEnv("AGENT_BOT_SHARED_SECRET");

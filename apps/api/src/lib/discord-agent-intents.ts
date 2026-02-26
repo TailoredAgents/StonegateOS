@@ -1,5 +1,5 @@
 import { and, eq, gt, isNull, or } from "drizzle-orm";
-import { discordActionIntents, getDb } from "@/db";
+import { discordActionIntents, getDb } from "../db";
 
 export type DiscordActionIntentStatus =
   | "pending"
