@@ -1293,9 +1293,44 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const messageMentionsContactContext =
+      /\b(lead|contact|customer|client|inbox|text|sms|thread|conversation|quote|booked|appointment|schedule)\b/i.test(trimmedMessage);
+    const messageContactQuery = extractContactQueryFromMessage(trimmedMessage);
+
+    let resolvedContactId: string | null = null;
+    let resolvedCandidates: ContactCandidate[] = [];
+    if (
+      isTeamChat &&
+      JARVIS_READ_TOOLS_ENABLED &&
+      !contactId &&
+      messageContactQuery &&
+      (messageContactQuery.kind !== "zip" || messageMentionsContactContext)
+    ) {
+      const resolved = await resolveContactTarget(trimmedMessage);
+      resolvedContactId = resolved.resolved?.id ?? null;
+      resolvedCandidates = resolved.candidates;
+
+      const needsDisambiguation =
+        !resolvedContactId &&
+        resolvedCandidates.length > 1 &&
+        (messageMentionsContactContext || messageContactQuery.kind !== "zip");
+      if (needsDisambiguation) {
+        const options = resolvedCandidates
+          .slice(0, 5)
+          .map((c) => `- ${toCandidateLabel(c)}`)
+          .join("\n");
+        return NextResponse.json({
+          ok: true,
+          reply: `Which contact did you mean?\n${options}\n\nReply with the phone number or email and I'll pull the right thread.`.trim()
+        });
+      }
+    }
+
+    const effectiveContactId = contactId ?? (resolvedContactId ?? undefined);
+
     const teamContext = isTeamChat
       ? await buildTeamChatContext({
-          contactId,
+          contactId: effectiveContactId,
           propertyId,
           property
         })
@@ -1318,7 +1353,29 @@ export async function POST(request: NextRequest) {
 
       const fallbackCalls = deriveFallbackReadToolCalls(trimmedMessage);
       const plannedCalls = plan?.toolCalls?.length ? plan.toolCalls : [];
-      const calls = (plannedCalls.length ? plannedCalls : fallbackCalls).slice(0, 6);
+
+      const shouldLoadDossier =
+        Boolean(effectiveContactId) && (messageMentionsContactContext || (messageContactQuery && messageContactQuery.kind !== "zip"));
+      const dossierCalls: JarvisReadToolCall[] =
+        shouldLoadDossier
+          ? [
+              { tool: "crm.contact.snapshot", args: { contactId: effectiveContactId } },
+              { tool: "crm.contact.instant_quote_photos", args: { contactId: effectiveContactId } },
+              { tool: "inbox.threads.list", args: { contactId: effectiveContactId, limit: 6, offset: 0 } },
+              { tool: "appointments.list", args: { contactId: effectiveContactId, status: "requested,confirmed,completed", limit: 25 } }
+            ]
+          : [];
+
+      const merged = [...dossierCalls, ...(plannedCalls.length ? plannedCalls : fallbackCalls)];
+      const seen = new Set<string>();
+      const calls = merged
+        .filter((call) => {
+          const key = `${call.tool}:${JSON.stringify(call.args ?? {})}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, 6);
 
       if (calls.length) {
         const { apiBase, adminKey } = getAdminContext();
@@ -1405,7 +1462,7 @@ export async function POST(request: NextRequest) {
     const reply = brainRes.text.trim();
 
     const booking = await maybeGetSuggestions(trimmedMessage, {
-      contactId,
+      contactId: effectiveContactId,
       propertyId,
       property
     });
@@ -1415,7 +1472,7 @@ export async function POST(request: NextRequest) {
       ? await buildActionSuggestions(
           trimmedMessage,
           {
-            contactId,
+            contactId: effectiveContactId,
             propertyId,
             property
           },
@@ -1665,6 +1722,8 @@ async function planJarvisReadTools(input: {
     "commissions.summary",
     "crm.pipeline",
     "crm.contacts.search",
+    "crm.contact.snapshot",
+    "crm.contact.instant_quote_photos",
     "inbox.threads.list",
     "inbox.thread.messages",
     "inbox.thread.suggest_reply",
@@ -1791,6 +1850,10 @@ function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
   const lower = message.toLowerCase();
   const calls: JarvisReadToolCall[] = [];
 
+  const contactQuery = extractContactQueryFromMessage(message);
+  const contactish =
+    /\b(lead|contact|customer|client|inbox|text|sms|thread|conversation|quote|booked|appointment|schedule)\b/i.test(lower);
+
   const reportKind = looksLikeOpsReportQuestion(message);
   if (reportKind === "daily") {
     calls.push({ tool: "google.ads.spend", args: { relative: "yesterday" } });
@@ -1886,8 +1949,7 @@ function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
     return calls;
   }
 
-  const contactQuery = extractContactQueryFromMessage(message);
-  if (contactQuery?.value?.trim().length) {
+  if (contactQuery?.value?.trim().length && (contactQuery.kind !== "zip" || contactish)) {
     calls.push({ tool: "crm.contacts.search", args: { q: contactQuery.value.trim(), limit: 12 } });
     return calls;
   }
@@ -2189,7 +2251,7 @@ async function buildActionSuggestions(
     lower.includes("appointment") ||
     lower.includes("reschedule") ||
     lower.includes("note");
-  const contactQuery = maybeTargetedAction ? extractContactQueryFromMessage(message) : null;
+  const contactQuery = !ctx.contactId && maybeTargetedAction ? extractContactQueryFromMessage(message) : null;
   const contactResolve = contactQuery ? await resolveContactTarget(message) : { resolved: null, candidates: [] };
   const contactTarget = contactResolve.resolved;
   const baseCtx = contactQuery && !contactTarget ? { ...ctx, contactId: undefined } : ctx;

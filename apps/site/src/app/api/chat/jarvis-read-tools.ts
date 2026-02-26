@@ -14,6 +14,8 @@ export type JarvisReadToolName =
   | "commissions.summary"
   | "crm.pipeline"
   | "crm.contacts.search"
+  | "crm.contact.snapshot"
+  | "crm.contact.instant_quote_photos"
   | "inbox.threads.list"
   | "inbox.thread.messages"
   | "inbox.thread.suggest_reply"
@@ -252,6 +254,40 @@ function toolSummaryLines(result: JarvisReadToolResult): string[] {
     return [`Inbox threads: ${threads.length} match(es).`, ...(top.length ? top.map((l) => `- ${l}`) : [])];
   }
 
+  if (result.tool === "crm.contact.snapshot") {
+    const contacts = Array.isArray(data["contacts"]) ? (data["contacts"] as unknown[]) : [];
+    const first = contacts.length > 0 && isRecord(contacts[0]) ? (contacts[0] as Record<string, unknown>) : null;
+    if (!first) return [];
+    const name = typeof first["name"] === "string" ? first["name"] : "Unknown";
+    const phone = typeof first["phoneE164"] === "string" ? first["phoneE164"] : typeof first["phone"] === "string" ? first["phone"] : "";
+    const pipeline = isRecord(first["pipeline"]) ? (first["pipeline"] as Record<string, unknown>) : null;
+    const stage = pipeline && typeof pipeline["stage"] === "string" ? (pipeline["stage"] as string) : "";
+    const props = Array.isArray(first["properties"]) ? (first["properties"] as unknown[]) : [];
+    const prop = props.length > 0 && isRecord(props[0]) ? (props[0] as Record<string, unknown>) : null;
+    const city = prop && typeof prop["city"] === "string" ? (prop["city"] as string) : "";
+    const zip = prop && typeof prop["postalCode"] === "string" ? (prop["postalCode"] as string) : "";
+    const lastActivityAt = typeof first["lastActivityAt"] === "string" ? (first["lastActivityAt"] as string) : "";
+    const place = [city || null, zip || null].filter(Boolean).join(" ");
+    return [
+      `Contact: ${name}${phone ? ` (${phone})` : ""}`,
+      `${stage ? `Pipeline: ${stage}` : "Pipeline: unknown"}${place ? ` â€” ${place}` : ""}${lastActivityAt ? ` â€” last activity ${lastActivityAt}` : ""}`
+    ];
+  }
+
+  if (result.tool === "crm.contact.instant_quote_photos") {
+    const quotes = Array.isArray(data["quotes"]) ? (data["quotes"] as unknown[]) : [];
+    const photoUrls = Array.isArray(data["photoUrls"]) ? (data["photoUrls"] as unknown[]) : [];
+    const first = quotes.length > 0 && isRecord(quotes[0]) ? (quotes[0] as Record<string, unknown>) : null;
+    const createdAt = first && typeof first["createdAt"] === "string" ? (first["createdAt"] as string) : "";
+    const jobTypes = first && Array.isArray(first["jobTypes"]) ? (first["jobTypes"] as unknown[]) : [];
+    const perceivedSize = first && typeof first["perceivedSize"] === "string" ? (first["perceivedSize"] as string) : "";
+    const jobTypesText = jobTypes.filter((j) => typeof j === "string" && j.trim().length).slice(0, 4).join(", ");
+    return [
+      `Instant quote photos: ${photoUrls.length} photo(s) across ${quotes.length} quote(s)`,
+      `${createdAt ? `Latest: ${createdAt}` : "Latest: unknown"}${perceivedSize ? ` â€” size ${perceivedSize}` : ""}${jobTypesText ? ` â€” types ${jobTypesText}` : ""}`
+    ];
+  }
+
   return [];
 }
 
@@ -391,6 +427,7 @@ export async function runJarvisReadTool(ctx: AdminContext, call: JarvisReadToolC
     }
     case "crm.contacts.search": {
       const q = asString(args["q"]) ?? "";
+      const contactId = asString(args["contactId"]);
       const limit = Math.min(Math.max(asInt(args["limit"], 12), 1), 50);
       const offset = Math.max(asInt(args["offset"], 0), 0);
       const excludeOutbound = args["excludeOutbound"] === true ? "1" : null;
@@ -399,12 +436,27 @@ export async function runJarvisReadTool(ctx: AdminContext, call: JarvisReadToolC
         path: "/api/admin/contacts",
         query: {
           ...(q ? { q } : {}),
+          ...(contactId ? { contactId } : {}),
           limit,
           offset,
           ...(excludeOutbound ? { excludeOutbound } : {}),
           ...(onlyOutbound ? { onlyOutbound } : {})
         }
       });
+      if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
+      return toolOk(tool, res.data);
+    }
+    case "crm.contact.snapshot": {
+      const contactId = asString(args["contactId"]);
+      if (!contactId) return toolError(tool, 400, "missing_contact_id");
+      const res = await adminFetchJson(ctx, { path: "/api/admin/contacts", query: { contactId, limit: 1, offset: 0 } });
+      if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
+      return toolOk(tool, res.data);
+    }
+    case "crm.contact.instant_quote_photos": {
+      const contactId = asString(args["contactId"]);
+      if (!contactId) return toolError(tool, 400, "missing_contact_id");
+      const res = await adminFetchJson(ctx, { path: `/api/admin/contacts/${encodeURIComponent(contactId)}/instant-quote-photos` });
       if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
       return toolOk(tool, res.data);
     }
