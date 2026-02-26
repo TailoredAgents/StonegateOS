@@ -8,6 +8,7 @@ import { isAgentBotRequest } from "./bot-auth";
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
 const PUBLIC_VOICE_MODEL = "gpt-4.1-mini";
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
+type ReasoningEffort = "low" | "medium" | "high";
 
 const PUBLIC_SYSTEM_PROMPT = `You are Stonegate Assist, the warm front-office voice for Stonegate Junk Removal in North Metro Atlanta. Think like a helpful local office rep, not a call script.
 
@@ -1212,7 +1213,9 @@ export async function POST(request: NextRequest) {
     }
 
     const apiKey = process.env["OPENAI_API_KEY"];
-    const brainModel = (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() || DEFAULT_BRAIN_MODEL;
+    const baseModel = (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() || DEFAULT_BRAIN_MODEL;
+    const teamModel = (process.env["OPENAI_TEAM_MODEL"] ?? "").trim();
+    const brainModel = isTeamChat && teamModel ? teamModel : baseModel;
 
     if (!apiKey) {
       return NextResponse.json(
@@ -1233,6 +1236,10 @@ export async function POST(request: NextRequest) {
       : null;
 
     const systemPrompt = isTeamChat ? TEAM_SYSTEM_PROMPT : PUBLIC_SYSTEM_PROMPT;
+    const teamEffortRaw = (process.env["OPENAI_TEAM_REASONING_EFFORT"] ?? "").trim().toLowerCase();
+    const teamEffort: ReasoningEffort =
+      teamEffortRaw === "high" ? "high" : teamEffortRaw === "medium" ? "medium" : "low";
+    const reasoningEffort: ReasoningEffort = isTeamChat ? teamEffort : "low";
     const buildChatPayload = (modelName: string, extraSystem?: string | null) => ({
       model: modelName,
       input: [
@@ -1240,7 +1247,7 @@ export async function POST(request: NextRequest) {
         ...(extraSystem ? ([{ role: "system" as const, content: extraSystem }] as const) : []),
         { role: "user" as const, content: trimmedMessage }
       ],
-      reasoning: { effort: "low" as const },
+      reasoning: { effort: reasoningEffort },
       text: { verbosity: "low" as const },
       max_output_tokens: 400
     });

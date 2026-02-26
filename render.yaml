@@ -67,6 +67,10 @@ services:
         sync: false
       - key: OPENAI_MODEL
         sync: false
+      - key: OPENAI_TEAM_MODEL
+        sync: false
+      - key: OPENAI_TEAM_REASONING_EFFORT
+        sync: false
       - key: AGENT_BOT_SHARED_SECRET
         sync: false
     buildFilter:
