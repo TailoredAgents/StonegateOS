@@ -690,7 +690,6 @@ async function main() {
               if (!channel || typeof (channel as any).isTextBased !== "function" || !(channel as any).isTextBased()) continue;
 
               const hasCritical = alerts.some((a) => a && typeof a.severity === "string" && a.severity === "critical");
-              const nowMs = Date.now();
               const diagPrior = monitorDiagnosticsState.get(channelId);
               const diagWithinCooldown = diagPrior && nowMs - diagPrior.at < cooldownMs;
               const shouldOfferDiagnostics =
