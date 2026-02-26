@@ -1262,6 +1262,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, reply: isTeamChat ? teamHelpText() : publicHelpText() });
     }
 
+    if (isTeamChat && looksLikeGoogleAdsSpendQuestion(trimmedMessage)) {
+      const reply = await fetchGoogleAdsSpendReply(trimmedMessage);
+      return NextResponse.json({ ok: true, reply });
+    }
+
     const apiKey = process.env["OPENAI_API_KEY"];
     const baseModel = (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() || DEFAULT_BRAIN_MODEL;
     const teamModel = (process.env["OPENAI_TEAM_MODEL"] ?? "").trim();
@@ -1527,6 +1532,61 @@ function looksLikeRevenueQuestion(message: string): boolean {
   const lower = message.toLowerCase();
   const keywords = ["revenue", "forecast", "sales", "booked out", "projected", "income", "today", "tomorrow"];
   return keywords.some((kw) => lower.includes(kw));
+}
+
+function looksLikeGoogleAdsSpendQuestion(message: string): boolean {
+  const lower = message.toLowerCase();
+  const mentionsAds =
+    (lower.includes("google") && lower.includes("ads")) ||
+    lower.includes("adwords") ||
+    lower.includes("ad spend") ||
+    lower.includes("ads spend") ||
+    lower.includes("adspend");
+  if (!mentionsAds) return false;
+  return lower.includes("spent") || lower.includes("spend") || lower.includes("cost");
+}
+
+function pickGoogleAdsSpendRelative(message: string): "yesterday" | "today" | null {
+  const lower = message.toLowerCase();
+  if (lower.includes("yesterday")) return "yesterday";
+  if (lower.includes("today")) return "today";
+  return null;
+}
+
+function fmtUsdFromNumericString(value: string): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "$0.00";
+  return `$${n.toFixed(2)}`;
+}
+
+async function fetchGoogleAdsSpendReply(message: string): Promise<string> {
+  const relative = pickGoogleAdsSpendRelative(message) ?? "yesterday";
+  const { apiBase, adminKey } = getAdminContext();
+  if (!adminKey) {
+    return "I can’t pull Google Ads spend yet because `ADMIN_API_KEY` isn’t set on the site service.";
+  }
+
+  const url = `${apiBase}/api/admin/google/ads/spend?relative=${encodeURIComponent(relative)}`;
+  const res = await fetch(url, { headers: { "x-api-key": adminKey }, cache: "no-store" }).catch(() => null);
+  if (!res) return "I couldn’t reach the Google Ads endpoint right now.";
+
+  const data = (await res.json().catch(() => null)) as any;
+  if (!res.ok) {
+    const err = typeof data?.error === "string" ? data.error : "unknown_error";
+    if (err === "google_ads_not_configured") {
+      return "Google Ads isn’t connected in StonegateOS yet, so I don’t have spend data to report.";
+    }
+    return `Google Ads spend lookup failed (${res.status}): ${err}`;
+  }
+
+  const date = typeof data?.date === "string" ? data.date : "";
+  const cost = typeof data?.totals?.cost === "string" ? data.totals.cost : "0";
+  const clicks = Number(data?.totals?.clicks ?? 0) || 0;
+  const impressions = Number(data?.totals?.impressions ?? 0) || 0;
+
+  const label = relative === "today" ? "Today" : "Yesterday";
+  const dateText = date ? ` (${date})` : "";
+  return `${label}${dateText} Google Ads spend: ${fmtUsdFromNumericString(cost)}. Clicks: ${clicks}. Impressions: ${impressions}.`;
 }
 
 function fmtMoney(cents: number, currency: string | null): string {
