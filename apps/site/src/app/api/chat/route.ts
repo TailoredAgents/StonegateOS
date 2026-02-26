@@ -1318,7 +1318,7 @@ export async function POST(request: NextRequest) {
 
       const fallbackCalls = deriveFallbackReadToolCalls(trimmedMessage);
       const plannedCalls = plan?.toolCalls?.length ? plan.toolCalls : [];
-      const calls = (plannedCalls.length ? plannedCalls : fallbackCalls).slice(0, 4);
+      const calls = (plannedCalls.length ? plannedCalls : fallbackCalls).slice(0, 6);
 
       if (calls.length) {
         const { apiBase, adminKey } = getAdminContext();
@@ -1586,11 +1586,21 @@ function shouldPlanReadTools(message: string): boolean {
   if (lower === "cancel" || lower === "deny") return false;
 
   const keywords = [
+    "daily report",
+    "morning report",
+    "weekly report",
+    "yesterday report",
+    "today report",
+    "report",
+    "kpi",
+    "dashboard",
     "google ads",
     "adwords",
     "ads spend",
     "ad spend",
     "adspend",
+    "ads",
+    "marketing",
     "meta",
     "facebook",
     "instagram",
@@ -1617,12 +1627,18 @@ function shouldPlanReadTools(message: string): boolean {
     "seo",
     "policy",
     "hours",
-    "service area",
-    "report",
-    "kpi",
-    "dashboard"
+    "service area"
   ];
   return keywords.some((kw) => lower.includes(kw));
+}
+
+function looksLikeOpsReportQuestion(message: string): "daily" | "weekly" | null {
+  const lower = message.toLowerCase();
+  if (lower.includes("weekly report") || lower.includes("week report")) return "weekly";
+  if (lower.includes("daily report") || lower.includes("morning report") || lower.includes("today report") || lower.includes("yesterday report")) {
+    return "daily";
+  }
+  return null;
 }
 
 async function planJarvisReadTools(input: {
@@ -1662,7 +1678,7 @@ async function planJarvisReadTools(input: {
   ];
 
   const systemPrompt = `You are a tool router for Jarvis (StonegateOS).
-Return ONLY JSON (per the schema) selecting up to 4 READ tools to answer the user's question with real system data.
+ Return ONLY JSON (per the schema) selecting up to 6 READ tools to answer the user's question with real system data.
 
 Rules:
 - Prefer the smallest set of tools that answers the question.
@@ -1704,7 +1720,7 @@ Tool hints:
           properties: {
             toolCalls: {
               type: "array",
-              maxItems: 4,
+              maxItems: 6,
               items: {
                 type: "object",
                 additionalProperties: false,
@@ -1768,12 +1784,33 @@ Tool hints:
   const finalClarification =
     clarification && clarification.question.trim().length && clarification.options.length >= 2 ? clarification : null;
 
-  return { toolCalls: toolCalls.slice(0, 4), clarification: finalClarification };
+  return { toolCalls: toolCalls.slice(0, 6), clarification: finalClarification };
 }
 
 function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
   const lower = message.toLowerCase();
   const calls: JarvisReadToolCall[] = [];
+
+  const reportKind = looksLikeOpsReportQuestion(message);
+  if (reportKind === "daily") {
+    calls.push({ tool: "google.ads.spend", args: { relative: "yesterday" } });
+    calls.push({ tool: "web.analytics.summary", args: { rangeDays: 1 } });
+    calls.push({ tool: "web.analytics.errors", args: { rangeDays: 1 } });
+    calls.push({ tool: "schedule.summary", args: { range: "today" } });
+    calls.push({ tool: "crm.pipeline", args: {} });
+    calls.push({ tool: "finance.revenue.summary", args: {} });
+    return calls;
+  }
+
+  if (reportKind === "weekly") {
+    calls.push({ tool: "google.ads.summary", args: { rangeDays: 7 } });
+    calls.push({ tool: "web.analytics.summary", args: { rangeDays: 7 } });
+    calls.push({ tool: "web.analytics.funnel", args: { rangeDays: 7 } });
+    calls.push({ tool: "schedule.summary", args: { range: "this_week" } });
+    calls.push({ tool: "finance.revenue.summary", args: {} });
+    calls.push({ tool: "finance.expenses.summary", args: {} });
+    return calls;
+  }
 
   if (looksLikeGoogleAdsSpendQuestion(message)) {
     calls.push({

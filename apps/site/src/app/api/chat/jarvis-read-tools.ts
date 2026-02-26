@@ -71,6 +71,190 @@ function fmtUsdFromNumericString(value: string): string {
   return `$${n.toFixed(2)}`;
 }
 
+function fmtMoneyCents(cents: number, currency: string | null | undefined): string {
+  if (!Number.isFinite(cents)) return "$0.00";
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: currency ?? "USD" }).format(cents / 100);
+  } catch {
+    return `$${(cents / 100).toFixed(2)}`;
+  }
+}
+
+function fmtPct(numerator: number, denominator: number): string {
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) return "0%";
+  const pct = (numerator / denominator) * 100;
+  if (!Number.isFinite(pct)) return "0%";
+  return `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function toolSummaryLines(result: JarvisReadToolResult): string[] {
+  if (result.status !== "ok") return [];
+  const data = result.data;
+  if (!isRecord(data)) return [];
+
+  if (result.tool === "google.ads.spend") {
+    const totals = isRecord(data["totals"]) ? (data["totals"] as Record<string, unknown>) : null;
+    const cost = totals && typeof totals["cost"] === "string" ? (totals["cost"] as string) : "0";
+    const clicks = totals ? asNumber(totals["clicks"], 0) : 0;
+    const impressions = totals ? asNumber(totals["impressions"], 0) : 0;
+    const date = typeof data["date"] === "string" ? (data["date"] as string) : "";
+    const costNumber = Number(cost);
+    const avgCpc = clicks > 0 && Number.isFinite(costNumber) ? `$${(costNumber / clicks).toFixed(2)}` : "$0.00";
+    return [
+      `Google Ads spend ${date || ""}: ${fmtUsdFromNumericString(cost)} (clicks ${clicks}, impr ${impressions}, avg CPC ${avgCpc})`.trim()
+    ];
+  }
+
+  if (result.tool === "google.ads.summary") {
+    const totals = isRecord(data["totals"]) ? (data["totals"] as Record<string, unknown>) : null;
+    if (!totals) return [];
+    const cost = typeof totals["cost"] === "string" ? (totals["cost"] as string) : "0";
+    const clicks = asNumber(totals["clicks"], 0);
+    const impressions = asNumber(totals["impressions"], 0);
+    const conversionsRaw = totals["conversions"];
+    const conversions = typeof conversionsRaw === "string" ? Number(conversionsRaw) : asNumber(conversionsRaw, 0);
+    const days = asNumber(totals["days"], asNumber(data["rangeDays"], 0));
+    const costNumber = Number(cost);
+    const avgCpc = clicks > 0 && Number.isFinite(costNumber) ? `$${(costNumber / clicks).toFixed(2)}` : "$0.00";
+    const cvr = clicks > 0 ? fmtPct(conversions, clicks) : "0%";
+    return [
+      `Google Ads last ${days || "?"} day(s): ${fmtUsdFromNumericString(cost)} spend, ${clicks} clicks, ${impressions} impr, ${Number.isFinite(conversions) ? conversions : 0} conv (CVR ${cvr}, avg CPC ${avgCpc})`
+    ];
+  }
+
+  if (result.tool === "web.analytics.summary") {
+    const totals = isRecord(data["totals"]) ? (data["totals"] as Record<string, unknown>) : null;
+    if (!totals) return [];
+    const visits = asNumber(totals["visits"], 0);
+    const pageViews = asNumber(totals["pageViews"], 0);
+    const callClicks = asNumber(totals["callClicks"], 0);
+    const step1 = asNumber(totals["bookStep1Views"], 0);
+    const submits = asNumber(totals["bookStep1Submits"], 0);
+    const quotes = asNumber(totals["bookQuoteSuccess"], 0);
+    const selfServe = asNumber(totals["bookBookingSuccess"], 0);
+    const bookedAny = asNumber(totals["bookedAnyChannel"], 0);
+    return [
+      `Web: ${visits} visits, ${pageViews} pageviews, ${callClicks} call-clicks`,
+      `/book: step1 ${step1} → submits ${submits} (${fmtPct(submits, step1)}) → quotes ${quotes} (${fmtPct(quotes, submits)}) → self-serve booked ${selfServe} (${fmtPct(selfServe, quotes)})`,
+      `Booked (any channel, non-canceled): ${bookedAny}`
+    ];
+  }
+
+  if (result.tool === "web.analytics.errors") {
+    const items = Array.isArray(data["items"]) ? (data["items"] as unknown[]) : [];
+    const total = items.reduce<number>((acc, item) => acc + (isRecord(item) ? asNumber(item["count"], 0) : 0), 0);
+    const top = items
+      .slice(0, 3)
+      .map((item) => (isRecord(item) ? `${String(item["event"] ?? "event")}: ${asNumber(item["count"], 0)}` : null))
+      .filter((v): v is string => Boolean(v && v.trim().length));
+    return [`Tracked failures: ${total}${top.length ? ` (top: ${top.join(", ")})` : ""}`];
+  }
+
+  if (result.tool === "schedule.summary") {
+    const total = asNumber(data["total"], 0);
+    const byStatus = isRecord(data["byStatus"]) ? (data["byStatus"] as Record<string, unknown>) : null;
+    const statusBits = byStatus
+      ? Object.entries(byStatus)
+          .slice(0, 6)
+          .map(([k, v]) => `${k}: ${asNumber(v, 0)}`)
+          .join(", ")
+      : "";
+    return [`Schedule: ${total} appt(s)${statusBits ? ` (${statusBits})` : ""}`];
+  }
+
+  if (result.tool === "finance.revenue.summary") {
+    const currency = typeof data["currency"] === "string" ? (data["currency"] as string) : "USD";
+    const windows = isRecord(data["windows"]) ? (data["windows"] as Record<string, unknown>) : null;
+    if (!windows) return [];
+    const lines: string[] = [];
+    for (const key of ["monthToDate", "last30Days", "yearToDate"] as const) {
+      const w = isRecord(windows[key]) ? (windows[key] as Record<string, unknown>) : null;
+      if (!w) continue;
+      const totalCents = asNumber(w["totalCents"], 0);
+      const count = asNumber(w["count"], 0);
+      const label = key === "monthToDate" ? "MTD" : key === "last30Days" ? "Last 30d" : "YTD";
+      lines.push(`Revenue ${label}: ${fmtMoneyCents(totalCents, currency)} (${count} completed)`);
+    }
+    return lines;
+  }
+
+  if (result.tool === "finance.expenses.summary") {
+    const currency = typeof data["currency"] === "string" ? (data["currency"] as string) : "USD";
+    const windows = isRecord(data["windows"]) ? (data["windows"] as Record<string, unknown>) : null;
+    if (!windows) return [];
+    const lines: string[] = [];
+    for (const key of ["monthToDate", "last30Days", "yearToDate"] as const) {
+      const w = isRecord(windows[key]) ? (windows[key] as Record<string, unknown>) : null;
+      if (!w) continue;
+      const totalCents = asNumber(w["totalCents"], 0);
+      const count = asNumber(w["count"], 0);
+      const label = key === "monthToDate" ? "MTD" : key === "last30Days" ? "Last 30d" : "YTD";
+      lines.push(`Expenses ${label}: ${fmtMoneyCents(totalCents, currency)} (${count} items)`);
+    }
+    return lines;
+  }
+
+  if (result.tool === "finance.pnl") {
+    const revenue = isRecord(data["revenue"]) ? (data["revenue"] as Record<string, unknown>) : null;
+    const expenses = isRecord(data["expenses"]) ? (data["expenses"] as Record<string, unknown>) : null;
+    const currency = (revenue && typeof revenue["currency"] === "string" ? (revenue["currency"] as string) : null) ?? "USD";
+    const rw = revenue && isRecord(revenue["windows"]) ? (revenue["windows"] as Record<string, unknown>) : null;
+    const ew = expenses && isRecord(expenses["windows"]) ? (expenses["windows"] as Record<string, unknown>) : null;
+    if (!rw || !ew) return [];
+
+    const lines: string[] = [];
+    for (const key of ["monthToDate", "last30Days", "yearToDate"] as const) {
+      const r = isRecord(rw[key]) ? (rw[key] as Record<string, unknown>) : null;
+      const e = isRecord(ew[key]) ? (ew[key] as Record<string, unknown>) : null;
+      if (!r || !e) continue;
+      const profit = asNumber(r["totalCents"], 0) - asNumber(e["totalCents"], 0);
+      const label = key === "monthToDate" ? "MTD" : key === "last30Days" ? "Last 30d" : "YTD";
+      lines.push(`Profit ${label}: ${fmtMoneyCents(profit, currency)}`);
+    }
+    return lines;
+  }
+
+  if (result.tool === "crm.pipeline") {
+    const lanes = Array.isArray(data["lanes"]) ? (data["lanes"] as unknown[]) : [];
+    const stageCounts = lanes
+      .map((lane) => {
+        if (!isRecord(lane)) return null;
+        const stage = String(lane["stage"] ?? "").trim();
+        const contacts = Array.isArray(lane["contacts"]) ? (lane["contacts"] as unknown[]) : [];
+        return stage ? { stage, count: contacts.length } : null;
+      })
+      .filter((v): v is { stage: string; count: number } => Boolean(v));
+    const total = stageCounts.reduce((acc, v) => acc + v.count, 0);
+    const bits = stageCounts.slice(0, 6).map((v) => `${v.stage}: ${v.count}`).join(", ");
+    return [`Pipeline: ${total} total${bits ? ` (${bits})` : ""}`];
+  }
+
+  if (result.tool === "inbox.threads.list") {
+    const threads = Array.isArray(data["threads"]) ? (data["threads"] as unknown[]) : [];
+    if (!threads.length) return ["Inbox: 0 threads match."];
+    const top = threads
+      .slice(0, 5)
+      .map((t) => {
+        if (!isRecord(t)) return null;
+        const channel = String(t["channel"] ?? "unknown");
+        const status = String(t["status"] ?? "unknown");
+        const subject = typeof t["subject"] === "string" ? t["subject"] : "";
+        const preview = typeof t["lastMessagePreview"] === "string" ? t["lastMessagePreview"] : "";
+        const line = `${channel}/${status}${subject ? ` â€” ${truncateText(subject, 40)}` : ""}${preview ? `: ${truncateText(preview, 80)}` : ""}`;
+        return line.trim();
+      })
+      .filter((v): v is string => Boolean(v && v.trim().length));
+    return [`Inbox threads: ${threads.length} match(es).`, ...(top.length ? top.map((l) => `- ${l}`) : [])];
+  }
+
+  return [];
+}
+
 async function adminFetchJson(
   ctx: AdminContext,
   input: { method?: "GET" | "POST"; path: string; query?: Record<string, string | number | null | undefined>; body?: unknown }
@@ -386,25 +570,24 @@ export function formatJarvisToolResultsForSystem(results: JarvisReadToolResult[]
   if (!results.length) return null;
   const now = new Date().toISOString();
   const lines: string[] = [];
+  const dataMaxLen = results.length > 3 ? 1400 : 2800;
   lines.push(`Live data (read-only) — generated ${now}:`);
   for (const r of results) {
     lines.push("");
     lines.push(`Tool: ${r.tool}`);
     lines.push(`Status: ${r.status}${typeof r.httpStatus === "number" ? ` (${r.httpStatus})` : ""}${r.error ? ` — ${r.error}` : ""}`);
-    if (r.status === "ok" && r.tool === "google.ads.spend" && isRecord(r.data)) {
-      const totals = isRecord(r.data["totals"]) ? (r.data["totals"] as Record<string, unknown>) : null;
-      const cost = totals && typeof totals["cost"] === "string" ? (totals["cost"] as string) : "0";
-      const clicks = totals && Number.isFinite(Number(totals["clicks"])) ? Number(totals["clicks"]) : 0;
-      const impressions = totals && Number.isFinite(Number(totals["impressions"])) ? Number(totals["impressions"]) : 0;
-      const date = typeof r.data["date"] === "string" ? (r.data["date"] as string) : "";
-      lines.push(`Summary: Google Ads spend ${date || ""} = ${fmtUsdFromNumericString(cost)} (clicks ${clicks}, impressions ${impressions})`.trim());
+    const summary = toolSummaryLines(r);
+    if (summary.length) {
+      lines.push("Summary:");
+      for (const s of summary) {
+        lines.push(`- ${truncateText(s, 220)}`);
+      }
     }
     if (r.data !== undefined) {
       const raw = stringifyForSystem(r.data);
       lines.push("Data:");
-      lines.push(truncateText(raw, 2800));
+      lines.push(truncateText(raw, dataMaxLen));
     }
   }
   return lines.join("\n").trim();
 }
-
