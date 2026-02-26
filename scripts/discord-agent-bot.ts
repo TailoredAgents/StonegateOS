@@ -233,7 +233,7 @@ async function main() {
   const commandPrefix = (process.env["DISCORD_COMMAND_PREFIX"] ?? "!sg").trim();
   const requireMention = process.env["DISCORD_REQUIRE_MENTION"] !== "false";
   const respondAll = process.env["DISCORD_RESPOND_ALL"] === "true";
-  const dmOnly = process.env["DISCORD_DM_ONLY"] !== "false";
+  const dmOnly = process.env["DISCORD_DM_ONLY"] === "true";
   const wakeWords = parseCsv(process.env["DISCORD_WAKE_WORDS"] ?? "jarvis,stonegate assist,stonegate");
   const intentTtlMinutes = Number(process.env["DISCORD_INTENT_TTL_MIN"] ?? 30);
   const contextLimit = Number(process.env["DISCORD_CONTEXT_MESSAGE_LIMIT"] ?? 20);
@@ -303,11 +303,6 @@ async function main() {
       const approval = parseApproval(message.content);
       const referencedId = message.reference?.messageId;
       if (approval) {
-        if (!referencedId && !isDm) {
-          await message.reply("To approve/cancel, reply to my proposed action message (or DM me).");
-          return;
-        }
-
         const intent = referencedId
           ? await findPendingDiscordActionIntentByBotMessageId(String(referencedId))
           : await findLatestPendingDiscordActionIntent({
