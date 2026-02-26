@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { inArray, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import {
   getDb,
   appointments,
@@ -18,6 +18,10 @@ import { isAdminRequest } from "../web/admin";
 
 const STATUS_OPTIONS = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
 type StatusOption = (typeof STATUS_OPTIONS)[number];
+
+function isUuidLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
 
 function parseStatusParam(param: string | null): StatusOption[] | null {
   if (!param || param.trim().length === 0 || param === "all") {
@@ -48,6 +52,16 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const db = getDb();
   const statusFilter = parseStatusParam(request.nextUrl.searchParams.get("status"));
+  const contactIdRaw = (request.nextUrl.searchParams.get("contactId") ?? "").trim();
+  const propertyIdRaw = (request.nextUrl.searchParams.get("propertyId") ?? "").trim();
+  const contactId = contactIdRaw && isUuidLike(contactIdRaw) ? contactIdRaw : null;
+  const propertyId = propertyIdRaw && isUuidLike(propertyIdRaw) ? propertyIdRaw : null;
+  const limitRaw = (request.nextUrl.searchParams.get("limit") ?? "").trim();
+  const limitParsed = limitRaw ? Number(limitRaw) : NaN;
+  const limit =
+    Number.isFinite(limitParsed) && limitParsed > 0
+      ? Math.max(1, Math.min(200, Math.floor(limitParsed)))
+      : null;
 
   const baseQuery = db
     .select({
@@ -85,16 +99,22 @@ export async function GET(request: NextRequest): Promise<Response> {
     .leftJoin(properties, eq(appointments.propertyId, properties.id))
     .leftJoin(leads, eq(appointments.leadId, leads.id));
 
-  const filteredQuery =
-    statusFilter && statusFilter.length > 0
-      ? baseQuery.where(inArray(appointments.status, statusFilter))
-      : baseQuery;
+  const conditions = [];
+  if (statusFilter && statusFilter.length > 0) {
+    conditions.push(inArray(appointments.status, statusFilter));
+  }
+  if (contactId) {
+    conditions.push(eq(appointments.contactId, contactId));
+  }
+  if (propertyId) {
+    conditions.push(eq(appointments.propertyId, propertyId));
+  }
 
-  const baseRows = await filteredQuery.orderBy(
-    asc(appointments.status),
-    asc(appointments.startAt),
-    desc(appointments.createdAt)
-  );
+  const filteredQuery = conditions.length > 0 ? baseQuery.where(and(...conditions)) : baseQuery;
+
+  const orderedQuery = filteredQuery.orderBy(asc(appointments.status), asc(appointments.startAt), desc(appointments.createdAt));
+
+  const baseRows = await (limit ? orderedQuery.limit(limit) : orderedQuery);
 
   const appointmentIds = baseRows
     .map((row) => row.id)

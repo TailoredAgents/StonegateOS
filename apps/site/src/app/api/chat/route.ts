@@ -215,10 +215,21 @@ type RescheduleAppointmentAction = {
   type: "reschedule_appointment";
   summary: string;
   payload: {
-    appointmentId: string;
+    appointmentId?: string;
     startAt: string;
     durationMinutes?: number;
     travelBufferMinutes?: number;
+    appointmentCandidates?: AppointmentCandidate[];
+  };
+};
+
+type CancelAppointmentAction = {
+  id: string;
+  type: "cancel_appointment";
+  summary: string;
+  payload: {
+    appointmentId?: string;
+    appointmentCandidates?: AppointmentCandidate[];
   };
 };
 
@@ -251,6 +262,7 @@ type ActionSuggestion = (
   | CreateTaskAction
   | CreateBookingAction
   | SendTextAction
+  | CancelAppointmentAction
   | RescheduleAppointmentAction
   | AddContactNoteAction
   | CreateReminderAction
@@ -280,6 +292,16 @@ type ContactTarget = {
 
 type ContactCandidate = ContactTarget & {
   lastActivityAt: string | null;
+  addressLine1: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+};
+
+type AppointmentCandidate = {
+  id: string;
+  status: string | null;
+  startAt: string | null;
   addressLine1: string | null;
   city: string | null;
   state: string | null;
@@ -1777,7 +1799,12 @@ async function buildActionSuggestions(
     actions.push(sendTextAction);
   }
 
-  const rescheduleAction = extractRescheduleAppointmentSuggestion(message, when ?? null);
+  const cancelAction = await extractCancelAppointmentSuggestion(message, resolvedCtx, when ?? null);
+  if (cancelAction) {
+    actions.push(cancelAction);
+  }
+
+  const rescheduleAction = await extractRescheduleAppointmentSuggestion(message, resolvedCtx, when ?? null);
   if (rescheduleAction) {
     actions.push(rescheduleAction);
   }
@@ -1926,25 +1953,106 @@ function pickSmsDraft(replyText: string | null): string | null {
   return cleaned.slice(0, 480);
 }
 
-function extractRescheduleAppointmentSuggestion(message: string, whenHint: string | null): RescheduleAppointmentAction | null {
+async function extractCancelAppointmentSuggestion(
+  message: string,
+  ctx: { contactId?: string },
+  whenHint: string | null
+): Promise<CancelAppointmentAction | null> {
+  const lower = message.toLowerCase();
+  const hasIntent =
+    lower.includes("cancel") &&
+    (lower.includes("appointment") || lower.includes("booking") || lower.includes("schedule"));
+  if (!hasIntent) return null;
+  if (!ctx.contactId) return null;
+
+  const appts = await fetchUpcomingAppointmentsForContact(ctx.contactId);
+  if (!appts.length) return null;
+
+  const shouldUseWhen = Boolean(whenHint && whenHint.trim().length) || looksLikeTimeHint(message);
+  const parsed = shouldUseWhen ? parseWhen((whenHint && whenHint.trim().length ? whenHint : message).trim()) : null;
+  const targetIso = parsed?.iso ?? null;
+
+  const candidates = targetIso
+    ? appts.filter((a) => {
+        if (!a.startAt) return false;
+        const aT = Date.parse(a.startAt);
+        const tT = Date.parse(targetIso);
+        if (!Number.isFinite(aT) || !Number.isFinite(tT)) return false;
+        return Math.abs(aT - tT) <= 2 * 60 * 60 * 1000;
+      })
+    : appts;
+
+  if (!candidates.length) return null;
+
+  if (candidates.length === 1) {
+    const only = candidates[0]!;
+    const whenLabel = only.startAt ? new Date(only.startAt).toLocaleString() : "the next appointment";
+    return {
+      id: newActionId(),
+      type: "cancel_appointment",
+      summary: `Cancel appointment (${whenLabel})`,
+      payload: { appointmentId: only.id }
+    };
+  }
+
+  return {
+    id: newActionId(),
+    type: "cancel_appointment",
+    summary: "Cancel appointment (pick one)",
+    payload: { appointmentCandidates: candidates }
+  };
+}
+
+async function extractRescheduleAppointmentSuggestion(
+  message: string,
+  ctx: { contactId?: string },
+  whenHint: string | null
+): Promise<RescheduleAppointmentAction | null> {
   const lower = message.toLowerCase();
   const hasIntent = lower.includes("reschedule") || lower.includes("move appointment") || lower.includes("change appointment");
   if (!hasIntent) return null;
-
-  const appointmentId = extractUuidFromText(message);
-  if (!appointmentId) return null;
 
   const when = (whenHint && whenHint.trim().length ? whenHint : message).trim();
   const parsed = parseWhen(when);
   if (!parsed?.iso) return null;
 
+  const appointmentId = extractUuidFromText(message);
+  if (appointmentId) {
+    return {
+      id: newActionId(),
+      type: "reschedule_appointment",
+      summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()}`,
+      payload: {
+        appointmentId,
+        startAt: parsed.iso
+      }
+    };
+  }
+
+  if (!ctx.contactId) return null;
+
+  const appts = await fetchUpcomingAppointmentsForContact(ctx.contactId);
+  if (!appts.length) return null;
+
+  if (appts.length === 1) {
+    return {
+      id: newActionId(),
+      type: "reschedule_appointment",
+      summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()}`,
+      payload: {
+        appointmentId: appts[0]!.id,
+        startAt: parsed.iso
+      }
+    };
+  }
+
   return {
     id: newActionId(),
     type: "reschedule_appointment",
-    summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()}`,
+    summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()} (pick which appointment)`,
     payload: {
-      appointmentId,
-      startAt: parsed.iso
+      startAt: parsed.iso,
+      appointmentCandidates: appts
     }
   };
 }
@@ -2313,17 +2421,20 @@ async function findAppointmentForContext(
   if (!apiKey || !contactId || !propertyId) return null;
 
   try {
-    const res = await fetch(`${apiBase}/api/appointments?status=confirmed`, {
+    const search = new URLSearchParams({
+      status: "confirmed",
+      contactId,
+      propertyId,
+      limit: "25"
+    });
+    const res = await fetch(`${apiBase}/api/appointments?${search.toString()}`, {
       headers: { "x-api-key": apiKey }
     });
     if (!res.ok) return null;
     const data = (await res.json()) as {
       data?: Array<{ id: string; startAt: string | null; contact?: { id: string }; property?: { id: string } }>;
     };
-    const matches =
-      data.data?.filter(
-        (appt) => appt.contact?.id === contactId && appt.property?.id === propertyId
-      ) ?? [];
+    const matches = data.data ?? [];
     if (!matches.length) return null;
 
     const now = Date.now();
@@ -2336,6 +2447,55 @@ async function findAppointmentForContext(
   } catch (error) {
     console.warn("[chat] appointment_lookup_failed", error);
     return null;
+  }
+}
+
+async function fetchUpcomingAppointmentsForContact(
+  contactId: string
+): Promise<AppointmentCandidate[]> {
+  const { apiBase, adminKey } = getAdminContext();
+  const hdrs = await headers();
+  const apiKey = adminKey ?? hdrs.get("x-api-key");
+  if (!apiKey || !contactId) return [];
+
+  try {
+    const search = new URLSearchParams({
+      status: "confirmed,requested",
+      contactId,
+      limit: "25"
+    });
+    const res = await fetch(`${apiBase}/api/appointments?${search.toString()}`, {
+      headers: { "x-api-key": apiKey },
+      cache: "no-store"
+    });
+    if (!res.ok) return [];
+    const data = (await res.json().catch(() => null)) as any;
+    const items: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data?.appointments) ? data.appointments : [];
+
+    const mapped = items
+      .map((appt) => {
+        const id = typeof appt?.id === "string" ? appt.id : null;
+        if (!id) return null;
+        const status = typeof appt?.status === "string" ? appt.status : null;
+        const startAt = typeof appt?.startAt === "string" ? appt.startAt : null;
+        const prop = appt?.property && typeof appt.property === "object" ? appt.property : null;
+        const addressLine1 = typeof prop?.addressLine1 === "string" ? prop.addressLine1 : null;
+        const city = typeof prop?.city === "string" ? prop.city : null;
+        const state = typeof prop?.state === "string" ? prop.state : null;
+        const postalCode = typeof prop?.postalCode === "string" ? prop.postalCode : null;
+        return { id, status, startAt, addressLine1, city, state, postalCode } satisfies AppointmentCandidate;
+      })
+      .filter((v): v is AppointmentCandidate => Boolean(v));
+
+    const now = Date.now();
+    const upcoming = mapped
+      .filter((a) => a.startAt && !Number.isNaN(Date.parse(a.startAt)) && Date.parse(a.startAt) >= now)
+      .sort((a, b) => Date.parse(a.startAt ?? "") - Date.parse(b.startAt ?? ""));
+
+    return upcoming.slice(0, 8);
+  } catch (error) {
+    console.warn("[chat] appointments_for_contact_failed", error);
+    return [];
   }
 }
 

@@ -57,7 +57,7 @@ type AgentChatResponse = {
 
 type DiscordTranscriptLine = { role: "user" | "assistant"; content: string };
 
-async function buildDiscordDmTranscript(message: any, limit: number): Promise<DiscordTranscriptLine[]> {
+async function buildDiscordTranscript(message: any, limit: number): Promise<DiscordTranscriptLine[]> {
   try {
     const channel = message.channel;
     if (!channel || typeof channel.messages?.fetch !== "function") return [];
@@ -66,6 +66,7 @@ async function buildDiscordDmTranscript(message: any, limit: number): Promise<Di
     if (!fetched) return [];
 
     const botId = message.client?.user?.id ? String(message.client.user.id) : null;
+    const authorId = message.author?.id ? String(message.author.id) : null;
     const sorted = Array.from(fetched.values()).sort(
       (a: any, b: any) => Number(a.createdTimestamp) - Number(b.createdTimestamp)
     );
@@ -76,6 +77,7 @@ async function buildDiscordDmTranscript(message: any, limit: number): Promise<Di
       const content = typeof msg.content === "string" ? msg.content.trim() : "";
       if (!content) continue;
       if (msg.author?.bot && botId && String(msg.author.id) !== botId) continue;
+      if (!msg.author?.bot && authorId && String(msg.author.id) !== authorId) continue;
 
       const role: DiscordTranscriptLine["role"] =
         botId && String(msg.author?.id ?? "") === botId ? "assistant" : "user";
@@ -92,7 +94,7 @@ function formatTranscriptForSystem(lines: DiscordTranscriptLine[]): string {
   if (!lines.length) return "";
   const rendered = lines.map((l) => `${l.role === "assistant" ? "Assistant" : "User"}: ${l.content}`).join("\n");
   return [
-    "Discord DM transcript (most recent messages).",
+    "Discord transcript (most recent messages).",
     "Use this for context. Do not mention Discord or the transcript unless asked.",
     rendered
   ].join("\n");
@@ -104,6 +106,16 @@ type ActionCandidate = {
   phoneE164?: string | null;
   email?: string | null;
   lastActivityAt?: string | null;
+  addressLine1?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+};
+
+type AppointmentCandidate = {
+  id: string;
+  startAt?: string | null;
+  status?: string | null;
   addressLine1?: string | null;
   city?: string | null;
   state?: string | null;
@@ -123,6 +135,19 @@ function getContactId(action: { payload?: Record<string, unknown> }): string | n
   return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
 }
 
+function getAppointmentCandidates(action: { payload?: Record<string, unknown> }): AppointmentCandidate[] {
+  const raw = action.payload?.["appointmentCandidates"];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((c) => (c && typeof c === "object" ? (c as AppointmentCandidate) : null))
+    .filter((c): c is AppointmentCandidate => Boolean(c && typeof c.id === "string" && c.id.trim().length > 0));
+}
+
+function getAppointmentId(action: { payload?: Record<string, unknown> }): string | null {
+  const raw = action.payload?.["appointmentId"];
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+}
+
 function withPickedContactId(
   action: { type?: string; payload?: Record<string, unknown> },
   pickedContactId: string
@@ -132,6 +157,19 @@ function withPickedContactId(
     payload: {
       ...(action.payload ?? {}),
       contactId: pickedContactId
+    }
+  };
+}
+
+function withPickedAppointmentId(
+  action: { type?: string; payload?: Record<string, unknown> },
+  pickedAppointmentId: string
+) {
+  return {
+    ...action,
+    payload: {
+      ...(action.payload ?? {}),
+      appointmentId: pickedAppointmentId
     }
   };
 }
@@ -146,6 +184,19 @@ function formatCandidateLine(candidate: ActionCandidate) {
   const addr = (candidate.addressLine1 ?? "").trim();
   const bits = [phone, email, [addr, city, state, zip].filter(Boolean).join(", ")].filter(Boolean);
   return bits.length ? `${name} — ${bits.join(" | ")}` : name;
+}
+
+function formatAppointmentCandidateLine(candidate: AppointmentCandidate) {
+  const startAt = typeof candidate.startAt === "string" ? candidate.startAt : "";
+  const when = startAt && !Number.isNaN(Date.parse(startAt)) ? new Date(startAt).toLocaleString() : "unscheduled";
+  const status = (candidate.status ?? "").trim();
+  const zip = (candidate.postalCode ?? "").trim();
+  const city = (candidate.city ?? "").trim();
+  const state = (candidate.state ?? "").trim();
+  const addr = (candidate.addressLine1 ?? "").trim();
+  const place = [addr, city, state, zip].filter(Boolean).join(", ");
+  const bits = [status ? `(${status})` : null, place || null].filter(Boolean);
+  return bits.length ? `${when} ${bits.join(" ")}` : when;
 }
 
 async function callAgentChat(input: {
@@ -330,47 +381,68 @@ async function main() {
           return;
         }
 
-        const approved = await markDiscordActionIntentApproved(intent.id, String(message.author.id));
-        if (!approved) {
-          await message.reply("That action is no longer pending.");
-          return;
-        }
-
         const pickIndex = approval.pick && Number.isFinite(approval.pick) ? Math.max(1, approval.pick) : null;
 
-        const normalizedActions = actions.map((action) => {
-          const existingId = getContactId(action);
-          if (existingId) return action;
-          const candidates = getCandidates(action);
-          if (candidates.length === 1) return withPickedContactId(action, candidates[0].id);
-          if (pickIndex && pickIndex <= candidates.length) return withPickedContactId(action, candidates[pickIndex - 1].id);
-          return action;
-        });
+        const normalizedActions = actions
+          .map((action) => {
+            const existingId = getContactId(action);
+            if (existingId) return action;
+            const candidates = getCandidates(action);
+            if (candidates.length === 1) return withPickedContactId(action, candidates[0].id);
+            if (pickIndex && pickIndex <= candidates.length) return withPickedContactId(action, candidates[pickIndex - 1].id);
+            return action;
+          })
+          .map((action) => {
+            const existingId = getAppointmentId(action);
+            if (existingId) return action;
+            const candidates = getAppointmentCandidates(action);
+            if (candidates.length === 1) return withPickedAppointmentId(action, candidates[0].id);
+            if (pickIndex && pickIndex <= candidates.length) return withPickedAppointmentId(action, candidates[pickIndex - 1].id);
+            return action;
+          });
 
         const missing = normalizedActions.find((action) => {
           if (action.type === "send_text" || action.type === "book_appointment") {
             return !getContactId(action);
           }
+          if (action.type === "cancel_appointment" || action.type === "reschedule_appointment") {
+            return !getAppointmentId(action);
+          }
           return false;
         });
 
         if (missing) {
-          const candidates = getCandidates(missing);
-          const lines = candidates.slice(0, 8).map((c, idx) => `${idx + 1}) ${formatCandidateLine(c)}`);
-          await markDiscordActionIntentExecuted({
-            id: intent.id,
-            ok: false,
-            error: "missing_contact_selection",
-            result: { missingAction: missing.type, candidates: candidates.map((c) => c.id) }
-          });
-          await message.reply(
-            [
-              `I need you to pick which contact for \`${missing.type}\`.`,
-              ...(lines.length ? ["", ...lines] : []),
-              "",
-              "Reply `approve N` (as a reply to my read-back) to run it, where N is the contact number above."
-            ].join("\n")
-          );
+          const contactCandidates = getCandidates(missing);
+          const apptCandidates = getAppointmentCandidates(missing);
+          if (contactCandidates.length > 1) {
+            const lines = contactCandidates.slice(0, 8).map((c, idx) => `${idx + 1}) ${formatCandidateLine(c)}`);
+            await message.reply(
+              [
+                `Pick a contact for \`${missing.type}\`:`,
+                ...(lines.length ? ["", ...lines] : []),
+                "",
+                "Reply `approve N` to run (or `cancel`)."
+              ].join("\n")
+            );
+          } else if (apptCandidates.length > 1) {
+            const lines = apptCandidates.slice(0, 8).map((c, idx) => `${idx + 1}) ${formatAppointmentCandidateLine(c)}`);
+            await message.reply(
+              [
+                `Pick an appointment for \`${missing.type}\`:`,
+                ...(lines.length ? ["", ...lines] : []),
+                "",
+                "Reply `approve N` to run (or `cancel`)."
+              ].join("\n")
+            );
+          } else {
+            await message.reply("I’m missing required info to run that action. Can you be more specific?");
+          }
+          return;
+        }
+
+        const approved = await markDiscordActionIntentApproved(intent.id, String(message.author.id));
+        if (!approved) {
+          await message.reply("That action is no longer pending.");
           return;
         }
 
@@ -431,8 +503,8 @@ async function main() {
       }
 
       const transcript =
-        isDm && Number.isFinite(contextLimit) && contextLimit > 0
-          ? await buildDiscordDmTranscript(message, Math.floor(contextLimit))
+        Number.isFinite(contextLimit) && contextLimit > 0
+          ? await buildDiscordTranscript(message, Math.floor(contextLimit))
           : [];
       const system = transcript.length ? formatTranscriptForSystem(transcript) : "";
 
@@ -447,14 +519,34 @@ async function main() {
         lines.push("", "**Proposed action(s)**");
         actions.forEach((a, idx) => lines.push(`${idx + 1}) ${a.summary ?? a.type}`));
 
-        const needsPick = actions.find((a) => (a.type === "send_text" || a.type === "book_appointment") && !getContactId(a) && getCandidates(a).length > 1);
-        const singlePick = actions.find((a) => (a.type === "send_text" || a.type === "book_appointment") && !getContactId(a) && getCandidates(a).length === 1);
+        const needsPick = actions.find(
+          (a) => (a.type === "send_text" || a.type === "book_appointment") && !getContactId(a) && getCandidates(a).length > 1
+        );
+        const singlePick = actions.find(
+          (a) => (a.type === "send_text" || a.type === "book_appointment") && !getContactId(a) && getCandidates(a).length === 1
+        );
+        const needsApptPick = actions.find(
+          (a) =>
+            (a.type === "cancel_appointment" || a.type === "reschedule_appointment") &&
+            !getAppointmentId(a) &&
+            getAppointmentCandidates(a).length > 1
+        );
+        const singleApptPick = actions.find(
+          (a) =>
+            (a.type === "cancel_appointment" || a.type === "reschedule_appointment") &&
+            !getAppointmentId(a) &&
+            getAppointmentCandidates(a).length === 1
+        );
 
         if (needsPick) {
           const candidates = getCandidates(needsPick);
           const candidateLines = candidates.slice(0, 8).map((c, idx) => `${idx + 1}) ${formatCandidateLine(c)}`);
           lines.push("", `Pick a contact for \`${needsPick.type}\`:` , ...candidateLines, "", "Reply `approve N` to run (or `cancel`).");
-        } else if (singlePick) {
+        } else if (needsApptPick) {
+          const candidates = getAppointmentCandidates(needsApptPick);
+          const candidateLines = candidates.slice(0, 8).map((c, idx) => `${idx + 1}) ${formatAppointmentCandidateLine(c)}`);
+          lines.push("", `Pick an appointment for \`${needsApptPick.type}\`:` , ...candidateLines, "", "Reply `approve N` to run (or `cancel`).");
+        } else if (singlePick || singleApptPick) {
           lines.push("", "Reply `approve` to run (or `cancel`).");
         } else {
           lines.push("", "Reply `approve` to run (or `cancel`).");
