@@ -486,6 +486,7 @@ async function main() {
   } = await import("../apps/api/src/lib/discord-report-subscriptions");
 
   const { buildDailyOpsReportMarkdown } = await import("../apps/api/src/lib/ops-reports");
+  const { computeOpsMonitorAlerts, formatOpsMonitorAlertsMarkdown } = await import("../apps/api/src/lib/ops-monitor");
 
   const {
     createDiscordAgentMemory,
@@ -520,8 +521,12 @@ async function main() {
   const defaultReportTime = (process.env["DISCORD_DAILY_REPORT_AT"] ?? "08:30").trim() || "08:30";
   const memoryEnabled = process.env["DISCORD_MEMORY_ENABLED"] !== "false";
   const memoryMaxItems = Number(process.env["DISCORD_MEMORY_MAX_ITEMS"] ?? 12);
+  const monitorEnabled = process.env["DISCORD_MONITOR_ENABLED"] !== "false";
+  const monitorCheckMs = Number(process.env["DISCORD_MONITOR_CHECK_MS"] ?? 120_000);
+  const monitorCooldownMin = Number(process.env["DISCORD_MONITOR_COOLDOWN_MIN"] ?? 30);
 
   const memoryCache = new Map<string, { at: number; items: MemoryCandidate[] }>();
+  const monitorState = new Map<string, { at: number; fingerprint: string }>();
   async function getMemoryContext(input: { guildId: string | null; channelId: string }): Promise<string> {
     if (!memoryEnabled) return "";
     const key = `${input.channelId}:${input.guildId ?? ""}`;
@@ -616,6 +621,11 @@ async function main() {
 
     if (reportsEnabled) {
       const interval = Number.isFinite(reportCheckMs) && reportCheckMs > 5_000 ? Math.floor(reportCheckMs) : 30_000;
+      const monitorInterval =
+        monitorEnabled && Number.isFinite(monitorCheckMs) && monitorCheckMs > 15_000 ? Math.floor(monitorCheckMs) : 120_000;
+      const cooldownMs =
+        Number.isFinite(monitorCooldownMin) && monitorCooldownMin >= 5 ? Math.floor(monitorCooldownMin * 60_000) : 30 * 60_000;
+      let nextMonitorAt = Date.now() + 10_000;
       setInterval(async () => {
         try {
           const subs = await listEnabledDiscordReportSubscriptions("daily_ops");
@@ -647,6 +657,39 @@ async function main() {
 
             await (channel as any).send(String(content).slice(0, 1900));
             await markDiscordReportSubscriptionSent({ id: String(sub.id) });
+          }
+
+          if (monitorEnabled && Date.now() >= nextMonitorAt) {
+            const channelIds = Array.from(new Set(subs.map((s) => String(s.discordChannelId)))).filter(Boolean);
+            for (const channelId of channelIds) {
+              const tz =
+                (subs.find((s) => String(s.discordChannelId) === channelId)?.timezone ?? defaultReportTz).trim() ||
+                defaultReportTz;
+
+              const alerts = await computeOpsMonitorAlerts({ tz }).catch(() => []);
+              if (!alerts.length) continue;
+
+              const fingerprint = alerts
+                .map((a) => `${a.key}|${a.severity}|${String(a.detail ?? "").slice(0, 200)}`)
+                .sort()
+                .join("\n");
+
+              const prior = monitorState.get(channelId);
+              const nowMs = Date.now();
+              const withinCooldown = prior && nowMs - prior.at < cooldownMs;
+              if (withinCooldown && prior?.fingerprint === fingerprint) continue;
+
+              const body = formatOpsMonitorAlertsMarkdown({ alerts, tz });
+              if (!body) continue;
+
+              const channel = await client.channels.fetch(channelId).catch(() => null);
+              if (!channel || typeof (channel as any).isTextBased !== "function" || !(channel as any).isTextBased()) continue;
+
+              await (channel as any).send(String(body).slice(0, 1900));
+              monitorState.set(channelId, { at: nowMs, fingerprint });
+            }
+
+            nextMonitorAt = Date.now() + monitorInterval;
           }
         } catch (error) {
           console.warn("[discord-agent] report_tick_failed", String(error));
