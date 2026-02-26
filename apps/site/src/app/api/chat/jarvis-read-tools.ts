@@ -18,6 +18,7 @@ export type JarvisReadToolName =
   | "crm.contact.instant_quote_photos"
   | "inbox.threads.list"
   | "inbox.thread.messages"
+  | "inbox.contact.transcript"
   | "inbox.thread.suggest_reply"
   | "outbound.queue"
   | "partners.list"
@@ -64,7 +65,8 @@ function asString(value: unknown): string | null {
 function truncateText(value: string, maxLen: number): string {
   const trimmed = value.trim();
   if (trimmed.length <= maxLen) return trimmed;
-  return `${trimmed.slice(0, Math.max(0, maxLen - 1))}…`;
+  const head = trimmed.slice(0, Math.max(0, maxLen - 3));
+  return `${head}...`;
 }
 
 function fmtUsdFromNumericString(value: string): string {
@@ -247,7 +249,7 @@ function toolSummaryLines(result: JarvisReadToolResult): string[] {
         const status = String(t["status"] ?? "unknown");
         const subject = typeof t["subject"] === "string" ? t["subject"] : "";
         const preview = typeof t["lastMessagePreview"] === "string" ? t["lastMessagePreview"] : "";
-        const line = `${channel}/${status}${subject ? ` â€” ${truncateText(subject, 40)}` : ""}${preview ? `: ${truncateText(preview, 80)}` : ""}`;
+        const line = `${channel}/${status}${subject ? ` - ${truncateText(subject, 40)}` : ""}${preview ? `: ${truncateText(preview, 80)}` : ""}`;
         return line.trim();
       })
       .filter((v): v is string => Boolean(v && v.trim().length));
@@ -270,7 +272,7 @@ function toolSummaryLines(result: JarvisReadToolResult): string[] {
     const place = [city || null, zip || null].filter(Boolean).join(" ");
     return [
       `Contact: ${name}${phone ? ` (${phone})` : ""}`,
-      `${stage ? `Pipeline: ${stage}` : "Pipeline: unknown"}${place ? ` â€” ${place}` : ""}${lastActivityAt ? ` â€” last activity ${lastActivityAt}` : ""}`
+      `${stage ? `Pipeline: ${stage}` : "Pipeline: unknown"}${place ? ` - ${place}` : ""}${lastActivityAt ? ` - last activity ${lastActivityAt}` : ""}`
     ];
   }
 
@@ -284,7 +286,7 @@ function toolSummaryLines(result: JarvisReadToolResult): string[] {
     const jobTypesText = jobTypes.filter((j) => typeof j === "string" && j.trim().length).slice(0, 4).join(", ");
     return [
       `Instant quote photos: ${photoUrls.length} photo(s) across ${quotes.length} quote(s)`,
-      `${createdAt ? `Latest: ${createdAt}` : "Latest: unknown"}${perceivedSize ? ` â€” size ${perceivedSize}` : ""}${jobTypesText ? ` â€” types ${jobTypesText}` : ""}`
+      `${createdAt ? `Latest: ${createdAt}` : "Latest: unknown"}${perceivedSize ? ` - size ${perceivedSize}` : ""}${jobTypesText ? ` - types ${jobTypesText}` : ""}`
     ];
   }
 
@@ -484,11 +486,41 @@ export async function runJarvisReadTool(ctx: AdminContext, call: JarvisReadToolC
     case "inbox.thread.messages": {
       const threadId = asString(args["threadId"]);
       if (!threadId) return toolError(tool, 400, "missing_thread_id");
-      const limit = Math.min(Math.max(asInt(args["limit"], 50), 1), 200);
-      const offset = Math.max(asInt(args["offset"], 0), 0);
-      const res = await adminFetchJson(ctx, { path: `/api/admin/inbox/threads/${encodeURIComponent(threadId)}/messages`, query: { limit, offset } });
+      const limit = Math.min(Math.max(asInt(args["limit"], 20), 1), 200);
+      const res = await adminFetchJson(ctx, { path: `/api/admin/inbox/threads/${encodeURIComponent(threadId)}` });
       if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
-      return toolOk(tool, res.data);
+
+      const payload = res.data;
+      if (!isRecord(payload)) return toolOk(tool, payload);
+      const thread = isRecord(payload["thread"]) ? (payload["thread"] as Record<string, unknown>) : null;
+      const messagesRaw = Array.isArray(payload["messages"]) ? (payload["messages"] as unknown[]) : [];
+      const messages = messagesRaw.filter((m) => m && typeof m === "object").slice(-limit);
+      return toolOk(tool, { ...(thread ? { thread } : {}), messages });
+    }
+    case "inbox.contact.transcript": {
+      const contactId = asString(args["contactId"]);
+      if (!contactId) return toolError(tool, 400, "missing_contact_id");
+      const threadLimit = Math.min(Math.max(asInt(args["threadLimit"], 6), 1), 12);
+      const messageLimit = Math.min(Math.max(asInt(args["messageLimit"], 20), 1), 80);
+
+      const threadsRes = await adminFetchJson(ctx, {
+        path: "/api/admin/inbox/threads",
+        query: { contactId, limit: threadLimit, offset: 0 }
+      });
+      if (!threadsRes.ok) return toolUnavailable(tool, threadsRes.status, threadsRes.error, threadsRes.data);
+
+      const payload = threadsRes.data;
+      const threads = isRecord(payload) && Array.isArray(payload["threads"]) ? (payload["threads"] as unknown[]) : [];
+      const first = threads.length > 0 && isRecord(threads[0]) ? (threads[0] as Record<string, unknown>) : null;
+      const threadId = first && typeof first["id"] === "string" ? (first["id"] as string) : null;
+      if (!threadId) {
+        return { tool, status: "no_data", httpStatus: 200, error: "no_threads_for_contact", data: { threads: [] } };
+      }
+
+      const transcriptRes = await runJarvisReadTool(ctx, { tool: "inbox.thread.messages", args: { threadId, limit: messageLimit } });
+      if (transcriptRes.status !== "ok") return transcriptRes;
+
+      return toolOk(tool, { threads, transcript: transcriptRes.data });
     }
     case "inbox.thread.suggest_reply": {
       const threadId = asString(args["threadId"]);

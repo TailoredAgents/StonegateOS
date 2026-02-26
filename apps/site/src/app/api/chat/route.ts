@@ -383,9 +383,12 @@ function extractContactQueryFromMessage(
   const rawAddress = typeof addressMatch?.[1] === "string" ? addressMatch[1].trim() : "";
   if (rawAddress) return { kind: "address", value: rawAddress };
 
-  const nameMatch = message.match(/\b(?:to|for|contact)\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,4})\b/i);
-  const rawName = typeof nameMatch?.[1] === "string" ? nameMatch[1].trim() : "";
+  const nameMatch =
+    message.match(/\b(?:to|for|contact|about|regarding)\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,4})\b/i) ??
+    message.match(/\b(?:text|sms|call|message|reply|email)\s+(?:to\s+)?([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,4})\b/i);
+  let rawName = typeof nameMatch?.[1] === "string" ? nameMatch[1].trim() : "";
   if (!rawName) return null;
+  rawName = rawName.replace(/(?:'s|’s)\b/i, "").trim();
 
   const lowered = rawName.toLowerCase();
   if (/\b(?:this|that|them|lead|contact|customer|person|someone|anyone|me|us|you)\b/i.test(lowered)) return null;
@@ -1361,7 +1364,7 @@ export async function POST(request: NextRequest) {
           ? [
               { tool: "crm.contact.snapshot", args: { contactId: effectiveContactId } },
               { tool: "crm.contact.instant_quote_photos", args: { contactId: effectiveContactId } },
-              { tool: "inbox.threads.list", args: { contactId: effectiveContactId, limit: 6, offset: 0 } },
+              { tool: "inbox.contact.transcript", args: { contactId: effectiveContactId, threadLimit: 6, messageLimit: 16 } },
               { tool: "appointments.list", args: { contactId: effectiveContactId, status: "requested,confirmed,completed", limit: 25 } }
             ]
           : [];
@@ -1726,6 +1729,7 @@ async function planJarvisReadTools(input: {
     "crm.contact.instant_quote_photos",
     "inbox.threads.list",
     "inbox.thread.messages",
+    "inbox.contact.transcript",
     "inbox.thread.suggest_reply",
     "outbound.queue",
     "partners.list",
