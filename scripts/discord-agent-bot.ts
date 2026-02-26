@@ -240,6 +240,16 @@ type AppointmentCandidate = {
   postalCode?: string | null;
 };
 
+type MemoryCandidate = {
+  id: string;
+  title?: string | null;
+  content?: string | null;
+  memoryType?: string | null;
+  scope?: string | null;
+  pinned?: boolean | null;
+  updatedAt?: string | null;
+};
+
 function getCandidates(action: { payload?: Record<string, unknown> }): ActionCandidate[] {
   const raw = action.payload?.["contactCandidates"];
   if (!Array.isArray(raw)) return [];
@@ -317,6 +327,15 @@ function formatAppointmentCandidateLine(candidate: AppointmentCandidate) {
   return bits.length ? `${when} ${bits.join(" ")}` : when;
 }
 
+function formatMemoryCandidateLine(candidate: MemoryCandidate) {
+  const title = (candidate.title ?? "").trim() || "Untitled";
+  const type = (candidate.memoryType ?? "").trim();
+  const scope = (candidate.scope ?? "").trim();
+  const pin = candidate.pinned ? " (pinned)" : "";
+  const meta = [type || null, scope || null].filter(Boolean).join("/");
+  return `${meta ? `[${meta}] ` : ""}${title}${pin}`;
+}
+
 async function callAgentChat(input: {
   siteUrl: string;
   botKey: string;
@@ -378,6 +397,58 @@ function splitActions(actions: Array<{ type?: string; summary?: string; payload?
     .slice(0, 3) as Array<{ type: string; summary?: string; payload: Record<string, unknown> }>;
 }
 
+function detectRememberIntent(text: string): { content: string; scope?: "channel" | "guild"; pinned?: boolean } | null {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) return null;
+
+  const wantsRemember =
+    normalized.startsWith("remember ") ||
+    normalized.startsWith("remember that ") ||
+    normalized.startsWith("note ") ||
+    normalized.startsWith("note to self ") ||
+    normalized.includes("save this") ||
+    normalized.includes("save that") ||
+    normalized.includes("add to memory") ||
+    normalized.includes("keep in mind");
+  if (!wantsRemember) return null;
+
+  let content = text.trim();
+  content = content.replace(/^remember(\s+that)?\s+/i, "");
+  content = content.replace(/^note(\s+to\s+self)?\s*[:\-]?\s+/i, "");
+  content = content.replace(/^save\s+(this|that)\s*[:\-]?\s*/i, "");
+  content = content.trim();
+  if (!content) return null;
+
+  const scope: "channel" | "guild" | undefined =
+    /\b(global|whole\s+server|entire\s+server|for\s+everyone|for\s+the\s+team)\b/i.test(normalized) ? "guild" : undefined;
+  const pinned = /\bpin(ned)?\b/i.test(normalized) ? true : undefined;
+
+  return { content, scope, pinned };
+}
+
+function detectRecallIntent(text: string): { q: string } | null {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) return null;
+  if (!(normalized.includes("remember") || normalized.includes("memory"))) return null;
+  const match =
+    text.match(/what do you remember about\s+(.+)/i) ??
+    text.match(/do you remember\s+(.+)/i) ??
+    text.match(/show me (?:your )?memory(?: about)?\s+(.+)/i);
+  const q = (match?.[1] ?? "").trim();
+  if (!q) return null;
+  return { q };
+}
+
+function detectForgetIntent(text: string): { q: string } | null {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) return null;
+  if (!(normalized.startsWith("forget ") || normalized.includes("remove memory") || normalized.includes("delete memory"))) {
+    return null;
+  }
+  const q = text.replace(/^forget\s+/i, "").trim();
+  return q ? { q } : null;
+}
+
 async function main() {
   const {
     createDiscordActionIntent,
@@ -396,6 +467,13 @@ async function main() {
   } = await import("../apps/api/src/lib/discord-report-subscriptions");
 
   const { buildDailyOpsReportMarkdown } = await import("../apps/api/src/lib/ops-reports");
+
+  const {
+    createDiscordAgentMemory,
+    listDiscordAgentMemoryForContext,
+    searchDiscordAgentMemory,
+    archiveDiscordAgentMemory
+  } = await import("../apps/api/src/lib/discord-agent-memory");
 
   const discordToken = mustEnv("DISCORD_BOT_TOKEN");
   const botKey = mustEnv("AGENT_BOT_SHARED_SECRET");
@@ -421,6 +499,45 @@ async function main() {
     (process.env["DISCORD_REPORT_TIMEZONE"] ?? process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York").trim() ||
     "America/New_York";
   const defaultReportTime = (process.env["DISCORD_DAILY_REPORT_AT"] ?? "08:30").trim() || "08:30";
+  const memoryEnabled = process.env["DISCORD_MEMORY_ENABLED"] !== "false";
+  const memoryMaxItems = Number(process.env["DISCORD_MEMORY_MAX_ITEMS"] ?? 12);
+
+  const memoryCache = new Map<string, { at: number; items: MemoryCandidate[] }>();
+  async function getMemoryContext(input: { guildId: string | null; channelId: string }): Promise<string> {
+    if (!memoryEnabled) return "";
+    const key = `${input.channelId}:${input.guildId ?? ""}`;
+    const nowMs = Date.now();
+    const cached = memoryCache.get(key);
+    if (cached && nowMs - cached.at < 30_000) {
+      const items = cached.items;
+      if (!items.length) return "";
+      const lines = items.slice(0, 12).map((m) => `- ${formatMemoryCandidateLine(m)}\n  ${String(m.content ?? "").trim().slice(0, 260)}`);
+      return ["Persistent memory (keep these facts/preferences consistent):", ...lines].join("\n");
+    }
+
+    const rows = await listDiscordAgentMemoryForContext({
+      discordGuildId: input.guildId,
+      discordChannelId: input.channelId,
+      maxItems: Number.isFinite(memoryMaxItems) ? memoryMaxItems : 12
+    }).catch(() => []);
+
+    const items: MemoryCandidate[] = Array.isArray(rows)
+      ? rows.map((r: any) => ({
+          id: String(r.id),
+          title: typeof r.title === "string" ? r.title : null,
+          content: typeof r.content === "string" ? r.content : null,
+          memoryType: typeof r.memoryType === "string" ? r.memoryType : typeof r.memory_type === "string" ? r.memory_type : null,
+          scope: typeof r.scope === "string" ? r.scope : null,
+          pinned: Boolean(r.pinned),
+          updatedAt: r.updatedAt ? String(r.updatedAt) : null
+        }))
+      : [];
+
+    memoryCache.set(key, { at: nowMs, items });
+    if (!items.length) return "";
+    const lines = items.slice(0, 12).map((m) => `- ${formatMemoryCandidateLine(m)}\n  ${String(m.content ?? "").trim().slice(0, 260)}`);
+    return ["Persistent memory (keep these facts/preferences consistent):", ...lines].join("\n");
+  }
 
   const client = new Client({
     intents: [
@@ -660,6 +777,40 @@ async function main() {
                       (err: any) => ({ ok: false, status: 500, data: { error: String(err) } })
                     );
                   })()
+                : type === "remember_memory"
+                  ? (() => {
+                      const discordChannelId = String(payload["discordChannelId"] ?? "");
+                      const title = typeof payload["title"] === "string" ? String(payload["title"]) : "";
+                      const content = typeof payload["content"] === "string" ? String(payload["content"]) : "";
+                      if (!discordChannelId || !title.trim() || !content.trim()) {
+                        return Promise.resolve({ ok: false, status: 400, data: { error: "invalid_memory_payload" } });
+                      }
+                      const scope = typeof payload["scope"] === "string" ? String(payload["scope"]) : "channel";
+                      const memoryType = typeof payload["memoryType"] === "string" ? String(payload["memoryType"]) : "note";
+                      const pinned = Boolean(payload["pinned"]);
+                      return createDiscordAgentMemory({
+                        discordGuildId: typeof payload["discordGuildId"] === "string" ? String(payload["discordGuildId"]) : null,
+                        discordChannelId,
+                        scope,
+                        memoryType,
+                        title,
+                        content,
+                        pinned,
+                        createdByDiscordUserId: String(message.author.id)
+                      }).then(
+                        () => ({ ok: true, status: 200, data: { ok: true } }),
+                        (err: any) => ({ ok: false, status: 500, data: { error: String(err) } })
+                      );
+                    })()
+                  : type === "archive_memory"
+                    ? (() => {
+                        const id = String(payload["id"] ?? "");
+                        if (!id) return Promise.resolve({ ok: false, status: 400, data: { error: "missing_memory_id" } });
+                        return archiveDiscordAgentMemory({ id }).then(
+                          () => ({ ok: true, status: 200, data: { ok: true } }),
+                          (err: any) => ({ ok: false, status: 500, data: { error: String(err) } })
+                        );
+                      })()
                 : await executeAgentAction({
                     siteUrl,
                     botKey,
@@ -765,6 +916,105 @@ async function main() {
           return;
         }
       }
+
+      if (memoryEnabled && trimmed) {
+        const recall = detectRecallIntent(trimmed);
+        if (recall) {
+          const rows = await searchDiscordAgentMemory({
+            discordGuildId: message.guildId ? String(message.guildId) : null,
+            discordChannelId: String(message.channelId),
+            q: recall.q,
+            maxItems: 8
+          }).catch(() => []);
+          if (!rows.length) {
+            await message.reply("I don’t have anything saved about that yet.");
+            return;
+          }
+          const lines = rows.slice(0, 8).map((r: any) => `- ${formatMemoryCandidateLine(r)}\n  ${String(r.content ?? "").trim().slice(0, 320)}`);
+          await message.reply(["Here’s what I have saved:", "", ...lines].join("\n").slice(0, 1900));
+          return;
+        }
+
+        const remember = detectRememberIntent(trimmed);
+        if (remember) {
+          const content = remember.content.trim();
+          const title = content.length > 80 ? `${content.slice(0, 77)}…` : content;
+          const scope = remember.scope ?? "channel";
+          const pinned = Boolean(remember.pinned);
+          const response = await message.reply(
+            `Got it. I can save this to memory (${scope}${pinned ? ", pinned" : ""}). Reply \`approve\` to save (or \`cancel\`).`
+          );
+          const expiresAt = intentTtlMinutes > 0 ? new Date(Date.now() + intentTtlMinutes * 60_000) : null;
+          await createDiscordActionIntent({
+            discordGuildId: message.guildId ? String(message.guildId) : null,
+            discordChannelId: String(message.channelId),
+            discordIntentMessageId: String(response.id),
+            requestedByDiscordUserId: String(message.author.id),
+            requestText: trimmed,
+            agentReply: "remember_memory",
+            actions: [
+              {
+                type: "remember_memory",
+                summary: `Save memory: ${title}`,
+                payload: {
+                  discordGuildId: message.guildId ? String(message.guildId) : null,
+                  discordChannelId: String(message.channelId),
+                  scope,
+                  memoryType: "note",
+                  title,
+                  content,
+                  pinned
+                }
+              }
+            ],
+            expiresAt
+          });
+          return;
+        }
+
+        const forget = detectForgetIntent(trimmed);
+        if (forget) {
+          const rows = await searchDiscordAgentMemory({
+            discordGuildId: message.guildId ? String(message.guildId) : null,
+            discordChannelId: String(message.channelId),
+            q: forget.q,
+            maxItems: 5
+          }).catch(() => []);
+          if (rows.length !== 1) {
+            const lines = rows.slice(0, 5).map((r: any) => `- ${String(r.id).slice(0, 8)}… ${formatMemoryCandidateLine(r)}`);
+            await message.reply(
+              [
+                "Tell me which memory to remove by ID (example: `forget 123e4567-...`).",
+                ...(lines.length ? ["", "Matches:", ...lines] : [])
+              ].join("\n").slice(0, 1900)
+            );
+            return;
+          }
+
+          const match = rows[0] as any;
+          const response = await message.reply(
+            `I can archive this memory: ${formatMemoryCandidateLine(match)}. Reply \`approve\` to confirm (or \`cancel\`).`
+          );
+          const expiresAt = intentTtlMinutes > 0 ? new Date(Date.now() + intentTtlMinutes * 60_000) : null;
+          await createDiscordActionIntent({
+            discordGuildId: message.guildId ? String(message.guildId) : null,
+            discordChannelId: String(message.channelId),
+            discordIntentMessageId: String(response.id),
+            requestedByDiscordUserId: String(message.author.id),
+            requestText: trimmed,
+            agentReply: "archive_memory",
+            actions: [
+              {
+                type: "archive_memory",
+                summary: `Archive memory: ${String(match.title ?? "").trim() || String(match.id)}`,
+                payload: { id: String(match.id) }
+              }
+            ],
+            expiresAt
+          });
+          return;
+        }
+      }
       const mentioned = message.mentions?.has?.(botUserId) ?? false;
       const prefixed = trimmed.toLowerCase().startsWith(commandPrefix.toLowerCase());
       const wake = stripWakeWord(trimmed, wakeWords);
@@ -791,7 +1041,12 @@ async function main() {
         Number.isFinite(contextLimit) && contextLimit > 0
           ? await buildDiscordTranscript(message, Math.floor(contextLimit))
           : [];
-      const system = transcript.length ? formatTranscriptForSystem(transcript) : "";
+      const memorySystem = await getMemoryContext({
+        guildId: message.guildId ? String(message.guildId) : null,
+        channelId: String(message.channelId)
+      });
+      const transcriptSystem = transcript.length ? formatTranscriptForSystem(transcript) : "";
+      const system = [memorySystem, transcriptSystem].filter((v) => v && v.trim().length).join("\n\n");
 
       const agentRes = await callAgentChat({ siteUrl, botKey, message: prompt, system });
       const replyText = (agentRes.reply ?? "").trim() || "Okay.";

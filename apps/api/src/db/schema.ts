@@ -1751,3 +1751,32 @@ export const discordReportSubscriptions = pgTable(
     lastSentIdx: index("discord_report_subscriptions_last_sent_idx").on(table.lastSentAt)
   })
 );
+
+// Discord agent: persistent memory and project notes for better continuity.
+export const discordAgentMemory = pgTable(
+  "discord_agent_memory",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    discordGuildId: text("discord_guild_id"),
+    discordChannelId: text("discord_channel_id").notNull(),
+    scope: text("scope").default("channel").notNull(), // channel | guild
+    memoryType: text("memory_type").default("note").notNull(), // note | preference | project | fact
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    tags: text("tags"),
+    pinned: boolean("pinned").default(false).notNull(),
+    archived: boolean("archived").default(false).notNull(),
+    createdByDiscordUserId: text("created_by_discord_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date())
+  },
+  (table) => ({
+    channelIdx: index("discord_agent_memory_channel_idx").on(table.discordChannelId),
+    archivedIdx: index("discord_agent_memory_archived_idx").on(table.archived),
+    pinnedIdx: index("discord_agent_memory_pinned_idx").on(table.pinned),
+    updatedIdx: index("discord_agent_memory_updated_idx").on(table.updatedAt)
+  })
+);
