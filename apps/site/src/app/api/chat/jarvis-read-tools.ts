@@ -16,6 +16,7 @@ export type JarvisReadToolName =
   | "crm.contacts.search"
   | "crm.contact.snapshot"
   | "crm.contact.instant_quote_photos"
+  | "crm.contact.omni_facts"
   | "inbox.threads.list"
   | "inbox.thread.messages"
   | "inbox.contact.transcript"
@@ -144,7 +145,7 @@ function toolSummaryLines(result: JarvisReadToolResult): string[] {
     const bookedAny = asNumber(totals["bookedAnyChannel"], 0);
     return [
       `Web: ${visits} visits, ${pageViews} pageviews, ${callClicks} call-clicks`,
-      `/book: step1 ${step1} → submits ${submits} (${fmtPct(submits, step1)}) → quotes ${quotes} (${fmtPct(quotes, submits)}) → self-serve booked ${selfServe} (${fmtPct(selfServe, quotes)})`,
+      `/book: step1 ${step1} -> submits ${submits} (${fmtPct(submits, step1)}) -> quotes ${quotes} (${fmtPct(quotes, submits)}) -> self-serve booked ${selfServe} (${fmtPct(selfServe, quotes)})`,
       `Booked (any channel, non-canceled): ${bookedAny}`
     ];
   }
@@ -288,6 +289,36 @@ function toolSummaryLines(result: JarvisReadToolResult): string[] {
       `Instant quote photos: ${photoUrls.length} photo(s) across ${quotes.length} quote(s)`,
       `${createdAt ? `Latest: ${createdAt}` : "Latest: unknown"}${perceivedSize ? ` - size ${perceivedSize}` : ""}${jobTypesText ? ` - types ${jobTypesText}` : ""}`
     ];
+  }
+
+  if (result.tool === "crm.contact.omni_facts") {
+    const facts = isRecord(data["facts"]) ? (data["facts"] as Record<string, unknown>) : null;
+    if (!facts) return [];
+    const pipelineStage = typeof facts["pipelineStage"] === "string" ? (facts["pipelineStage"] as string) : "";
+    const knownZip = typeof facts["knownZip"] === "string" ? (facts["knownZip"] as string) : "";
+    const missingFields = Array.isArray(facts["missingFields"]) ? (facts["missingFields"] as unknown[]) : [];
+    const missing = missingFields
+      .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      .slice(0, 4);
+
+    const instantQuote = isRecord(facts["instantQuote"]) ? (facts["instantQuote"] as Record<string, unknown>) : null;
+    const photoUrls = instantQuote && Array.isArray(instantQuote["photoUrls"]) ? (instantQuote["photoUrls"] as unknown[]) : [];
+    const jobTypes = instantQuote && Array.isArray(instantQuote["jobTypes"]) ? (instantQuote["jobTypes"] as unknown[]) : [];
+    const size = instantQuote && typeof instantQuote["perceivedSize"] === "string" ? (instantQuote["perceivedSize"] as string) : "";
+    const typesText = jobTypes.filter((j) => typeof j === "string" && j.trim().length).slice(0, 4).join(", ");
+    const photoCount = photoUrls.filter((u) => typeof u === "string" && u.trim().length).length;
+
+    const otherThreads = Array.isArray(facts["otherChannelThreads"]) ? (facts["otherChannelThreads"] as unknown[]) : [];
+    const threadCount = otherThreads.length;
+
+    const lines: string[] = [];
+    lines.push(`Omni facts: ${pipelineStage ? `pipeline ${pipelineStage}` : "pipeline unknown"}${knownZip ? `, zip ${knownZip}` : ""}`);
+    if (instantQuote) {
+      lines.push(`Instant quote: ${photoCount} photo(s)${size ? `, size ${size}` : ""}${typesText ? `, types ${typesText}` : ""}`);
+    }
+    if (threadCount) lines.push(`Other channels: ${threadCount} thread(s)`);
+    if (missing.length) lines.push(`Missing info: ${missing.join(", ")}`);
+    return lines;
   }
 
   return [];
@@ -459,6 +490,17 @@ export async function runJarvisReadTool(ctx: AdminContext, call: JarvisReadToolC
       const contactId = asString(args["contactId"]);
       if (!contactId) return toolError(tool, 400, "missing_contact_id");
       const res = await adminFetchJson(ctx, { path: `/api/admin/contacts/${encodeURIComponent(contactId)}/instant-quote-photos` });
+      if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
+      return toolOk(tool, res.data);
+    }
+    case "crm.contact.omni_facts": {
+      const contactId = asString(args["contactId"]);
+      if (!contactId) return toolError(tool, 400, "missing_contact_id");
+      const includeQuotePrice = args["includeQuotePrice"] === true ? "1" : null;
+      const res = await adminFetchJson(ctx, {
+        path: `/api/admin/contacts/${encodeURIComponent(contactId)}/omni`,
+        query: { ...(includeQuotePrice ? { includeQuotePrice } : {}) }
+      });
       if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
       return toolOk(tool, res.data);
     }
@@ -655,11 +697,11 @@ export function formatJarvisToolResultsForSystem(results: JarvisReadToolResult[]
   const now = new Date().toISOString();
   const lines: string[] = [];
   const dataMaxLen = results.length > 3 ? 1400 : 2800;
-  lines.push(`Live data (read-only) — generated ${now}:`);
+  lines.push(`Live data (read-only) - generated ${now}:`);
   for (const r of results) {
     lines.push("");
     lines.push(`Tool: ${r.tool}`);
-    lines.push(`Status: ${r.status}${typeof r.httpStatus === "number" ? ` (${r.httpStatus})` : ""}${r.error ? ` — ${r.error}` : ""}`);
+    lines.push(`Status: ${r.status}${typeof r.httpStatus === "number" ? ` (${r.httpStatus})` : ""}${r.error ? ` - ${r.error}` : ""}`);
     const summary = toolSummaryLines(r);
     if (summary.length) {
       lines.push("Summary:");

@@ -1363,7 +1363,7 @@ export async function POST(request: NextRequest) {
         shouldLoadDossier
           ? [
               { tool: "crm.contact.snapshot", args: { contactId: effectiveContactId } },
-              { tool: "crm.contact.instant_quote_photos", args: { contactId: effectiveContactId } },
+              { tool: "crm.contact.omni_facts", args: { contactId: effectiveContactId, includeQuotePrice: true } },
               { tool: "inbox.contact.transcript", args: { contactId: effectiveContactId, threadLimit: 6, messageLimit: 16 } },
               { tool: "appointments.list", args: { contactId: effectiveContactId, status: "requested,confirmed,completed", limit: 25 } }
             ]
@@ -1727,6 +1727,7 @@ async function planJarvisReadTools(input: {
     "crm.contacts.search",
     "crm.contact.snapshot",
     "crm.contact.instant_quote_photos",
+    "crm.contact.omni_facts",
     "inbox.threads.list",
     "inbox.thread.messages",
     "inbox.contact.transcript",

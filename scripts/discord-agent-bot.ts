@@ -175,8 +175,8 @@ function stripWakeWord(text: string, wakeWords: string[]): { matched: boolean; p
     if (!lower.startsWith(wake)) continue;
     const next = trimmed.slice(wake.length);
     // Ensure we matched a whole wake phrase, not a prefix inside a word.
-    if (next.length && !/^[\s,:;\-—]/.test(next)) continue;
-    const prompt = next.replace(/^[\s,:;\-—]+/, "").trim();
+    if (next.length && !/^[\s,:;\-]/.test(next)) continue;
+    const prompt = next.replace(/^[\s,:;\-]+/, "").trim();
     return { matched: true, prompt };
   }
 
@@ -329,7 +329,7 @@ function formatCandidateLine(candidate: ActionCandidate) {
   const state = (candidate.state ?? "").trim();
   const addr = (candidate.addressLine1 ?? "").trim();
   const bits = [phone, email, [addr, city, state, zip].filter(Boolean).join(", ")].filter(Boolean);
-  return bits.length ? `${name} — ${bits.join(" | ")}` : name;
+  return bits.length ? `${name} - ${bits.join(" | ")}` : name;
 }
 
 function formatAppointmentCandidateLine(candidate: AppointmentCandidate) {
@@ -758,7 +758,7 @@ async function main() {
               requestedByDiscordUserId: "system"
             }));
         if (!intent) {
-          await message.reply("I don’t see a pending action to approve/cancel.");
+          await message.reply("I don't see a pending action to approve/cancel.");
           return;
         }
 
@@ -832,7 +832,7 @@ async function main() {
               ].join("\n")
             );
           } else {
-            await message.reply("I’m missing required info to run that action. Can you be more specific?");
+            await message.reply("I'm missing required info to run that action. Can you be more specific?");
           }
           return;
         }
@@ -1009,7 +1009,7 @@ async function main() {
 
         if (reportIntent?.kind === "unsubscribe") {
           const response = await message.reply(
-            "Okay — I can stop posting the daily ops report in this channel. Reply `approve` to confirm (or `cancel`)."
+            "Okay - I can stop posting the daily ops report in this channel. Reply `approve` to confirm (or `cancel`)."
           );
 
           const expiresAt = intentTtlMinutes > 0 ? new Date(Date.now() + intentTtlMinutes * 60_000) : null;
@@ -1046,18 +1046,18 @@ async function main() {
             maxItems: 8
           }).catch(() => []);
           if (!rows.length) {
-            await message.reply("I don’t have anything saved about that yet.");
+            await message.reply("I don't have anything saved about that yet.");
             return;
           }
           const lines = rows.slice(0, 8).map((r: any) => `- ${formatMemoryCandidateLine(r)}\n  ${String(r.content ?? "").trim().slice(0, 320)}`);
-          await message.reply(["Here’s what I have saved:", "", ...lines].join("\n").slice(0, 1900));
+          await message.reply(["Here's what I have saved:", "", ...lines].join("\n").slice(0, 1900));
           return;
         }
 
         const remember = detectRememberIntent(trimmed);
         if (remember) {
           const content = remember.content.trim();
-          const title = content.length > 80 ? `${content.slice(0, 77)}…` : content;
+          const title = content.length > 80 ? `${content.slice(0, 77)}...` : content;
           const scope = remember.scope ?? "channel";
           const pinned = Boolean(remember.pinned);
           const response = await message.reply(
@@ -1100,7 +1100,7 @@ async function main() {
             maxItems: 5
           }).catch(() => []);
           if (rows.length !== 1) {
-            const lines = rows.slice(0, 5).map((r: any) => `- ${String(r.id).slice(0, 8)}… ${formatMemoryCandidateLine(r)}`);
+            const lines = rows.slice(0, 5).map((r: any) => `- ${String(r.id).slice(0, 8)}... ${formatMemoryCandidateLine(r)}`);
             await message.reply(
               [
                 "Tell me which memory to remove by ID (example: `forget 123e4567-...`).",
@@ -1152,7 +1152,7 @@ async function main() {
         prompt = wake.prompt;
       }
       if (!prompt) {
-        await message.reply("Yep — what do you need?");
+        await message.reply("Yep - what do you need?");
         return;
       }
 
