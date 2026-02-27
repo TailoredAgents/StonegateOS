@@ -21,6 +21,7 @@ const SERVICE_CITIES = [
   "Milton",
   "Johns Creek"
 ] as const;
+const PRIMARY_SERVICE_CITIES = ["Woodstock", "Marietta", "Canton", "Roswell", "Alpharetta", "Acworth"] as const;
 const SERVICE_STATE = "GA";
 
 const AREA_SLUGS_BY_TOPIC_CITY_KEY: Record<string, { city: string; slug: string }> = {
@@ -40,6 +41,16 @@ type OpenAIResponsesData = {
   output?: Array<{ content?: Array<{ text?: unknown; type?: unknown }> }>;
   output_text?: unknown;
 };
+
+function pickAnchorCity(topicKey: string): (typeof PRIMARY_SERVICE_CITIES)[number] {
+  const key = topicKey.trim() || "topic";
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  const idx = PRIMARY_SERVICE_CITIES.length ? hash % PRIMARY_SERVICE_CITIES.length : 0;
+  return PRIMARY_SERVICE_CITIES[idx] ?? "Woodstock";
+}
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -303,6 +314,15 @@ function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string
 
   if (cityAreaLink) {
     links.push(cityAreaLink);
+  } else {
+    const anchorCity = pickAnchorCity(topic.key);
+    const anchorSlug = AREA_SLUGS_BY_TOPIC_CITY_KEY[anchorCity.toLowerCase()];
+    if (anchorSlug) {
+      links.push({
+        label: `Junk removal in ${anchorSlug.city}, ${SERVICE_STATE}`,
+        url: `/areas/${anchorSlug.slug}`
+      });
+    }
   }
 
   const serviceLabels: Record<string, string> = {
@@ -323,11 +343,14 @@ function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string
 
 async function generateBrief(topic: SeoTopic, apiKey: string, brainModel: string): Promise<BriefGenResult> {
   const cityLine = SERVICE_CITIES.map((city) => `${city}, ${SERVICE_STATE}`).join("; ");
-  const systemPrompt = `You are an SEO content strategist for Stonegate Junk Removal (North Metro Atlanta).
+  const anchorCity = pickAnchorCity(topic.key);
+  const systemPrompt = `You are an SEO content strategist for Stonegate Junk Removal (serving ${PRIMARY_SERVICE_CITIES.join(", ")}, ${SERVICE_STATE}).
   Hard rules:
   - Do NOT include any dollar amounts.
   - Do NOT mention any counties outside Cobb, Cherokee, Fulton, and Bartow.
   - Keep the content geographically relevant to our core service cities: ${cityLine}.
+  - Prefer using ${anchorCity}, ${SERVICE_STATE} as the primary city reference and optionally mention 1-2 other core cities naturally.
+  - Avoid repeating the exact phrase "North Metro Atlanta" more than once (use city names instead).
   - Do NOT invent statistics, rankings, awards, or partnerships.
   - Keep it practical and specific to junk removal.
   Return ONLY JSON with: title, metaDescription, excerpt, outline (array of section headings).
@@ -409,7 +432,8 @@ async function writePostMarkdown(
   company: { businessName: string; primaryPhone: string }
 ): Promise<string | null> {
   const internalLinks = buildInternalLinks(topic);
-  const serviceCitySentence = `We primarily serve ${SERVICE_CITIES.join(", ")}, ${SERVICE_STATE} (North Metro Atlanta).`;
+  const anchorCity = pickAnchorCity(topic.key);
+  const primaryCitySentence = `We primarily serve ${PRIMARY_SERVICE_CITIES.join(", ")}, ${SERVICE_STATE}.`;
 
   const systemPrompt = `You write a helpful local SEO blog post in Markdown for ${company.businessName}.
   Rules:
@@ -418,7 +442,9 @@ async function writePostMarkdown(
   - Do NOT mention any counties outside Cobb, Cherokee, Fulton, and Bartow.
   - Do NOT invent statistics, legal claims, rankings, or awards.
   - Mention "${company.businessName}" in the intro.
-  - Include this service-area sentence (once, naturally): "${serviceCitySentence}"
+  - Include this service-area sentence (once, naturally): "${primaryCitySentence}"
+  - Use ${anchorCity}, ${SERVICE_STATE} as the primary local reference and mention 1-2 other core cities naturally (do not keyword-stuff).
+  - Avoid repeating the exact phrase "North Metro Atlanta" more than once (use city names instead).
   - Include a short FAQ section (4 Q&As).
   - Include internal links exactly as provided (use [label](url)).
   - End with a short CTA to book online or call ${company.primaryPhone}.`.trim();
@@ -434,7 +460,7 @@ async function writePostMarkdown(
           excerpt: brief.excerpt,
           outline: brief.outline,
           primaryKeyword: topic.primaryKeyword,
-          serviceArea: "Cobb, Cherokee, Fulton, and Bartow counties (North Metro Atlanta)",
+          serviceArea: `${PRIMARY_SERVICE_CITIES.join(", ")}, ${SERVICE_STATE} (Cobb, Cherokee, Fulton, and Bartow)`,
           internalLinks
         })
       }

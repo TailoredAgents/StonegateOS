@@ -10,7 +10,7 @@ export type SeoTopic = {
 export const SEO_TOPICS: SeoTopic[] = [
   {
     key: "prepare-for-junk-removal",
-    titleHint: "How to Prepare for a Junk Removal Pickup (North Metro Atlanta)",
+    titleHint: "How to Prepare for a Junk Removal Pickup: A Quick Prep Checklist",
     primaryKeyword: "how to prepare for junk removal",
     relatedServiceSlugs: ["single-item", "furniture", "appliances"]
   },
@@ -70,7 +70,7 @@ export const SEO_TOPICS: SeoTopic[] = [
   },
   {
     key: "mattress-disposal-atlanta",
-    titleHint: "Mattress Disposal in North Metro Atlanta: The Simple, Responsible Option",
+    titleHint: "Mattress Disposal: The Simple, Responsible Option",
     primaryKeyword: "mattress disposal",
     relatedServiceSlugs: ["furniture", "single-item"]
   },
@@ -88,7 +88,7 @@ export const SEO_TOPICS: SeoTopic[] = [
   },
   {
     key: "spring-cleaning-junk-removal",
-    titleHint: "Spring Cleaning in North Metro Atlanta: A Cleanout Plan That Works",
+    titleHint: "Spring Cleaning: A Cleanout Plan That Works",
     primaryKeyword: "spring cleaning junk removal",
     relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
   },
