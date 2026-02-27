@@ -27,7 +27,9 @@ export type JarvisReadToolName =
   | "meta.ads.summary"
   | "google.ads.spend"
   | "google.ads.summary"
-  | "google.ads.status";
+  | "google.ads.status"
+  | "google.ads.analyst.status"
+  | "google.ads.analyst.recommendations";
 
 export type JarvisReadToolCall = {
   tool: JarvisReadToolName;
@@ -222,6 +224,45 @@ function toolSummaryLines(result: JarvisReadToolResult): string[] {
       lines.push(`Profit ${label}: ${fmtMoneyCents(profit, currency)}`);
     }
     return lines;
+  }
+
+  if (result.tool === "google.ads.analyst.status") {
+    const latest = isRecord(data["latest"]) ? (data["latest"] as Record<string, unknown>) : null;
+    const createdAt = latest && typeof latest["createdAt"] === "string" ? (latest["createdAt"] as string) : "";
+    const rangeDays = latest && typeof latest["rangeDays"] === "number" ? String(latest["rangeDays"]) : "";
+    const health = isRecord(data["health"]) ? (data["health"] as Record<string, unknown>) : null;
+    const lastSuccessAt = health && typeof health["lastSuccessAt"] === "string" ? (health["lastSuccessAt"] as string) : "";
+    const lastFailureAt = health && typeof health["lastFailureAt"] === "string" ? (health["lastFailureAt"] as string) : "";
+    return [
+      `Google Ads analyst: ${latest ? `latest report ${createdAt || "unknown"}` : "no reports yet"}`.trim(),
+      rangeDays ? `Latest range: ${rangeDays} days` : "",
+      lastSuccessAt ? `Last success: ${lastSuccessAt}` : lastFailureAt ? `Last failure: ${lastFailureAt}` : ""
+    ].filter(Boolean);
+  }
+
+  if (result.tool === "google.ads.analyst.recommendations") {
+    const items = Array.isArray(data["items"]) ? (data["items"] as unknown[]) : [];
+    if (!items.length) return ["Google Ads recommendations: 0 items."];
+    const counts = new Map<string, number>();
+    const topTerms: string[] = [];
+    for (const item of items) {
+      if (!isRecord(item)) continue;
+      const status = String(item["status"] ?? "unknown");
+      counts.set(status, (counts.get(status) ?? 0) + 1);
+      const kind = String(item["kind"] ?? "");
+      const payload = isRecord(item["payload"]) ? (item["payload"] as Record<string, unknown>) : null;
+      const term = payload && typeof payload["term"] === "string" ? payload["term"] : payload && typeof payload["keyword"] === "string" ? payload["keyword"] : null;
+      if (kind === "negative_keyword" && term && topTerms.length < 5) topTerms.push(String(term));
+    }
+    const countBits = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([k, v]) => `${k}:${v}`)
+      .join(", ");
+    return [
+      `Google Ads recommendations: ${items.length} item(s)${countBits ? ` (${countBits})` : ""}`,
+      ...(topTerms.length ? [`Top negative keywords: ${topTerms.join(", ")}`] : [])
+    ];
   }
 
   if (result.tool === "crm.pipeline") {
@@ -662,6 +703,25 @@ export async function runJarvisReadTool(ctx: AdminContext, call: JarvisReadToolC
         return toolUnavailable(tool, res.status, res.error, res.data);
       }
       return toolOk(tool, res.data);
+    }
+    case "google.ads.analyst.status": {
+      const res = await adminFetchJson(ctx, { path: "/api/admin/google/ads/analyst/status" });
+      if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
+      return toolOk(tool, res.data);
+    }
+    case "google.ads.analyst.recommendations": {
+      const reportId = asString(args["reportId"]);
+      const statusFilter = asString(args["status"]);
+      const res = await adminFetchJson(ctx, {
+        path: "/api/admin/google/ads/analyst/recommendations",
+        query: { ...(reportId ? { reportId } : {}) }
+      });
+      if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
+      if (!statusFilter) return toolOk(tool, res.data);
+      const payload = res.data;
+      if (!isRecord(payload) || !Array.isArray(payload["items"])) return toolOk(tool, payload);
+      const filtered = (payload["items"] as unknown[]).filter((item) => isRecord(item) && String(item["status"] ?? "") === statusFilter);
+      return toolOk(tool, { ...payload, items: filtered });
     }
     case "finance.pnl": {
       const [rev, exp] = await Promise.all([

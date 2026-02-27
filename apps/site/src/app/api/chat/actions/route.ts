@@ -72,6 +72,16 @@ type SendTextPayload = {
   channel?: "sms" | "dm" | "email";
 };
 
+type GoogleAdsRecommendationsBulkUpdatePayload = {
+  ids: string[];
+  status: "approved" | "ignored" | "proposed";
+  note?: string | null;
+};
+
+type GoogleAdsRecommendationsBulkApplyPayload = {
+  ids: string[];
+};
+
 type ActionRequest =
   | { type: "create_contact"; payload: CreateContactPayload }
   | { type: "create_quote"; payload: CreateQuotePayload }
@@ -81,7 +91,9 @@ type ActionRequest =
   | { type: "book_appointment"; payload: BookAppointmentPayload }
   | { type: "cancel_appointment"; payload: CancelAppointmentPayload }
   | { type: "reschedule_appointment"; payload: RescheduleAppointmentPayload }
-  | { type: "send_text"; payload: SendTextPayload };
+  | { type: "send_text"; payload: SendTextPayload }
+  | { type: "google_ads_recommendations_bulk_update"; payload: GoogleAdsRecommendationsBulkUpdatePayload }
+  | { type: "google_ads_recommendations_bulk_apply"; payload: GoogleAdsRecommendationsBulkApplyPayload };
 
 const ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
 const ACTION_RATE_LIMIT_MS = Number(process.env["CHAT_ACTION_RATE_MS"] ?? 0);
@@ -474,6 +486,62 @@ export async function POST(request: NextRequest) {
 
     const data = await res.json().catch(() => ({}));
     console.info("[chat-actions] appointment canceled", { result: data });
+    return NextResponse.json({ ok: true, type: payload.type, result: data });
+  }
+
+  if (payload.type === "google_ads_recommendations_bulk_update") {
+    const body = payload.payload;
+    const ids = Array.isArray(body?.ids)
+      ? body.ids.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      : [];
+    const status = body?.status;
+    const note = typeof body?.note === "string" && body.note.trim().length ? body.note.trim() : undefined;
+    if (!ids.length || (status !== "approved" && status !== "ignored" && status !== "proposed")) {
+      return NextResponse.json({ error: "invalid_google_ads_bulk_update" }, { status: 400 });
+    }
+
+    const res = await safeAdminCall(`/api/admin/google/ads/analyst/recommendations/bulk`, {
+      method: "POST",
+      body: JSON.stringify({ ids, status, ...(note ? { note } : {}) })
+    });
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return NextResponse.json({ error: "google_ads_bulk_update_failed", detail: detail.slice(0, 200) }, { status: res.status });
+    }
+
+    const data = await res.json().catch(() => ({}));
+    return NextResponse.json({ ok: true, type: payload.type, result: data });
+  }
+
+  if (payload.type === "google_ads_recommendations_bulk_apply") {
+    const body = payload.payload;
+    const ids = Array.isArray(body?.ids)
+      ? body.ids.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      : [];
+    if (!ids.length) {
+      return NextResponse.json({ error: "invalid_google_ads_bulk_apply" }, { status: 400 });
+    }
+
+    const res = await safeAdminCall(`/api/admin/google/ads/analyst/recommendations/apply/bulk`, {
+      method: "POST",
+      body: JSON.stringify({ ids })
+    });
+
+    if (!res) {
+      return NextResponse.json({ error: "admin_key_missing" }, { status: 503 });
+    }
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return NextResponse.json({ error: "google_ads_bulk_apply_failed", detail: detail.slice(0, 200) }, { status: res.status });
+    }
+
+    const data = await res.json().catch(() => ({}));
     return NextResponse.json({ ok: true, type: payload.type, result: data });
   }
 

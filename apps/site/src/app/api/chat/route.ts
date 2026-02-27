@@ -294,6 +294,26 @@ type CreateReminderAction = {
   };
 };
 
+type GoogleAdsRecommendationsBulkUpdateAction = {
+  id: string;
+  type: "google_ads_recommendations_bulk_update";
+  summary: string;
+  payload: {
+    ids: string[];
+    status: "approved" | "ignored" | "proposed";
+    note?: string | null;
+  };
+};
+
+type GoogleAdsRecommendationsBulkApplyAction = {
+  id: string;
+  type: "google_ads_recommendations_bulk_apply";
+  summary: string;
+  payload: {
+    ids: string[];
+  };
+};
+
 type ActionSuggestion = (
   | CreateContactAction
   | CreateQuoteAction
@@ -304,6 +324,8 @@ type ActionSuggestion = (
   | RescheduleAppointmentAction
   | AddContactNoteAction
   | CreateReminderAction
+  | GoogleAdsRecommendationsBulkUpdateAction
+  | GoogleAdsRecommendationsBulkApplyAction
 ) & {
   note?: string | null;
 };
@@ -1481,7 +1503,8 @@ export async function POST(request: NextRequest) {
           },
           booking,
           classification,
-          reply
+          reply,
+          liveDataResults
         )
       : [];
     const actionNote = actions.length ? actions.map((action) => `Action: ${action.summary}`).join("\n") : null;
@@ -1738,7 +1761,9 @@ async function planJarvisReadTools(input: {
     "meta.ads.summary",
     "google.ads.spend",
     "google.ads.summary",
-    "google.ads.status"
+    "google.ads.status",
+    "google.ads.analyst.status",
+    "google.ads.analyst.recommendations"
   ];
 
   const systemPrompt = `You are a tool router for Jarvis (StonegateOS).
@@ -1753,6 +1778,7 @@ Rules:
 Tool hints:
 - Google Ads spend yesterday/today/date => google.ads.spend
 - Google Ads status/connected => google.ads.status
+- Google Ads recommendations => google.ads.analyst.recommendations; analyst status => google.ads.analyst.status
 - Web analytics + /book funnel => web.analytics.summary or web.analytics.funnel
 - Revenue (completed jobs) => finance.revenue.summary; Profit/P&L => finance.pnl
 - Expenses totals => finance.expenses.summary; list => finance.expenses.list
@@ -1890,6 +1916,14 @@ function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
 
   if (lower.includes("google") && lower.includes("ads") && (lower.includes("status") || lower.includes("connected") || lower.includes("configured"))) {
     calls.push({ tool: "google.ads.status", args: {} });
+    return calls;
+  }
+
+  if (
+    (lower.includes("google") && lower.includes("ads")) &&
+    (lower.includes("recommendation") || lower.includes("recommendations") || lower.includes("negative keyword") || lower.includes("negative keywords"))
+  ) {
+    calls.push({ tool: "google.ads.analyst.recommendations", args: { status: "proposed" } });
     return calls;
   }
 
@@ -2238,7 +2272,8 @@ async function buildActionSuggestions(
   },
   booking?: BookingPayload | null,
   classification?: IntentClassification | null,
-  replyText?: string | null
+  replyText?: string | null,
+  liveDataResults?: JarvisReadToolResult[] | null
 ): Promise<ActionSuggestion[]> {
   const actions: ActionSuggestion[] = [];
   const note = extractActionNote(message) ?? classification?.note ?? null;
@@ -2323,6 +2358,11 @@ async function buildActionSuggestions(
     actions.push(rescheduleAction);
   }
 
+  const googleAdsActions = extractGoogleAdsRecommendationActions(message, liveDataResults ?? null);
+  if (googleAdsActions.length) {
+    actions.push(...googleAdsActions);
+  }
+
   if (booking && !directBooking) {
     const bookingActions = buildBookingActions(booking, resolvedCtx, when, quotedTotalCents);
     actions.push(
@@ -2334,6 +2374,106 @@ async function buildActionSuggestions(
   }
 
   return actions.slice(0, 3);
+}
+
+function extractGoogleAdsRecommendationActions(message: string, liveData: JarvisReadToolResult[] | null): ActionSuggestion[] {
+  const lower = message.toLowerCase();
+  const mentionsGoogleAds = lower.includes("google") && lower.includes("ads");
+  const mentionsRecs =
+    lower.includes("recommendation") ||
+    lower.includes("recommendations") ||
+    lower.includes("negative keyword") ||
+    lower.includes("negative keywords");
+  if (!mentionsGoogleAds || !mentionsRecs) return [];
+
+  const wantsIgnore =
+    lower.includes("ignore") ||
+    lower.includes("skip") ||
+    lower.includes("don't") ||
+    lower.includes("dont") ||
+    lower.includes("no") ||
+    lower.includes("not now");
+  const wantsApply = lower.includes("apply") || lower.includes("implement") || lower.includes("push") || lower.includes("run it");
+  const wantsApprove = lower.includes("approve") || lower.includes("accept") || lower.includes("ok") || lower.includes("yes");
+
+  const uuid = extractUuidFromText(message);
+  const wantsAll = /\b(all|everything|all of them|all of those)\b/i.test(message);
+  const wantsNegativeOnly = lower.includes("negative keyword");
+
+  const items: Array<{ id: string; status?: string | null; kind?: string | null }> = [];
+  if (!uuid && Array.isArray(liveData)) {
+    const recTool = liveData.find((r) => r.tool === "google.ads.analyst.recommendations" && r.status === "ok");
+    const data = recTool?.data;
+    if (data && typeof data === "object" && Array.isArray((data as any).items)) {
+      for (const it of (data as any).items as any[]) {
+        if (!it || typeof it !== "object") continue;
+        const id = typeof it.id === "string" ? it.id : null;
+        if (!id) continue;
+        items.push({
+          id,
+          status: typeof it.status === "string" ? it.status : null,
+          kind: typeof it.kind === "string" ? it.kind : null
+        });
+      }
+    }
+  }
+
+  const pickIds = (): Array<{ id: string; status?: string | null; kind?: string | null }> => {
+    if (uuid) return [{ id: uuid }];
+    const pool = wantsNegativeOnly ? items.filter((i) => i.kind === "negative_keyword") : items;
+    if (!pool.length) return [];
+    if (wantsAll) return pool.slice(0, 20);
+    return [pool[0]!];
+  };
+
+  const selected = pickIds();
+  if (!selected.length) return [];
+
+  const ids = selected.map((s) => s.id);
+  const needsApprove = selected.filter((s) => (s.status ?? "proposed") !== "approved" && (s.status ?? "proposed") !== "applied");
+  const approvedOrWillBe = ids;
+
+  const actions: ActionSuggestion[] = [];
+
+  if (wantsIgnore) {
+    actions.push({
+      id: newActionId(),
+      type: "google_ads_recommendations_bulk_update",
+      summary: `Ignore Google Ads recommendation${ids.length === 1 ? "" : "s"} (${ids.length})`,
+      payload: { ids, status: "ignored" }
+    });
+    return actions;
+  }
+
+  if (wantsApply) {
+    if (needsApprove.length) {
+      actions.push({
+        id: newActionId(),
+        type: "google_ads_recommendations_bulk_update",
+        summary: `Approve Google Ads recommendation${ids.length === 1 ? "" : "s"} (${ids.length})`,
+        payload: { ids: needsApprove.map((s) => s.id), status: "approved" }
+      });
+    }
+    actions.push({
+      id: newActionId(),
+      type: "google_ads_recommendations_bulk_apply",
+      summary: `Apply Google Ads recommendation${approvedOrWillBe.length === 1 ? "" : "s"} (${approvedOrWillBe.length})`,
+      payload: { ids: approvedOrWillBe }
+    });
+    return actions;
+  }
+
+  if (wantsApprove) {
+    actions.push({
+      id: newActionId(),
+      type: "google_ads_recommendations_bulk_update",
+      summary: `Approve Google Ads recommendation${ids.length === 1 ? "" : "s"} (${ids.length})`,
+      payload: { ids, status: "approved" }
+    });
+    return actions;
+  }
+
+  return [];
 }
 
 function extractDirectBookingSuggestion(
@@ -2424,7 +2564,7 @@ function extractSendTextSuggestion(
   return {
     id: newActionId(),
     type: "send_text",
-    summary: `Send text: “${snippet}”`,
+    summary: `Send text: "${snippet}"`,
     payload: {
       ...(contactId ? { contactId } : {}),
       body,
