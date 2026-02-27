@@ -21,6 +21,7 @@ type QuoteState =
       baseLow: number;
       baseHigh: number;
       discountPercent: number;
+      discountAmount: number;
       low: number;
       high: number;
       tier: string;
@@ -675,6 +676,7 @@ export function LeadForm({
           displayTierLabel: string;
           reasonSummary: string;
           discountPercent?: number;
+          discountAmount?: number;
           needsInPersonEstimate?: boolean;
         };
       } | null;
@@ -697,6 +699,7 @@ export function LeadForm({
         low: data.quote.priceLowDiscounted ?? data.quote.priceLow,
         high: data.quote.priceHighDiscounted ?? data.quote.priceHigh,
         discountPercent: data.quote.discountPercent ?? 0,
+        discountAmount: data.quote.discountAmount ?? 0,
         tier: data.quote.displayTierLabel,
         reason: data.quote.reasonSummary,
         needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate)
@@ -1183,6 +1186,15 @@ export function LeadForm({
       ? quoteState.low === quoteState.high
         ? `$${quoteState.low}`
         : `$${quoteState.low} - $${quoteState.high}`
+      : null;
+
+  const discountLabel =
+    quoteState.status === "ready"
+      ? quoteState.discountAmount > 0
+        ? `$${quoteState.discountAmount} off`
+        : quoteState.discountPercent > 0
+          ? `${Math.round(quoteState.discountPercent * 100)}% off`
+          : null
       : null;
 
   const getAnalyticsPath = React.useCallback(() => {
@@ -2082,9 +2094,9 @@ export function LeadForm({
             {quoteState.status === "ready" ? (
               <div ref={quoteCardRef} className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/70 p-4">
                 <div className="flex items-center gap-2 text-sm font-semibold text-primary-900">
-                  {quoteState.discountPercent > 0 ? (
+                  {discountLabel ? (
                     <span className="rounded-full bg-primary-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
-                      {Math.round(quoteState.discountPercent * 100)}% off
+                      {discountLabel}
                     </span>
                   ) : null}
                   {isBrush || isDemo ? "Here's your estimate" : "Here's your instant quote"}
@@ -2092,7 +2104,7 @@ export function LeadForm({
                 <div className="text-2xl font-semibold text-primary-900">
                   {discountedRange}
                   <span className="ml-2 text-sm font-normal text-neutral-500 line-through">
-                    {quoteState.discountPercent > 0 ? baseRange : null}
+                    {discountLabel ? baseRange : null}
                   </span>
                 </div>
                 <div className="text-sm text-neutral-700">{quoteState.tier}</div>

@@ -52,6 +52,13 @@ async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>):
   return percent;
 }
 
+function resolveDemoFixedDiscountDollars(): number {
+  const envRaw = process.env["INSTANT_QUOTE_DISCOUNT_DEMO_AMOUNT"];
+  const envValue = envRaw ? Number(envRaw) : NaN;
+  if (Number.isFinite(envValue) && envValue > 0) return Math.round(envValue);
+  return 100;
+}
+
 const DemoTypeSchema = z.enum([
   "deck",
   "fence",
@@ -544,10 +551,9 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
     }
 
-    const discountPercent = await resolveInstantQuoteDiscountPercent(db);
-    const discountMultiplier = discountPercent > 0 ? 1 - discountPercent : 1;
-    const priceLowDiscounted = discountPercent > 0 ? Math.max(0, Math.round(quote.priceLow * discountMultiplier)) : undefined;
-    const priceHighDiscounted = discountPercent > 0 ? Math.max(0, Math.round(quote.priceHigh * discountMultiplier)) : undefined;
+    const discountAmount = resolveDemoFixedDiscountDollars();
+    const priceLowDiscounted = discountAmount > 0 ? Math.max(0, quote.priceLow - discountAmount) : undefined;
+    const priceHighDiscounted = discountAmount > 0 ? Math.max(0, quote.priceHigh - discountAmount) : undefined;
 
     return corsJson(
       {
@@ -555,7 +561,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         quoteId,
         quote: {
           ...quote,
-          discountPercent: discountPercent > 0 ? discountPercent : undefined,
+          discountAmount: discountAmount > 0 ? discountAmount : undefined,
           priceLowDiscounted: priceLowDiscounted ?? undefined,
           priceHighDiscounted: priceHighDiscounted ?? undefined
         }

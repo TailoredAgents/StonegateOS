@@ -51,6 +51,13 @@ async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>):
   return percent;
 }
 
+function resolveJunkFixedDiscountDollars(): number {
+  const envRaw = process.env["INSTANT_QUOTE_DISCOUNT_JUNK_AMOUNT"];
+  const envValue = envRaw ? Number(envRaw) : NaN;
+  if (Number.isFinite(envValue) && envValue > 0) return Math.round(envValue);
+  return 40;
+}
+
 const RequestSchema = z.object({
   source: z.string().optional().default("public_site"),
   contact: z.object({
@@ -612,12 +619,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const discountPercent = await resolveInstantQuoteDiscountPercent(db);
-    const discountMultiplier = discountPercent > 0 ? 1 - discountPercent : 1;
-    const priceLowDiscounted =
-      discountPercent > 0 ? Math.max(0, Math.round(base.priceLow * discountMultiplier)) : undefined;
-    const priceHighDiscounted =
-      discountPercent > 0 ? Math.max(0, Math.round(base.priceHigh * discountMultiplier)) : undefined;
+    const discountAmount = resolveJunkFixedDiscountDollars();
+    const priceLowDiscounted = discountAmount > 0 ? Math.max(0, base.priceLow - discountAmount) : undefined;
+    const priceHighDiscounted = discountAmount > 0 ? Math.max(0, base.priceHigh - discountAmount) : undefined;
 
     return corsJson(
       {
@@ -625,7 +629,7 @@ export async function POST(request: NextRequest) {
         quoteId,
         quote: {
           ...base,
-          discountPercent: discountPercent > 0 ? discountPercent : undefined,
+          discountAmount: discountAmount > 0 ? discountAmount : undefined,
           priceLowDiscounted: priceLowDiscounted ?? undefined,
           priceHighDiscounted: priceHighDiscounted ?? undefined
         }

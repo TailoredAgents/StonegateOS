@@ -1047,6 +1047,22 @@ async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>):
   return percent;
 }
 
+function resolveFixedDiscountDollars(service: "junk" | "demo"): number {
+  const envKey = service === "demo" ? "INSTANT_QUOTE_DISCOUNT_DEMO_AMOUNT" : "INSTANT_QUOTE_DISCOUNT_JUNK_AMOUNT";
+  const envRaw = process.env[envKey];
+  const envValue = envRaw ? Number(envRaw) : Number.NaN;
+  if (Number.isFinite(envValue) && envValue > 0) return Math.round(envValue);
+  return service === "demo" ? 100 : 40;
+}
+
+function classifyInstantQuoteService(jobTypes: unknown): "demo" | "junk" | "brush" | "unknown" {
+  const types = Array.isArray(jobTypes) ? jobTypes : [];
+  if (types.some((t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff")) return "demo";
+  if (types.some((t) => typeof t === "string" && t.toLowerCase() === "brush_clearing")) return "brush";
+  if (types.length) return "junk";
+  return "unknown";
+}
+
 async function buildLeadAlertMessage(
   leadId: string
 ): Promise<{ text: string; phone: string | null; mediaUrls: string[] | null } | null> {
@@ -1067,6 +1083,7 @@ async function buildLeadAlertMessage(
       state: properties.state,
       postalCode: properties.postalCode,
       instantQuoteAiResult: instantQuotes.aiResult,
+      instantQuoteJobTypes: instantQuotes.jobTypes,
       instantQuotePhotoUrls: instantQuotes.photoUrls
     })
     .from(leads)
@@ -1099,7 +1116,10 @@ async function buildLeadAlertMessage(
     .filter((part) => part.length > 0);
   const address = addressParts.length ? addressParts.join(", ") : null;
   const source = typeof row.source === "string" && row.source.length ? row.source : null;
-  const discountPercent = await resolveInstantQuoteDiscountPercent(db);
+  const quoteService = classifyInstantQuoteService(row.instantQuoteJobTypes);
+  const discountPercent = quoteService === "brush" ? await resolveInstantQuoteDiscountPercent(db) : 0;
+  const discountAmount =
+    quoteService === "demo" ? resolveFixedDiscountDollars("demo") : quoteService === "junk" ? resolveFixedDiscountDollars("junk") : 0;
 
   const quoteFromInstant = (() => {
     const ai = isRecord(row.instantQuoteAiResult) ? row.instantQuoteAiResult : null;
@@ -1116,9 +1136,17 @@ async function buildLeadAlertMessage(
     const tierLabel = tier.length ? ` (${tier})` : "";
     const estimateFlag = needsEstimate ? " (needs estimate)" : "";
 
-    // Keep lead alert consistent with what the customer sees on-site (discounted range when enabled).
-    // This runs near real-time; if discount policy changes later, old lead alerts may differ from older quotes.
-    if (discountPercent > 0 && discountPercent < 1) {
+    // Keep lead alert consistent with what the customer sees (discounted range when enabled).
+    if (discountAmount > 0) {
+      const discountedLow = Math.max(0, low - discountAmount);
+      const discountedHigh = Math.max(discountedLow, high - discountAmount);
+      const discountLabel = `${formatCurrency(discountAmount)} off`;
+      const baseLabel = formatRange(low, high);
+      const discountedLabel = formatRange(discountedLow, discountedHigh);
+      if (discountedLabel !== baseLabel) {
+        return `Quote: ${discountedLabel}${tierLabel} (${discountLabel}; was ${baseLabel})${estimateFlag}`;
+      }
+    } else if (discountPercent > 0 && discountPercent < 1) {
       const discountMultiplier = 1 - discountPercent;
       const discountedLow = Math.max(0, Math.round(low * discountMultiplier));
       const discountedHigh = Math.max(discountedLow, Math.round(high * discountMultiplier));
