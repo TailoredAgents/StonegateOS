@@ -92,7 +92,11 @@ function overlapsCount(blocks: Array<{ start: Date; end: Date }>, start: Date, e
   return count;
 }
 
-function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string }): number {
+function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string; jobTypes?: unknown }): number {
+  const jobTypes = Array.isArray(quote.jobTypes) ? quote.jobTypes : [];
+  const isDemoEstimate = jobTypes.some((t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff");
+  if (isDemoEstimate) return 45;
+
   const ai = isRecord(quote.aiResult) ? quote.aiResult : null;
   const priceHigh = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
   const maxUnits =
@@ -196,7 +200,7 @@ export async function POST(request: NextRequest) {
       typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
         ? bookingRules.bufferMinutes
         : DEFAULT_TRAVEL_BUFFER_MIN;
-    const durationMinutes = deriveDurationMinutes({ aiResult: quote.aiResult, perceivedSize: quote.perceivedSize });
+    const durationMinutes = deriveDurationMinutes({ aiResult: quote.aiResult, perceivedSize: quote.perceivedSize, jobTypes: quote.jobTypes });
 
     const startAt = new Date(body.startAt);
     if (Number.isNaN(startAt.getTime())) {

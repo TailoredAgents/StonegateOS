@@ -40,7 +40,7 @@ type PerceivedSize =
   | "three_quarter_trailer"
   | "big_cleanout"
   | "not_sure";
-type LeadFormVariant = "junk" | "brush";
+type LeadFormVariant = "junk" | "brush" | "demo";
 type JunkType =
   | "furniture"
   | "appliances"
@@ -59,6 +59,48 @@ type BrushScope =
 type BrushPrimary = BrushScope | "other";
 type BrushDifficulty = "easy" | "moderate" | "hard" | "not_sure";
 type BrushAccess = "open" | "standard_gate" | "tight_gate" | "not_sure";
+
+type DemoType =
+  | "deck"
+  | "fence"
+  | "shed"
+  | "kitchen_bath"
+  | "drywall"
+  | "concrete"
+  | "hot_tub_playset"
+  | "other";
+
+type DemoSize =
+  | "deck_small"
+  | "deck_medium"
+  | "deck_large"
+  | "deck_xl"
+  | "fence_0_50"
+  | "fence_50_150"
+  | "fence_150_300"
+  | "fence_300_plus"
+  | "shed_small"
+  | "shed_medium"
+  | "shed_large"
+  | "shed_xl"
+  | "rooms_1"
+  | "rooms_2"
+  | "rooms_3_plus"
+  | "drywall_1_room"
+  | "drywall_2_3_rooms"
+  | "drywall_whole_floor"
+  | "concrete_0_100"
+  | "concrete_100_250"
+  | "concrete_250_600"
+  | "concrete_600_plus"
+  | "hot_tub_small"
+  | "hot_tub_standard"
+  | "hot_tub_large"
+  | "hot_tub_not_sure"
+  | "other_small"
+  | "other_medium"
+  | "other_large"
+  | "other_not_sure";
 
 const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
   { id: "furniture", label: "Furniture" },
@@ -124,6 +166,66 @@ const BRUSH_ACCESS_OPTIONS: Array<{ id: BrushAccess; label: string; hint: string
   { id: "not_sure", label: "Not sure", hint: "No problem — photos help us confirm" }
 ];
 
+const DEMO_TYPE_OPTIONS: Array<{ id: DemoType; label: string; hint: string }> = [
+  { id: "deck", label: "Deck / porch", hint: "Tear-out + cleanup" },
+  { id: "fence", label: "Fence", hint: "Wood, vinyl, chain-link, etc." },
+  { id: "shed", label: "Shed", hint: "Small to large sheds" },
+  { id: "kitchen_bath", label: "Kitchen / bath demo", hint: "Cabinets, tile, fixtures" },
+  { id: "drywall", label: "Drywall removal", hint: "Room(s) or a whole floor" },
+  { id: "concrete", label: "Concrete removal", hint: "Driveway, patio, walkway, slab" },
+  { id: "hot_tub_playset", label: "Hot tub / playset", hint: "Disassembly + haul-off" },
+  { id: "other", label: "Other", hint: "Tell us what you need demolished" }
+];
+
+const DEMO_SIZE_OPTIONS: Record<DemoType, Array<{ id: DemoSize; label: string; hint: string }>> = {
+  deck: [
+    { id: "deck_small", label: "Small", hint: "Small porch / small deck" },
+    { id: "deck_medium", label: "Medium", hint: "Typical deck size" },
+    { id: "deck_large", label: "Large", hint: "Large deck / big tear-out" },
+    { id: "deck_xl", label: "XL", hint: "Multi-level or very large" }
+  ],
+  fence: [
+    { id: "fence_0_50", label: "0–50 ft", hint: "Small section" },
+    { id: "fence_50_150", label: "50–150 ft", hint: "Most yards" },
+    { id: "fence_150_300", label: "150–300 ft", hint: "Large yard / multiple sides" },
+    { id: "fence_300_plus", label: "300+ ft", hint: "Very large / multiple yards" }
+  ],
+  shed: [
+    { id: "shed_small", label: "Small", hint: "Small shed" },
+    { id: "shed_medium", label: "Medium", hint: "Most sheds" },
+    { id: "shed_large", label: "Large", hint: "Large shed" },
+    { id: "shed_xl", label: "XL", hint: "Very large shed / barn-style" }
+  ],
+  kitchen_bath: [
+    { id: "rooms_1", label: "1 room", hint: "One kitchen or one bath" },
+    { id: "rooms_2", label: "2 rooms", hint: "Two rooms" },
+    { id: "rooms_3_plus", label: "3+ rooms", hint: "Multiple rooms" }
+  ],
+  drywall: [
+    { id: "drywall_1_room", label: "1 room", hint: "One room" },
+    { id: "drywall_2_3_rooms", label: "2–3 rooms", hint: "Multiple rooms" },
+    { id: "drywall_whole_floor", label: "Whole floor", hint: "A whole floor / big area" }
+  ],
+  concrete: [
+    { id: "concrete_0_100", label: "0–100 sq ft", hint: "Small pad / walkway" },
+    { id: "concrete_100_250", label: "100–250 sq ft", hint: "Patio-size" },
+    { id: "concrete_250_600", label: "250–600 sq ft", hint: "Large patio / partial driveway" },
+    { id: "concrete_600_plus", label: "600+ sq ft", hint: "Driveway-size or larger" }
+  ],
+  hot_tub_playset: [
+    { id: "hot_tub_small", label: "Small", hint: "Small playset or compact hot tub" },
+    { id: "hot_tub_standard", label: "Standard", hint: "Most hot tubs / playsets" },
+    { id: "hot_tub_large", label: "Large", hint: "Large hot tub / big structure" },
+    { id: "hot_tub_not_sure", label: "Not sure", hint: "No problem — photos help" }
+  ],
+  other: [
+    { id: "other_small", label: "Small", hint: "Small demo" },
+    { id: "other_medium", label: "Medium", hint: "Medium demo" },
+    { id: "other_large", label: "Large", hint: "Large demo" },
+    { id: "other_not_sure", label: "Not sure", hint: "No problem — photos help" }
+  ]
+};
+
 const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
   { id: "today", label: "Today" },
   { id: "tomorrow", label: "Tomorrow" },
@@ -133,6 +235,7 @@ const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
 
 const GOOGLE_ADS_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_LEAD_SEND_TO"] ?? "";
 const GOOGLE_ADS_BRUSH_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_BRUSH_LEAD_SEND_TO"] ?? "";
+const GOOGLE_ADS_DEMO_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_DEMO_LEAD_SEND_TO"] ?? "";
 const GOOGLE_ADS_CONTACT_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO"] ?? "";
 const GOOGLE_REVIEW_URL = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_URL"] ?? "https://g.page/r/Ce6kQH50C8_dEAI/review";
 const GOOGLE_REVIEW_RATING = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_RATING"] ?? "5.0";
@@ -145,6 +248,7 @@ export function LeadForm({
 }: React.HTMLAttributes<HTMLDivElement> & { variant?: LeadFormVariant }) {
   const utm = useUTM();
   const isBrush = variant === "brush";
+  const isDemo = variant === "demo";
   const [step, setStep] = React.useState<1 | 2>(1);
   const [types, setTypes] = React.useState<JunkType[]>([]);
   const [showMoreJunkTypes, setShowMoreJunkTypes] = React.useState(false);
@@ -156,6 +260,10 @@ export function LeadForm({
   const [brushDifficulty, setBrushDifficulty] = React.useState<BrushDifficulty>("not_sure");
   const [brushAccess, setBrushAccess] = React.useState<BrushAccess>("not_sure");
   const [brushHaulAway, setBrushHaulAway] = React.useState(true);
+  const [demoType, setDemoType] = React.useState<DemoType>("deck");
+  const [demoSize, setDemoSize] = React.useState<DemoSize | null>(null);
+  const [demoHaulAway, setDemoHaulAway] = React.useState(true);
+  const [demoOtherDetails, setDemoOtherDetails] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [showPhotoUploader, setShowPhotoUploader] = React.useState(false);
   const [showBrushPlanningDetails, setShowBrushPlanningDetails] = React.useState(false);
@@ -286,7 +394,7 @@ export function LeadForm({
   }, []);
 
   const trackGoogleLeadConversion = React.useCallback((quoteId: string | null) => {
-    const sendTo = isBrush ? GOOGLE_ADS_BRUSH_LEAD_SEND_TO : GOOGLE_ADS_LEAD_SEND_TO;
+    const sendTo = isBrush ? GOOGLE_ADS_BRUSH_LEAD_SEND_TO : isDemo ? GOOGLE_ADS_DEMO_LEAD_SEND_TO : GOOGLE_ADS_LEAD_SEND_TO;
     if (!sendTo) return;
     if (!quoteId) return;
     if (trackedLeadQuoteIdRef.current === quoteId) return;
@@ -296,7 +404,7 @@ export function LeadForm({
       currency: "USD",
       transaction_id: quoteId
     });
-  }, [isBrush]);
+  }, [isBrush, isDemo]);
 
   const applyEnhancedConversionsUserData = React.useCallback(
     (input: {
@@ -387,11 +495,18 @@ export function LeadForm({
     setTypes((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
   };
 
+  React.useEffect(() => {
+    if (!isDemo) return;
+    const options = DEMO_SIZE_OPTIONS[demoType] ?? [];
+    const allowed = demoSize ? options.some((opt) => opt.id === demoSize) : true;
+    if (!allowed) setDemoSize(null);
+  }, [demoSize, demoType, isDemo]);
+
   const handlePhotos = async (files: FileList | null) => {
     if (!files) return;
     const selected = Array.from(files).slice(0, 4);
     const path = getAnalyticsPath();
-    const eventPrefix = path === "/book" || path === "/bookbrush" ? "book" : "lead_form";
+    const eventPrefix = isBookAnalyticsPath(path) ? "book" : "lead_form";
     trackWebEvent({ event: `${eventPrefix}_photo_upload_start`, path, meta: { count: selected.length } });
     if (!apiBase) {
       setPhotoUploadStatus("error");
@@ -438,7 +553,7 @@ export function LeadForm({
     const missingPhone = !phone.trim();
     const missingZip = !analyticsZip;
 
-    if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+    if (isBookAnalyticsPath(analyticsPath)) {
       trackWebEvent({
         event: "book_quote_attempt",
         path: analyticsPath,
@@ -448,7 +563,7 @@ export function LeadForm({
     }
 
     if (missingPhone || missingZip) {
-      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+      if (isBookAnalyticsPath(analyticsPath)) {
         trackWebEvent({
           event: "book_quote_blocked_missing_fields",
           path: analyticsPath,
@@ -456,32 +571,46 @@ export function LeadForm({
           meta: { missingName, missingPhone, missingZip, hasEmail: Boolean(email.trim()) }
         });
       }
-      setError("Please enter your mobile number to see your price.");
+      setError(isDemo || isBrush ? "Please enter your mobile number to see your estimate." : "Please enter your mobile number to see your price.");
       return;
     }
 
     const safeName = name.trim() || "New customer";
     setError(null);
     setQuoteState({ status: "loading" });
-    if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+    if (isBookAnalyticsPath(analyticsPath)) {
       trackWebEvent({ event: "book_quote_start", path: analyticsPath, zip: analyticsZip });
     } else {
       trackWebEvent({ event: "lead_form_quote_start", path: analyticsPath });
     }
     try {
-      const resolvedTypes: JunkType[] = !isBrush ? (types.length ? types : otherSelected ? ["general_junk"] : []) : [];
-      if (!isBrush && !resolvedTypes.length) {
+      const resolvedTypes: JunkType[] =
+        !isBrush && !isDemo ? (types.length ? types : otherSelected ? ["general_junk"] : []) : [];
+      if (!isBrush && !isDemo && !resolvedTypes.length) {
         setStep(1);
         setQuoteState({ status: "idle" });
         setError("Pick at least one type of junk.");
         return;
       }
+      if (isDemo && !demoSize) {
+        setStep(1);
+        setQuoteState({ status: "idle" });
+        setError("Pick an approximate project size.");
+        return;
+      }
 
-      const otherLine = !isBrush && otherSelected && otherDetails.trim().length > 0 ? `Other: ${otherDetails.trim()}` : "";
+      const otherLine =
+        !isBrush && !isDemo && otherSelected && otherDetails.trim().length > 0 ? `Other: ${otherDetails.trim()}` : "";
       const brushOtherLine =
         isBrush && brushPrimary === "other" && brushOtherDetails.trim().length > 0 ? `Other: ${brushOtherDetails.trim()}` : "";
-      const combinedNotes = [notes.trim(), otherLine, brushOtherLine].filter((v) => v.length > 0).join("\n");
-      const quoteEndpoint = isBrush ? `${apiBase}/api/brush-quote` : `${apiBase}/api/junk-quote`;
+      const demoOtherLine =
+        isDemo && demoType === "other" && demoOtherDetails.trim().length > 0 ? `Other: ${demoOtherDetails.trim()}` : "";
+      const combinedNotes = [notes.trim(), otherLine, brushOtherLine, demoOtherLine].filter((v) => v.length > 0).join("\n");
+      const quoteEndpoint = isBrush
+        ? `${apiBase}/api/brush-quote`
+        : isDemo
+          ? `${apiBase}/api/demo-quote`
+          : `${apiBase}/api/junk-quote`;
       const res = await fetch(quoteEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -503,7 +632,22 @@ export function LeadForm({
                 },
                 utm
               }
-            : {
+            : isDemo
+              ? {
+                  source: "public_site",
+                  contact: { name: safeName, phone: phone.trim(), timeframe },
+                  job: {
+                    type: demoType,
+                    size: demoSize ?? "other_not_sure",
+                    haulAway: demoHaulAway,
+                    notes: combinedNotes || undefined,
+                    zip: zip.trim(),
+                    photoUrls: photos,
+                    otherDetails: demoType === "other" ? demoOtherDetails.trim() || undefined : undefined
+                  },
+                  utm
+                }
+              : {
                 source: "public_site",
                 contact: { name: safeName, phone: phone.trim(), timeframe },
                  job: {
@@ -575,15 +719,15 @@ export function LeadForm({
         trackMetaEvent(
           "Lead",
           {
-            content_name: isBrush ? "Brush quote" : "Junk quote",
-            content_category: isBrush ? "brush" : "junk_removal",
+            content_name: isBrush ? "Brush quote" : isDemo ? "Demo quote" : "Junk quote",
+            content_category: isBrush ? "brush" : isDemo ? "demo" : "junk_removal",
             value: Number.isFinite(leadValue) ? leadValue : undefined,
             currency: "USD"
           },
           { eventID: nextQuoteId }
         );
       }
-      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+      if (isBookAnalyticsPath(analyticsPath)) {
         trackWebEvent({
           event: "book_quote_success",
           path: analyticsPath,
@@ -602,7 +746,7 @@ export function LeadForm({
     } catch (err) {
       setQuoteState({ status: "error", message: (err as Error).message });
       const key = bucketWebAnalyticsError(err);
-      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+      if (isBookAnalyticsPath(analyticsPath)) {
         trackWebEvent({ event: "book_quote_fail", path: analyticsPath, zip: analyticsZip, key });
       } else {
         trackWebEvent({ event: "lead_form_quote_fail", path: analyticsPath, key });
@@ -856,7 +1000,7 @@ export function LeadForm({
     }
     setBookingStatus("loading");
     setBookingMessage(null);
-    if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+    if (isBookAnalyticsPath(analyticsPath)) {
       trackWebEvent({ event: "book_booking_attempt", path: analyticsPath, zip: analyticsZip });
     } else {
       trackWebEvent({ event: "lead_form_booking_attempt", path: analyticsPath });
@@ -888,7 +1032,7 @@ export function LeadForm({
         if (errorPayload?.error === "slot_full") {
           setBookingStatus("error");
           setBookingMessage("That time just filled up. Please pick another time.");
-          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+          if (isBookAnalyticsPath(analyticsPath)) {
             trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "slot_full" });
           } else {
             trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "slot_full" });
@@ -899,7 +1043,7 @@ export function LeadForm({
         if (errorPayload?.error === "day_full") {
           setBookingStatus("error");
           setBookingMessage("We are fully booked that day. Please choose another time.");
-          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+          if (isBookAnalyticsPath(analyticsPath)) {
             trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "day_full" });
           } else {
             trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "day_full" });
@@ -914,7 +1058,7 @@ export function LeadForm({
         ) {
           setBookingStatus("error");
           setBookingMessage("That hold expired. Please pick another time.");
-          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+          if (isBookAnalyticsPath(analyticsPath)) {
             trackWebEvent({
               event: "book_booking_fail",
               path: analyticsPath,
@@ -936,7 +1080,7 @@ export function LeadForm({
             typeof errorPayload.errorId === "string" && errorPayload.errorId.length
               ? ` (ref ${errorPayload.errorId})`
               : "";
-          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+          if (isBookAnalyticsPath(analyticsPath)) {
             trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "server_error" });
           } else {
             trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "server_error" });
@@ -944,7 +1088,7 @@ export function LeadForm({
           throw new Error(`Booking failed on our end. Please try again or call us.${suffix}`);
         }
         if (typeof errorPayload?.message === "string" && errorPayload.message.trim().length > 0) {
-          if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+          if (isBookAnalyticsPath(analyticsPath)) {
             trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "message" });
           } else {
             trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "message" });
@@ -955,7 +1099,7 @@ export function LeadForm({
           typeof errorPayload?.error === "string" && errorPayload.error.length
             ? errorPayload.error
             : `Booking failed (HTTP ${res.status})`;
-        if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+        if (isBookAnalyticsPath(analyticsPath)) {
           trackWebEvent({
             event: "book_booking_fail",
             path: analyticsPath,
@@ -982,7 +1126,7 @@ export function LeadForm({
         return `You're booked for ${formatSlotLabel(bookedAt)}. ${delivery}`;
       });
       setHoldStatus("idle");
-      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+      if (isBookAnalyticsPath(analyticsPath)) {
         trackWebEvent({
           event: "book_booking_success",
           path: analyticsPath,
@@ -998,7 +1142,10 @@ export function LeadForm({
       }
       if (!trackedScheduleRef.current) {
         trackedScheduleRef.current = true;
-        trackMetaEvent("Schedule", { content_name: "Book pickup", content_category: "junk_removal" });
+        trackMetaEvent("Schedule", {
+          content_name: isBrush ? "Book clearing" : isDemo ? "Book demo estimate" : "Book pickup",
+          content_category: isBrush ? "brush" : isDemo ? "demo" : "junk_removal"
+        });
         applyEnhancedConversionsUserData({
           name,
           phone,
@@ -1017,7 +1164,7 @@ export function LeadForm({
       setBookingStatus("error");
       setBookingMessage((err as Error).message);
       const key = bucketWebAnalyticsError(err);
-      if (analyticsPath === "/book" || analyticsPath === "/bookbrush") {
+      if (isBookAnalyticsPath(analyticsPath)) {
         trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key });
       } else {
         trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key });
@@ -1043,14 +1190,18 @@ export function LeadForm({
     return window.location.pathname || "/";
   }, []);
 
+  const isBookAnalyticsPath = React.useCallback((path: string) => {
+    return path === "/book" || path === "/bookbrush" || path === "/bookdemo";
+  }, []);
+
   React.useEffect(() => {
     const path = getAnalyticsPath();
-    if (path === "/book" || path === "/bookbrush") {
+    if (isBookAnalyticsPath(path)) {
       trackWebEvent({ event: "book_step_view", path, key: String(step) });
     } else {
       trackWebEvent({ event: "lead_form_step_view", path, key: String(step) });
     }
-  }, [getAnalyticsPath, step]);
+  }, [getAnalyticsPath, isBookAnalyticsPath, step]);
 
   return (
     <div
@@ -1067,17 +1218,25 @@ export function LeadForm({
         {step === 1
           ? isBrush
             ? "Show us what you need cleared"
-            : "Show us what you need gone"
+            : isDemo
+              ? "Show us what you want demolished"
+              : "Show us what you need gone"
           : isBrush
             ? "Where should we text your estimate?"
-            : "Where should we text your quote?"}
+            : isDemo
+              ? "Where should we text your demo estimate?"
+              : "Where should we text your quote?"}
       </h2>
       <p className="mt-1 text-sm text-neutral-600">
         {step === 1
           ? isBrush
             ? "Answer a few quick questions to see a ballpark range before booking."
-            : "Answer a few quick questions to see your price before booking."
-          : "Enter a mobile number to see your price. Name is optional."}
+            : isDemo
+              ? "Answer a few quick questions to see a ballpark range before booking."
+              : "Answer a few quick questions to see your price before booking."
+          : isDemo
+            ? "Enter a mobile number to see your estimate range. Name is optional."
+            : "Enter a mobile number to see your price. Name is optional."}
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700">
@@ -1119,7 +1278,7 @@ export function LeadForm({
           e.preventDefault();
           if (step === 1) {
             const path = getAnalyticsPath();
-            if (!isBrush && !types.length && !otherSelected) {
+            if (!isBrush && !isDemo && !types.length && !otherSelected) {
               setError("Pick at least one type of junk.");
               return;
             }
@@ -1127,7 +1286,16 @@ export function LeadForm({
               setError("Please describe what you need cleared.");
               return;
             }
-            if (!perceivedSize) {
+            if (isDemo) {
+              if (demoType === "other" && demoOtherDetails.trim().length < 3) {
+                setError("Please describe what you need demolished.");
+                return;
+              }
+              if (!demoSize) {
+                setError("Pick an approximate project size.");
+                return;
+              }
+            } else if (!perceivedSize) {
               setError(isBrush ? "Pick an approximate job size." : "Pick an approximate amount.");
               return;
             }
@@ -1144,16 +1312,27 @@ export function LeadForm({
                   photoCount: photos.length,
                   photoSkipped
                 }
-              : {
-                  typeCount: types.length + (otherSelected ? 1 : 0),
-                  otherSelected,
-                  otherHasDetails: otherDetails.trim().length > 0,
-                  perceivedSize,
-                  hasPhotos: photos.length > 0,
-                  photoCount: photos.length,
-                  photoSkipped
-                };
-            if (path === "/book" || path === "/bookbrush") {
+              : isDemo
+                ? {
+                    demoType,
+                    demoSize,
+                    haulAway: demoHaulAway,
+                    otherSelected: demoType === "other",
+                    otherHasDetails: demoOtherDetails.trim().length > 0,
+                    hasPhotos: photos.length > 0,
+                    photoCount: photos.length,
+                    photoSkipped
+                  }
+                : {
+                    typeCount: types.length + (otherSelected ? 1 : 0),
+                    otherSelected,
+                    otherHasDetails: otherDetails.trim().length > 0,
+                    perceivedSize,
+                    hasPhotos: photos.length > 0,
+                    photoCount: photos.length,
+                    photoSkipped
+                  };
+            if (isBookAnalyticsPath(path)) {
               trackWebEvent({ event: "book_step1_submit", path, zip: zip.trim(), meta: baseMeta });
             } else {
               trackWebEvent({ event: "lead_form_step1_submit", path, meta: baseMeta });
@@ -1242,6 +1421,138 @@ export function LeadForm({
                     autoComplete="off"
                   />
                 ) : null}
+              </div>
+            ) : isDemo ? (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-semibold text-neutral-800">What are we demolishing?</label>
+                  <p className="text-xs text-neutral-500">Pick the best match</p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="What are we demolishing?">
+                    {DEMO_TYPE_OPTIONS.map((opt) => {
+                      const selected = demoType === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setDemoType(opt.id)}
+                          className={cn(
+                            "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
+                            selected
+                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                            )}
+                            aria-hidden="true"
+                          >
+                            <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                          </span>
+                          <div className="space-y-0.5">
+                            <div className="font-semibold text-neutral-900">{opt.label}</div>
+                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {demoType === "other" ? (
+                    <textarea
+                      rows={2}
+                      value={demoOtherDetails}
+                      onChange={(e) => setDemoOtherDetails(e.target.value)}
+                      className="mt-2 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                      placeholder="Briefly describe what you want demolished"
+                      autoComplete="off"
+                    />
+                  ) : null}
+                </div>
+
+                <div>
+                  <label className="text-sm font-semibold text-neutral-800">About how big is it?</label>
+                  <p className="text-xs text-neutral-500">Pick the closest option</p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="About how big is it?">
+                    {(DEMO_SIZE_OPTIONS[demoType] ?? []).map((opt) => {
+                      const selected = demoSize === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setDemoSize(opt.id)}
+                          className={cn(
+                            "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
+                            selected
+                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                            )}
+                            aria-hidden="true"
+                          >
+                            <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                          </span>
+                          <div className="space-y-0.5">
+                            <div className="font-semibold text-neutral-900">{opt.label}</div>
+                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm font-semibold text-neutral-800">Do we haul it away?</label>
+                  <p className="text-xs text-neutral-500">Choose haul-away if you want it removed and disposed.</p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Do we haul it away?">
+                    {[
+                      { id: "haul", label: "Haul away", hint: "We remove and dispose of debris", value: true },
+                      { id: "pile", label: "Pile on-site", hint: "We leave a neat pile on the property", value: false }
+                    ].map((opt) => {
+                      const selected = demoHaulAway === opt.value;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setDemoHaulAway(opt.value)}
+                          className={cn(
+                            "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
+                            selected
+                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                            )}
+                            aria-hidden="true"
+                          >
+                            <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                          </span>
+                          <div className="space-y-0.5">
+                            <div className="font-semibold text-neutral-900">{opt.label}</div>
+                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             ) : (
               <div>
@@ -1426,7 +1737,8 @@ export function LeadForm({
               ) : null}
             </div>
 
-            <div className="space-y-2">
+            {!isDemo ? (
+              <div className="space-y-2">
               <label className="text-sm font-semibold text-neutral-800">
                 {isBrush ? "How big is the area?" : "How much junk are we hauling away?"}
               </label>
@@ -1471,7 +1783,8 @@ export function LeadForm({
                   );
                 })}
               </div>
-            </div>
+              </div>
+            ) : null}
 
             {isBrush ? (
               <div className="space-y-2">
@@ -1666,10 +1979,10 @@ export function LeadForm({
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <Button type="submit" className="w-full justify-center sm:w-auto">
-                Continue to my price
+                {isBrush || isDemo ? "Continue to my estimate" : "Continue to my price"}
               </Button>
               <p className="text-xs text-neutral-500">
-                Next: enter your mobile number to see your {isBrush ? "estimate" : "price"}.
+                Next: enter your mobile number to see your {isBrush || isDemo ? "estimate" : "price"}.
               </p>
             </div>
           </div>
@@ -1702,7 +2015,9 @@ export function LeadForm({
                   className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                   placeholder="(404) 777-2631"
                 />
-                <p className="mt-1 text-[11px] text-neutral-500">We’ll text your price here. No spam.</p>
+                <p className="mt-1 text-[11px] text-neutral-500">
+                  We’ll text your {isBrush || isDemo ? "estimate" : "price"} here. No spam.
+                </p>
               </div>
               <div className="sm:col-span-2">
                 <label className="text-sm font-semibold text-neutral-800">Email (optional)</label>
@@ -1756,10 +2071,10 @@ export function LeadForm({
 
             <Button type="submit" className="w-full justify-center" disabled={quoteState.status === "loading"}>
               {quoteState.status === "loading"
-                ? isBrush
+                ? isBrush || isDemo
                   ? "Calculating your estimate..."
                   : "Calculating your quote..."
-                : isBrush
+                : isBrush || isDemo
                   ? "Get my estimate"
                   : "Get my instant quote"}
             </Button>
@@ -1772,7 +2087,7 @@ export function LeadForm({
                       {Math.round(quoteState.discountPercent * 100)}% off
                     </span>
                   ) : null}
-                  {isBrush ? "Here's your estimate" : "Here's your instant quote"}
+                  {isBrush || isDemo ? "Here's your estimate" : "Here's your instant quote"}
                 </div>
                 <div className="text-2xl font-semibold text-primary-900">
                   {discountedRange}
@@ -1790,11 +2105,19 @@ export function LeadForm({
                 <div className="text-xs text-neutral-600">
                   {isBrush && quoteState.needsInPersonEstimate
                     ? "This is a ballpark range. We\u2019ll call/text to confirm details and finalize before we arrive."
-                    : "We\u2019ll confirm the exact price on-site before we start."}
+                    : isDemo
+                      ? "This is a range. We’ll confirm details on-site before we start."
+                      : "We\u2019ll confirm the exact price on-site before we start."}
                 </div>
                   <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
                     <div className="text-xs font-semibold text-neutral-700">
-                      {isBrush && quoteState.needsInPersonEstimate ? "Request a time (pending confirmation)" : isBrush ? "Book this clearing" : "Book this pickup"}
+                      {isBrush && quoteState.needsInPersonEstimate
+                        ? "Request a time (pending confirmation)"
+                        : isBrush
+                          ? "Book this clearing"
+                          : isDemo
+                            ? "Book a demo estimate"
+                            : "Book this pickup"}
                     </div>
                     <div className="grid gap-2 md:grid-cols-2">
                       <input
@@ -2041,7 +2364,9 @@ export function LeadForm({
                           ? "Request this time"
                           : isBrush
                             ? "Book this clearing"
-                            : "Book this pickup"}
+                            : isDemo
+                              ? "Book a demo estimate"
+                              : "Book this pickup"}
                     </Button>
                     <Button asChild variant="secondary" className="justify-center">
                       <a href="tel:+14047772631" aria-label="Call to confirm and book">
@@ -2060,7 +2385,7 @@ export function LeadForm({
                     </div>
                   ) : null}
                   <div className="text-[11px] text-neutral-500">
-                    We've saved your {isBrush ? "estimate" : "quote"} with your contact info so we can help if you have questions.
+                    We've saved your {isBrush || isDemo ? "estimate" : "quote"} with your contact info so we can help if you have questions.
                   </div>
                 </div>
               </div>

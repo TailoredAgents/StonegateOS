@@ -156,11 +156,17 @@ function uniqByStart(list: Suggestion[], limit: number): Suggestion[] {
   return out;
 }
 
-function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string }): {
+function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string; jobTypes?: unknown }): {
   durationMinutes: number;
   maxUnits: number | null;
   loads: number;
 } {
+  const jobTypes = Array.isArray(quote.jobTypes) ? quote.jobTypes : [];
+  const isDemoEstimate = jobTypes.some((t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff");
+  if (isDemoEstimate) {
+    return { durationMinutes: 45, maxUnits: null, loads: 1 };
+  }
+
   const ai = isRecord(quote.aiResult) ? quote.aiResult : null;
   const priceHigh = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
   const maxUnits =

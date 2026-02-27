@@ -143,7 +143,7 @@ export async function WebAnalyticsSection(props: {
 
   const vitalsRows =
     vitals?.items
-      ?.filter((row) => row.path === "/book" || row.path === "/bookbrush" || row.path === "/")
+      ?.filter((row) => row.path === "/book" || row.path === "/bookbrush" || row.path === "/bookdemo" || row.path === "/")
       ?.sort((a, b) => (a.path + a.metric + (a.device ?? "")).localeCompare(b.path + b.metric + (b.device ?? ""))) ?? [];
 
   const errorsRows = errors?.items?.slice(0, 12) ?? [];
@@ -154,7 +154,7 @@ export async function WebAnalyticsSection(props: {
         <div>
           <h2 className={TEAM_SECTION_TITLE}>Website analytics</h2>
           <p className={TEAM_SECTION_SUBTITLE}>
-            First-party events from the public site only (raw retained for 30 days). Focus: /book + /bookbrush funnel + call clicks.
+            First-party events from the public site only (raw retained for 30 days). Focus: /book + /bookbrush + /bookdemo funnel + call clicks.
           </p>
         </div>
 
@@ -199,7 +199,7 @@ export async function WebAnalyticsSection(props: {
               <div className="mt-2 text-2xl font-semibold text-slate-900">{fmtNumber(totals.callClicks)}</div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">/book step 1</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">/book* step 1</div>
               <div className="mt-2 text-2xl font-semibold text-slate-900">{fmtNumber(totals.bookStep1Views)}</div>
               <div className="mt-1 text-xs text-slate-500">{fmtPercent(submitRate)} submit rate</div>
             </div>
@@ -223,7 +223,7 @@ export async function WebAnalyticsSection(props: {
           <div className="grid gap-4 lg:grid-cols-3">
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm font-semibold text-slate-900">/book + /bookbrush funnel by service area</div>
+                <div className="text-sm font-semibold text-slate-900">/book + /bookbrush + /bookdemo funnel by service area</div>
                 <div className="text-xs text-slate-500">ZIP is bucketed (never stored).</div>
               </div>
               <div className="mt-4 overflow-x-auto">
@@ -263,7 +263,7 @@ export async function WebAnalyticsSection(props: {
                     {!funnel?.byBucket?.length ? (
                       <tr>
                         <td className="px-3 py-5 text-sm text-slate-500" colSpan={5}>
-                          No /book or /bookbrush events in this range yet.
+                          No /book, /bookbrush, or /bookdemo events in this range yet.
                         </td>
                       </tr>
                     ) : null}
@@ -363,7 +363,7 @@ export async function WebAnalyticsSection(props: {
                     {!vitalsRows.length ? (
                       <tr>
                         <td className="px-3 py-5 text-sm text-slate-500" colSpan={5}>
-                          No vitals captured yet. These populate as visitors browse /, /book, and /bookbrush.
+                          No vitals captured yet. These populate as visitors browse /, /book, /bookbrush, and /bookdemo.
                         </td>
                       </tr>
                     ) : null}

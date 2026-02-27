@@ -43,7 +43,13 @@ function fallbackResponse(message: string): string {
 
 export function ChatBot() {
   const pathname = usePathname();
-  if (pathname === "/book" || pathname === "/bookbrush" || pathname.startsWith("/book/") || pathname.startsWith("/quote")) {
+  if (
+    pathname === "/book" ||
+    pathname === "/bookbrush" ||
+    pathname === "/bookdemo" ||
+    pathname.startsWith("/book/") ||
+    pathname.startsWith("/quote")
+  ) {
     return null;
   }
 

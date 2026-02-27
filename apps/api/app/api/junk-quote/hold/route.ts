@@ -87,7 +87,11 @@ function overlapsCount(blocks: Array<{ start: Date; end: Date }>, start: Date, e
   return count;
 }
 
-function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string }): number {
+function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string; jobTypes?: unknown }): number {
+  const jobTypes = Array.isArray(quote.jobTypes) ? quote.jobTypes : [];
+  const isDemoEstimate = jobTypes.some((t) => typeof t === "string" && t.toLowerCase() === "demo-hauloff");
+  if (isDemoEstimate) return 45;
+
   const ai = isRecord(quote.aiResult) ? quote.aiResult : null;
   const priceHigh = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
   const maxUnits =
