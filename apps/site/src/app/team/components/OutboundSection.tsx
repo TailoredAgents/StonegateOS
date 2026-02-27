@@ -3,6 +3,7 @@ import { callAdminApi } from "../lib/api";
 import {
   importOutboundProspectsAction,
   bulkOutboundAction,
+  draftOutboundFirstTouchAction,
   openContactThreadAction,
   setOutboundDispositionAction,
   startContactCallAction
@@ -462,6 +463,14 @@ export async function OutboundSection({
                                 Msg
                               </SubmitButton>
                             </form>
+                            <form action={draftOutboundFirstTouchAction}>
+                              <input type="hidden" name="contactId" value={item.contact.id} />
+                              <input type="hidden" name="taskId" value={item.id} />
+                              <input type="hidden" name="channel" value={item.contact.email ? "email" : "sms"} />
+                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Drafting...">
+                                Draft
+                              </SubmitButton>
+                            </form>
                           </div>
                         </td>
                       </tr>
@@ -509,6 +518,14 @@ export async function OutboundSection({
                       <input type="hidden" name="channel" value={selected.contact.email ? "email" : "sms"} />
                       <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
                         Message
+                      </SubmitButton>
+                    </form>
+                    <form action={draftOutboundFirstTouchAction}>
+                      <input type="hidden" name="contactId" value={selected.contact.id} />
+                      <input type="hidden" name="taskId" value={selected.id} />
+                      <input type="hidden" name="channel" value={selected.contact.email ? "email" : "sms"} />
+                      <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Drafting...">
+                        Draft outreach
                       </SubmitButton>
                     </form>
                   </div>

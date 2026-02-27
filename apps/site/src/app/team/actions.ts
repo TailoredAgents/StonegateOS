@@ -3352,6 +3352,60 @@ export async function startOutboundCadenceAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function draftOutboundFirstTouchAction(formData: FormData) {
+  const jar = await cookies();
+  const contactIdRaw = formData.get("contactId");
+  const taskIdRaw = formData.get("taskId");
+  const channelRaw = formData.get("channel");
+
+  const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
+  const taskId = typeof taskIdRaw === "string" ? taskIdRaw.trim() : "";
+  const channel = typeof channelRaw === "string" ? channelRaw.trim() : "";
+
+  if (!contactId) {
+    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/outbound/draft", {
+    method: "POST",
+    body: JSON.stringify({
+      contactId,
+      ...(taskId ? { taskId } : {}),
+      ...(channel ? { channel } : {})
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to draft outreach");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | { threadId?: string; channel?: string }
+    | null;
+
+  const threadId = typeof payload?.threadId === "string" ? payload.threadId.trim() : "";
+  const resolvedChannel = typeof payload?.channel === "string" ? payload.channel.trim() : channel || "sms";
+
+  if (!threadId) {
+    jar.set({ name: "myst-flash-error", value: "Draft created but thread is missing", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Draft created. Review and send from Inbox.", path: "/" });
+
+  redirect(
+    `/team?tab=inbox&threadId=${encodeURIComponent(threadId)}&contactId=${encodeURIComponent(
+      contactId
+    )}&channel=${encodeURIComponent(resolvedChannel)}`
+  );
+}
+
 export async function bulkOutboundAction(formData: FormData) {
   const jar = await cookies();
 
