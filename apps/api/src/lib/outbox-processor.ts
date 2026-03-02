@@ -770,7 +770,8 @@ async function ensureSalesFollowupsForLead(input: {
     });
   }
 
-  await input.db.transaction(async (tx) => {
+  const scheduledPreCall = await input.db.transaction(async (tx) => {
+    let preCall: { taskId: string; callAt: Date } | null = null;
     for (const task of tasksToCreate) {
       const [created] = await tx
         .insert(crmTasks)
@@ -805,7 +806,7 @@ async function ensureSalesFollowupsForLead(input: {
       }
 
       if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
-        const delayMs = 40_000;
+        const delayMs = 30_000;
         const instantAt = isWithinBusinessHours ? new Date(now.getTime() + delayMs) : clockStart;
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
@@ -817,6 +818,9 @@ async function ensureSalesFollowupsForLead(input: {
           mode: "instant",
           nextAttemptAt: instantAt.toISOString()
         });
+        if (!preCall) {
+          preCall = { taskId: created.id, callAt: instantAt };
+        }
       }
     }
 
@@ -824,7 +828,27 @@ async function ensureSalesFollowupsForLead(input: {
       .update(outboxEvents)
       .set({ payload: { ...(input.payload ?? {}), scheduledSalesFollowups: true } })
       .where(eq(outboxEvents.id, input.outboxEventId));
+    return preCall;
   });
+
+  if (scheduledPreCall) {
+    try {
+      await scheduleSpeedToLeadPreCallSms({
+        db: input.db,
+        leadId: row.leadId,
+        contactId: row.contactId,
+        taskId: scheduledPreCall.taskId,
+        callAt: scheduledPreCall.callAt
+      });
+    } catch (error) {
+      console.warn("[outbox] sales.escalation.pre_call_sms_failed", {
+        leadId: row.leadId,
+        contactId: row.contactId,
+        taskId: scheduledPreCall.taskId,
+        error: String(error)
+      });
+    }
+  }
 }
 
 async function ensureSalesFollowupsForContact(input: {
@@ -953,7 +977,8 @@ async function ensureSalesFollowupsForContact(input: {
     });
   }
 
-  await input.db.transaction(async (tx) => {
+  const scheduledPreCall = await input.db.transaction(async (tx) => {
+    let preCall: { taskId: string; callAt: Date } | null = null;
     for (const task of tasksToCreate) {
       const [created] = await tx
         .insert(crmTasks)
@@ -989,13 +1014,16 @@ async function ensureSalesFollowupsForContact(input: {
 
       if (SALES_ESCALATION_CALL_ENABLED && hasPhone && task.notes.includes("kind=speed_to_lead")) {
         if (!allowInstantCallEscalation) continue;
-        const delayMs = 40_000;
+        const delayMs = 30_000;
         const instantAt = isWithinBusinessHours ? new Date(now.getTime() + delayMs) : clockStart;
         await tx.insert(outboxEvents).values({
           type: "sales.escalation.call",
           payload: { taskId: created.id, mode: "instant" },
           nextAttemptAt: instantAt
         });
+        if (!preCall) {
+          preCall = { taskId: created.id, callAt: instantAt };
+        }
       }
     }
 
@@ -1003,6 +1031,116 @@ async function ensureSalesFollowupsForContact(input: {
       .update(outboxEvents)
       .set({ payload: { ...(input.payload ?? {}), scheduledSalesFollowups: true } })
       .where(eq(outboxEvents.id, input.outboxEventId));
+    return preCall;
+  });
+
+  if (scheduledPreCall && allowInstantCallEscalation) {
+    try {
+      await scheduleSpeedToLeadPreCallSms({
+        db: input.db,
+        leadId: null,
+        contactId: contactRow.contactId,
+        taskId: scheduledPreCall.taskId,
+        callAt: scheduledPreCall.callAt
+      });
+    } catch (error) {
+      console.warn("[outbox] sales.escalation.pre_call_sms_failed", {
+        contactId: contactRow.contactId,
+        taskId: scheduledPreCall.taskId,
+        error: String(error)
+      });
+    }
+  }
+}
+
+async function scheduleSpeedToLeadPreCallSms(input: {
+  db: ReturnType<typeof getDb>;
+  leadId: string | null;
+  contactId: string;
+  taskId: string;
+  callAt: Date;
+}): Promise<void> {
+  const PRE_CALL_LEAD_MS = 20_000;
+  const now = new Date();
+  const preCallAt = new Date(Math.max(now.getTime(), input.callAt.getTime() - PRE_CALL_LEAD_MS));
+
+  const [existing] = await input.db
+    .select({ id: conversationMessages.id })
+    .from(conversationMessages)
+    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .where(
+      and(
+        eq(conversationThreads.contactId, input.contactId),
+        eq(conversationMessages.direction, "outbound"),
+        eq(conversationMessages.channel, "sms"),
+        sql`${conversationMessages.metadata} ->> 'speedToLeadPreCallTaskId' = ${input.taskId}`
+      )
+    )
+    .limit(1);
+  if (existing?.id) return;
+
+  const [contact] = await input.db
+    .select({
+      firstName: contacts.firstName,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164
+    })
+    .from(contacts)
+    .where(eq(contacts.id, input.contactId))
+    .limit(1);
+
+  const toAddress = (contact?.phoneE164 ?? contact?.phone ?? "").trim();
+  if (!toAddress) return;
+
+  let threadId: string | null = null;
+  if (input.leadId) {
+    const [leadRow] = await input.db
+      .select({ propertyId: leads.propertyId })
+      .from(leads)
+      .where(eq(leads.id, input.leadId))
+      .limit(1);
+    threadId = await ensureThreadForLead(input.db, {
+      leadId: input.leadId,
+      contactId: input.contactId,
+      propertyId: (leadRow?.propertyId as string | null) ?? null,
+      channel: "sms"
+    });
+  } else {
+    threadId = await ensureThreadForContactChannel(input.db, { contactId: input.contactId, channel: "sms" });
+  }
+  if (!threadId) return;
+
+  const who = (contact?.firstName ?? "").trim() || "there";
+  const body =
+    `Hi ${who}, this is Stonegate Junk Removal — we’re about to call to confirm a couple details and lock in your exact price. ` +
+    "If now isn’t a good time, reply with a better time.";
+
+  await queueOutboundMessage({
+    db: input.db,
+    threadId,
+    channel: "sms",
+    body,
+    toAddress,
+    metadata: {
+      automation: true,
+      autoReply: true,
+      speedToLead: true,
+      speedToLeadPreCallTaskId: input.taskId
+    },
+    nextAttemptAt: preCallAt
+  });
+
+  await recordAuditEvent({
+    actor: { type: "worker", label: "outbox" },
+    action: "sales.escalation.pre_call_sms.queued",
+    entityType: "crm_task",
+    entityId: input.taskId,
+    meta: {
+      contactId: input.contactId,
+      leadId: input.leadId,
+      threadId,
+      nextAttemptAt: preCallAt.toISOString()
+    }
   });
 }
 

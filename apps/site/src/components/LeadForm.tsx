@@ -1175,17 +1175,30 @@ export function LeadForm({
     }
   };
 
+  const JUNK_PRESENTED_MIN = 100;
+  const JUNK_PRESENTED_STEP = 175;
+
   const baseRange =
     quoteState.status === "ready"
-      ? quoteState.baseLow === quoteState.baseHigh
-        ? `$${quoteState.baseLow}`
-        : `$${quoteState.baseLow} - $${quoteState.baseHigh}`
+      ? (() => {
+          const high = quoteState.baseHigh;
+          const low =
+            !isBrush && !isDemo && quoteState.baseLow === quoteState.baseHigh
+              ? Math.min(high, Math.max(JUNK_PRESENTED_MIN, high - JUNK_PRESENTED_STEP))
+              : quoteState.baseLow;
+          return low === high ? `$${low}` : `$${low} - $${high}`;
+        })()
       : null;
   const discountedRange =
     quoteState.status === "ready"
-      ? quoteState.low === quoteState.high
-        ? `$${quoteState.low}`
-        : `$${quoteState.low} - $${quoteState.high}`
+      ? (() => {
+          const high = quoteState.high;
+          const low =
+            !isBrush && !isDemo && quoteState.low === quoteState.high
+              ? Math.min(high, Math.max(JUNK_PRESENTED_MIN, high - JUNK_PRESENTED_STEP))
+              : quoteState.low;
+          return low === high ? `$${low}` : `$${low} - $${high}`;
+        })()
       : null;
 
   const discountLabel =
@@ -1245,10 +1258,10 @@ export function LeadForm({
             ? "Answer a few quick questions to see a ballpark range before booking."
             : isDemo
               ? "Answer a few quick questions to see a ballpark range before booking."
-              : "Answer a few quick questions to see your price before booking."
+              : "Answer a few quick questions to see a ballpark range before booking."
           : isDemo
             ? "Enter a mobile number to see your estimate range. Name is optional."
-            : "Enter a mobile number to see your price. Name is optional."}
+            : "Enter a mobile number so we can text you your range (and confirm a couple details). Name is optional."}
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700">
@@ -2119,7 +2132,7 @@ export function LeadForm({
                     ? "This is a ballpark range. We\u2019ll call/text to confirm details and finalize before we arrive."
                     : isDemo
                       ? "This is a range. We’ll confirm details on-site before we start."
-                      : "We\u2019ll confirm the exact price on-site before we start."}
+                      : "This is a range. We\u2019ll call to confirm a couple details and lock in the exact price."}
                 </div>
                   <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
                     <div className="text-xs font-semibold text-neutral-700">
