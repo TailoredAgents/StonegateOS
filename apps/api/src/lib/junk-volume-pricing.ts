@@ -1,4 +1,4 @@
-export const JUNK_SINGLE_ITEM_PRICE = 100;
+export const JUNK_SINGLE_ITEM_PRICE = 150;
 export const JUNK_QUARTER_LOAD_PRICE = 175;
 
 export const JUNK_VOLUME_UNIT_PRICE = JUNK_QUARTER_LOAD_PRICE;
@@ -10,4 +10,3 @@ export const JUNK_VOLUME_PRICING = {
   threeQuarter: JUNK_VOLUME_UNIT_PRICE * 3,
   full: JUNK_VOLUME_UNIT_PRICE * 4
 } as const;
-

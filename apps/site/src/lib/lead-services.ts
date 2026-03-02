@@ -5,7 +5,7 @@ export type LeadServiceOption = {
 };
 
 export const DEFAULT_LEAD_SERVICE_OPTIONS: LeadServiceOption[] = [
-  { slug: "single-item", title: "Rubbish", description: "Common household waste" },
+  { slug: "single-item", title: "Small Pickup", description: "Minimum pickup (starting at $150)" },
   { slug: "furniture", title: "Furniture Removal", description: "Sofas, dressers, desks, and more" },
   { slug: "appliances", title: "Appliance Removal", description: "Refrigerators, washers, dryers" },
   { slug: "yard-waste", title: "Yard Waste & Debris", description: "Brush, branches, and bagged leaves" },

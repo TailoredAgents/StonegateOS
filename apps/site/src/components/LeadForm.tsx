@@ -127,8 +127,7 @@ const JUNK_PRIMARY_OPTIONS = JUNK_PRIMARY_TYPE_IDS.map((id) => JUNK_OPTIONS.find
 const JUNK_SECONDARY_OPTIONS = JUNK_SECONDARY_TYPE_IDS.map((id) => JUNK_OPTIONS.find((opt) => opt.id === id)!).filter(Boolean);
 
 const JUNK_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
-  { id: "single_item", label: "Single item", hint: "1 small/medium item (chair, dresser, small appliance)" },
-  { id: "min_pickup", label: "Small pickup (2-4 items)", hint: "A few items or a small pile (for bulky items, choose Medium+ or Not sure)" },
+  { id: "min_pickup", label: "Small pickup (1-4 items)", hint: "A few items or a small pile (minimum pickup starts at $150)" },
   { id: "half_trailer", label: "Medium load", hint: "1 room OR 1-2 bulky items + boxes/bags" },
   { id: "three_quarter_trailer", label: "Large load", hint: "2 rooms OR several bulky items" },
   { id: "big_cleanout", label: "Huge cleanout", hint: "Full garage, basement, or multiple rooms" },

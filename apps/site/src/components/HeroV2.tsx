@@ -93,11 +93,11 @@ export function HeroV2({
               same-day availability in Woodstock and nearby North Metro
               communities.
             </p>
-            <p className="max-w-xl text-sm text-neutral-500">
-              No travel fees in our core service area. Coverage is up to 25
-              miles for half-load and larger jobs, and up to 15 miles for
-              single-item and quarter-load pickups.
-            </p>
+              <p className="max-w-xl text-sm text-neutral-500">
+                No travel fees in our core service area. Coverage is up to 25
+                miles for half-load and larger jobs, and up to 15 miles for
+                minimum-pickup and quarter-load jobs.
+              </p>
           </div>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">

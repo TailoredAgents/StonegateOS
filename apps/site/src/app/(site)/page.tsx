@@ -176,7 +176,7 @@ const homeFaqs = [
   {
     question: "What areas do you serve?",
     answer:
-      "For half-load and larger jobs, we cover up to 25 miles from Woodstock, GA. For single-item to quarter-load pickups, coverage is up to 15 miles.",
+      "For half-load and larger jobs, we cover up to 25 miles from Woodstock, GA. For minimum-pickup to quarter-load jobs, coverage is up to 15 miles.",
   },
   {
     question: "Do you charge travel fees?",
@@ -519,8 +519,8 @@ export default function HomePage() {
               </h2>
               <p className="mt-2 text-body text-neutral-600">
                 We cover up to 25 miles from Woodstock for half-load jobs and
-                larger, and up to 15 miles for single-item and quarter-load
-                pickups.
+                larger, and up to 15 miles for minimum-pickup and quarter-load
+                jobs.
               </p>
             </div>
             <Button asChild>

@@ -145,10 +145,10 @@ const QuoteResultSchema = z
         path: ["priceLow"]
       });
     }
-    if (value.priceLow < 100 || value.priceHigh < 100) {
+    if (value.priceLow < 150 || value.priceHigh < 150) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "prices must be >= 100",
+        message: "prices must be >= 150",
         path: ["priceLow"]
       });
     }
@@ -252,7 +252,7 @@ function formatLoadCount(units: number): string {
 }
 
 function formatFraction(units: number): string {
-  if (units === 0) return "Single item";
+  if (units === 0) return "Minimum pickup";
   if (units === 1) return "1/4";
   if (units === 2) return "1/2";
   if (units === 3) return "3/4";
@@ -262,8 +262,8 @@ function formatFraction(units: number): string {
 
 function formatTierLabel(minUnits: number, maxUnits: number): string {
   if (minUnits === maxUnits) {
-    if (minUnits === 0) return "Single item pickup";
-    if (minUnits === 1) return "Small pickup (2-4 items)";
+    if (minUnits === 0) return "Minimum pickup";
+    if (minUnits === 1) return "Small pickup (1-4 items)";
     if (minUnits <= 4) return minUnits === 4 ? "Full trailer" : `${formatFraction(minUnits)} trailer`;
     return `${formatLoadCount(minUnits)} trailer loads`;
   }
@@ -904,11 +904,11 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>, bounds: Quote
 
 const SYSTEM_PROMPT = `
 You are the quoting assistant for Stonegate Junk Removal in Woodstock, Georgia.
-Stonegate uses one large 7x16x4 dump trailer. Pricing is based on either a single-item pickup or trailer volume.
+Stonegate uses one large 7x16x4 dump trailer. Pricing is based on a minimum pickup or trailer volume.
 Do NOT add charges for weight, stairs, distance, time, urgency, heavy/bulky items, or difficulty.
 
 Base prices:
-- Single item pickup: $100
+- Minimum pickup: $150
 - 1/4 trailer: $175
 - 1/2 trailer: $350
 - 3/4 trailer: $525
@@ -922,7 +922,7 @@ Rules:
 - Respond ONLY with JSON: { "loadFractionEstimate": number, "priceLow": number, "priceHigh": number, "displayTierLabel": string, "reasonSummary": string, "needsInPersonEstimate": boolean }
 - Always return priceLow and priceHigh. They may be equal if the range is very tight.
 - Map perceived size to trailer fraction:
-  single_item -> single item pickup
+  single_item -> minimum pickup
   min_pickup -> 1/4 trailer minimum pickup
   half_trailer -> 1/2 trailer
   three_quarter_trailer -> 3/4 trailer
