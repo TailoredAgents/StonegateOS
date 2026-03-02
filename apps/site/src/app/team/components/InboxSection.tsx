@@ -5,6 +5,7 @@ import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { InboxAutoScroll } from "./InboxAutoScroll";
 import { InboxMediaGallery } from "./InboxMediaGallery";
+import { InboxLiveUpdatesClient } from "./InboxLiveUpdatesClient";
 import { TEAM_EMPTY_STATE, TEAM_INPUT_COMPACT, TEAM_SELECT, teamButtonClass } from "./team-ui";
 import type { ContactNoteSummary } from "./contacts.types";
 import type { ContactReminderSummary } from "./contacts.types";
@@ -1126,6 +1127,15 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
               </div>
 
               <div id="inbox-thread-scroll" className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                {selectedThreadId && activeContactId ? (
+                  <InboxLiveUpdatesClient
+                    threadId={selectedThreadId}
+                    contactId={activeContactId}
+                    channel={requestedChannel}
+                    initialMessageCount={timelineMessages.length}
+                    initialLastMessageAt={activeThread?.lastMessageAt ?? null}
+                  />
+                ) : null}
                 {timelineMessages.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-sm text-slate-500">
                     No messages yet. Send the first touch below.
@@ -1195,6 +1205,9 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                             <div className="mt-3 flex justify-end">
                               <form action={sendDraftMessageAction}>
                                 <input type="hidden" name="messageId" value={message.id} />
+                                {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
+                                <input type="hidden" name="contactId" value={activeContactId ?? ""} />
+                                <input type="hidden" name="channel" value={requestedChannel} />
                                 <SubmitButton
                                   className="rounded-full bg-primary-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow transition hover:bg-primary-700"
                                   pendingLabel="Sending..."

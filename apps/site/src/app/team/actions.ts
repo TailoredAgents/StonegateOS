@@ -925,6 +925,9 @@ export async function openContactThreadAction(formData: FormData) {
 export async function sendDraftMessageAction(formData: FormData) {
   const jar = await cookies();
   const messageId = formData.get("messageId");
+  const threadId = formData.get("threadId");
+  const contactId = formData.get("contactId");
+  const channel = formData.get("channel");
   if (typeof messageId !== "string" || messageId.trim().length === 0) {
     jar.set({ name: "myst-flash-error", value: "Message ID missing", path: "/" });
     revalidatePath("/team");
@@ -945,6 +948,13 @@ export async function sendDraftMessageAction(formData: FormData) {
 
   jar.set({ name: "myst-flash", value: "Message sending...", path: "/" });
   revalidatePath("/team");
+  if (typeof threadId === "string" && threadId.trim().length > 0) {
+    const resolvedChannel = typeof channel === "string" ? channel.trim() : "";
+    const resolvedContactId = typeof contactId === "string" ? contactId.trim() : "";
+    redirect(
+      `/team?tab=inbox&threadId=${encodeURIComponent(threadId.trim())}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`
+    );
+  }
 }
 
 export async function updateContactAction(formData: FormData) {
@@ -2619,6 +2629,10 @@ export async function sendThreadMessageAction(formData: FormData) {
 
   jar.set({ name: "myst-flash", value: attachments.length ? "Message + photos queued" : "Message queued", path: "/" });
   revalidatePath("/team");
+  const resolvedContactId = typeof contactId === "string" ? contactId.trim() : "";
+  redirect(
+    `/team?tab=inbox&threadId=${encodeURIComponent(resolvedThreadId)}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`
+  );
 }
 
 export async function retryFailedMessageAction(formData: FormData) {
@@ -2729,7 +2743,10 @@ export async function suggestThreadReplyAction(formData: FormData) {
   }
 
   jar.set({ name: "myst-flash", value: "AI draft created. Review and click Send when ready.", path: "/" });
-  redirect(`/team?tab=inbox&threadId=${encodeURIComponent(resolvedThreadId)}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}`);
+  revalidatePath("/team");
+  redirect(
+    `/team?tab=inbox&threadId=${encodeURIComponent(resolvedThreadId)}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`
+  );
 }
 
 export async function logoutCrew() {
