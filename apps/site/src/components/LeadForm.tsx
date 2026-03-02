@@ -1175,7 +1175,7 @@ export function LeadForm({
     }
   };
 
-  const JUNK_PRESENTED_MIN = 100;
+  const JUNK_PRESENTED_MIN = 150;
   const JUNK_PRESENTED_STEP = 175;
 
   const baseRange =
