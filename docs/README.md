@@ -7,6 +7,7 @@ This folder contains the current operational docs for the monorepo.
 - Critical production flows: `CRITICAL_FLOWS.md`
 - Release checklist + smoke checks: `RELEASE_CHECKLIST.md`
 - Stability audit checklist (ads + daily ops): `STABILITY_AUDIT.md`
+- System “AI briefing pack” (architecture + API + data): `system/README.md`
 
 ## Operations
 - Outbox worker (background jobs): `outbox-worker.md`
