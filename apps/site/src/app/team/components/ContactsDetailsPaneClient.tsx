@@ -356,6 +356,18 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Appointment type</span>
+              <select
+                name="appointmentType"
+                defaultValue="job"
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="job">Job (junk removal)</option>
+                <option value="in_person_quote">In-person quote only</option>
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Property</span>
               <select
                 name="propertyId"

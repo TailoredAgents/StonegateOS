@@ -1,4 +1,4 @@
-export const PIPELINE_STAGES = ["new", "contacted", "quoted", "qualified", "won", "lost"] as const;
+export const PIPELINE_STAGES = ["new", "contacted", "quoted", "in_person_quote", "qualified", "won", "lost"] as const;
 
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
@@ -6,6 +6,7 @@ export const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
   new: "New",
   contacted: "Contacted",
   quoted: "Quoted",
+  in_person_quote: "In-person quote",
   qualified: "Booked",
   won: "Completed",
   lost: "Lost"
@@ -44,6 +45,12 @@ export const PIPELINE_STAGE_THEMES: Record<string, PipelineStageTheme> = {
     cardBorder: "border-indigo-100 hover:border-indigo-200",
     cardBackground: "bg-gradient-to-br from-white to-indigo-50/60"
   },
+  in_person_quote: {
+    dot: "bg-fuchsia-400",
+    badge: "bg-fuchsia-100 text-fuchsia-700",
+    cardBorder: "border-fuchsia-100 hover:border-fuchsia-200",
+    cardBackground: "bg-gradient-to-br from-white to-fuchsia-50/60"
+  },
   qualified: {
     dot: "bg-amber-400",
     badge: "bg-amber-100 text-amber-700",
@@ -80,6 +87,8 @@ export function badgeClassForPipelineStage(stage: string): string {
       return "bg-amber-100 text-amber-800";
     case "quoted":
       return "bg-indigo-100 text-indigo-800";
+    case "in_person_quote":
+      return "bg-fuchsia-100 text-fuchsia-800";
     case "qualified":
       return "bg-sky-100 text-sky-800";
     case "won":

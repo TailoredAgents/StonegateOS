@@ -574,6 +574,7 @@ export async function bookAppointmentAction(formData: FormData) {
 
   const contactId = formData.get("contactId");
   const propertyId = formData.get("propertyId");
+  const appointmentType = formData.get("appointmentType");
   const startAt = formData.get("startAt");
   const durationMinutes = formData.get("durationMinutes");
   const travelBufferMinutes = formData.get("travelBufferMinutes");
@@ -612,6 +613,9 @@ export async function bookAppointmentAction(formData: FormData) {
     services
   };
 
+  if (typeof appointmentType === "string" && appointmentType.trim().length > 0) {
+    payload["appointmentType"] = appointmentType.trim();
+  }
   if (typeof propertyId === "string" && propertyId.trim().length > 0) {
     payload["propertyId"] = propertyId.trim();
   }

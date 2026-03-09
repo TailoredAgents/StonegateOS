@@ -175,6 +175,7 @@ export const properties = pgTable(
 export const crmPipelineStageEnum = pgEnum("crm_pipeline_stage", [
   "new",
   "contacted",
+  "in_person_quote",
   "qualified",
   "quoted",
   "won",

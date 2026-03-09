@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { desc, eq, sql } from "drizzle-orm";
-import { appointmentNotes, appointments, crmTasks, getDb, outboxEvents, properties, teamMembers } from "@/db";
+import { appointmentNotes, appointments, crmPipeline, crmTasks, getDb, outboxEvents, properties, teamMembers } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { getBusinessHoursPolicy } from "@/lib/policy";
@@ -22,6 +22,7 @@ function parseStartAt(value: string, timezone: string): Date | null {
 type BookRequest = {
   contactId?: string;
   propertyId?: string;
+  appointmentType?: string;
   startAt?: string;
   durationMinutes?: number;
   travelBufferMinutes?: number;
@@ -53,6 +54,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     payload = {
       contactId: form.get("contactId")?.toString(),
       propertyId: form.get("propertyId")?.toString(),
+      appointmentType: form.get("appointmentType")?.toString(),
       startAt: form.get("startAt")?.toString(),
       durationMinutes: form.get("durationMinutes") ? Number(form.get("durationMinutes")) : undefined,
       travelBufferMinutes: form.get("travelBufferMinutes") ? Number(form.get("travelBufferMinutes")) : undefined,
@@ -72,6 +74,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   const contactId = typeof payload.contactId === "string" && payload.contactId.length ? payload.contactId : null;
   const propertyId = typeof payload.propertyId === "string" && payload.propertyId.length ? payload.propertyId : null;
   const startAtIso = typeof payload.startAt === "string" && payload.startAt.length ? payload.startAt : null;
+  const appointmentTypeRaw = typeof payload.appointmentType === "string" ? payload.appointmentType.trim() : "";
+  const appointmentType = appointmentTypeRaw.toLowerCase() === "in_person_quote" ? "in_person_quote" : "job";
   const durationMinutes =
     typeof payload.durationMinutes === "number" && payload.durationMinutes > 0 ? payload.durationMinutes : 60;
   const travelBufferMinutes =
@@ -172,7 +176,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         .values({
           contactId,
           propertyId: resolvedPropertyId,
-          type: "estimate",
+          type: appointmentType,
           startAt,
           durationMinutes,
           status: "confirmed",
@@ -214,6 +218,37 @@ export async function POST(request: NextRequest): Promise<Response> {
           services
         }
       });
+
+      const nextStage = appointmentType === "in_person_quote" ? "in_person_quote" : "qualified";
+      const [pipelineRow] = await tx
+        .select({ stage: crmPipeline.stage })
+        .from(crmPipeline)
+        .where(eq(crmPipeline.contactId, contactId))
+        .limit(1);
+      const previousStage = typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
+      if (previousStage !== "won" && previousStage !== "lost" && previousStage !== nextStage) {
+        await tx
+          .insert(crmPipeline)
+          .values({ contactId, stage: nextStage })
+          .onConflictDoUpdate({
+            target: crmPipeline.contactId,
+            set: { stage: nextStage, updatedAt: now }
+          });
+
+        await tx.insert(outboxEvents).values({
+          type: "pipeline.auto_stage_change",
+          payload: {
+            contactId,
+            fromStage: previousStage,
+            toStage: nextStage,
+            reason: "admin.booking.created",
+            meta: {
+              appointmentId,
+              appointmentType
+            }
+          }
+        });
+      }
 
       return {
         appointmentId,

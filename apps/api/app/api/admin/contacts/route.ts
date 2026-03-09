@@ -20,7 +20,7 @@ import { and, asc, desc, eq, inArray, ilike, or, sql } from "drizzle-orm";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 200;
-const PIPELINE_STAGES = ["new", "contacted", "qualified", "quoted", "won", "lost"] as const;
+const PIPELINE_STAGES = ["new", "contacted", "quoted", "in_person_quote", "qualified", "won", "lost"] as const;
 type PipelineStage = (typeof PIPELINE_STAGES)[number];
 const PIPELINE_STAGE_SET = new Set<string>(PIPELINE_STAGES);
 

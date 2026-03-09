@@ -8,6 +8,7 @@ export type CalendarEvent = {
   start: string;
   end: string;
   appointmentId?: string;
+  appointmentType?: string | null;
   rescheduleToken?: string | null;
   contactName?: string | null;
   address?: string | null;
@@ -57,6 +58,8 @@ export function CalendarGrid({
   }
 
   const isConflict = (id: string) => conflicts.some((c) => c.a === id || c.b === id);
+  const isInPersonQuote = (evt: CalendarEvent): boolean =>
+    evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote";
 
   return (
     <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-7">
@@ -95,7 +98,11 @@ export function CalendarGrid({
                     <button
                       key={evt.id}
                       className={`block w-full max-w-full overflow-hidden rounded-lg border px-2 py-1 text-left ${
-                        evt.source === "db" ? "border-primary-200 bg-primary-50/70" : "border-slate-200 bg-slate-50"
+                        evt.source === "db"
+                          ? isInPersonQuote(evt)
+                            ? "border-fuchsia-200 bg-fuchsia-50/70"
+                            : "border-primary-200 bg-primary-50/70"
+                          : "border-slate-200 bg-slate-50"
                       } ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
                       onClick={() => onSelectEvent?.(evt.id)}
                       type="button"
@@ -108,8 +115,17 @@ export function CalendarGrid({
                           <span className="hidden rounded-full bg-white px-1.5 text-[10px] uppercase text-slate-500 sm:inline-flex">
                             {evt.source === "db" ? "appt" : "google"}
                           </span>
+                          {isInPersonQuote(evt) ? (
+                            <span className="rounded-full bg-white px-1.5 text-[10px] uppercase text-fuchsia-700">
+                              quote
+                            </span>
+                          ) : null}
                           {evt.status ? (
-                            <span className="rounded-full bg-white px-1.5 text-[10px] uppercase text-primary-700">
+                            <span
+                              className={`rounded-full bg-white px-1.5 text-[10px] uppercase ${
+                                isInPersonQuote(evt) ? "text-fuchsia-700" : "text-primary-700"
+                              }`}
+                            >
                               {evt.status}
                             </span>
                           ) : null}

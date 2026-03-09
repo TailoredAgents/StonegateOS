@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { appointmentHolds, getDb, appointments, instantQuotes, leads, outboxEvents, properties } from "@/db";
+import { appointmentHolds, getDb, appointments, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
 import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../../web/persistence";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
@@ -724,6 +724,37 @@ export async function POST(request: NextRequest) {
             customerPhone: normalizedPhone.e164,
             customerEmail: body.email ?? null,
             customerName
+          }
+        });
+      }
+
+      const [pipelineRow] = await tx
+        .select({ stage: crmPipeline.stage })
+        .from(crmPipeline)
+        .where(eq(crmPipeline.contactId, contact.id))
+        .limit(1);
+
+      const previousStage = typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
+      if (previousStage !== "won" && previousStage !== "lost" && previousStage !== "qualified") {
+        await tx
+          .insert(crmPipeline)
+          .values({ contactId: contact.id, stage: "qualified" })
+          .onConflictDoUpdate({
+            target: crmPipeline.contactId,
+            set: { stage: "qualified", updatedAt: new Date() }
+          });
+
+        await tx.insert(outboxEvents).values({
+          type: "pipeline.auto_stage_change",
+          payload: {
+            contactId: contact.id,
+            fromStage: previousStage,
+            toStage: "qualified",
+            reason: "instant_quote.booked_online",
+            meta: {
+              instantQuoteId: quote.id ?? null,
+              leadId
+            }
           }
         });
       }

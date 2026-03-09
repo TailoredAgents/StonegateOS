@@ -851,6 +851,17 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
+                <span>Appointment type</span>
+                <select
+                  name="appointmentType"
+                  defaultValue="job"
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                >
+                  <option value="job">Job (junk removal)</option>
+                  <option value="in_person_quote">In-person quote only</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
                 <span>Property</span>
                 <select
                   name="propertyId"

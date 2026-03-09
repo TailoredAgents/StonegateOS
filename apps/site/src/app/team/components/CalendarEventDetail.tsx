@@ -8,6 +8,8 @@ type Props = {
 };
 
 export function CalendarEventDetail({ event, variant = "standalone" }: Props): React.ReactElement {
+  const isInPersonQuote =
+    event.source === "db" && (event.appointmentType ?? "").trim().toLowerCase() === "in_person_quote";
   const appointmentId =
     event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : null);
   const rescheduleLink =
@@ -27,8 +29,17 @@ export function CalendarEventDetail({ event, variant = "standalone" }: Props): R
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-700">
           {event.source === "db" ? "Appointment" : "Google"}
         </span>
+        {isInPersonQuote ? (
+          <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-fuchsia-700">
+            In-person quote
+          </span>
+        ) : null}
         {event.status ? (
-          <span className="rounded-full bg-primary-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-primary-700">
+          <span
+            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${
+              isInPersonQuote ? "bg-fuchsia-50 text-fuchsia-700" : "bg-primary-50 text-primary-700"
+            }`}
+          >
             {event.status}
           </span>
         ) : null}

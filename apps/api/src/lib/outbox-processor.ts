@@ -103,8 +103,16 @@ const APPOINTMENT_STATUS_VALUES = ["requested", "confirmed", "completed", "no_sh
 type AppointmentStatus = (typeof APPOINTMENT_STATUS_VALUES)[number];
 const VALID_APPOINTMENT_STATUSES = new Set<string>(APPOINTMENT_STATUS_VALUES);
 
-type PipelineStage = "new" | "contacted" | "qualified" | "quoted" | "won" | "lost";
-const PIPELINE_STAGE_SET = new Set<PipelineStage>(["new", "contacted", "qualified", "quoted", "won", "lost"]);
+type PipelineStage = "new" | "contacted" | "quoted" | "in_person_quote" | "qualified" | "won" | "lost";
+const PIPELINE_STAGE_SET = new Set<PipelineStage>([
+  "new",
+  "contacted",
+  "quoted",
+  "in_person_quote",
+  "qualified",
+  "won",
+  "lost"
+]);
 
 type FollowUpChannel = "sms" | "email";
 

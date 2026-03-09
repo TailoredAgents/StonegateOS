@@ -10,6 +10,7 @@ type CalendarEvent = {
   start: string;
   end: string;
   appointmentId?: string;
+  appointmentType?: string | null;
   rescheduleToken?: string | null;
   contactName?: string | null;
   address?: string | null;

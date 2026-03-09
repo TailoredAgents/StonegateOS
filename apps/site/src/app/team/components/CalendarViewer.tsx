@@ -233,11 +233,24 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
                         <span className="whitespace-nowrap text-xs font-semibold tabular-nums text-slate-800">
                           {formatTimeRange(evt.start, evt.end)}
                         </span>
-                        {evt.status ? (
-                          <span className="rounded-full bg-primary-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-primary-700">
-                            {evt.status}
-                          </span>
-                        ) : null}
+                        <div className="flex flex-wrap items-center justify-end gap-1">
+                          {evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote" ? (
+                            <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-fuchsia-700">
+                              quote
+                            </span>
+                          ) : null}
+                          {evt.status ? (
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${
+                                evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote"
+                                  ? "bg-fuchsia-50 text-fuchsia-700"
+                                  : "bg-primary-50 text-primary-700"
+                              }`}
+                            >
+                              {evt.status}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                       <div className="mt-1 truncate text-sm font-semibold text-slate-900">{evt.title}</div>
                       {evt.address ? <div className="truncate text-xs text-slate-600">{evt.address}</div> : null}
@@ -287,9 +300,16 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
                       <span className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-slate-700">
                         {formatTimeRange(evt.start, evt.end)}
                       </span>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
-                        {evt.source === "db" ? "appt" : "google"}
-                      </span>
+                      <div className="flex flex-wrap items-center justify-end gap-1">
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
+                          {evt.source === "db" ? "appt" : "google"}
+                        </span>
+                        {evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote" ? (
+                          <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-fuchsia-700">
+                            quote
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                     <div className="mt-1 truncate font-semibold text-slate-900">{evt.title}</div>
                     {evt.address ? <div className="truncate text-[11px] text-slate-600">{evt.address}</div> : null}
