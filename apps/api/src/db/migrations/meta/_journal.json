@@ -232,6 +232,27 @@
       "when": 1772059661950,
       "tag": "0032_discord_action_intents",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1773180000000,
+      "tag": "0033_discord_report_subscriptions",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1773180001000,
+      "tag": "0034_discord_agent_memory",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1773180002000,
+      "tag": "0035_in_person_quote_pipeline_stage",
+      "breakpoints": true
     }
   ]
 }
