@@ -1,5 +1,6 @@
 import React from "react";
 import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
+import { formatCalendarEventAmounts, formatCompactUsdCents } from "./calendarEventAmounts";
 
 type CalendarEvent = {
   id: string;
@@ -13,11 +14,14 @@ type CalendarEvent = {
   contactName?: string | null;
   address?: string | null;
   status?: string | null;
+  quotedTotalCents?: number | null;
+  finalTotalCents?: number | null;
 };
 
 type Props = {
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
+  projectedRevenueByDay: Record<string, number>;
   onSelectEvent?: (id: string) => void;
   anchorDay: string;
   selectedDay?: string | null;
@@ -29,6 +33,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export function CalendarMonthGrid({
   events,
   conflicts,
+  projectedRevenueByDay,
   onSelectEvent,
   anchorDay,
   selectedDay,
@@ -62,6 +67,8 @@ export function CalendarMonthGrid({
         const key = formatDayKey(day);
         const inMonth = getMonthStart(day).getTime() === firstOfMonth.getTime();
         const bucket = buckets.get(key) ?? [];
+        const projectedRevenue = projectedRevenueByDay[key] ?? 0;
+        const projectedRevenueLabel = projectedRevenue > 0 ? formatCompactUsdCents(projectedRevenue) : null;
         const isSelected = typeof selectedDay === "string" && selectedDay.length > 0 ? selectedDay === key : false;
         return (
           <div
@@ -73,15 +80,23 @@ export function CalendarMonthGrid({
             <button
               type="button"
               onClick={() => onSelectDay?.(key)}
+              title={projectedRevenueLabel ? `Projected revenue ${projectedRevenueLabel}` : undefined}
               className={`mb-1 w-full text-left text-[11px] font-semibold uppercase ${
                 isSelected ? "text-primary-700" : "text-slate-500"
               }`}
             >
-              {day.toLocaleDateString(undefined, {
-                timeZone: TEAM_TIME_ZONE,
-                weekday: "short",
-                day: "numeric"
-              })}
+              <span className="block">
+                {day.toLocaleDateString(undefined, {
+                  timeZone: TEAM_TIME_ZONE,
+                  weekday: "short",
+                  day: "numeric"
+                })}
+              </span>
+              {projectedRevenueLabel ? (
+                <span className="block truncate text-[10px] font-semibold normal-case text-emerald-700">
+                  Proj {projectedRevenueLabel}
+                </span>
+              ) : null}
             </button>
 
             {bucket.length ? (
@@ -106,35 +121,39 @@ export function CalendarMonthGrid({
                 <div className="hidden space-y-1 sm:block">
                   {bucket
                     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
-                    .map((evt) => (
-                      <button
-                        key={evt.id}
-                        className={`block w-full max-w-full overflow-hidden rounded border px-1 py-0.5 text-left text-[11px] ${
-                          evt.source === "db"
-                            ? isInPersonQuote(evt)
-                              ? "border-fuchsia-200 bg-fuchsia-50/70"
-                              : "border-primary-200 bg-primary-50/70"
-                            : "border-slate-200 bg-slate-100"
-                        } ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
-                        onClick={() => onSelectEvent?.(evt.id)}
-                        type="button"
-                      >
-                        <div className="flex items-center gap-1">
-                          <span className="whitespace-nowrap font-semibold tabular-nums text-slate-800">
-                            {formatTime(evt.start)}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate text-slate-700">{evt.title}</span>
-                          {isInPersonQuote(evt) ? (
-                            <span className="rounded bg-white px-1 text-[10px] uppercase text-fuchsia-700">quote</span>
-                          ) : null}
-                          {evt.status ? (
-                            <span className={`rounded bg-white px-1 text-[10px] uppercase ${isInPersonQuote(evt) ? "text-fuchsia-700" : "text-primary-700"}`}>
-                              {evt.status}
+                    .map((evt) => {
+                      const amountSummary = evt.source === "db" ? formatCalendarEventAmounts(evt) : null;
+                      return (
+                        <button
+                          key={evt.id}
+                          className={`block w-full max-w-full overflow-hidden rounded border px-1 py-0.5 text-left text-[11px] ${
+                            evt.source === "db"
+                              ? isInPersonQuote(evt)
+                                ? "border-fuchsia-200 bg-fuchsia-50/70"
+                                : "border-primary-200 bg-primary-50/70"
+                              : "border-slate-200 bg-slate-100"
+                          } ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
+                          onClick={() => onSelectEvent?.(evt.id)}
+                          type="button"
+                        >
+                          <div className="flex items-center gap-1">
+                            <span className="whitespace-nowrap font-semibold tabular-nums text-slate-800">
+                              {formatTime(evt.start)}
                             </span>
-                          ) : null}
-                        </div>
-                      </button>
-                    ))}
+                            <span className="min-w-0 flex-1 truncate text-slate-700">{evt.title}</span>
+                            {isInPersonQuote(evt) ? (
+                              <span className="rounded bg-white px-1 text-[10px] uppercase text-fuchsia-700">quote</span>
+                            ) : null}
+                            {evt.status ? (
+                              <span className={`rounded bg-white px-1 text-[10px] uppercase ${isInPersonQuote(evt) ? "text-fuchsia-700" : "text-primary-700"}`}>
+                                {evt.status}
+                              </span>
+                            ) : null}
+                          </div>
+                          {amountSummary ? <div className="truncate text-[10px] text-slate-600">{amountSummary}</div> : null}
+                        </button>
+                      );
+                    })}
                 </div>
               )}
             </div>

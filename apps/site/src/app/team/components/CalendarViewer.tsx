@@ -7,6 +7,7 @@ import { CalendarMonthGrid } from "./CalendarMonthGrid";
 import { CalendarEventDetail } from "./CalendarEventDetail";
 import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
 import { TEAM_CARD } from "./team-ui";
+import { buildProjectedRevenueByDay, formatCalendarEventAmounts, formatUsdCents } from "./calendarEventAmounts";
 
 type Props = {
   initialView: "week" | "month" | "day";
@@ -43,6 +44,10 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
       .filter((evt) => dayKeyFromIso(evt.start) === selectedDay)
       .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
   }, [events, selectedDay]);
+  const projectedRevenueByDay = React.useMemo(() => buildProjectedRevenueByDay(events), [events]);
+  const selectedDayProjectedRevenue = projectedRevenueByDay[selectedDay] ?? 0;
+  const selectedDayProjectedLabel =
+    selectedDayProjectedRevenue > 0 ? formatUsdCents(selectedDayProjectedRevenue) : null;
 
   const updateCalendarUrl = React.useCallback(
     (next: { anchorDay?: string; view?: "week" | "month" | "day" }) => {
@@ -208,6 +213,7 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
             <CalendarMonthGrid
               events={events}
               conflicts={conflicts}
+              projectedRevenueByDay={projectedRevenueByDay}
               anchorDay={anchorDay}
               selectedDay={selectedDay}
               onSelectDay={handleSelectDay}
@@ -215,47 +221,58 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
             />
           ) : view === "day" ? (
             <div className="rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm">
-              <div className="mb-3 text-xs font-semibold uppercase text-slate-500">{formatDayKeyLabel(selectedDay)}</div>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-semibold uppercase text-slate-500">{formatDayKeyLabel(selectedDay)}</div>
+                {selectedDayProjectedLabel ? (
+                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-emerald-700">
+                    Projected {selectedDayProjectedLabel}
+                  </span>
+                ) : null}
+              </div>
               {dayEvents.length === 0 ? (
                 <p className="text-sm text-slate-500">No appointments.</p>
               ) : (
                 <div className="space-y-2">
-                  {dayEvents.map((evt) => (
-                    <button
-                      key={evt.id}
-                      type="button"
-                      onClick={() => handleSelectEvent(evt.id)}
-                      className={`block w-full overflow-hidden rounded-lg border px-3 py-3 text-left ${
-                        evt.id === selectedId ? "border-primary-300 bg-primary-50/70" : "border-slate-200 bg-white hover:bg-slate-50"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="whitespace-nowrap text-xs font-semibold tabular-nums text-slate-800">
-                          {formatTimeRange(evt.start, evt.end)}
-                        </span>
-                        <div className="flex flex-wrap items-center justify-end gap-1">
-                          {evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote" ? (
-                            <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-fuchsia-700">
-                              quote
-                            </span>
-                          ) : null}
-                          {evt.status ? (
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${
-                                evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote"
-                                  ? "bg-fuchsia-50 text-fuchsia-700"
-                                  : "bg-primary-50 text-primary-700"
-                              }`}
-                            >
-                              {evt.status}
-                            </span>
-                          ) : null}
+                  {dayEvents.map((evt) => {
+                    const amountSummary = evt.source === "db" ? formatCalendarEventAmounts(evt) : null;
+                    return (
+                      <button
+                        key={evt.id}
+                        type="button"
+                        onClick={() => handleSelectEvent(evt.id)}
+                        className={`block w-full overflow-hidden rounded-lg border px-3 py-3 text-left ${
+                          evt.id === selectedId ? "border-primary-300 bg-primary-50/70" : "border-slate-200 bg-white hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="whitespace-nowrap text-xs font-semibold tabular-nums text-slate-800">
+                            {formatTimeRange(evt.start, evt.end)}
+                          </span>
+                          <div className="flex flex-wrap items-center justify-end gap-1">
+                            {evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote" ? (
+                              <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-fuchsia-700">
+                                quote
+                              </span>
+                            ) : null}
+                            {evt.status ? (
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${
+                                  evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote"
+                                    ? "bg-fuchsia-50 text-fuchsia-700"
+                                    : "bg-primary-50 text-primary-700"
+                                }`}
+                              >
+                                {evt.status}
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                      <div className="mt-1 truncate text-sm font-semibold text-slate-900">{evt.title}</div>
-                      {evt.address ? <div className="truncate text-xs text-slate-600">{evt.address}</div> : null}
-                    </button>
-                  ))}
+                        <div className="mt-1 truncate text-sm font-semibold text-slate-900">{evt.title}</div>
+                        {amountSummary ? <div className="truncate text-xs text-slate-600">{amountSummary}</div> : null}
+                        {evt.address ? <div className="truncate text-xs text-slate-600">{evt.address}</div> : null}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -263,6 +280,7 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
             <CalendarGrid
               events={events}
               conflicts={conflicts}
+              projectedRevenueByDay={projectedRevenueByDay}
               anchorDay={anchorDay}
               selectedDay={selectedDay}
               onSelectDay={handleSelectDay}
@@ -277,6 +295,9 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
               <div>
                 <div className="text-xs font-semibold uppercase text-slate-500">Details</div>
                 <div className="mt-1 text-sm font-semibold text-slate-900">{formatDayKeyLabel(selectedDay)}</div>
+                {selectedDayProjectedLabel ? (
+                  <div className="mt-1 text-[11px] font-semibold text-emerald-700">Projected {selectedDayProjectedLabel}</div>
+                ) : null}
               </div>
               <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
                 {dayEvents.length} {dayEvents.length === 1 ? "item" : "items"}
@@ -287,34 +308,38 @@ export function CalendarViewer({ initialView, initialAnchor, events, conflicts }
               {dayEvents.length === 0 ? (
                 <p className="text-sm text-slate-500">Select a date to see appointments.</p>
               ) : (
-                dayEvents.slice(0, 8).map((evt) => (
-                  <button
-                    key={evt.id}
-                    type="button"
-                    onClick={() => handleSelectEvent(evt.id)}
-                    className={`block w-full overflow-hidden rounded-xl border px-3 py-2 text-left text-sm ${
-                      evt.id === selectedId ? "border-primary-300 bg-primary-50/70" : "border-slate-200 bg-white hover:bg-slate-50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-slate-700">
-                        {formatTimeRange(evt.start, evt.end)}
-                      </span>
-                      <div className="flex flex-wrap items-center justify-end gap-1">
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
-                          {evt.source === "db" ? "appt" : "google"}
+                dayEvents.slice(0, 8).map((evt) => {
+                  const amountSummary = evt.source === "db" ? formatCalendarEventAmounts(evt) : null;
+                  return (
+                    <button
+                      key={evt.id}
+                      type="button"
+                      onClick={() => handleSelectEvent(evt.id)}
+                      className={`block w-full overflow-hidden rounded-xl border px-3 py-2 text-left text-sm ${
+                        evt.id === selectedId ? "border-primary-300 bg-primary-50/70" : "border-slate-200 bg-white hover:bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-slate-700">
+                          {formatTimeRange(evt.start, evt.end)}
                         </span>
-                        {evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote" ? (
-                          <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-fuchsia-700">
-                            quote
+                        <div className="flex flex-wrap items-center justify-end gap-1">
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">
+                            {evt.source === "db" ? "appt" : "google"}
                           </span>
-                        ) : null}
+                          {evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote" ? (
+                            <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-fuchsia-700">
+                              quote
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
-                    <div className="mt-1 truncate font-semibold text-slate-900">{evt.title}</div>
-                    {evt.address ? <div className="truncate text-[11px] text-slate-600">{evt.address}</div> : null}
-                  </button>
-                ))
+                      <div className="mt-1 truncate font-semibold text-slate-900">{evt.title}</div>
+                      {amountSummary ? <div className="truncate text-[11px] text-slate-600">{amountSummary}</div> : null}
+                      {evt.address ? <div className="truncate text-[11px] text-slate-600">{evt.address}</div> : null}
+                    </button>
+                  );
+                })
               )}
               {dayEvents.length > 8 ? (
                 <div className="text-xs text-slate-500">+{dayEvents.length - 8} more… use day view to see all.</div>

@@ -19,6 +19,8 @@ type CalendarEvent = {
   contactName?: string | null;
   address?: string | null;
   status?: string | null;
+  quotedTotalCents?: number | null;
+  finalTotalCents?: number | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
 };
 
@@ -51,6 +53,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
       startAt: appointments.startAt,
       durationMinutes: appointments.durationMinutes,
       rescheduleToken: appointments.rescheduleToken,
+      quotedTotalCents: appointments.quotedTotalCents,
+      finalTotalCents: appointments.finalTotalCents,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
       addressLine1: properties.addressLine1,
@@ -129,6 +133,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
         contactName,
         address: addressParts.length ? addressParts : null,
         status: row.status ?? null,
+        quotedTotalCents: row.quotedTotalCents ?? null,
+        finalTotalCents: row.finalTotalCents ?? null,
         notes: row.contactId ? notesByContactId.get(row.contactId) ?? [] : []
       };
     });

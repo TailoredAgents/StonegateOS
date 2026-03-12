@@ -15,6 +15,8 @@ type CalendarEvent = {
   contactName?: string | null;
   address?: string | null;
   status?: string | null;
+  quotedTotalCents?: number | null;
+  finalTotalCents?: number | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
 };
 

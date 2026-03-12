@@ -1,6 +1,7 @@
 import React from "react";
 import type { CalendarEvent } from "./CalendarGrid";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
+import { formatCalendarEventAmounts } from "./calendarEventAmounts";
 
 type Props = {
   event: CalendarEvent;
@@ -18,6 +19,7 @@ export function CalendarEventDetail({ event, variant = "standalone" }: Props): R
       : null;
   const teamLink = appointmentId ? `/team?tab=myday&appointmentId=${encodeURIComponent(appointmentId)}` : null;
   const notes = event.notes ?? [];
+  const amountSummary = event.source === "db" ? formatCalendarEventAmounts(event) : null;
   const shellClass =
     variant === "embedded"
       ? "rounded-xl border border-slate-200 bg-white p-3"
@@ -50,6 +52,7 @@ export function CalendarEventDetail({ event, variant = "standalone" }: Props): R
       </p>
       {event.address ? <p className="text-xs text-slate-500">{event.address}</p> : null}
       {event.contactName ? <p className="text-xs text-slate-500">Contact: {event.contactName}</p> : null}
+      {amountSummary ? <p className="text-xs text-slate-500">{amountSummary}</p> : null}
       {notes.length ? (
         <div className="mt-3 space-y-1 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Notes</div>
