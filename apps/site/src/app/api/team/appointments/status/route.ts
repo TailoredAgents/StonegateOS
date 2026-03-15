@@ -27,6 +27,10 @@ function parsePercentToBps(value: unknown): number | null {
   return Math.round(parsed * 100);
 }
 
+function hasEnteredValue(value: FormDataEntryValue | null): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   const jar = request.cookies;
   const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
@@ -74,6 +78,21 @@ export async function POST(request: NextRequest): Promise<Response> {
       return response;
     }
     payload["finalTotalCents"] = cents;
+
+    const cardTipRaw = formData.get("cardTip");
+    const cardTipCents = parseUsdToCents(cardTipRaw);
+    if (hasEnteredValue(cardTipRaw) && cardTipCents === null) {
+      const response = NextResponse.redirect(redirectTo, 303);
+      response.cookies.set({
+        name: "myst-flash-error",
+        value: "Card tips must be 0 or more.",
+        path: "/"
+      });
+      return response;
+    }
+    if (cardTipCents !== null) {
+      payload["cardTipCents"] = cardTipCents;
+    }
 
     const crewIds = formData.getAll("crewMemberId").filter((value): value is string => typeof value === "string");
     if (crewIds.length > 0) {

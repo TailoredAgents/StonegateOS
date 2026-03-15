@@ -112,7 +112,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
       <header className={TEAM_CARD_PADDED}>
         <h2 className={TEAM_SECTION_TITLE}>Commissions</h2>
         <p className={TEAM_SECTION_SUBTITLE}>
-          Weekly payouts calculated from completed jobs using final amount paid. Sales is assigned on each contact,
+          Weekly payouts use the current Monday-Sunday week and final amount paid. Sales is assigned on each contact,
           marketing is paid to the marketing recipient, and crews are selected when marking a job complete.
         </p>
       </header>
@@ -248,4 +248,3 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
     </section>
   );
 }
-

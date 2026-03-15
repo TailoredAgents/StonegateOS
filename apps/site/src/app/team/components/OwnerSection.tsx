@@ -11,7 +11,9 @@ type RevenueWindow = {
 type RevenuePayload = {
   ok: true;
   currency: string;
+  timezone: string;
   windows: {
+    weekToDate: RevenueWindow & { startsAt: string };
     last30Days: RevenueWindow;
     monthToDate: RevenueWindow;
     yearToDate: RevenueWindow;
@@ -57,6 +59,7 @@ type CommissionSummaryPayload = {
   periodStart: string;
   periodEnd: string;
   scheduledPayoutAt: string;
+  cardTipsCents: number;
   totalsCents: {
     sales: number;
     marketing: number;
@@ -77,6 +80,17 @@ function fmtMoney(cents: number, currency: string) {
 function fmtDay(iso: string): string {
   const d = new Date(iso);
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(d);
+}
+
+function fmtWindowStart(iso: string, timezone: string): string {
+  const d = new Date(iso);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric"
+  }).format(d);
 }
 
 function fmtPercent(value: number): string {
@@ -173,6 +187,18 @@ export async function OwnerSection(): Promise<React.ReactElement> {
             <p className="text-amber-700">{revenueError}</p>
           ) : revenue?.ok ? (
             <ul className="space-y-2">
+              <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div>
+                  <div className="font-semibold text-slate-900">Week to date</div>
+                  <div className="text-xs text-slate-600">{revenue.windows.weekToDate.count} jobs</div>
+                  <div className="text-[11px] text-slate-500">
+                    Counting from {fmtWindowStart(revenue.windows.weekToDate.startsAt, revenue.timezone)}
+                  </div>
+                </div>
+                <div className="text-right font-semibold text-slate-900">
+                  {fmtMoney(revenue.windows.weekToDate.totalCents, revenue.currency)}
+                </div>
+              </li>
               <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                 <div>
                   <div className="font-semibold text-slate-900">Month to date</div>
@@ -306,12 +332,18 @@ export async function OwnerSection(): Promise<React.ReactElement> {
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">This week (pay period)</div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Current week (Mon-Sun)</div>
                     <div className="mt-1 text-sm font-semibold text-slate-900">
                       Total: {fmtMoney(commissionSummary.totalsCents.total, "USD")}
                     </div>
                     <div className="mt-1 text-xs text-slate-600">
+                      Counting completed jobs from {fmtWindowStart(commissionSummary.periodStart, commissionSummary.timezone)}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-600">
                       Payout scheduled {fmtWhen(commissionSummary.scheduledPayoutAt, commissionSummary.timezone)}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-600">
+                      Card tips tracked separately: {fmtMoney(commissionSummary.cardTipsCents, "USD")}
                     </div>
                   </div>
                   <div className="text-right text-xs text-slate-600">
@@ -327,7 +359,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
             </div>
           ) : (
             <p className="mt-4 text-sm text-slate-600">
-              Commissions are calculated from completed jobs using final amount paid.
+              Commissions are calculated from completed jobs in the current Monday-Sunday week using final amount paid.
             </p>
           )}
         </div>

@@ -253,6 +253,20 @@
       "when": 1773180002000,
       "tag": "0035_in_person_quote_pipeline_stage",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1773180003000,
+      "tag": "0036_appointment_card_tips",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1773180004000,
+      "tag": "0037_freeze_existing_sold_by",
+      "breakpoints": true
     }
   ]
 }

@@ -2,21 +2,20 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { contacts, getDb, appointmentCrewMembers, appointments, leads, outboxEvents } from "@/db";
+import { getDb, appointmentCrewMembers, appointments, leads, outboxEvents } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
 import { getOrCreateCommissionSettings, recalculateAppointmentCommissions } from "@/lib/commissions";
-import { getContactAssignee } from "@/lib/contact-assignees";
 
 const StatusSchema = z.object({
   status: z.enum(["requested", "confirmed", "completed", "no_show", "canceled"]),
   crew: z.string().optional().nullable(),
   owner: z.string().optional().nullable(),
-  soldByMemberId: z.string().uuid().optional().nullable(),
   marketingMemberId: z.string().uuid().optional().nullable(),
   finalTotalCents: z.number().int().nonnegative().optional(),
+  cardTipCents: z.number().int().nonnegative().optional(),
   finalTotalSameAsQuoted: z.boolean().optional(),
   crewMembers: z
     .array(
@@ -69,16 +68,15 @@ export async function POST(
   const status = parsed.data.status;
   const crew = parsed.data.crew;
   const owner = parsed.data.owner;
-  const soldByMemberId = parsed.data.soldByMemberId;
   const marketingMemberId = parsed.data.marketingMemberId;
   const finalTotalCentsInput = parsed.data.finalTotalCents;
+  const cardTipCentsInput = parsed.data.cardTipCents;
   const finalTotalSameAsQuoted = parsed.data.finalTotalSameAsQuoted === true;
   const crewMembers = parsed.data.crewMembers;
 
   const [existing] = await db
     .select({
       id: appointments.id,
-      contactId: appointments.contactId,
       leadId: appointments.leadId,
       calendarEventId: appointments.calendarEventId,
       quotedTotalCents: appointments.quotedTotalCents,
@@ -113,30 +111,6 @@ export async function POST(
   const completedAtToSet =
     leavingCompleted ? null : becameCompleted ? new Date() : undefined;
 
-  let soldByToSet: string | null | undefined = undefined;
-  if (becameCompleted && soldByMemberId === undefined) {
-    try {
-      const [row] = await db
-        .select({ salespersonMemberId: contacts.salespersonMemberId })
-        .from(contacts)
-        .where(eq(contacts.id, existing.contactId))
-        .limit(1);
-      if (row?.salespersonMemberId) {
-        soldByToSet = row.salespersonMemberId;
-      }
-    } catch (error) {
-      const code = extractPgCode(error);
-      if (code !== "42703") throw error;
-    }
-    if (!soldByToSet && existing.contactId) {
-      try {
-        soldByToSet = await getContactAssignee(db, existing.contactId);
-      } catch {
-        // ignore fallback errors
-      }
-    }
-  }
-
   let marketingToSet: string | null | undefined = undefined;
   if (becameCompleted && marketingMemberId === undefined) {
     try {
@@ -154,7 +128,6 @@ export async function POST(
     status === "completed" &&
     (becameCompleted ||
       finalTotalCentsToSet !== undefined ||
-      soldByMemberId !== undefined ||
       marketingMemberId !== undefined ||
       marketingToSet !== undefined ||
       crewMembers !== undefined);
@@ -166,11 +139,10 @@ export async function POST(
     };
     if (crew !== undefined) baseSet["crew"] = crew ?? null;
     if (owner !== undefined) baseSet["owner"] = owner ?? null;
-    if (soldByMemberId !== undefined) baseSet["soldByMemberId"] = soldByMemberId ?? null;
-    if (soldByToSet !== undefined) baseSet["soldByMemberId"] = soldByToSet;
     if (marketingMemberId !== undefined) baseSet["marketingMemberId"] = marketingMemberId ?? null;
     if (marketingToSet !== undefined) baseSet["marketingMemberId"] = marketingToSet;
     if (finalTotalCentsToSet !== undefined) baseSet["finalTotalCents"] = finalTotalCentsToSet;
+    if (cardTipCentsInput !== undefined) baseSet["cardTipCents"] = cardTipCentsInput;
     if (completedAtToSet !== undefined) baseSet["completedAt"] = completedAtToSet;
 
     let row:
@@ -284,7 +256,7 @@ export async function POST(
       status,
       leadId: updated.leadId ?? null,
       ...(finalTotalCentsToSet !== undefined ? { finalTotalCents: finalTotalCentsToSet } : {}),
-      ...(soldByMemberId !== undefined ? { soldByMemberId } : {}),
+      ...(cardTipCentsInput !== undefined ? { cardTipCents: cardTipCentsInput } : {}),
       ...(marketingMemberId !== undefined ? { marketingMemberId } : {}),
       ...(crewMembers !== undefined ? { crewMembersCount: crewMembers.length } : {})
     }

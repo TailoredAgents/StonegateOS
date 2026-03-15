@@ -1025,6 +1025,7 @@ export const appointments = pgTable(
     status: appointmentStatusEnum("status").default("requested").notNull(),
     quotedTotalCents: integer("quoted_total_cents"),
     finalTotalCents: integer("final_total_cents"),
+    cardTipCents: integer("card_tip_cents"),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     calendarEventId: text("calendar_event_id"),
     crew: text("crew"),

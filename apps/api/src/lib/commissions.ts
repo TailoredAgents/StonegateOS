@@ -6,14 +6,12 @@ import {
   appointmentCrewMembers,
   appointments,
   commissionSettings,
-  contacts,
   expenses,
   payoutRunAdjustments,
   payoutRunLines,
   payoutRuns,
   teamMembers
 } from "@/db";
-import { getContactAssignee } from "@/lib/contact-assignees";
 
 export type CommissionSettingsRow = {
   key: string;
@@ -80,7 +78,7 @@ export async function getOrCreateCommissionSettings(db: DatabaseClient): Promise
     .values({
       key: SETTINGS_KEY,
       timezone: "America/New_York",
-      payoutWeekday: 5,
+      payoutWeekday: 1,
       payoutHour: 12,
       payoutMinute: 0,
       salesRateBps: 750,
@@ -116,47 +114,26 @@ export async function getOrCreateCommissionSettings(db: DatabaseClient): Promise
   return { ...created, payoutWeekday: asWeekday(created.payoutWeekday) };
 }
 
-export function resolveCurrentPayoutCutoff(now: Date, settings: Pick<CommissionSettingsRow, "timezone" | "payoutWeekday" | "payoutHour" | "payoutMinute">) {
-  const zoned = DateTime.fromJSDate(now).setZone(settings.timezone);
-  const thisWeekCutoff = zoned.set({
-    weekday: settings.payoutWeekday,
-    hour: settings.payoutHour,
-    minute: settings.payoutMinute,
-    second: 0,
-    millisecond: 0
-  });
-
-  const cutoff = zoned >= thisWeekCutoff ? thisWeekCutoff : thisWeekCutoff.minus({ weeks: 1 });
-  return {
-    timezone: settings.timezone,
-    cutoffAt: cutoff.toJSDate()
-  };
-}
-
-export function resolveUpcomingPayoutCutoff(
+export function resolveCurrentPayoutPeriod(
   now: Date,
-  settings: Pick<CommissionSettingsRow, "timezone" | "payoutWeekday" | "payoutHour" | "payoutMinute">
+  settings: Pick<CommissionSettingsRow, "timezone" | "payoutHour" | "payoutMinute">
 ) {
   const zoned = DateTime.fromJSDate(now).setZone(settings.timezone);
-  const thisWeekCutoff = zoned.set({
-    weekday: settings.payoutWeekday,
+  const periodStart = zoned.startOf("week");
+  const periodEnd = periodStart.plus({ weeks: 1 });
+  const scheduledPayoutAt = periodEnd.set({
     hour: settings.payoutHour,
     minute: settings.payoutMinute,
     second: 0,
     millisecond: 0
   });
 
-  const cutoff = zoned < thisWeekCutoff ? thisWeekCutoff : thisWeekCutoff.plus({ weeks: 1 });
   return {
     timezone: settings.timezone,
-    cutoffAt: cutoff.toJSDate()
+    periodStart: periodStart.toJSDate(),
+    periodEnd: periodEnd.toJSDate(),
+    scheduledPayoutAt: scheduledPayoutAt.toJSDate()
   };
-}
-
-export function defaultPayPeriodForCutoff(cutoffAt: Date, timezone: string): { start: Date; end: Date } {
-  const cutoff = DateTime.fromJSDate(cutoffAt).setZone(timezone);
-  const start = cutoff.minus({ days: 6, hours: 12 }).set({ second: 0, millisecond: 0 });
-  return { start: start.toJSDate(), end: cutoff.toJSDate() };
 }
 
 function roundCents(amount: number): number {
@@ -199,10 +176,8 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
             id: string;
             status: string | null;
             finalTotalCents: number | null;
-            contactId: string | null;
             soldByMemberId: string | null;
             marketingMemberId: string | null;
-            contactSalespersonId: string | null;
           }
         | undefined;
 
@@ -212,13 +187,10 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
             id: appointments.id,
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
-            contactId: appointments.contactId,
             soldByMemberId: appointments.soldByMemberId,
-            marketingMemberId: appointments.marketingMemberId,
-            contactSalespersonId: contacts.salespersonMemberId
+            marketingMemberId: appointments.marketingMemberId
           })
           .from(appointments)
-          .leftJoin(contacts, eq(appointments.contactId, contacts.id))
           .where(eq(appointments.id, appointmentId))
           .limit(1);
         row = full;
@@ -232,8 +204,7 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
           .select({
             id: appointments.id,
             status: appointments.status,
-            finalTotalCents: appointments.finalTotalCents,
-            contactId: appointments.contactId
+            finalTotalCents: appointments.finalTotalCents
           })
           .from(appointments)
           .where(eq(appointments.id, appointmentId))
@@ -243,8 +214,7 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
           ? {
               ...fallback,
               soldByMemberId: null,
-              marketingMemberId: null,
-              contactSalespersonId: null
+              marketingMemberId: null
             }
           : undefined;
       }
@@ -272,9 +242,7 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
 
       const commissionRows: Array<typeof appointmentCommissions.$inferInsert> = [];
 
-      const fallbackContactAssignee =
-        !row.contactSalespersonId && row.contactId ? await getContactAssignee(tx, row.contactId) : null;
-      const soldBy = row.soldByMemberId ?? row.contactSalespersonId ?? fallbackContactAssignee ?? null;
+      const soldBy = row.soldByMemberId ?? null;
       if (soldBy) {
         commissionRows.push({
           appointmentId,
@@ -386,13 +354,12 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
 
 export async function createOrGetCurrentPayoutRun(db: DatabaseClient, input: { actorId?: string | null }): Promise<{ payoutRunId: string }> {
   const settings = await getOrCreateCommissionSettings(db);
-  const { cutoffAt, timezone } = resolveCurrentPayoutCutoff(new Date(), settings);
-  const period = defaultPayPeriodForCutoff(cutoffAt, timezone);
+  const period = resolveCurrentPayoutPeriod(new Date(), settings);
 
   const [existing] = await db
     .select({ id: payoutRuns.id })
     .from(payoutRuns)
-    .where(and(eq(payoutRuns.periodStart, period.start), eq(payoutRuns.periodEnd, period.end)))
+    .where(and(eq(payoutRuns.periodStart, period.periodStart), eq(payoutRuns.periodEnd, period.periodEnd)))
     .limit(1);
 
   if (existing?.id) return { payoutRunId: existing.id };
@@ -400,10 +367,10 @@ export async function createOrGetCurrentPayoutRun(db: DatabaseClient, input: { a
   const [created] = await db
     .insert(payoutRuns)
     .values({
-      timezone,
-      periodStart: period.start,
-      periodEnd: period.end,
-      scheduledPayoutAt: cutoffAt,
+      timezone: period.timezone,
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      scheduledPayoutAt: period.scheduledPayoutAt,
       status: "draft",
       createdBy: input.actorId ?? null,
       createdAt: new Date(),

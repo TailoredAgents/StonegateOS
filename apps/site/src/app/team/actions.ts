@@ -85,6 +85,7 @@ export async function updateApptStatus(formData: FormData) {
 
   if (status === "completed") {
     const finalTotalCents = parseUsdToCents(formData.get("finalTotal"));
+    const cardTipCents = parseUsdToCents(formData.get("cardTip"));
     const same = formData.get("finalTotalSameAsQuoted");
     const finalTotalSameAsQuoted = typeof same === "string" && (same === "true" || same === "on");
 
@@ -92,6 +93,10 @@ export async function updateApptStatus(formData: FormData) {
       payload["finalTotalCents"] = finalTotalCents;
     } else if (finalTotalSameAsQuoted) {
       payload["finalTotalSameAsQuoted"] = true;
+    }
+
+    if (cardTipCents !== null) {
+      payload["cardTipCents"] = cardTipCents;
     }
   }
 
@@ -575,6 +580,9 @@ export async function bookAppointmentAction(formData: FormData) {
   const contactId = formData.get("contactId");
   const propertyId = formData.get("propertyId");
   const appointmentType = formData.get("appointmentType");
+  const assignedAssociateMemberIdRaw = formData.get("assignedAssociateMemberId");
+  const currentAssignedAssociateMemberIdRaw = formData.get("currentAssignedAssociateMemberId");
+  const soldByMemberIdRaw = formData.get("soldByMemberId");
   const startAt = formData.get("startAt");
   const durationMinutes = formData.get("durationMinutes");
   const travelBufferMinutes = formData.get("travelBufferMinutes");
@@ -588,8 +596,28 @@ export async function bookAppointmentAction(formData: FormData) {
     return;
   }
 
+  const contactIdValue = contactId.trim();
+
   if (typeof startAt !== "string" || startAt.trim().length === 0) {
     jar.set({ name: "myst-flash-error", value: "Start time is required", path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const assignedAssociateMemberId =
+    typeof assignedAssociateMemberIdRaw === "string" && assignedAssociateMemberIdRaw.trim().length > 0
+      ? assignedAssociateMemberIdRaw.trim()
+      : null;
+  const currentAssignedAssociateMemberId =
+    typeof currentAssignedAssociateMemberIdRaw === "string" && currentAssignedAssociateMemberIdRaw.trim().length > 0
+      ? currentAssignedAssociateMemberIdRaw.trim()
+      : null;
+  const soldByMemberId =
+    typeof soldByMemberIdRaw === "string" && soldByMemberIdRaw.trim().length > 0 ? soldByMemberIdRaw.trim() : null;
+  const appointmentTypeValue = typeof appointmentType === "string" && appointmentType.trim().length > 0 ? appointmentType.trim() : "job";
+
+  if (appointmentTypeValue !== "in_person_quote" && !soldByMemberId) {
+    jar.set({ name: "myst-flash-error", value: "Who sold the job is required to book a job.", path: "/" });
     revalidatePath("/team");
     return;
   }
@@ -606,16 +634,14 @@ export async function bookAppointmentAction(formData: FormData) {
       : [];
 
   const payload: Record<string, unknown> = {
-    contactId: contactId.trim(),
+    contactId: contactIdValue,
     startAt: startAt.trim(),
     durationMinutes: Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : 60,
     travelBufferMinutes: Number.isFinite(parsedTravel) && parsedTravel >= 0 ? parsedTravel : 30,
     services
   };
 
-  if (typeof appointmentType === "string" && appointmentType.trim().length > 0) {
-    payload["appointmentType"] = appointmentType.trim();
-  }
+  payload["appointmentType"] = appointmentTypeValue;
   if (typeof propertyId === "string" && propertyId.trim().length > 0) {
     payload["propertyId"] = propertyId.trim();
   }
@@ -625,6 +651,28 @@ export async function bookAppointmentAction(formData: FormData) {
   if (quotedTotalCents !== null) {
     payload["quotedTotalCents"] = quotedTotalCents;
   }
+  if (soldByMemberId) {
+    payload["soldByMemberId"] = soldByMemberId;
+  }
+
+  const assigneeChanged = assignedAssociateMemberId !== currentAssignedAssociateMemberId;
+  let assigneeUpdated = false;
+
+  if (assigneeChanged) {
+    const assigneeResponse = await callAdminApi(`/api/admin/contacts/${encodeURIComponent(contactIdValue)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ salespersonMemberId: assignedAssociateMemberId })
+    });
+
+    if (!assigneeResponse.ok) {
+      const message = await readErrorMessage(assigneeResponse, "Unable to update assigned associate");
+      jar.set({ name: "myst-flash-error", value: message, path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    assigneeUpdated = true;
+  }
 
   const response = await callAdminApi("/api/admin/booking/book", {
     method: "POST",
@@ -632,8 +680,30 @@ export async function bookAppointmentAction(formData: FormData) {
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to book appointment");
-    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    let rollbackFailed = false;
+    if (assigneeUpdated) {
+      try {
+        const rollbackResponse = await callAdminApi(`/api/admin/contacts/${encodeURIComponent(contactIdValue)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ salespersonMemberId: currentAssignedAssociateMemberId })
+        });
+        rollbackFailed = !rollbackResponse.ok;
+      } catch {
+        rollbackFailed = true;
+      }
+    }
+
+    const message = await readErrorMessage(
+      response,
+      "Unable to book appointment"
+    );
+    jar.set(
+      {
+        name: "myst-flash-error",
+        value: rollbackFailed ? `${message} Assigned associate may need to be reset.` : message,
+        path: "/"
+      }
+    );
     revalidatePath("/team");
     return;
   }

@@ -49,7 +49,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const payload: Record<string, unknown> = {
     timezone: "America/New_York",
-    payoutWeekday: 5,
+    payoutWeekday: 1,
     payoutHour: 12,
     payoutMinute: 0,
     salesRateBps,

@@ -848,6 +848,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             className="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-xs text-slate-600 shadow-inner"
           >
             <input type="hidden" name="contactId" value={contactState.id} />
+            <input type="hidden" name="currentAssignedAssociateMemberId" value={contactState.salespersonMemberId ?? ""} />
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
@@ -910,14 +911,48 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                 />
               </label>
-               <label className="flex flex-col gap-1 sm:col-span-2">
-                 <span>Services (optional)</span>
-                 <input
-                   name="services"
-                   placeholder="e.g. junk_removal_primary"
-                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                 />
-               </label>
+              <label className="flex flex-col gap-1">
+                <span>Assigned Associate</span>
+                <select
+                  name="assignedAssociateMemberId"
+                  defaultValue={contactState.salespersonMemberId ?? ""}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                >
+                  <option value="">(Unassigned)</option>
+                  {teamMembers.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>Who sold the job?</span>
+                <select
+                  name="soldByMemberId"
+                  defaultValue={contactState.salespersonMemberId ?? ""}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                >
+                  <option value="">(Select seller)</option>
+                  {teamMembers.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="sm:col-span-2 text-[11px] text-slate-500">
+                Assigned Associate controls call routing and follow-up ownership. Who sold the job controls sales
+                commission and locks once the appointment is booked.
+              </p>
+              <label className="flex flex-col gap-1 sm:col-span-2">
+                <span>Services (optional)</span>
+                <input
+                  name="services"
+                  placeholder="e.g. junk_removal_primary"
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                />
+              </label>
               <label className="flex flex-col gap-1 sm:col-span-2">
                 <span>Quoted price (optional)</span>
                 <input

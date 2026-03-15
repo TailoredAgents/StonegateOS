@@ -4,9 +4,8 @@ import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { appointmentCommissions, appointments, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import {
-  defaultPayPeriodForCutoff,
   getOrCreateCommissionSettings,
-  resolveUpcomingPayoutCutoff
+  resolveCurrentPayoutPeriod
 } from "@/lib/commissions";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -32,8 +31,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   const db = getDb();
   try {
     const settings = await getOrCreateCommissionSettings(db);
-    const { cutoffAt, timezone } = resolveUpcomingPayoutCutoff(new Date(), settings);
-    const period = defaultPayPeriodForCutoff(cutoffAt, timezone);
+    const period = resolveCurrentPayoutPeriod(new Date(), settings);
+    let cardTipsCents = 0;
 
     const rows = await db
       .select({
@@ -45,11 +44,31 @@ export async function GET(request: NextRequest): Promise<Response> {
       .where(
         and(
           eq(appointments.status, "completed"),
-          gte(appointments.completedAt, period.start),
-          lt(appointments.completedAt, period.end)
+          gte(appointments.completedAt, period.periodStart),
+          lt(appointments.completedAt, period.periodEnd)
         )
       )
       .groupBy(appointmentCommissions.role);
+
+    try {
+      const [tipsRow] = await db
+        .select({
+          totalCents: sql<number>`coalesce(sum(${appointments.cardTipCents}), 0)::int`.as("total_cents")
+        })
+        .from(appointments)
+        .where(
+          and(
+            eq(appointments.status, "completed"),
+            gte(appointments.completedAt, period.periodStart),
+            lt(appointments.completedAt, period.periodEnd)
+          )
+        );
+      cardTipsCents = Number(tipsRow?.totalCents ?? 0);
+    } catch (error) {
+      const code = extractPgCode(error);
+      if (code !== "42703") throw error;
+      cardTipsCents = 0;
+    }
 
     const totals = { sales: 0, marketing: 0, crew: 0, adjustments: 0 };
     for (const row of rows) {
@@ -62,10 +81,11 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     return NextResponse.json({
       ok: true,
-      timezone,
-      periodStart: period.start.toISOString(),
-      periodEnd: period.end.toISOString(),
-      scheduledPayoutAt: cutoffAt.toISOString(),
+      timezone: period.timezone,
+      periodStart: period.periodStart.toISOString(),
+      periodEnd: period.periodEnd.toISOString(),
+      scheduledPayoutAt: period.scheduledPayoutAt.toISOString(),
+      cardTipsCents,
       totalsCents: {
         sales: totals.sales,
         marketing: totals.marketing,

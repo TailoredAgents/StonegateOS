@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
+import { DateTime } from "luxon";
 import { getDb, appointments } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
@@ -9,6 +10,8 @@ type WindowSummary = {
   totalCents: number;
   count: number;
 };
+
+const REVENUE_TIME_ZONE = process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
 
 function startOfUtcMonth(d: Date) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0));
@@ -33,9 +36,9 @@ async function computeWindow(db: ReturnType<typeof getDb>, start: Date, end: Dat
     .where(
       and(
         eq(appointments.status, "completed"),
-        isNotNull(appointments.startAt),
-        gte(appointments.startAt, start),
-        lt(appointments.startAt, end)
+        isNotNull(appointments.completedAt),
+        gte(appointments.completedAt, start),
+        lt(appointments.completedAt, end)
       )
     );
 
@@ -43,6 +46,10 @@ async function computeWindow(db: ReturnType<typeof getDb>, start: Date, end: Dat
     totalCents: row?.totalCents ?? 0,
     count: row?.count ?? 0
   };
+}
+
+function startOfLocalWeek(d: Date, timezone: string): Date {
+  return DateTime.fromJSDate(d, { zone: timezone }).startOf("week").toJSDate();
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -56,12 +63,14 @@ export async function GET(request: NextRequest): Promise<Response> {
   const now = new Date();
 
   const last30Start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const weekStart = startOfLocalWeek(now, REVENUE_TIME_ZONE);
   const monthStart = startOfUtcMonth(now);
   const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0));
   const yearStart = startOfUtcYear(now);
   const nextYearStart = new Date(Date.UTC(now.getUTCFullYear() + 1, 0, 1, 0, 0, 0, 0));
 
-  const [last30Days, monthToDate, yearToDate] = await Promise.all([
+  const [weekToDate, last30Days, monthToDate, yearToDate] = await Promise.all([
+    computeWindow(db, weekStart, now),
     computeWindow(db, last30Start, now),
     computeWindow(db, monthStart, nextMonthStart),
     computeWindow(db, yearStart, nextYearStart)
@@ -70,7 +79,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   return NextResponse.json({
     ok: true,
     currency: "USD",
+    timezone: REVENUE_TIME_ZONE,
     windows: {
+      weekToDate: {
+        ...weekToDate,
+        startsAt: weekStart.toISOString()
+      },
       last30Days,
       monthToDate,
       yearToDate

@@ -75,6 +75,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       leadId: appointments.leadId,
       quotedTotalCents: appointments.quotedTotalCents,
       finalTotalCents: appointments.finalTotalCents,
+      soldByMemberId: appointments.soldByMemberId,
       contactId: contacts.id,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
@@ -279,6 +280,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       leadId: row.leadId,
       quotedTotalCents: row.quotedTotalCents ?? null,
       finalTotalCents: row.finalTotalCents ?? null,
+      soldByMemberId: row.soldByMemberId ?? null,
       services: row.servicesRequested ?? [],
       contact: {
         id: row.contactId ?? "unknown",
@@ -309,4 +311,3 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   return NextResponse.json({ ok: true, data: appointmentsDto, appointments: appointmentsDto });
 }
-

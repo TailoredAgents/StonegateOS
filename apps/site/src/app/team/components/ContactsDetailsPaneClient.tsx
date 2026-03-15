@@ -353,6 +353,7 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
       {showBookingForm ? (
         <form action={bookAppointmentAction} className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-xs text-slate-600">
           <input type="hidden" name="contactId" value={contact.id} />
+          <input type="hidden" name="currentAssignedAssociateMemberId" value={assignee ?? ""} />
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
@@ -417,6 +418,43 @@ export function ContactsDetailsPaneClient({ contact, teamMembers }: Props): Reac
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
             </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Assigned Associate</span>
+              <select
+                name="assignedAssociateMemberId"
+                defaultValue={assignee ?? ""}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="">(Unassigned)</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Who sold the job?</span>
+              <select
+                name="soldByMemberId"
+                defaultValue={assignee ?? ""}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="">(Select seller)</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <p className="sm:col-span-2 text-[11px] text-slate-500">
+              Assigned Associate keeps the contact routed to the right phone and owner. Who sold the job is stored on
+              the appointment for commission payouts and is not editable after booking.
+            </p>
 
             <label className="flex flex-col gap-1 sm:col-span-2">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quoted price (optional)</span>

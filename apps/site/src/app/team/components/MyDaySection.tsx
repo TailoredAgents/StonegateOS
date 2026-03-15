@@ -48,6 +48,7 @@ interface AppointmentDto {
   travelBufferMinutes: number | null;
   quotedTotalCents: number | null;
   finalTotalCents: number | null;
+  soldByMemberId: string | null;
   services: string[];
   rescheduleToken: string;
   contact: {
@@ -102,6 +103,8 @@ export async function MyDaySection(): Promise<ReactElement> {
   } catch (error) {
     loadError = `Appointments request error: ${(error as Error).message}`;
   }
+
+  const teamMemberNameById = new Map(teamMembers.map((member) => [member.id, member.name]));
 
   return (
     <section className="space-y-4">
@@ -161,6 +164,9 @@ export async function MyDaySection(): Promise<ReactElement> {
                   Final: {fmtUsdCents(a.finalTotalCents)}
                 </span>
               ) : null}
+              <span className="rounded-full bg-amber-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                Sold by: {a.soldByMemberId ? teamMemberNameById.get(a.soldByMemberId) ?? "Unknown" : "Not set"}
+              </span>
               {a.quoteStatus ? (
                 <span className="rounded-full bg-primary-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
                   Quote: {a.quoteStatus}
@@ -191,11 +197,26 @@ export async function MyDaySection(): Promise<ReactElement> {
                     className="w-40 rounded-md border border-neutral-300 px-2 py-1 text-xs"
                   />
                 </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] text-neutral-600">Card tips (optional)</span>
+                  <input
+                    name="cardTip"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder="e.g. 20.00"
+                    className="w-32 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                  />
+                </label>
+                <div className="w-full text-[11px] text-neutral-500">
+                  Card tips are tracked separately and are not counted in revenue.
+                </div>
                 <details className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
                   <summary className="cursor-pointer select-none font-medium">Commissions</summary>
                   <div className="mt-2 flex flex-col gap-2">
                     <div className="text-[11px] text-neutral-600">
-                      Sales commission comes from the contact&apos;s assigned salesperson.
+                      Sales commission is locked to the person selected in Who sold the job? when the appointment was
+                      booked.
                     </div>
                     <div className="text-[11px] text-neutral-600">Crew split (must total 100%)</div>
                     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
