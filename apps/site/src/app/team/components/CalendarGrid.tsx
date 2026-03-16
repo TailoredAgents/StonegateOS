@@ -1,6 +1,10 @@
 import React from "react";
 import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
-import { formatCalendarEventAmounts, formatCompactUsdCents } from "./calendarEventAmounts";
+import {
+  formatCalendarEventAmounts,
+  formatUsdCents,
+  type CalendarDayRevenueSummary,
+} from "./calendarEventAmounts";
 
 export type CalendarEvent = {
   id: string;
@@ -22,7 +26,7 @@ export type CalendarEvent = {
 type Props = {
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
-  projectedRevenueByDay: Record<string, number>;
+  revenueSummaryByDay: Record<string, CalendarDayRevenueSummary>;
   anchorDay: string;
   selectedDay?: string | null;
   onSelectDay?: (dayKey: string) => void;
@@ -34,17 +38,19 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export function CalendarGrid({
   events,
   conflicts,
-  projectedRevenueByDay,
+  revenueSummaryByDay,
   anchorDay,
   selectedDay,
   onSelectDay,
-  onSelectEvent
+  onSelectEvent,
 }: Props): React.ReactElement {
   const anchor = parseDayKey(anchorDay) ?? new Date();
   const weekday = getWeekdayIndex(anchor);
   const startOfWeek = new Date(anchor.getTime() - weekday * DAY_MS);
 
-  const days = Array.from({ length: 7 }).map((_, i) => new Date(startOfWeek.getTime() + i * DAY_MS));
+  const days = Array.from({ length: 7 }).map(
+    (_, i) => new Date(startOfWeek.getTime() + i * DAY_MS),
+  );
 
   const dayBuckets: Record<string, CalendarEvent[]> = {};
   for (const day of days) {
@@ -62,18 +68,25 @@ export function CalendarGrid({
     }
   }
 
-  const isConflict = (id: string) => conflicts.some((c) => c.a === id || c.b === id);
+  const isConflict = (id: string) =>
+    conflicts.some((c) => c.a === id || c.b === id);
   const isInPersonQuote = (evt: CalendarEvent): boolean =>
-    evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote";
+    evt.source === "db" &&
+    (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote";
 
   return (
     <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-7">
       {days.map((day) => {
         const key = formatDayKey(day);
         const bucket = dayBuckets[key] ?? [];
-        const projectedRevenue = projectedRevenueByDay[key] ?? 0;
-        const projectedRevenueLabel = projectedRevenue > 0 ? formatCompactUsdCents(projectedRevenue) : null;
-        const isSelected = typeof selectedDay === "string" && selectedDay.length > 0 ? selectedDay === key : false;
+        const revenueSummary = revenueSummaryByDay[key] ?? null;
+        const revenueLabel = revenueSummary
+          ? formatUsdCents(revenueSummary.amountCents)
+          : null;
+        const isSelected =
+          typeof selectedDay === "string" && selectedDay.length > 0
+            ? selectedDay === key
+            : false;
         return (
           <div
             key={key}
@@ -84,9 +97,15 @@ export function CalendarGrid({
             <button
               type="button"
               onClick={() => onSelectDay?.(key)}
-              title={projectedRevenueLabel ? `Projected revenue ${projectedRevenueLabel}` : undefined}
+              title={
+                revenueSummary && revenueLabel
+                  ? `${revenueSummary.label} revenue ${revenueLabel}`
+                  : undefined
+              }
               className={`mb-2 w-full text-left text-xs font-semibold uppercase ${
-                isSelected ? "text-primary-700" : "text-slate-500 hover:text-primary-700"
+                isSelected
+                  ? "text-primary-700"
+                  : "text-slate-500 hover:text-primary-700"
               }`}
             >
               <span className="block">
@@ -94,12 +113,12 @@ export function CalendarGrid({
                   timeZone: TEAM_TIME_ZONE,
                   weekday: "short",
                   month: "short",
-                  day: "numeric"
+                  day: "numeric",
                 })}
               </span>
-              {projectedRevenueLabel ? (
-                <span className="block truncate text-[11px] font-semibold normal-case text-emerald-700">
-                  Proj {projectedRevenueLabel}
+              {revenueSummary && revenueLabel ? (
+                <span className="block whitespace-normal text-[11px] font-semibold normal-case leading-4 text-emerald-700">
+                  {revenueSummary.label} {revenueLabel}
                 </span>
               ) : null}
             </button>
@@ -110,7 +129,10 @@ export function CalendarGrid({
                 bucket
                   .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
                   .map((evt) => {
-                    const amountSummary = evt.source === "db" ? formatCalendarEventAmounts(evt) : null;
+                    const amountSummary =
+                      evt.source === "db"
+                        ? formatCalendarEventAmounts(evt)
+                        : null;
                     return (
                       <button
                         key={evt.id}
@@ -140,7 +162,9 @@ export function CalendarGrid({
                             {evt.status ? (
                               <span
                                 className={`rounded-full bg-white px-1.5 text-[10px] uppercase ${
-                                  isInPersonQuote(evt) ? "text-fuchsia-700" : "text-primary-700"
+                                  isInPersonQuote(evt)
+                                    ? "text-fuchsia-700"
+                                    : "text-primary-700"
                                 }`}
                               >
                                 {evt.status}
@@ -153,10 +177,18 @@ export function CalendarGrid({
                             ) : null}
                           </div>
                         </div>
-                        <div className="mt-0.5 truncate text-xs font-semibold text-slate-900">{evt.title}</div>
-                        {amountSummary ? <div className="truncate text-[11px] text-slate-600">{amountSummary}</div> : null}
+                        <div className="mt-0.5 truncate text-xs font-semibold text-slate-900">
+                          {evt.title}
+                        </div>
+                        {amountSummary ? (
+                          <div className="truncate text-[11px] text-slate-600">
+                            {amountSummary}
+                          </div>
+                        ) : null}
                         {evt.address ? (
-                          <div className="hidden truncate text-[11px] text-slate-500 md:block">{evt.address}</div>
+                          <div className="hidden truncate text-[11px] text-slate-500 md:block">
+                            {evt.address}
+                          </div>
                         ) : null}
                       </button>
                     );
@@ -177,7 +209,7 @@ function formatTime(iso: string): string {
     timeZone: TEAM_TIME_ZONE,
     hour: "numeric",
     minute: "2-digit",
-    hour12: true
+    hour12: true,
   }).formatToParts(d);
   const hour = parts.find((p) => p.type === "hour")?.value ?? "";
   const minute = parts.find((p) => p.type === "minute")?.value ?? "";
@@ -197,12 +229,20 @@ function parseDayKey(dayKey: string): Date | null {
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day)
+  )
+    return null;
   return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
 }
 
 function getWeekdayIndex(date: Date): number {
-  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: TEAM_TIME_ZONE, weekday: "short" }).format(date);
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
+    weekday: "short",
+  }).format(date);
   switch (weekday.toLowerCase().slice(0, 3)) {
     case "sun":
       return 0;

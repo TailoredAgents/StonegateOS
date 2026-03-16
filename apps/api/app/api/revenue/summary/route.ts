@@ -11,45 +11,53 @@ type WindowSummary = {
   count: number;
 };
 
-const REVENUE_TIME_ZONE = process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
+const REVENUE_TIME_ZONE =
+  process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
 
-function startOfUtcMonth(d: Date) {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0));
-}
-
-function startOfUtcYear(d: Date) {
-  return new Date(Date.UTC(d.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
-}
-
-async function computeWindow(db: ReturnType<typeof getDb>, start: Date, end: Date): Promise<WindowSummary> {
+async function computeWindow(
+  db: ReturnType<typeof getDb>,
+  start: Date,
+  end: Date,
+): Promise<WindowSummary> {
   const [row] = await db
     .select({
       totalCents: sql<number>`
         coalesce(
-          sum(coalesce(${appointments.finalTotalCents}, ${appointments.quotedTotalCents})),
+          sum(${appointments.finalTotalCents}),
           0
         )::int
       `.as("total_cents"),
-      count: sql<number>`count(*)::int`.as("count")
+      count: sql<number>`
+        count(*) filter (where ${appointments.finalTotalCents} is not null)::int
+      `.as("count"),
     })
     .from(appointments)
     .where(
       and(
         eq(appointments.status, "completed"),
         isNotNull(appointments.completedAt),
+        isNotNull(appointments.finalTotalCents),
         gte(appointments.completedAt, start),
-        lt(appointments.completedAt, end)
-      )
+        lt(appointments.completedAt, end),
+      ),
     );
 
   return {
     totalCents: row?.totalCents ?? 0,
-    count: row?.count ?? 0
+    count: row?.count ?? 0,
   };
 }
 
 function startOfLocalWeek(d: Date, timezone: string): Date {
   return DateTime.fromJSDate(d, { zone: timezone }).startOf("week").toJSDate();
+}
+
+function startOfLocalMonth(d: Date, timezone: string): Date {
+  return DateTime.fromJSDate(d, { zone: timezone }).startOf("month").toJSDate();
+}
+
+function startOfLocalYear(d: Date, timezone: string): Date {
+  return DateTime.fromJSDate(d, { zone: timezone }).startOf("year").toJSDate();
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -64,16 +72,14 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const last30Start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const weekStart = startOfLocalWeek(now, REVENUE_TIME_ZONE);
-  const monthStart = startOfUtcMonth(now);
-  const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0));
-  const yearStart = startOfUtcYear(now);
-  const nextYearStart = new Date(Date.UTC(now.getUTCFullYear() + 1, 0, 1, 0, 0, 0, 0));
+  const monthStart = startOfLocalMonth(now, REVENUE_TIME_ZONE);
+  const yearStart = startOfLocalYear(now, REVENUE_TIME_ZONE);
 
   const [weekToDate, last30Days, monthToDate, yearToDate] = await Promise.all([
     computeWindow(db, weekStart, now),
     computeWindow(db, last30Start, now),
-    computeWindow(db, monthStart, nextMonthStart),
-    computeWindow(db, yearStart, nextYearStart)
+    computeWindow(db, monthStart, now),
+    computeWindow(db, yearStart, now),
   ]);
 
   return NextResponse.json({
@@ -83,11 +89,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     windows: {
       weekToDate: {
         ...weekToDate,
-        startsAt: weekStart.toISOString()
+        startsAt: weekStart.toISOString(),
       },
       last30Days,
       monthToDate,
-      yearToDate
-    }
+      yearToDate,
+    },
   });
 }

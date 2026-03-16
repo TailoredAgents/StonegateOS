@@ -4,20 +4,31 @@ import type { ContactSummary, PaginationInfo } from "./contacts.types";
 import { TEAM_EMPTY_STATE, teamButtonClass } from "./team-ui";
 import { ContactsAddContactClient } from "./ContactsAddContactClient";
 import { ContactsDetailsPaneClient } from "./ContactsDetailsPaneClient";
-import { badgeClassForPipelineStage, labelForPipelineStage } from "./pipeline.stages";
+import {
+  badgeClassForPipelineStage,
+  labelForPipelineStage,
+} from "./pipeline.stages";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
+import { formatStoredContactSource } from "../lib/booking-details";
 
 const PAGE_SIZE = 25;
 
 type ContactsView = "inbound" | "all" | "outbound";
 
-function normalizeView(args: { includeOutbound?: boolean; onlyOutbound?: boolean }): ContactsView {
+function normalizeView(args: {
+  includeOutbound?: boolean;
+  onlyOutbound?: boolean;
+}): ContactsView {
   if (args.onlyOutbound) return "outbound";
   if (args.includeOutbound) return "all";
   return "inbound";
 }
 
-function buildHref(args: { search?: string; offset?: number; view?: ContactsView }): string {
+function buildHref(args: {
+  search?: string;
+  offset?: number;
+  view?: ContactsView;
+}): string {
   const query = new URLSearchParams();
   query.set("tab", "contacts");
   if (args.search && args.search.trim().length > 0) {
@@ -71,7 +82,7 @@ function formatLastActivity(value: string | null): string {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
   }).format(parsed);
 }
 
@@ -88,26 +99,37 @@ export async function ContactsSection({
   offset,
   contactId,
   excludeOutbound,
-  onlyOutbound
+  onlyOutbound,
 }: ContactsSectionProps): Promise<ReactElement> {
   const safeOffset = typeof offset === "number" && offset > 0 ? offset : 0;
   const shouldOnlyOutbound = onlyOutbound === true;
-  const shouldExcludeOutbound = shouldOnlyOutbound ? false : excludeOutbound !== false;
+  const shouldExcludeOutbound = shouldOnlyOutbound
+    ? false
+    : excludeOutbound !== false;
   const includeOutbound = !shouldExcludeOutbound;
-  const view = normalizeView({ includeOutbound, onlyOutbound: shouldOnlyOutbound });
+  const view = normalizeView({
+    includeOutbound,
+    onlyOutbound: shouldOnlyOutbound,
+  });
 
   let teamMembers: Array<{ id: string; name: string }> = [];
   try {
     const membersRes = await callAdminApi("/api/admin/team/directory");
     if (membersRes.ok) {
-      const payload = (await membersRes.json()) as { members?: Array<{ id: string; name: string; active?: boolean }> };
-      teamMembers = (payload.members ?? []).filter((m) => m.active !== false).map((m) => ({ id: m.id, name: m.name }));
+      const payload = (await membersRes.json()) as {
+        members?: Array<{ id: string; name: string; active?: boolean }>;
+      };
+      teamMembers = (payload.members ?? [])
+        .filter((m) => m.active !== false)
+        .map((m) => ({ id: m.id, name: m.name }));
     }
   } catch {
     teamMembers = [];
   }
 
-  const memberNameById = new Map(teamMembers.map((member) => [member.id, member.name]));
+  const memberNameById = new Map(
+    teamMembers.map((member) => [member.id, member.name]),
+  );
 
   const params = new URLSearchParams();
   params.set("limit", String(PAGE_SIZE));
@@ -119,7 +141,9 @@ export async function ContactsSection({
     params.set("excludeOutbound", "1");
   }
 
-  const response = await callAdminApi(`/api/admin/contacts?${params.toString()}`);
+  const response = await callAdminApi(
+    `/api/admin/contacts?${params.toString()}`,
+  );
   if (!response.ok) {
     throw new Error("Failed to load contacts");
   }
@@ -134,29 +158,40 @@ export async function ContactsSection({
     limit: PAGE_SIZE,
     offset: safeOffset,
     total: contacts.length,
-    nextOffset: null
+    nextOffset: null,
   };
 
   const hasPrev = pagination.offset > 0;
-  const prevOffset = hasPrev ? Math.max(pagination.offset - pagination.limit, 0) : 0;
+  const prevOffset = hasPrev
+    ? Math.max(pagination.offset - pagination.limit, 0)
+    : 0;
   const hasNext =
-    typeof pagination.nextOffset === "number" && pagination.nextOffset > pagination.offset;
+    typeof pagination.nextOffset === "number" &&
+    pagination.nextOffset > pagination.offset;
   const nextOffset = hasNext
-    ? pagination.nextOffset ?? pagination.offset + contacts.length
+    ? (pagination.nextOffset ?? pagination.offset + contacts.length)
     : pagination.offset;
 
-  const selectedContactId = typeof contactId === "string" && contactId.trim().length > 0 ? contactId.trim() : null;
+  const selectedContactId =
+    typeof contactId === "string" && contactId.trim().length > 0
+      ? contactId.trim()
+      : null;
   let selectedContact: ContactSummary | null = null;
   if (selectedContactId) {
-    selectedContact = contacts.find((contact) => contact.id === selectedContactId) ?? null;
+    selectedContact =
+      contacts.find((contact) => contact.id === selectedContactId) ?? null;
     if (!selectedContact) {
       try {
         const selectedParams = new URLSearchParams();
         selectedParams.set("contactId", selectedContactId);
         selectedParams.set("limit", "1");
-        const selectedRes = await callAdminApi(`/api/admin/contacts?${selectedParams.toString()}`);
+        const selectedRes = await callAdminApi(
+          `/api/admin/contacts?${selectedParams.toString()}`,
+        );
         if (selectedRes.ok) {
-          const selectedPayload = (await selectedRes.json()) as { contacts?: ContactSummary[] };
+          const selectedPayload = (await selectedRes.json()) as {
+            contacts?: ContactSummary[];
+          };
           selectedContact = (selectedPayload.contacts ?? [])[0] ?? null;
         }
       } catch {
@@ -170,7 +205,9 @@ export async function ContactsSection({
       <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-4 shadow-md shadow-slate-200/50 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Contacts</h2>
-          <p className="mt-1 text-sm text-slate-600">Search, assign, and keep follow-ups tight.</p>
+          <p className="mt-1 text-sm text-slate-600">
+            Search, assign, and keep follow-ups tight.
+          </p>
         </div>
         <ContactsAddContactClient teamMembers={teamMembers} />
       </div>
@@ -188,17 +225,37 @@ export async function ContactsSection({
           className="min-w-[240px] flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
         />
         <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">View</span>
+          <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+            View
+          </span>
           <label className="inline-flex items-center gap-1">
-            <input type="radio" name="view" value="inbound" defaultChecked={view === "inbound"} className="text-primary-600" />
+            <input
+              type="radio"
+              name="view"
+              value="inbound"
+              defaultChecked={view === "inbound"}
+              className="text-primary-600"
+            />
             Inbound
           </label>
           <label className="inline-flex items-center gap-1">
-            <input type="radio" name="view" value="all" defaultChecked={view === "all"} className="text-primary-600" />
+            <input
+              type="radio"
+              name="view"
+              value="all"
+              defaultChecked={view === "all"}
+              className="text-primary-600"
+            />
             All
           </label>
           <label className="inline-flex items-center gap-1">
-            <input type="radio" name="view" value="outbound" defaultChecked={view === "outbound"} className="text-primary-600" />
+            <input
+              type="radio"
+              name="view"
+              value="outbound"
+              defaultChecked={view === "outbound"}
+              className="text-primary-600"
+            />
             Outbound
           </label>
         </div>
@@ -219,18 +276,30 @@ export async function ContactsSection({
                   <a
                     aria-disabled={!hasPrev}
                     className={`rounded-full border border-slate-200 px-4 py-1.5 ${
-                      hasPrev ? "text-slate-600 hover:border-primary-300 hover:text-primary-700" : "pointer-events-none opacity-40"
+                      hasPrev
+                        ? "text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                        : "pointer-events-none opacity-40"
                     }`}
-                    href={hasPrev ? buildHref({ search, offset: prevOffset, view }) : "#"}
+                    href={
+                      hasPrev
+                        ? buildHref({ search, offset: prevOffset, view })
+                        : "#"
+                    }
                   >
                     Previous
                   </a>
                   <a
                     aria-disabled={!hasNext}
                     className={`rounded-full border border-slate-200 px-4 py-1.5 ${
-                      hasNext ? "text-slate-600 hover:border-primary-300 hover:text-primary-700" : "pointer-events-none opacity-40"
+                      hasNext
+                        ? "text-slate-600 hover:border-primary-300 hover:text-primary-700"
+                        : "pointer-events-none opacity-40"
                     }`}
-                    href={hasNext ? buildHref({ search, offset: nextOffset, view }) : "#"}
+                    href={
+                      hasNext
+                        ? buildHref({ search, offset: nextOffset, view })
+                        : "#"
+                    }
                   >
                     Next
                   </a>
@@ -253,25 +322,61 @@ export async function ContactsSection({
                     <tbody className="divide-y divide-slate-100">
                       {contacts.map((contact) => {
                         const isSelected = selectedContactId === contact.id;
-                        const assignedLabel = contact.salespersonMemberId ? memberNameById.get(contact.salespersonMemberId) ?? "Assigned" : "Unassigned";
+                        const assignedLabel = contact.salespersonMemberId
+                          ? (memberNameById.get(contact.salespersonMemberId) ??
+                            "Assigned")
+                          : "Unassigned";
+                        const sourceLabel = formatStoredContactSource(
+                          contact.source,
+                          memberNameById,
+                        );
                         return (
-                          <tr key={contact.id} className={isSelected ? "bg-primary-50/40" : "hover:bg-slate-50/70"}>
+                          <tr
+                            key={contact.id}
+                            className={
+                              isSelected
+                                ? "bg-primary-50/40"
+                                : "hover:bg-slate-50/70"
+                            }
+                          >
                             <td className="px-4 py-3">
-                              <a href={buildSelectHref({ contactId: contact.id, search, offset: safeOffset, view })} className="font-semibold text-slate-900 hover:text-primary-700">
+                              <a
+                                href={buildSelectHref({
+                                  contactId: contact.id,
+                                  search,
+                                  offset: safeOffset,
+                                  view,
+                                })}
+                                className="font-semibold text-slate-900 hover:text-primary-700"
+                              >
                                 {contact.name}
                               </a>
-                              {contact.source ? (
-                                <div className="mt-1 text-xs text-slate-500">{contact.source}</div>
+                              {sourceLabel ? (
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {sourceLabel}
+                                </div>
                               ) : null}
                             </td>
-                            <td className="px-4 py-3 text-slate-700">{contact.phone ?? <span className="text-slate-400">—</span>}</td>
-                            <td className="px-4 py-3 text-slate-700">{contact.email ?? <span className="text-slate-400">—</span>}</td>
+                            <td className="px-4 py-3 text-slate-700">
+                              {contact.phone ?? (
+                                <span className="text-slate-400">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-slate-700">
+                              {contact.email ?? (
+                                <span className="text-slate-400">—</span>
+                              )}
+                            </td>
                             <td className="px-4 py-3">
-                              <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${badgeClassForPipelineStage(contact.pipeline.stage)}`}>
+                              <span
+                                className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${badgeClassForPipelineStage(contact.pipeline.stage)}`}
+                              >
                                 {labelForPipelineStage(contact.pipeline.stage)}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-slate-700">{assignedLabel}</td>
+                            <td className="px-4 py-3 text-slate-700">
+                              {assignedLabel}
+                            </td>
                             <td className="px-4 py-3 text-right text-xs text-slate-500">
                               {formatLastActivity(contact.lastActivityAt)}
                             </td>
@@ -288,11 +393,20 @@ export async function ContactsSection({
 
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-md shadow-slate-200/50">
           {selectedContact ? (
-            <ContactsDetailsPaneClient key={selectedContact.id} contact={selectedContact} teamMembers={teamMembers} />
+            <ContactsDetailsPaneClient
+              key={selectedContact.id}
+              contact={selectedContact}
+              teamMembers={teamMembers}
+            />
           ) : (
             <div className="text-sm text-slate-600">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Details</div>
-              <p className="mt-2">Select a contact on the left to see details, notes, and reminders.</p>
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Details
+              </div>
+              <p className="mt-2">
+                Select a contact on the left to see details, notes, and
+                reminders.
+              </p>
             </div>
           )}
         </div>

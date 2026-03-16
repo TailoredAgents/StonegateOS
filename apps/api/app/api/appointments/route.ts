@@ -11,16 +11,24 @@ import {
   appointmentTasks,
   crmPipeline,
   crmTasks,
-  quotes
+  quotes,
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../web/admin";
 
-const STATUS_OPTIONS = ["requested", "confirmed", "completed", "no_show", "canceled"] as const;
+const STATUS_OPTIONS = [
+  "requested",
+  "confirmed",
+  "completed",
+  "no_show",
+  "canceled",
+] as const;
 type StatusOption = (typeof STATUS_OPTIONS)[number];
 
 function isUuidLike(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 function parseStatusParam(param: string | null): StatusOption[] | null {
@@ -51,11 +59,19 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (permissionError) return permissionError;
 
   const db = getDb();
-  const statusFilter = parseStatusParam(request.nextUrl.searchParams.get("status"));
-  const contactIdRaw = (request.nextUrl.searchParams.get("contactId") ?? "").trim();
-  const propertyIdRaw = (request.nextUrl.searchParams.get("propertyId") ?? "").trim();
-  const contactId = contactIdRaw && isUuidLike(contactIdRaw) ? contactIdRaw : null;
-  const propertyId = propertyIdRaw && isUuidLike(propertyIdRaw) ? propertyIdRaw : null;
+  const statusFilter = parseStatusParam(
+    request.nextUrl.searchParams.get("status"),
+  );
+  const contactIdRaw = (
+    request.nextUrl.searchParams.get("contactId") ?? ""
+  ).trim();
+  const propertyIdRaw = (
+    request.nextUrl.searchParams.get("propertyId") ?? ""
+  ).trim();
+  const contactId =
+    contactIdRaw && isUuidLike(contactIdRaw) ? contactIdRaw : null;
+  const propertyId =
+    propertyIdRaw && isUuidLike(propertyIdRaw) ? propertyIdRaw : null;
   const limitRaw = (request.nextUrl.searchParams.get("limit") ?? "").trim();
   const limitParsed = limitRaw ? Number(limitRaw) : NaN;
   const limit =
@@ -75,6 +91,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       leadId: appointments.leadId,
       quotedTotalCents: appointments.quotedTotalCents,
       finalTotalCents: appointments.finalTotalCents,
+      bookingDetails: appointments.bookingDetails,
       soldByMemberId: appointments.soldByMemberId,
       contactId: contacts.id,
       contactFirstName: contacts.firstName,
@@ -93,7 +110,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       rescheduleToken: appointments.rescheduleToken,
       calendarEventId: appointments.calendarEventId,
       crew: appointments.crew,
-      owner: appointments.owner
+      owner: appointments.owner,
     })
     .from(appointments)
     .leftJoin(contacts, eq(appointments.contactId, contacts.id))
@@ -111,9 +128,14 @@ export async function GET(request: NextRequest): Promise<Response> {
     conditions.push(eq(appointments.propertyId, propertyId));
   }
 
-  const filteredQuery = conditions.length > 0 ? baseQuery.where(and(...conditions)) : baseQuery;
+  const filteredQuery =
+    conditions.length > 0 ? baseQuery.where(and(...conditions)) : baseQuery;
 
-  const orderedQuery = filteredQuery.orderBy(asc(appointments.status), asc(appointments.startAt), desc(appointments.createdAt));
+  const orderedQuery = filteredQuery.orderBy(
+    asc(appointments.status),
+    asc(appointments.startAt),
+    desc(appointments.createdAt),
+  );
 
   const baseRows = await (limit ? orderedQuery.limit(limit) : orderedQuery);
 
@@ -124,16 +146,28 @@ export async function GET(request: NextRequest): Promise<Response> {
     new Set(
       baseRows
         .map((row) => row.contactId)
-        .filter((id): id is string => typeof id === "string" && id.length > 0)
-    )
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
   );
 
-  const notesMap = new Map<string, { id: string; body: string; createdAt: string }[]>();
+  const notesMap = new Map<
+    string,
+    { id: string; body: string; createdAt: string }[]
+  >();
   const attachmentsMap = new Map<
     string,
-    { id: string; filename: string; url: string; contentType: string | null; createdAt: string }[]
+    {
+      id: string;
+      filename: string;
+      url: string;
+      contentType: string | null;
+      createdAt: string;
+    }[]
   >();
-  const tasksMap = new Map<string, { id: string; title: string; status: string; createdAt: string }[]>();
+  const tasksMap = new Map<
+    string,
+    { id: string; title: string; status: string; createdAt: string }[]
+  >();
 
   if (contactIds.length > 0) {
     const taskRows = await db
@@ -143,7 +177,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         body: crmTasks.notes,
         createdAt: crmTasks.createdAt,
         status: crmTasks.status,
-        dueAt: crmTasks.dueAt
+        dueAt: crmTasks.dueAt,
       })
       .from(crmTasks)
       .where(inArray(crmTasks.contactId, contactIds))
@@ -160,7 +194,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       notesMap.get(row.contactId)!.push({
         id: row.id,
         body: row.body,
-        createdAt: row.createdAt.toISOString()
+        createdAt: row.createdAt.toISOString(),
       });
     }
 
@@ -177,7 +211,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         filename: appointmentAttachments.filename,
         url: appointmentAttachments.url,
         contentType: appointmentAttachments.contentType,
-        createdAt: appointmentAttachments.createdAt
+        createdAt: appointmentAttachments.createdAt,
       })
       .from(appointmentAttachments)
       .where(inArray(appointmentAttachments.appointmentId, appointmentIds));
@@ -191,7 +225,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         filename: att.filename,
         url: att.url,
         contentType: att.contentType,
-        createdAt: att.createdAt.toISOString()
+        createdAt: att.createdAt.toISOString(),
       });
     }
 
@@ -205,7 +239,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         appointmentId: appointmentTasks.appointmentId,
         title: appointmentTasks.title,
         status: appointmentTasks.status,
-        createdAt: appointmentTasks.createdAt
+        createdAt: appointmentTasks.createdAt,
       })
       .from(appointmentTasks)
       .where(inArray(appointmentTasks.appointmentId, appointmentIds));
@@ -218,7 +252,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         id: task.id,
         title: task.title,
         status: task.status ?? "open",
-        createdAt: task.createdAt.toISOString()
+        createdAt: task.createdAt.toISOString(),
       });
     }
 
@@ -233,7 +267,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       .select({
         contactId: crmPipeline.contactId,
         stage: crmPipeline.stage,
-        updatedAt: crmPipeline.updatedAt
+        updatedAt: crmPipeline.updatedAt,
       })
       .from(crmPipeline)
       .where(inArray(crmPipeline.contactId, contactIds));
@@ -249,7 +283,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       .select({
         contactId: quotes.contactId,
         status: quotes.status,
-        updatedAt: quotes.updatedAt
+        updatedAt: quotes.updatedAt,
       })
       .from(quotes)
       .where(inArray(quotes.contactId, contactIds))
@@ -258,16 +292,24 @@ export async function GET(request: NextRequest): Promise<Response> {
     for (const row of quoteRows) {
       if (!row.contactId) continue;
       if (quoteMap.has(row.contactId)) continue; // keep most recent
-      quoteMap.set(row.contactId, { status: row.status ?? "pending", updatedAt: row.updatedAt });
+      quoteMap.set(row.contactId, {
+        status: row.status ?? "pending",
+        updatedAt: row.updatedAt,
+      });
     }
   }
 
   const appointmentsDto = baseRows.map((row) => {
-    const contactName = row.contactFirstName && row.contactLastName
-      ? `${row.contactFirstName} ${row.contactLastName}`
-      : row.contactFirstName ?? row.contactLastName ?? "Stonegate Customer";
-    const pipelineStage = row.contactId ? pipelineMap.get(row.contactId) ?? null : null;
-    const quoteStatus = row.contactId ? quoteMap.get(row.contactId)?.status ?? null : null;
+    const contactName =
+      row.contactFirstName && row.contactLastName
+        ? `${row.contactFirstName} ${row.contactLastName}`
+        : (row.contactFirstName ?? row.contactLastName ?? "Stonegate Customer");
+    const pipelineStage = row.contactId
+      ? (pipelineMap.get(row.contactId) ?? null)
+      : null;
+    const quoteStatus = row.contactId
+      ? (quoteMap.get(row.contactId)?.status ?? null)
+      : null;
 
     return {
       id: row.id,
@@ -280,13 +322,14 @@ export async function GET(request: NextRequest): Promise<Response> {
       leadId: row.leadId,
       quotedTotalCents: row.quotedTotalCents ?? null,
       finalTotalCents: row.finalTotalCents ?? null,
+      bookingDetails: row.bookingDetails ?? null,
       soldByMemberId: row.soldByMemberId ?? null,
       services: row.servicesRequested ?? [],
       contact: {
         id: row.contactId ?? "unknown",
         name: contactName,
         email: row.contactEmail ?? null,
-        phone: row.contactPhoneE164 ?? row.contactPhone ?? null
+        phone: row.contactPhoneE164 ?? row.contactPhone ?? null,
       },
       pipelineStage,
       quoteStatus,
@@ -297,17 +340,21 @@ export async function GET(request: NextRequest): Promise<Response> {
         state: row.state ?? "",
         postalCode: row.postalCode ?? "",
         lat: row.lat ? Number(row.lat) : null,
-        lng: row.lng ? Number(row.lng) : null
+        lng: row.lng ? Number(row.lng) : null,
       },
       calendarEventId: row.calendarEventId,
       rescheduleToken: row.rescheduleToken,
       crew: row.crew ?? null,
       owner: row.owner ?? null,
-      notes: row.contactId ? notesMap.get(row.contactId) ?? [] : [],
+      notes: row.contactId ? (notesMap.get(row.contactId) ?? []) : [],
       attachments: attachmentsMap.get(row.id) ?? [],
-      tasks: tasksMap.get(row.id) ?? []
+      tasks: tasksMap.get(row.id) ?? [],
     };
   });
 
-  return NextResponse.json({ ok: true, data: appointmentsDto, appointments: appointmentsDto });
+  return NextResponse.json({
+    ok: true,
+    data: appointmentsDto,
+    appointments: appointmentsDto,
+  });
 }

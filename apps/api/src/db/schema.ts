@@ -15,45 +15,90 @@ import {
   jsonb,
   integer,
   doublePrecision,
-  customType
+  customType,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType() {
     return "bytea";
-  }
+  },
 });
 
-export const leadStatusEnum = pgEnum("lead_status", ["new", "contacted", "quoted", "scheduled"]);
+export const leadStatusEnum = pgEnum("lead_status", [
+  "new",
+  "contacted",
+  "quoted",
+  "scheduled",
+]);
 export const quoteStatusEnum = pgEnum("quote_status", [
   "pending",
   "sent",
   "accepted",
-  "declined"
+  "declined",
 ]);
 export const appointmentStatusEnum = pgEnum("appointment_status", [
   "requested",
   "confirmed",
   "completed",
   "no_show",
-  "canceled"
+  "canceled",
 ]);
-export const commissionRoleEnum = pgEnum("commission_role", ["sales", "marketing", "crew"]);
-export const payoutRunStatusEnum = pgEnum("payout_run_status", ["draft", "locked", "paid"]);
-export const auditActorTypeEnum = pgEnum("audit_actor_type", ["human", "ai", "system", "worker"]);
+
+export type AppointmentLeadSourceType =
+  | "google"
+  | "facebook"
+  | "team_member"
+  | "referral";
+export type AppointmentPriceMode = "range" | "exact" | "both";
+export type AppointmentLoadSizeKind =
+  | "quarter_to_half"
+  | "half_to_three_quarters"
+  | "three_quarters_to_full"
+  | "custom";
+export type AppointmentBookingDetails = {
+  source: {
+    type: AppointmentLeadSourceType;
+    teamMemberId?: string | null;
+    referralName?: string | null;
+  };
+  pricing: {
+    mode: AppointmentPriceMode;
+    rangeMinCents?: number | null;
+    rangeMaxCents?: number | null;
+  };
+  loadSize: {
+    kind: AppointmentLoadSizeKind;
+    customLoads?: number | null;
+  };
+};
+export const commissionRoleEnum = pgEnum("commission_role", [
+  "sales",
+  "marketing",
+  "crew",
+]);
+export const payoutRunStatusEnum = pgEnum("payout_run_status", [
+  "draft",
+  "locked",
+  "paid",
+]);
+export const auditActorTypeEnum = pgEnum("audit_actor_type", [
+  "human",
+  "ai",
+  "system",
+  "worker",
+]);
 export const conversationChannelEnum = pgEnum("conversation_channel", [
   "sms",
   "email",
   "dm",
   "call",
-  "web"
+  "web",
 ]);
-export const conversationThreadStatusEnum = pgEnum("conversation_thread_status", [
-  "open",
-  "pending",
-  "closed"
-]);
+export const conversationThreadStatusEnum = pgEnum(
+  "conversation_thread_status",
+  ["open", "pending", "closed"],
+);
 export const conversationStateEnum = pgEnum("conversation_state", [
   "new",
   "qualifying",
@@ -63,46 +108,48 @@ export const conversationStateEnum = pgEnum("conversation_state", [
   "booked",
   "reminder",
   "completed",
-  "review"
+  "review",
 ]);
-export const conversationParticipantTypeEnum = pgEnum("conversation_participant_type", [
-  "contact",
-  "team",
-  "system"
-]);
+export const conversationParticipantTypeEnum = pgEnum(
+  "conversation_participant_type",
+  ["contact", "team", "system"],
+);
 export const messageDirectionEnum = pgEnum("message_direction", [
   "inbound",
   "outbound",
-  "internal"
+  "internal",
 ]);
 export const messageDeliveryStatusEnum = pgEnum("message_delivery_status", [
   "queued",
   "sent",
   "delivered",
-  "failed"
+  "failed",
 ]);
 export const mergeSuggestionStatusEnum = pgEnum("merge_suggestion_status", [
   "pending",
   "approved",
-  "declined"
+  "declined",
 ]);
 export const automationChannelEnum = pgEnum("automation_channel", [
   "sms",
   "email",
   "dm",
   "call",
-  "web"
+  "web",
 ]);
-export const automationModeEnum = pgEnum("automation_mode", ["draft", "assist", "auto"]);
+export const automationModeEnum = pgEnum("automation_mode", [
+  "draft",
+  "assist",
+  "auto",
+]);
 
 export const partnerStatusEnum = pgEnum("partner_status", [
   "none",
   "prospect",
   "contacted",
   "partner",
-  "inactive"
+  "inactive",
 ]);
-
 
 export const contacts = pgTable(
   "contacts",
@@ -115,30 +162,48 @@ export const contacts = pgTable(
     phone: varchar("phone", { length: 32 }),
     phoneE164: varchar("phone_e164", { length: 32 }),
     salespersonMemberId: uuid("salesperson_member_id"),
-    partnerStatus: partnerStatusEnum("partner_status").default("none").notNull(),
+    partnerStatus: partnerStatusEnum("partner_status")
+      .default("none")
+      .notNull(),
     partnerType: text("partner_type"),
     partnerOwnerMemberId: uuid("partner_owner_member_id"),
     partnerSince: timestamp("partner_since", { withTimezone: true }),
-    partnerLastTouchAt: timestamp("partner_last_touch_at", { withTimezone: true }),
-    partnerNextTouchAt: timestamp("partner_next_touch_at", { withTimezone: true }),
-    partnerReferralCount: integer("partner_referral_count").default(0).notNull(),
-    partnerLastReferralAt: timestamp("partner_last_referral_at", { withTimezone: true }),
+    partnerLastTouchAt: timestamp("partner_last_touch_at", {
+      withTimezone: true,
+    }),
+    partnerNextTouchAt: timestamp("partner_next_touch_at", {
+      withTimezone: true,
+    }),
+    partnerReferralCount: integer("partner_referral_count")
+      .default(0)
+      .notNull(),
+    partnerLastReferralAt: timestamp("partner_last_referral_at", {
+      withTimezone: true,
+    }),
     preferredContactMethod: text("preferred_contact_method").default("phone"),
     source: text("source"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     emailIdx: uniqueIndex("contacts_email_key").on(table.email),
     phoneIdx: uniqueIndex("contacts_phone_key").on(table.phone),
     phoneE164Idx: uniqueIndex("contacts_phone_e164_key").on(table.phoneE164),
-    partnerStatusIdx: index("contacts_partner_status_idx").on(table.partnerStatus),
-    partnerOwnerIdx: index("contacts_partner_owner_idx").on(table.partnerOwnerMemberId),
-    partnerNextTouchIdx: index("contacts_partner_next_touch_idx").on(table.partnerNextTouchAt)
-  })
+    partnerStatusIdx: index("contacts_partner_status_idx").on(
+      table.partnerStatus,
+    ),
+    partnerOwnerIdx: index("contacts_partner_owner_idx").on(
+      table.partnerOwnerMemberId,
+    ),
+    partnerNextTouchIdx: index("contacts_partner_next_touch_idx").on(
+      table.partnerNextTouchAt,
+    ),
+  }),
 );
 
 export const properties = pgTable(
@@ -156,20 +221,22 @@ export const properties = pgTable(
     lat: numeric("lat", { precision: 9, scale: 6 }),
     lng: numeric("lng", { precision: 9, scale: 6 }),
     gated: boolean("gated").default(false).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     contactIdx: index("properties_contact_idx").on(table.contactId),
     addressKey: uniqueIndex("properties_address_key").on(
       table.addressLine1,
       table.postalCode,
-      table.state
-    )
-  })
+      table.state,
+    ),
+  }),
 );
 
 export const crmPipelineStageEnum = pgEnum("crm_pipeline_stage", [
@@ -179,10 +246,13 @@ export const crmPipelineStageEnum = pgEnum("crm_pipeline_stage", [
   "qualified",
   "quoted",
   "won",
-  "lost"
+  "lost",
 ]);
 
-export const crmTaskStatusEnum = pgEnum("crm_task_status", ["open", "completed"]);
+export const crmTaskStatusEnum = pgEnum("crm_task_status", [
+  "open",
+  "completed",
+]);
 
 export const crmPipeline = pgTable("crm_pipeline", {
   contactId: uuid("contact_id")
@@ -191,11 +261,13 @@ export const crmPipeline = pgTable("crm_pipeline", {
     .primaryKey(),
   stage: crmPipelineStageEnum("stage").default("new").notNull(),
   notes: text("notes"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull()
-    .$onUpdate(() => new Date())
+    .$onUpdate(() => new Date()),
 });
 
 export const crmTasks = pgTable(
@@ -210,16 +282,18 @@ export const crmTasks = pgTable(
     assignedTo: text("assigned_to"),
     status: crmTaskStatusEnum("status").default("open").notNull(),
     notes: text("notes"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     contactIdx: index("crm_tasks_contact_idx").on(table.contactId),
-    dueIdx: index("crm_tasks_due_idx").on(table.dueAt)
-  })
+    dueIdx: index("crm_tasks_due_idx").on(table.dueAt),
+  }),
 );
 
 export const leads = pgTable(
@@ -243,23 +317,28 @@ export const leads = pgTable(
     utmTerm: text("utm_term"),
     utmContent: text("utm_content"),
     gclid: text("gclid"),
-  fbclid: text("fbclid"),
-  referrer: text("referrer"),
-  formPayload: jsonb("form_payload").$type<Record<string, unknown>>(),
-  instantQuoteId: uuid("instant_quote_id").references(() => instantQuotes.id, { onDelete: "set null" }),
-  quoteEstimate: numeric("quote_estimate"),
-  quoteId: text("quote_id"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
+    fbclid: text("fbclid"),
+    referrer: text("referrer"),
+    formPayload: jsonb("form_payload").$type<Record<string, unknown>>(),
+    instantQuoteId: uuid("instant_quote_id").references(
+      () => instantQuotes.id,
+      { onDelete: "set null" },
+    ),
+    quoteEstimate: numeric("quote_estimate"),
+    quoteId: text("quote_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     contactIdx: index("leads_contact_idx").on(table.contactId),
     propertyIdx: index("leads_property_idx").on(table.propertyId),
-    quoteIdx: uniqueIndex("leads_quote_idx").on(table.quoteId)
-  })
+    quoteIdx: uniqueIndex("leads_quote_idx").on(table.quoteId),
+  }),
 );
 
 export const teamRoles = pgTable(
@@ -269,15 +348,17 @@ export const teamRoles = pgTable(
     name: text("name").notNull(),
     slug: text("slug").notNull(),
     permissions: text("permissions").array().notNull().default([]),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
-    slugIdx: uniqueIndex("team_roles_slug_key").on(table.slug)
-  })
+    slugIdx: uniqueIndex("team_roles_slug_key").on(table.slug),
+  }),
 );
 
 export const teamMembers = pgTable(
@@ -286,23 +367,27 @@ export const teamMembers = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     name: text("name").notNull(),
     email: text("email"),
-    roleId: uuid("role_id").references(() => teamRoles.id, { onDelete: "set null" }),
+    roleId: uuid("role_id").references(() => teamRoles.id, {
+      onDelete: "set null",
+    }),
     permissionsGrant: text("permissions_grant").array().notNull().default([]),
     permissionsDeny: text("permissions_deny").array().notNull().default([]),
     active: boolean("active").default(true).notNull(),
     defaultCrewSplitBps: integer("default_crew_split_bps"),
     passwordHash: text("password_hash"),
     passwordSetAt: timestamp("password_set_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     emailIdx: index("team_members_email_idx").on(table.email),
-    roleIdx: index("team_members_role_idx").on(table.roleId)
-  })
+    roleIdx: index("team_members_role_idx").on(table.roleId),
+  }),
 );
 
 export const teamLoginTokens = pgTable(
@@ -316,13 +401,15 @@ export const teamLoginTokens = pgTable(
     requestedIp: text("requested_ip"),
     userAgent: text("user_agent"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     tokenHashIdx: uniqueIndex("team_login_tokens_hash_key").on(table.tokenHash),
     memberIdx: index("team_login_tokens_member_idx").on(table.teamMemberId),
-    expiresIdx: index("team_login_tokens_expires_idx").on(table.expiresAt)
-  })
+    expiresIdx: index("team_login_tokens_expires_idx").on(table.expiresAt),
+  }),
 );
 
 export const teamSessions = pgTable(
@@ -336,15 +423,19 @@ export const teamSessions = pgTable(
     ip: text("ip"),
     userAgent: text("user_agent"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
-    revokedAt: timestamp("revoked_at", { withTimezone: true })
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
   },
   (table) => ({
     sessionHashIdx: uniqueIndex("team_sessions_hash_key").on(table.sessionHash),
     memberIdx: index("team_sessions_member_idx").on(table.teamMemberId),
-    expiresIdx: index("team_sessions_expires_idx").on(table.expiresAt)
-  })
+    expiresIdx: index("team_sessions_expires_idx").on(table.expiresAt),
+  }),
 );
 
 export const auditLogs = pgTable(
@@ -352,20 +443,27 @@ export const auditLogs = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     actorType: auditActorTypeEnum("actor_type").default("system").notNull(),
-    actorId: uuid("actor_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    actorId: uuid("actor_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     actorLabel: text("actor_label"),
     actorRole: text("actor_role"),
     action: text("action").notNull(),
     entityType: text("entity_type").notNull(),
     entityId: text("entity_id"),
     meta: jsonb("meta").$type<Record<string, unknown> | null>(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     actorIdx: index("audit_logs_actor_idx").on(table.actorId),
-    entityIdx: index("audit_logs_entity_idx").on(table.entityType, table.entityId),
-    createdIdx: index("audit_logs_created_idx").on(table.createdAt)
-  })
+    entityIdx: index("audit_logs_entity_idx").on(
+      table.entityType,
+      table.entityId,
+    ),
+    createdIdx: index("audit_logs_created_idx").on(table.createdAt),
+  }),
 );
 
 export const mergeSuggestions = pgTable(
@@ -382,41 +480,54 @@ export const mergeSuggestions = pgTable(
     reason: text("reason").notNull(),
     confidence: integer("confidence").default(0).notNull(),
     meta: jsonb("meta").$type<Record<string, unknown> | null>(),
-    reviewedBy: uuid("reviewed_by").references(() => teamMembers.id, { onDelete: "set null" }),
+    reviewedBy: uuid("reviewed_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     statusIdx: index("merge_suggestions_status_idx").on(table.status),
     sourceIdx: index("merge_suggestions_source_idx").on(table.sourceContactId),
     targetIdx: index("merge_suggestions_target_idx").on(table.targetContactId),
-    pairIdx: uniqueIndex("merge_suggestions_pair_key").on(table.sourceContactId, table.targetContactId)
-  })
+    pairIdx: uniqueIndex("merge_suggestions_pair_key").on(
+      table.sourceContactId,
+      table.targetContactId,
+    ),
+  }),
 );
 
 export const policySettings = pgTable("policy_settings", {
   key: text("key").primaryKey(),
   value: jsonb("value").$type<Record<string, unknown>>().notNull(),
-  updatedBy: uuid("updated_by").references(() => teamMembers.id, { onDelete: "set null" }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedBy: uuid("updated_by").references(() => teamMembers.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull()
-    .$onUpdate(() => new Date())
+    .$onUpdate(() => new Date()),
 });
 
 export const automationSettings = pgTable("automation_settings", {
   channel: automationChannelEnum("channel").primaryKey(),
   mode: automationModeEnum("mode").default("draft").notNull(),
-  updatedBy: uuid("updated_by").references(() => teamMembers.id, { onDelete: "set null" }),
+  updatedBy: uuid("updated_by").references(() => teamMembers.id, {
+    onDelete: "set null",
+  }),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull()
-    .$onUpdate(() => new Date())
+    .$onUpdate(() => new Date()),
 });
 
 export const leadAutomationStates = pgTable(
@@ -434,49 +545,68 @@ export const leadAutomationStates = pgTable(
     followupStep: integer("followup_step").default(0).notNull(),
     nextFollowupAt: timestamp("next_followup_at", { withTimezone: true }),
     pausedAt: timestamp("paused_at", { withTimezone: true }),
-    pausedBy: uuid("paused_by").references(() => teamMembers.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    pausedBy: uuid("paused_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     leadIdx: index("lead_automation_lead_idx").on(table.leadId),
-    leadChannelIdx: uniqueIndex("lead_automation_lead_channel_key").on(table.leadId, table.channel)
-  })
+    leadChannelIdx: uniqueIndex("lead_automation_lead_channel_key").on(
+      table.leadId,
+      table.channel,
+    ),
+  }),
 );
 
 export const conversationThreads = pgTable(
   "conversation_threads",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
-    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
-    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
+    leadId: uuid("lead_id").references(() => leads.id, {
+      onDelete: "set null",
+    }),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    propertyId: uuid("property_id").references(() => properties.id, {
+      onDelete: "set null",
+    }),
     status: conversationThreadStatusEnum("status").default("open").notNull(),
     state: conversationStateEnum("state").default("new").notNull(),
     channel: conversationChannelEnum("channel").default("sms").notNull(),
     subject: text("subject"),
     lastMessagePreview: text("last_message_preview"),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
-    assignedTo: uuid("assigned_to").references(() => teamMembers.id, { onDelete: "set null" }),
+    assignedTo: uuid("assigned_to").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     stateUpdatedAt: timestamp("state_updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     leadIdx: index("conversation_threads_lead_idx").on(table.leadId),
     contactIdx: index("conversation_threads_contact_idx").on(table.contactId),
     statusIdx: index("conversation_threads_status_idx").on(table.status),
     stateIdx: index("conversation_threads_state_idx").on(table.state),
-    lastMessageIdx: index("conversation_threads_last_message_idx").on(table.lastMessageAt)
-  })
+    lastMessageIdx: index("conversation_threads_last_message_idx").on(
+      table.lastMessageAt,
+    ),
+  }),
 );
 
 export const conversationParticipants = pgTable(
@@ -486,16 +616,23 @@ export const conversationParticipants = pgTable(
     threadId: uuid("thread_id")
       .notNull()
       .references(() => conversationThreads.id, { onDelete: "cascade" }),
-    participantType: conversationParticipantTypeEnum("participant_type").notNull(),
-    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
-    teamMemberId: uuid("team_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    participantType:
+      conversationParticipantTypeEnum("participant_type").notNull(),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    teamMemberId: uuid("team_member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     externalAddress: text("external_address"),
     displayName: text("display_name"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    threadIdx: index("conversation_participants_thread_idx").on(table.threadId)
-  })
+    threadIdx: index("conversation_participants_thread_idx").on(table.threadId),
+  }),
 );
 
 export const conversationMessages = pgTable(
@@ -505,9 +642,12 @@ export const conversationMessages = pgTable(
     threadId: uuid("thread_id")
       .notNull()
       .references(() => conversationThreads.id, { onDelete: "cascade" }),
-    participantId: uuid("participant_id").references(() => conversationParticipants.id, {
-      onDelete: "set null"
-    }),
+    participantId: uuid("participant_id").references(
+      () => conversationParticipants.id,
+      {
+        onDelete: "set null",
+      },
+    ),
     direction: messageDirectionEnum("direction").notNull(),
     channel: conversationChannelEnum("channel").notNull(),
     subject: text("subject"),
@@ -515,19 +655,25 @@ export const conversationMessages = pgTable(
     mediaUrls: text("media_urls").array().notNull().default([]),
     toAddress: text("to_address"),
     fromAddress: text("from_address"),
-    deliveryStatus: messageDeliveryStatusEnum("delivery_status").default("queued").notNull(),
+    deliveryStatus: messageDeliveryStatusEnum("delivery_status")
+      .default("queued")
+      .notNull(),
     provider: text("provider"),
     providerMessageId: text("provider_message_id"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     receivedAt: timestamp("received_at", { withTimezone: true }),
     metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     threadIdx: index("conversation_messages_thread_idx").on(table.threadId),
-    statusIdx: index("conversation_messages_status_idx").on(table.deliveryStatus),
-    sentIdx: index("conversation_messages_sent_idx").on(table.sentAt)
-  })
+    statusIdx: index("conversation_messages_status_idx").on(
+      table.deliveryStatus,
+    ),
+    sentIdx: index("conversation_messages_sent_idx").on(table.sentAt),
+  }),
 );
 
 export const partnerUsers = pgTable(
@@ -544,17 +690,23 @@ export const partnerUsers = pgTable(
     active: boolean("active").default(true).notNull(),
     passwordHash: text("password_hash"),
     passwordSetAt: timestamp("password_set_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     emailIdx: uniqueIndex("partner_users_email_key").on(table.email),
-    phoneE164Idx: uniqueIndex("partner_users_phone_e164_key").on(table.phoneE164),
-    orgContactIdx: index("partner_users_org_contact_idx").on(table.orgContactId)
-  })
+    phoneE164Idx: uniqueIndex("partner_users_phone_e164_key").on(
+      table.phoneE164,
+    ),
+    orgContactIdx: index("partner_users_org_contact_idx").on(
+      table.orgContactId,
+    ),
+  }),
 );
 
 export const partnerLoginTokens = pgTable(
@@ -569,13 +721,17 @@ export const partnerLoginTokens = pgTable(
     userAgent: text("user_agent"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     usedAt: timestamp("used_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    tokenHashIdx: uniqueIndex("partner_login_tokens_hash_key").on(table.tokenHash),
+    tokenHashIdx: uniqueIndex("partner_login_tokens_hash_key").on(
+      table.tokenHash,
+    ),
     userIdx: index("partner_login_tokens_user_idx").on(table.partnerUserId),
-    expiresIdx: index("partner_login_tokens_expires_idx").on(table.expiresAt)
-  })
+    expiresIdx: index("partner_login_tokens_expires_idx").on(table.expiresAt),
+  }),
 );
 
 export const partnerSessions = pgTable(
@@ -590,14 +746,20 @@ export const partnerSessions = pgTable(
     userAgent: text("user_agent"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    sessionHashIdx: uniqueIndex("partner_sessions_hash_key").on(table.sessionHash),
+    sessionHashIdx: uniqueIndex("partner_sessions_hash_key").on(
+      table.sessionHash,
+    ),
     userIdx: index("partner_sessions_user_idx").on(table.partnerUserId),
-    expiresIdx: index("partner_sessions_expires_idx").on(table.expiresAt)
-  })
+    expiresIdx: index("partner_sessions_expires_idx").on(table.expiresAt),
+  }),
 );
 
 export const partnerRateCards = pgTable(
@@ -609,15 +771,17 @@ export const partnerRateCards = pgTable(
       .references(() => contacts.id, { onDelete: "cascade" }),
     currency: text("currency").default("USD").notNull(),
     active: boolean("active").default(true).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
-    orgIdx: uniqueIndex("partner_rate_cards_org_key").on(table.orgContactId)
-  })
+    orgIdx: uniqueIndex("partner_rate_cards_org_key").on(table.orgContactId),
+  }),
 );
 
 export const partnerRateItems = pgTable(
@@ -632,12 +796,14 @@ export const partnerRateItems = pgTable(
     label: text("label"),
     amountCents: integer("amount_cents").notNull(),
     sortOrder: integer("sort_order").default(0).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     cardIdx: index("partner_rate_items_card_idx").on(table.rateCardId),
-    serviceIdx: index("partner_rate_items_service_idx").on(table.serviceKey)
-  })
+    serviceIdx: index("partner_rate_items_service_idx").on(table.serviceKey),
+  }),
 );
 
 export const inboxMediaUploads = pgTable(
@@ -649,12 +815,14 @@ export const inboxMediaUploads = pgTable(
     contentType: text("content_type").notNull(),
     bytes: bytea("bytes").notNull(),
     byteLength: integer("byte_length").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   },
   (table) => ({
-    expiresIdx: index("inbox_media_uploads_expires_idx").on(table.expiresAt)
-  })
+    expiresIdx: index("inbox_media_uploads_expires_idx").on(table.expiresAt),
+  }),
 );
 
 export const messageDeliveryEvents = pgTable(
@@ -667,13 +835,15 @@ export const messageDeliveryEvents = pgTable(
     status: messageDeliveryStatusEnum("status").notNull(),
     detail: text("detail"),
     provider: text("provider"),
-    occurredAt: timestamp("occurred_at", { withTimezone: true }).defaultNow().notNull()
+    occurredAt: timestamp("occurred_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     messageIdx: index("message_delivery_message_idx").on(table.messageId),
     statusIdx: index("message_delivery_status_idx").on(table.status),
-    occurredIdx: index("message_delivery_occurred_idx").on(table.occurredAt)
-  })
+    occurredIdx: index("message_delivery_occurred_idx").on(table.occurredAt),
+  }),
 );
 
 export const outboxEvents = pgTable("outbox_events", {
@@ -683,8 +853,10 @@ export const outboxEvents = pgTable("outbox_events", {
   attempts: integer("attempts").default(0).notNull(),
   nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
   lastError: text("last_error"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  processedAt: timestamp("processed_at", { withTimezone: true })
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  processedAt: timestamp("processed_at", { withTimezone: true }),
 });
 
 export const providerHealth = pgTable("provider_health", {
@@ -695,7 +867,7 @@ export const providerHealth = pgTable("provider_health", {
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull()
-    .$onUpdate(() => new Date())
+    .$onUpdate(() => new Date()),
 });
 
 export const metaAdsInsightsDaily = pgTable(
@@ -719,20 +891,22 @@ export const metaAdsInsightsDaily = pgTable(
     reach: integer("reach").notNull(),
     spend: numeric("spend", { precision: 12, scale: 2 }).notNull(),
     raw: jsonb("raw").$type<Record<string, unknown>>().notNull(),
-    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull()
+    fetchedAt: timestamp("fetched_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     uniqueIdx: uniqueIndex("meta_ads_insights_unique_idx").on(
       table.accountId,
       table.level,
       table.entityId,
-      table.dateStart
+      table.dateStart,
     ),
     dateIdx: index("meta_ads_insights_date_idx").on(table.dateStart),
     campaignIdx: index("meta_ads_insights_campaign_idx").on(table.campaignId),
     adsetIdx: index("meta_ads_insights_adset_idx").on(table.adsetId),
-    adIdx: index("meta_ads_insights_ad_idx").on(table.adId)
-  })
+    adIdx: index("meta_ads_insights_ad_idx").on(table.adId),
+  }),
 );
 
 export const googleAdsInsightsDaily = pgTable(
@@ -747,19 +921,26 @@ export const googleAdsInsightsDaily = pgTable(
     clicks: integer("clicks").notNull(),
     cost: numeric("cost", { precision: 12, scale: 2 }).notNull(),
     conversions: numeric("conversions", { precision: 12, scale: 2 }).notNull(),
-    conversionValue: numeric("conversion_value", { precision: 12, scale: 2 }).notNull(),
+    conversionValue: numeric("conversion_value", {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
     raw: jsonb("raw").$type<Record<string, unknown>>().notNull(),
-    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull()
+    fetchedAt: timestamp("fetched_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     uniqueIdx: uniqueIndex("google_ads_insights_daily_unique_idx").on(
       table.customerId,
       table.dateStart,
-      table.campaignId
+      table.campaignId,
     ),
     dateIdx: index("google_ads_insights_daily_date_idx").on(table.dateStart),
-    campaignIdx: index("google_ads_insights_daily_campaign_idx").on(table.campaignId)
-  })
+    campaignIdx: index("google_ads_insights_daily_campaign_idx").on(
+      table.campaignId,
+    ),
+  }),
 );
 
 export const googleAdsSearchTermsDaily = pgTable(
@@ -775,9 +956,14 @@ export const googleAdsSearchTermsDaily = pgTable(
     clicks: integer("clicks").notNull(),
     cost: numeric("cost", { precision: 12, scale: 2 }).notNull(),
     conversions: numeric("conversions", { precision: 12, scale: 2 }).notNull(),
-    conversionValue: numeric("conversion_value", { precision: 12, scale: 2 }).notNull(),
+    conversionValue: numeric("conversion_value", {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
     raw: jsonb("raw").$type<Record<string, unknown>>().notNull(),
-    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull()
+    fetchedAt: timestamp("fetched_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     uniqueIdx: uniqueIndex("google_ads_search_terms_daily_unique_idx").on(
@@ -785,12 +971,18 @@ export const googleAdsSearchTermsDaily = pgTable(
       table.dateStart,
       table.campaignId,
       table.adGroupId,
-      table.searchTerm
+      table.searchTerm,
     ),
-    dateIdx: index("google_ads_search_terms_daily_date_idx").on(table.dateStart),
-    campaignIdx: index("google_ads_search_terms_daily_campaign_idx").on(table.campaignId),
-    adGroupIdx: index("google_ads_search_terms_daily_ad_group_idx").on(table.adGroupId)
-  })
+    dateIdx: index("google_ads_search_terms_daily_date_idx").on(
+      table.dateStart,
+    ),
+    campaignIdx: index("google_ads_search_terms_daily_campaign_idx").on(
+      table.campaignId,
+    ),
+    adGroupIdx: index("google_ads_search_terms_daily_ad_group_idx").on(
+      table.adGroupId,
+    ),
+  }),
 );
 
 export const googleAdsConversionActions = pgTable(
@@ -805,12 +997,17 @@ export const googleAdsConversionActions = pgTable(
     type: text("type"),
     status: text("status"),
     raw: jsonb("raw").$type<Record<string, unknown>>().notNull(),
-    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull()
+    fetchedAt: timestamp("fetched_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    uniqueIdx: uniqueIndex("google_ads_conversion_actions_unique_idx").on(table.customerId, table.actionId),
-    nameIdx: index("google_ads_conversion_actions_name_idx").on(table.name)
-  })
+    uniqueIdx: uniqueIndex("google_ads_conversion_actions_unique_idx").on(
+      table.customerId,
+      table.actionId,
+    ),
+    nameIdx: index("google_ads_conversion_actions_name_idx").on(table.name),
+  }),
 );
 
 export const googleAdsCampaignConversionsDaily = pgTable(
@@ -823,20 +1020,31 @@ export const googleAdsCampaignConversionsDaily = pgTable(
     conversionActionId: text("conversion_action_id").notNull(),
     conversionActionName: text("conversion_action_name"),
     conversions: numeric("conversions", { precision: 12, scale: 2 }).notNull(),
-    conversionValue: numeric("conversion_value", { precision: 12, scale: 2 }).notNull(),
+    conversionValue: numeric("conversion_value", {
+      precision: 12,
+      scale: 2,
+    }).notNull(),
     raw: jsonb("raw").$type<Record<string, unknown>>().notNull(),
-    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull()
+    fetchedAt: timestamp("fetched_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    uniqueIdx: uniqueIndex("google_ads_campaign_conversions_daily_unique_idx").on(
+    uniqueIdx: uniqueIndex(
+      "google_ads_campaign_conversions_daily_unique_idx",
+    ).on(
       table.customerId,
       table.dateStart,
       table.campaignId,
-      table.conversionActionId
+      table.conversionActionId,
     ),
-    dateIdx: index("google_ads_campaign_conversions_daily_date_idx").on(table.dateStart),
-    campaignIdx: index("google_ads_campaign_conversions_daily_campaign_idx").on(table.campaignId)
-  })
+    dateIdx: index("google_ads_campaign_conversions_daily_date_idx").on(
+      table.dateStart,
+    ),
+    campaignIdx: index("google_ads_campaign_conversions_daily_campaign_idx").on(
+      table.campaignId,
+    ),
+  }),
 );
 
 export const googleAdsAnalystReports = pgTable(
@@ -847,15 +1055,27 @@ export const googleAdsAnalystReports = pgTable(
     since: text("since").notNull(),
     until: text("until").notNull(),
     callWeight: numeric("call_weight", { precision: 4, scale: 3 }).notNull(),
-    bookingWeight: numeric("booking_weight", { precision: 4, scale: 3 }).notNull(),
+    bookingWeight: numeric("booking_weight", {
+      precision: 4,
+      scale: 3,
+    }).notNull(),
     report: jsonb("report").$type<Record<string, unknown>>().notNull(),
-    createdBy: uuid("created_by").references(() => teamMembers.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdBy: uuid("created_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    createdAtIdx: index("google_ads_analyst_reports_created_at_idx").on(table.createdAt),
-    rangeIdx: index("google_ads_analyst_reports_range_idx").on(table.since, table.until)
-  })
+    createdAtIdx: index("google_ads_analyst_reports_created_at_idx").on(
+      table.createdAt,
+    ),
+    rangeIdx: index("google_ads_analyst_reports_range_idx").on(
+      table.since,
+      table.until,
+    ),
+  }),
 );
 
 export const googleAdsAnalystRecommendations = pgTable(
@@ -868,19 +1088,29 @@ export const googleAdsAnalystRecommendations = pgTable(
     kind: text("kind").notNull(),
     status: text("status").default("proposed").notNull(),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
-    decidedBy: uuid("decided_by").references(() => teamMembers.id, { onDelete: "set null" }),
+    decidedBy: uuid("decided_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
     appliedAt: timestamp("applied_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
-    reportIdx: index("google_ads_analyst_recs_report_idx").on(table.reportId, table.createdAt),
-    statusIdx: index("google_ads_analyst_recs_status_idx").on(table.status, table.createdAt)
-  })
+    reportIdx: index("google_ads_analyst_recs_report_idx").on(
+      table.reportId,
+      table.createdAt,
+    ),
+    statusIdx: index("google_ads_analyst_recs_status_idx").on(
+      table.status,
+      table.createdAt,
+    ),
+  }),
 );
 
 export const webEvents = pgTable(
@@ -901,14 +1131,16 @@ export const webEvents = pgTable(
     device: text("device"),
     inAreaBucket: text("in_area_bucket"),
     meta: jsonb("meta").$type<Record<string, unknown>>().notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     createdAtIdx: index("web_events_created_at_idx").on(table.createdAt),
     eventIdx: index("web_events_event_idx").on(table.event),
     pathIdx: index("web_events_path_idx").on(table.path),
-    sessionIdx: index("web_events_session_idx").on(table.sessionId)
-  })
+    sessionIdx: index("web_events_session_idx").on(table.sessionId),
+  }),
 );
 
 export const webEventCountsDaily = pgTable(
@@ -927,7 +1159,9 @@ export const webEventCountsDaily = pgTable(
     utmTerm: text("utm_term").notNull().default(""),
     utmContent: text("utm_content").notNull().default(""),
     count: integer("count").notNull().default(0),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     uniqueIdx: uniqueIndex("web_event_counts_daily_unique_idx").on(
@@ -941,12 +1175,12 @@ export const webEventCountsDaily = pgTable(
       table.utmMedium,
       table.utmCampaign,
       table.utmTerm,
-      table.utmContent
+      table.utmContent,
     ),
     dateIdx: index("web_event_counts_daily_date_idx").on(table.dateStart),
     eventIdx: index("web_event_counts_daily_event_idx").on(table.event),
-    pathIdx: index("web_event_counts_daily_path_idx").on(table.path)
-  })
+    pathIdx: index("web_event_counts_daily_path_idx").on(table.path),
+  }),
 );
 
 export const webVitals = pgTable(
@@ -960,12 +1194,17 @@ export const webVitals = pgTable(
     value: doublePrecision("value").notNull(),
     rating: text("rating"),
     device: text("device"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     createdAtIdx: index("web_vitals_created_at_idx").on(table.createdAt),
-    pathMetricIdx: index("web_vitals_path_metric_idx").on(table.path, table.metric)
-  })
+    pathMetricIdx: index("web_vitals_path_metric_idx").on(
+      table.path,
+      table.metric,
+    ),
+  }),
 );
 
 export const googleAdsAnalystRecommendationEvents = pgTable(
@@ -974,7 +1213,9 @@ export const googleAdsAnalystRecommendationEvents = pgTable(
     id: uuid("id").defaultRandom().primaryKey(),
     recommendationId: uuid("recommendation_id")
       .notNull()
-      .references(() => googleAdsAnalystRecommendations.id, { onDelete: "cascade" }),
+      .references(() => googleAdsAnalystRecommendations.id, {
+        onDelete: "cascade",
+      }),
     reportId: uuid("report_id")
       .notNull()
       .references(() => googleAdsAnalystReports.id, { onDelete: "cascade" }),
@@ -982,15 +1223,28 @@ export const googleAdsAnalystRecommendationEvents = pgTable(
     fromStatus: text("from_status"),
     toStatus: text("to_status").notNull(),
     note: text("note"),
-    actorMemberId: uuid("actor_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    actorMemberId: uuid("actor_member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     actorSource: text("actor_source").default("ui").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    reportIdx: index("google_ads_analyst_rec_events_report_idx").on(table.reportId, table.createdAt),
-    recommendationIdx: index("google_ads_analyst_rec_events_rec_idx").on(table.recommendationId, table.createdAt),
-    actorIdx: index("google_ads_analyst_rec_events_actor_idx").on(table.actorMemberId, table.createdAt)
-  })
+    reportIdx: index("google_ads_analyst_rec_events_report_idx").on(
+      table.reportId,
+      table.createdAt,
+    ),
+    recommendationIdx: index("google_ads_analyst_rec_events_rec_idx").on(
+      table.recommendationId,
+      table.createdAt,
+    ),
+    actorIdx: index("google_ads_analyst_rec_events_actor_idx").on(
+      table.actorMemberId,
+      table.createdAt,
+    ),
+  }),
 );
 
 export const calendarSyncState = pgTable("calendar_sync_state", {
@@ -1001,11 +1255,13 @@ export const calendarSyncState = pgTable("calendar_sync_state", {
   channelExpiresAt: timestamp("channel_expires_at", { withTimezone: true }),
   lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
   lastNotificationAt: timestamp("last_notification_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull()
-    .$onUpdate(() => new Date())
+    .$onUpdate(() => new Date()),
 });
 export const appointments = pgTable(
   "appointments",
@@ -1017,61 +1273,83 @@ export const appointments = pgTable(
     propertyId: uuid("property_id")
       .notNull()
       .references(() => properties.id, { onDelete: "cascade" }),
-    leadId: uuid("lead_id")
-      .references(() => leads.id, { onDelete: "set null" }),
+    leadId: uuid("lead_id").references(() => leads.id, {
+      onDelete: "set null",
+    }),
     type: text("type").default("estimate").notNull(),
     startAt: timestamp("start_at", { withTimezone: true }),
     durationMinutes: integer("duration_min").default(60).notNull(),
     status: appointmentStatusEnum("status").default("requested").notNull(),
     quotedTotalCents: integer("quoted_total_cents"),
     finalTotalCents: integer("final_total_cents"),
+    bookingDetails: jsonb(
+      "booking_details",
+    ).$type<AppointmentBookingDetails | null>(),
     cardTipCents: integer("card_tip_cents"),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     calendarEventId: text("calendar_event_id"),
     crew: text("crew"),
     owner: text("owner"),
-    soldByMemberId: uuid("sold_by_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
-    marketingMemberId: uuid("marketing_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    soldByMemberId: uuid("sold_by_member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    marketingMemberId: uuid("marketing_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
     rescheduleToken: varchar("reschedule_token", { length: 64 }).notNull(),
     travelBufferMinutes: integer("travel_buffer_min").default(30).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     startIdx: index("appointments_start_idx").on(table.startAt),
-    statusIdx: index("appointments_status_idx").on(table.status)
-    })
-  );
+    statusIdx: index("appointments_status_idx").on(table.status),
+  }),
+);
 
 export const appointmentHolds = pgTable(
   "appointment_holds",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    instantQuoteId: uuid("instant_quote_id").references(() => instantQuotes.id, { onDelete: "set null" }),
-    leadId: uuid("lead_id").references(() => leads.id, { onDelete: "set null" }),
-    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
-    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
+    instantQuoteId: uuid("instant_quote_id").references(
+      () => instantQuotes.id,
+      { onDelete: "set null" },
+    ),
+    leadId: uuid("lead_id").references(() => leads.id, {
+      onDelete: "set null",
+    }),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    propertyId: uuid("property_id").references(() => properties.id, {
+      onDelete: "set null",
+    }),
     startAt: timestamp("start_at", { withTimezone: true }).notNull(),
     durationMinutes: integer("duration_min").default(60).notNull(),
     travelBufferMinutes: integer("travel_buffer_min").default(30).notNull(),
     status: text("status").default("active").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     startIdx: index("appointment_holds_start_idx").on(table.startAt),
     statusIdx: index("appointment_holds_status_idx").on(table.status),
     expiresIdx: index("appointment_holds_expires_idx").on(table.expiresAt),
-    quoteIdx: index("appointment_holds_quote_idx").on(table.instantQuoteId)
-  })
+    quoteIdx: index("appointment_holds_quote_idx").on(table.instantQuoteId),
+  }),
 );
 
 export const appointmentNotes = pgTable(
@@ -1082,11 +1360,15 @@ export const appointmentNotes = pgTable(
       .notNull()
       .references(() => appointments.id, { onDelete: "cascade" }),
     body: text("body").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    appointmentIdx: index("appointment_notes_appointment_idx").on(table.appointmentId)
-  })
+    appointmentIdx: index("appointment_notes_appointment_idx").on(
+      table.appointmentId,
+    ),
+  }),
 );
 
 export const appointmentAttachments = pgTable(
@@ -1099,11 +1381,15 @@ export const appointmentAttachments = pgTable(
     filename: text("filename").notNull(),
     url: text("url").notNull(),
     contentType: text("content_type"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    appointmentIdx: index("appointment_attachments_appointment_idx").on(table.appointmentId)
-  })
+    appointmentIdx: index("appointment_attachments_appointment_idx").on(
+      table.appointmentId,
+    ),
+  }),
 );
 
 export const partnerBookings = pgTable(
@@ -1113,20 +1399,28 @@ export const partnerBookings = pgTable(
     orgContactId: uuid("org_contact_id")
       .notNull()
       .references(() => contacts.id, { onDelete: "cascade" }),
-    partnerUserId: uuid("partner_user_id").references(() => partnerUsers.id, { onDelete: "set null" }),
-    propertyId: uuid("property_id").references(() => properties.id, { onDelete: "set null" }),
+    partnerUserId: uuid("partner_user_id").references(() => partnerUsers.id, {
+      onDelete: "set null",
+    }),
+    propertyId: uuid("property_id").references(() => properties.id, {
+      onDelete: "set null",
+    }),
     appointmentId: uuid("appointment_id")
       .notNull()
       .references(() => appointments.id, { onDelete: "cascade" }),
     serviceKey: text("service_key"),
     tierKey: text("tier_key"),
     amountCents: integer("amount_cents"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     orgIdx: index("partner_bookings_org_idx").on(table.orgContactId),
-    appointmentIdx: index("partner_bookings_appointment_idx").on(table.appointmentId)
-  })
+    appointmentIdx: index("partner_bookings_appointment_idx").on(
+      table.appointmentId,
+    ),
+  }),
 );
 
 export const callRecords = pgTable(
@@ -1139,37 +1433,50 @@ export const callRecords = pgTable(
     mode: text("mode"), // inbound | sales_escalation | null
     from: text("from_number"),
     to: text("to_number"),
-    contactId: uuid("contact_id").references(() => contacts.id, { onDelete: "set null" }),
-    assignedTo: uuid("assigned_to").references(() => teamMembers.id, { onDelete: "set null" }),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    assignedTo: uuid("assigned_to").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     callStatus: text("call_status"),
     callDurationSec: integer("call_duration_sec"),
     recordingSid: text("recording_sid"),
     recordingUrl: text("recording_url"),
     recordingDurationSec: integer("recording_duration_sec"),
-    recordingCreatedAt: timestamp("recording_created_at", { withTimezone: true }),
+    recordingCreatedAt: timestamp("recording_created_at", {
+      withTimezone: true,
+    }),
     transcript: text("transcript"),
     extracted: jsonb("extracted").$type<Record<string, unknown> | null>(),
     summary: text("summary"),
     coaching: text("coaching"),
-    noteTaskId: uuid("note_task_id").references(() => crmTasks.id, { onDelete: "set null" }),
+    noteTaskId: uuid("note_task_id").references(() => crmTasks.id, {
+      onDelete: "set null",
+    }),
     processedAt: timestamp("processed_at", { withTimezone: true }),
     deleteAfter: timestamp("delete_after", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     callSidIdx: uniqueIndex("call_records_call_sid_key").on(table.callSid),
     contactIdx: index("call_records_contact_idx").on(table.contactId),
     assignedIdx: index("call_records_assigned_idx").on(table.assignedTo),
-    deleteIdx: index("call_records_delete_idx").on(table.deleteAfter)
-  })
+    deleteIdx: index("call_records_delete_idx").on(table.deleteAfter),
+  }),
 );
 
-export const callCoachingRubricEnum = pgEnum("call_coaching_rubric", ["inbound", "outbound"]);
+export const callCoachingRubricEnum = pgEnum("call_coaching_rubric", [
+  "inbound",
+  "outbound",
+]);
 
 export const callCoaching = pgTable(
   "call_coaching",
@@ -1178,26 +1485,37 @@ export const callCoaching = pgTable(
     callRecordId: uuid("call_record_id")
       .notNull()
       .references(() => callRecords.id, { onDelete: "cascade" }),
-    memberId: uuid("member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    memberId: uuid("member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     rubric: callCoachingRubricEnum("rubric").notNull(),
     version: integer("version").default(1).notNull(),
     model: text("model"),
     scoreOverall: integer("score_overall").notNull(),
-    scoreBreakdown: jsonb("score_breakdown").$type<Record<string, number> | null>(),
+    scoreBreakdown: jsonb("score_breakdown").$type<Record<
+      string,
+      number
+    > | null>(),
     wins: text("wins").array().notNull().default([]),
     improvements: text("improvements").array().notNull().default([]),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
-    uniqueIdx: uniqueIndex("call_coaching_unique").on(table.callRecordId, table.rubric, table.version),
+    uniqueIdx: uniqueIndex("call_coaching_unique").on(
+      table.callRecordId,
+      table.rubric,
+      table.version,
+    ),
     callIdx: index("call_coaching_call_idx").on(table.callRecordId),
     memberIdx: index("call_coaching_member_idx").on(table.memberId),
-    rubricIdx: index("call_coaching_rubric_idx").on(table.rubric)
-  })
+    rubricIdx: index("call_coaching_rubric_idx").on(table.rubric),
+  }),
 );
 
 export const commissionSettings = pgTable("commission_settings", {
@@ -1209,13 +1527,20 @@ export const commissionSettings = pgTable("commission_settings", {
   salesRateBps: integer("sales_rate_bps").default(750).notNull(),
   marketingRateBps: integer("marketing_rate_bps").default(1000).notNull(),
   crewPoolRateBps: integer("crew_pool_rate_bps").default(2500).notNull(),
-  marketingMemberId: uuid("marketing_member_id").references(() => teamMembers.id, { onDelete: "set null" }),
-  updatedBy: uuid("updated_by").references(() => teamMembers.id, { onDelete: "set null" }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  marketingMemberId: uuid("marketing_member_id").references(
+    () => teamMembers.id,
+    { onDelete: "set null" },
+  ),
+  updatedBy: uuid("updated_by").references(() => teamMembers.id, {
+    onDelete: "set null",
+  }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull()
-    .$onUpdate(() => new Date())
+    .$onUpdate(() => new Date()),
 });
 
 export const appointmentCrewMembers = pgTable(
@@ -1229,12 +1554,17 @@ export const appointmentCrewMembers = pgTable(
       .notNull()
       .references(() => teamMembers.id, { onDelete: "restrict" }),
     splitBps: integer("split_bps").default(0).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     apptIdx: index("appointment_crew_members_appt_idx").on(table.appointmentId),
-    uniqueIdx: uniqueIndex("appointment_crew_members_unique").on(table.appointmentId, table.memberId)
-  })
+    uniqueIdx: uniqueIndex("appointment_crew_members_unique").on(
+      table.appointmentId,
+      table.memberId,
+    ),
+  }),
 );
 
 export const appointmentCommissions = pgTable(
@@ -1244,22 +1574,30 @@ export const appointmentCommissions = pgTable(
     appointmentId: uuid("appointment_id")
       .notNull()
       .references(() => appointments.id, { onDelete: "cascade" }),
-    memberId: uuid("member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    memberId: uuid("member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     role: commissionRoleEnum("role").notNull(),
     baseCents: integer("base_cents").notNull(),
     amountCents: integer("amount_cents").notNull(),
     meta: jsonb("meta").$type<Record<string, unknown> | null>(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     apptIdx: index("appointment_commissions_appt_idx").on(table.appointmentId),
     memberIdx: index("appointment_commissions_member_idx").on(table.memberId),
-    uniqueIdx: uniqueIndex("appointment_commissions_unique").on(table.appointmentId, table.role, table.memberId)
-  })
+    uniqueIdx: uniqueIndex("appointment_commissions_unique").on(
+      table.appointmentId,
+      table.role,
+      table.memberId,
+    ),
+  }),
 );
 
 export const payoutRuns = pgTable(
@@ -1269,21 +1607,30 @@ export const payoutRuns = pgTable(
     timezone: text("timezone").notNull(),
     periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
     periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
-    scheduledPayoutAt: timestamp("scheduled_payout_at", { withTimezone: true }).notNull(),
+    scheduledPayoutAt: timestamp("scheduled_payout_at", {
+      withTimezone: true,
+    }).notNull(),
     status: payoutRunStatusEnum("status").default("draft").notNull(),
-    createdBy: uuid("created_by").references(() => teamMembers.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdBy: uuid("created_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
     lockedAt: timestamp("locked_at", { withTimezone: true }),
-    paidAt: timestamp("paid_at", { withTimezone: true })
+    paidAt: timestamp("paid_at", { withTimezone: true }),
   },
   (table) => ({
-    periodIdx: index("payout_runs_period_idx").on(table.periodStart, table.periodEnd),
-    statusIdx: index("payout_runs_status_idx").on(table.status)
-  })
+    periodIdx: index("payout_runs_period_idx").on(
+      table.periodStart,
+      table.periodEnd,
+    ),
+    statusIdx: index("payout_runs_status_idx").on(table.status),
+  }),
 );
 
 export const payoutRunLines = pgTable(
@@ -1293,19 +1640,26 @@ export const payoutRunLines = pgTable(
     payoutRunId: uuid("payout_run_id")
       .notNull()
       .references(() => payoutRuns.id, { onDelete: "cascade" }),
-    memberId: uuid("member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    memberId: uuid("member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     salesCents: integer("sales_cents").default(0).notNull(),
     marketingCents: integer("marketing_cents").default(0).notNull(),
     crewCents: integer("crew_cents").default(0).notNull(),
     adjustmentsCents: integer("adjustments_cents").default(0).notNull(),
     totalCents: integer("total_cents").default(0).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
     runIdx: index("payout_run_lines_run_idx").on(table.payoutRunId),
     memberIdx: index("payout_run_lines_member_idx").on(table.memberId),
-    uniqueIdx: uniqueIndex("payout_run_lines_unique").on(table.payoutRunId, table.memberId)
-  })
+    uniqueIdx: uniqueIndex("payout_run_lines_unique").on(
+      table.payoutRunId,
+      table.memberId,
+    ),
+  }),
 );
 
 export const payoutRunAdjustments = pgTable(
@@ -1315,15 +1669,21 @@ export const payoutRunAdjustments = pgTable(
     payoutRunId: uuid("payout_run_id")
       .notNull()
       .references(() => payoutRuns.id, { onDelete: "cascade" }),
-    memberId: uuid("member_id").references(() => teamMembers.id, { onDelete: "set null" }),
+    memberId: uuid("member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
     amountCents: integer("amount_cents").notNull(),
     note: text("note"),
-    createdBy: uuid("created_by").references(() => teamMembers.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+    createdBy: uuid("created_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
   },
   (table) => ({
-    runIdx: index("payout_run_adjustments_run_idx").on(table.payoutRunId)
-  })
+    runIdx: index("payout_run_adjustments_run_idx").on(table.payoutRunId),
+  }),
 );
 
 export const quotes = pgTable(
@@ -1358,34 +1718,38 @@ export const quotes = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     decisionAt: timestamp("decision_at", { withTimezone: true }),
     decisionNotes: text("decision_notes"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     contactIdx: index("quotes_contact_idx").on(table.contactId),
     propertyIdx: index("quotes_property_idx").on(table.propertyId),
-    shareTokenIdx: uniqueIndex("quotes_share_token_key").on(table.shareToken)
-  })
+    shareTokenIdx: uniqueIndex("quotes_share_token_key").on(table.shareToken),
+  }),
 );
 
 export const quoteRelations = relations(quotes, ({ one }) => ({
   contact: one(contacts, {
     fields: [quotes.contactId],
-    references: [contacts.id]
+    references: [contacts.id],
   }),
   property: one(properties, {
     fields: [quotes.propertyId],
-    references: [properties.id]
-  })
+    references: [properties.id],
+  }),
 }));
 
 // Instant quotes (junk removal)
 export const instantQuotes = pgTable("instant_quotes", {
   id: uuid("id").defaultRandom().primaryKey(),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
   source: text("source").default("public_site").notNull(),
   contactName: text("contact_name").notNull(),
   contactPhone: text("contact_phone").notNull(),
@@ -1395,7 +1759,7 @@ export const instantQuotes = pgTable("instant_quotes", {
   perceivedSize: text("perceived_size").notNull(),
   notes: text("notes"),
   photoUrls: text("photo_urls").array().notNull().default([]),
-  aiResult: jsonb("ai_result").notNull()
+  aiResult: jsonb("ai_result").notNull(),
 });
 
 export type InstantQuote = typeof instantQuotes.$inferSelect;
@@ -1414,17 +1778,19 @@ export const blogPosts = pgTable(
     metaDescription: text("meta_description"),
     topicKey: text("topic_key"),
     publishedAt: timestamp("published_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     slugKey: uniqueIndex("blog_posts_slug_key").on(table.slug),
     publishedIdx: index("blog_posts_published_idx").on(table.publishedAt),
-    topicKeyIdx: index("blog_posts_topic_key_idx").on(table.topicKey)
-  })
+    topicKeyIdx: index("blog_posts_topic_key_idx").on(table.topicKey),
+  }),
 );
 
 export const seoAgentState = pgTable("seo_agent_state", {
@@ -1433,7 +1799,7 @@ export const seoAgentState = pgTable("seo_agent_state", {
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull()
-    .$onUpdate(() => new Date())
+    .$onUpdate(() => new Date()),
 });
 
 export const contactRelations = relations(contacts, ({ many, one }) => ({
@@ -1444,60 +1810,66 @@ export const contactRelations = relations(contacts, ({ many, one }) => ({
   tasks: many(crmTasks),
   pipeline: one(crmPipeline, {
     fields: [contacts.id],
-    references: [crmPipeline.contactId]
-  })
+    references: [crmPipeline.contactId],
+  }),
 }));
 
 export const propertyRelations = relations(properties, ({ one, many }) => ({
   contact: one(contacts, {
     fields: [properties.contactId],
-    references: [contacts.id]
+    references: [contacts.id],
   }),
   leads: many(leads),
   quotes: many(quotes),
-  appointments: many(appointments)
+  appointments: many(appointments),
 }));
 
 export const leadRelations = relations(leads, ({ one, many }) => ({
   contact: one(contacts, {
     fields: [leads.contactId],
-    references: [contacts.id]
+    references: [contacts.id],
   }),
   property: one(properties, {
     fields: [leads.propertyId],
-    references: [properties.id]
+    references: [properties.id],
   }),
-  appointments: many(appointments)
+  appointments: many(appointments),
 }));
 
-export const appointmentRelations = relations(appointments, ({ one, many }) => ({
-  contact: one(contacts, {
-    fields: [appointments.contactId],
-    references: [contacts.id]
+export const appointmentRelations = relations(
+  appointments,
+  ({ one, many }) => ({
+    contact: one(contacts, {
+      fields: [appointments.contactId],
+      references: [contacts.id],
+    }),
+    property: one(properties, {
+      fields: [appointments.propertyId],
+      references: [properties.id],
+    }),
+    lead: one(leads, {
+      fields: [appointments.leadId],
+      references: [leads.id],
+    }),
+    notes: many(appointmentNotes),
   }),
-  property: one(properties, {
-    fields: [appointments.propertyId],
-    references: [properties.id]
-  }),
-  lead: one(leads, {
-    fields: [appointments.leadId],
-    references: [leads.id]
-  }),
-  notes: many(appointmentNotes)
-}));
+);
 
-export const appointmentNoteRelations = relations(appointmentNotes, ({ one }) => ({
-  appointment: one(appointments, {
-    fields: [appointmentNotes.appointmentId],
-    references: [appointments.id]
-  })
-}));
+export const appointmentNoteRelations = relations(
+  appointmentNotes,
+  ({ one }) => ({
+    appointment: one(appointments, {
+      fields: [appointmentNotes.appointmentId],
+      references: [appointments.id],
+    }),
+  }),
+);
 
 export const crmTaskRelations = relations(crmTasks, ({ one }) => ({
   contact: one(contacts, {
     fields: [crmTasks.contactId],
-    references: [contacts.id]
-  })
+    references: [contacts.id],
+  }),
 }));
 
 export const appointmentTasks = pgTable(
@@ -1509,23 +1881,25 @@ export const appointmentTasks = pgTable(
       .references(() => appointments.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     status: text("status").default("open").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     apptIdx: index("appointment_tasks_appt_idx").on(table.appointmentId),
-    statusIdx: index("appointment_tasks_status_idx").on(table.status)
-  })
+    statusIdx: index("appointment_tasks_status_idx").on(table.status),
+  }),
 );
 
 export const crmPipelineRelations = relations(crmPipeline, ({ one }) => ({
   contact: one(contacts, {
     fields: [crmPipeline.contactId],
-    references: [contacts.id]
-  })
+    references: [contacts.id],
+  }),
 }));
 
 // Plaid banking data
@@ -1538,15 +1912,17 @@ export const plaidItems = pgTable(
     institutionId: text("institution_id"),
     institutionName: text("institution_name"),
     cursor: text("cursor"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
-    itemIdx: uniqueIndex("plaid_items_item_idx").on(table.itemId)
-  })
+    itemIdx: uniqueIndex("plaid_items_item_idx").on(table.itemId),
+  }),
 );
 
 export const plaidAccounts = pgTable(
@@ -1565,16 +1941,18 @@ export const plaidAccounts = pgTable(
     isoCurrencyCode: varchar("iso_currency_code", { length: 8 }),
     available: numeric("available", { precision: 14, scale: 2 }),
     current: numeric("current", { precision: 14, scale: 2 }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     accountIdx: uniqueIndex("plaid_accounts_account_idx").on(table.accountId),
-    itemIdx: index("plaid_accounts_item_idx").on(table.itemId)
-  })
+    itemIdx: index("plaid_accounts_item_idx").on(table.itemId),
+  }),
 );
 
 export const plaidTransactions = pgTable(
@@ -1593,17 +1971,19 @@ export const plaidTransactions = pgTable(
     pending: boolean("pending").default(false).notNull(),
     category: text("category").array(),
     raw: jsonb("raw"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     txnIdx: uniqueIndex("plaid_transactions_txn_idx").on(table.transactionId),
     accountIdx: index("plaid_transactions_account_idx").on(table.accountId),
-    dateIdx: index("plaid_transactions_date_idx").on(table.date)
-  })
+    dateIdx: index("plaid_transactions_date_idx").on(table.date),
+  }),
 );
 
 export const expenses = pgTable(
@@ -1623,43 +2003,54 @@ export const expenses = pgTable(
     receiptFilename: text("receipt_filename"),
     receiptUrl: text("receipt_url"),
     receiptContentType: text("receipt_content_type"),
-    bankTransactionId: uuid("bank_transaction_id").references(() => plaidTransactions.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    bankTransactionId: uuid("bank_transaction_id").references(
+      () => plaidTransactions.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
     txnIdx: index("expenses_bank_txn_idx").on(table.bankTransactionId),
-    paidAtIdx: index("expenses_paid_at_idx").on(table.paidAt)
-  })
+    paidAtIdx: index("expenses_paid_at_idx").on(table.paidAt),
+  }),
 );
 
 export const plaidItemRelations = relations(plaidItems, ({ many }) => ({
-  accounts: many(plaidAccounts)
+  accounts: many(plaidAccounts),
 }));
 
-export const plaidAccountRelations = relations(plaidAccounts, ({ one, many }) => ({
-  item: one(plaidItems, {
-    fields: [plaidAccounts.itemId],
-    references: [plaidItems.id]
+export const plaidAccountRelations = relations(
+  plaidAccounts,
+  ({ one, many }) => ({
+    item: one(plaidItems, {
+      fields: [plaidAccounts.itemId],
+      references: [plaidItems.id],
+    }),
+    transactions: many(plaidTransactions),
   }),
-  transactions: many(plaidTransactions)
-}));
+);
 
-export const plaidTransactionRelations = relations(plaidTransactions, ({ one }) => ({
-  account: one(plaidAccounts, {
-    fields: [plaidTransactions.accountId],
-    references: [plaidAccounts.id]
-  })
-}));
+export const plaidTransactionRelations = relations(
+  plaidTransactions,
+  ({ one }) => ({
+    account: one(plaidAccounts, {
+      fields: [plaidTransactions.accountId],
+      references: [plaidAccounts.id],
+    }),
+  }),
+);
 
 export const expenseRelations = relations(expenses, ({ one }) => ({
   bankTransaction: one(plaidTransactions, {
     fields: [expenses.bankTransactionId],
-    references: [plaidTransactions.id]
-  })
+    references: [plaidTransactions.id],
+  }),
 }));
 
 // Payments (Stripe charge ingestion for reconciliation)
@@ -1676,18 +2067,22 @@ export const payments = pgTable(
     last4: varchar("last4", { length: 4 }),
     receiptUrl: text("receipt_url"),
     metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
-    appointmentId: uuid("appointment_id").references(() => appointments.id, { onDelete: "set null" }),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    appointmentId: uuid("appointment_id").references(() => appointments.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
-    capturedAt: timestamp("captured_at", { withTimezone: true })
+    capturedAt: timestamp("captured_at", { withTimezone: true }),
   },
   (table) => ({
     stripeIdx: uniqueIndex("payments_charge_idx").on(table.stripeChargeId),
-    appointmentIdx: index("payments_appointment_idx").on(table.appointmentId)
-  })
+    appointmentIdx: index("payments_appointment_idx").on(table.appointmentId),
+  }),
 );
 
 // Discord agent: staged actions requiring explicit approval.
@@ -1706,7 +2101,9 @@ export const discordActionIntents = pgTable(
     agentReply: text("agent_reply"),
     actions: jsonb("actions").$type<Array<Record<string, unknown>> | null>(),
 
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     executedAt: timestamp("executed_at", { withTimezone: true }),
@@ -1719,13 +2116,17 @@ export const discordActionIntents = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
-    msgIdx: uniqueIndex("discord_action_intents_message_idx").on(table.discordIntentMessageId),
+    msgIdx: uniqueIndex("discord_action_intents_message_idx").on(
+      table.discordIntentMessageId,
+    ),
     statusIdx: index("discord_action_intents_status_idx").on(table.status),
-    createdAtIdx: index("discord_action_intents_created_at_idx").on(table.createdAt)
-  })
+    createdAtIdx: index("discord_action_intents_created_at_idx").on(
+      table.createdAt,
+    ),
+  }),
 );
 
 // Discord agent: scheduled report targets (channels/DMs) and their schedules.
@@ -1741,17 +2142,26 @@ export const discordReportSubscriptions = pgTable(
     enabled: boolean("enabled").default(true).notNull(),
     lastSentAt: timestamp("last_sent_at", { withTimezone: true }),
     createdByDiscordUserId: text("created_by_discord_user_id"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
-    uniqueIdx: uniqueIndex("discord_report_subscriptions_unique_idx").on(table.discordChannelId, table.reportType),
-    enabledIdx: index("discord_report_subscriptions_enabled_idx").on(table.enabled),
-    lastSentIdx: index("discord_report_subscriptions_last_sent_idx").on(table.lastSentAt)
-  })
+    uniqueIdx: uniqueIndex("discord_report_subscriptions_unique_idx").on(
+      table.discordChannelId,
+      table.reportType,
+    ),
+    enabledIdx: index("discord_report_subscriptions_enabled_idx").on(
+      table.enabled,
+    ),
+    lastSentIdx: index("discord_report_subscriptions_last_sent_idx").on(
+      table.lastSentAt,
+    ),
+  }),
 );
 
 // Discord agent: persistent memory and project notes for better continuity.
@@ -1769,16 +2179,20 @@ export const discordAgentMemory = pgTable(
     pinned: boolean("pinned").default(false).notNull(),
     archived: boolean("archived").default(false).notNull(),
     createdByDiscordUserId: text("created_by_discord_user_id"),
-    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull()
-      .$onUpdate(() => new Date())
+      .$onUpdate(() => new Date()),
   },
   (table) => ({
-    channelIdx: index("discord_agent_memory_channel_idx").on(table.discordChannelId),
+    channelIdx: index("discord_agent_memory_channel_idx").on(
+      table.discordChannelId,
+    ),
     archivedIdx: index("discord_agent_memory_archived_idx").on(table.archived),
     pinnedIdx: index("discord_agent_memory_pinned_idx").on(table.pinned),
-    updatedIdx: index("discord_agent_memory_updated_idx").on(table.updatedAt)
-  })
+    updatedIdx: index("discord_agent_memory_updated_idx").on(table.updatedAt),
+  }),
 );

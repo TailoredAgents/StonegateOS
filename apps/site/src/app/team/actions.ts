@@ -1,22 +1,33 @@
-'use server';
+"use server";
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { callAdminApi } from "./lib/api";
+import {
+  buildStoredContactSource,
+  parseAppointmentBookingFormData,
+  parseLeadSourceFormData,
+} from "./lib/booking-details";
 
 const TEAM_ACTOR_ID_COOKIE = "myst-team-actor-id";
 const TEAM_ACTOR_LABEL_COOKIE = "myst-team-actor-label";
 
 function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value,
+  );
 }
 
 export async function setActingMemberAction(formData: FormData) {
   const jar = await cookies();
   const memberRaw = formData.get("member");
   if (typeof memberRaw !== "string" || memberRaw.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Pick a team member first", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Pick a team member first",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -28,11 +39,17 @@ export async function setActingMemberAction(formData: FormData) {
     parsed = null;
   }
 
-  const memberId = parsed && typeof parsed.id === "string" ? parsed.id.trim() : "";
-  const memberName = parsed && typeof parsed.name === "string" ? parsed.name.trim() : "";
+  const memberId =
+    parsed && typeof parsed.id === "string" ? parsed.id.trim() : "";
+  const memberName =
+    parsed && typeof parsed.name === "string" ? parsed.name.trim() : "";
 
   if (!memberId || !isUuid(memberId)) {
-    jar.set({ name: "myst-flash-error", value: "Invalid member selection", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Invalid member selection",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -41,7 +58,7 @@ export async function setActingMemberAction(formData: FormData) {
     name: TEAM_ACTOR_ID_COOKIE,
     value: memberId,
     path: "/",
-    maxAge: 60 * 60 * 24 * 365
+    maxAge: 60 * 60 * 24 * 365,
   });
 
   if (memberName) {
@@ -49,7 +66,7 @@ export async function setActingMemberAction(formData: FormData) {
       name: TEAM_ACTOR_LABEL_COOKIE,
       value: memberName,
       path: "/",
-      maxAge: 60 * 60 * 24 * 365
+      maxAge: 60 * 60 * 24 * 365,
     });
   } else {
     jar.set({ name: TEAM_ACTOR_LABEL_COOKIE, value: "", path: "/", maxAge: 0 });
@@ -58,7 +75,7 @@ export async function setActingMemberAction(formData: FormData) {
   jar.set({
     name: "myst-flash",
     value: memberName ? `Acting as ${memberName}` : "Acting member updated",
-    path: "/"
+    path: "/",
   });
 
   revalidatePath("/team");
@@ -68,7 +85,11 @@ export async function clearActingMemberAction() {
   const jar = await cookies();
   jar.set({ name: TEAM_ACTOR_ID_COOKIE, value: "", path: "/", maxAge: 0 });
   jar.set({ name: TEAM_ACTOR_LABEL_COOKIE, value: "", path: "/", maxAge: 0 });
-  jar.set({ name: "myst-flash", value: "Reset acting member to default", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "Reset acting member to default",
+    path: "/",
+  });
   revalidatePath("/team");
 }
 
@@ -87,7 +108,8 @@ export async function updateApptStatus(formData: FormData) {
     const finalTotalCents = parseUsdToCents(formData.get("finalTotal"));
     const cardTipCents = parseUsdToCents(formData.get("cardTip"));
     const same = formData.get("finalTotalSameAsQuoted");
-    const finalTotalSameAsQuoted = typeof same === "string" && (same === "true" || same === "on");
+    const finalTotalSameAsQuoted =
+      typeof same === "string" && (same === "true" || same === "on");
 
     if (finalTotalCents !== null) {
       payload["finalTotalCents"] = finalTotalCents;
@@ -102,7 +124,7 @@ export async function updateApptStatus(formData: FormData) {
 
   await callAdminApi(`/api/appointments/${id}/status`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   const jar = await cookies();
@@ -113,11 +135,16 @@ export async function updateApptStatus(formData: FormData) {
 export async function addApptNote(formData: FormData) {
   const id = formData.get("appointmentId");
   const body = formData.get("body");
-  if (typeof id !== "string" || typeof body !== "string" || body.trim().length === 0) return;
+  if (
+    typeof id !== "string" ||
+    typeof body !== "string" ||
+    body.trim().length === 0
+  )
+    return;
 
   await callAdminApi(`/api/appointments/${id}/notes`, {
     method: "POST",
-    body: JSON.stringify({ body })
+    body: JSON.stringify({ body }),
   });
 
   const jar = await cookies();
@@ -136,7 +163,7 @@ export async function sendQuoteAction(formData: FormData) {
 
   const response = await callAdminApi(`/api/quotes/${id.trim()}/send`, {
     method: "POST",
-    body: JSON.stringify({})
+    body: JSON.stringify({}),
   });
 
   if (!response.ok) {
@@ -153,11 +180,15 @@ export async function sendQuoteAction(formData: FormData) {
 export async function quoteDecisionAction(formData: FormData) {
   const id = formData.get("quoteId");
   const decision = formData.get("decision");
-  if (typeof id !== "string" || (decision !== "accepted" && decision !== "declined")) return;
+  if (
+    typeof id !== "string" ||
+    (decision !== "accepted" && decision !== "declined")
+  )
+    return;
 
   await callAdminApi(`/api/quotes/${id}/decision`, {
     method: "POST",
-    body: JSON.stringify({ decision })
+    body: JSON.stringify({ decision }),
   });
 
   const jar = await cookies();
@@ -174,7 +205,9 @@ export async function deleteQuoteAction(formData: FormData) {
     return;
   }
 
-  const response = await callAdminApi(`/api/quotes/${id}`, { method: "DELETE" });
+  const response = await callAdminApi(`/api/quotes/${id}`, {
+    method: "DELETE",
+  });
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to delete quote");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
@@ -190,14 +223,23 @@ export async function deleteInstantQuoteAction(formData: FormData) {
   const jar = await cookies();
   const id = formData.get("instantQuoteId");
   if (typeof id !== "string" || id.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Instant quote ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Instant quote ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/instant-quotes/${id}`, { method: "DELETE" });
+  const response = await callAdminApi(`/api/admin/instant-quotes/${id}`, {
+    method: "DELETE",
+  });
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to delete instant quote");
+    const message = await readErrorMessage(
+      response,
+      "Unable to delete instant quote",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -210,11 +252,16 @@ export async function deleteInstantQuoteAction(formData: FormData) {
 export async function attachPaymentAction(formData: FormData) {
   const id = formData.get("paymentId");
   const appt = formData.get("appointmentId");
-  if (typeof id !== "string" || typeof appt !== "string" || appt.trim().length === 0) return;
+  if (
+    typeof id !== "string" ||
+    typeof appt !== "string" ||
+    appt.trim().length === 0
+  )
+    return;
 
   await callAdminApi(`/api/payments/${id}/attach`, {
     method: "POST",
-    body: JSON.stringify({ appointmentId: appt })
+    body: JSON.stringify({ appointmentId: appt }),
   });
 
   const jar = await cookies();
@@ -269,22 +316,32 @@ export async function rescheduleAppointmentAction(formData: FormData) {
     return;
   }
 
-  const response = await callAdminApi(`/api/web/appointments/${id}/reschedule`, {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
+  const response = await callAdminApi(
+    `/api/web/appointments/${id}/reschedule`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
 
   if (!response.ok) {
     let message = "Unable to reschedule";
     try {
-      const data = (await response.json()) as { error?: string; message?: string };
+      const data = (await response.json()) as {
+        error?: string;
+        message?: string;
+      };
       message = data.message ?? data.error ?? message;
     } catch {
       // ignore
     }
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
   } else {
-    jar.set({ name: "myst-flash", value: "Appointment rescheduled", path: "/" });
+    jar.set({
+      name: "myst-flash",
+      value: "Appointment rescheduled",
+      path: "/",
+    });
   }
 
   revalidatePath("/team");
@@ -304,8 +361,16 @@ export async function createQuoteAction(formData: FormData) {
   const notes = formData.get("notes");
   const serviceOverridesRaw = formData.get("serviceOverrides");
 
-  if (typeof contactId !== "string" || typeof propertyId !== "string" || typeof zoneId !== "string") {
-    jar.set({ name: "myst-flash-error", value: "Missing quote details", path: "/" });
+  if (
+    typeof contactId !== "string" ||
+    typeof propertyId !== "string" ||
+    typeof zoneId !== "string"
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Missing quote details",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -323,7 +388,11 @@ export async function createQuoteAction(formData: FormData) {
   }
 
   if (!services.length) {
-    jar.set({ name: "myst-flash-error", value: "No services selected", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "No services selected",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -332,7 +401,7 @@ export async function createQuoteAction(formData: FormData) {
     contactId,
     propertyId,
     zoneId,
-    selectedServices: services
+    selectedServices: services,
   };
 
   if (typeof depositRate === "string" && depositRate.trim().length > 0) {
@@ -353,7 +422,10 @@ export async function createQuoteAction(formData: FormData) {
     payload["notes"] = notes.trim();
   }
 
-  if (typeof serviceOverridesRaw === "string" && serviceOverridesRaw.trim().length > 0) {
+  if (
+    typeof serviceOverridesRaw === "string" &&
+    serviceOverridesRaw.trim().length > 0
+  ) {
     try {
       const parsed = JSON.parse(serviceOverridesRaw) as Record<string, unknown>;
       const sanitized: Record<string, number> = {};
@@ -375,7 +447,7 @@ export async function createQuoteAction(formData: FormData) {
 
   const response = await callAdminApi(`/api/quotes`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   type CreateQuoteResponse = {
@@ -395,34 +467,46 @@ export async function createQuoteAction(formData: FormData) {
 
   if (!response.ok) {
     const message =
-      (data?.error && typeof data.error === "string" ? data.error : null) ?? "Unable to create quote";
+      (data?.error && typeof data.error === "string" ? data.error : null) ??
+      "Unable to create quote";
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
   const quoteId = data?.quote?.id ?? null;
-  const shareLink = data?.shareUrl ?? (data?.quote?.shareToken ? `/quote/${data.quote.shareToken}` : null);
+  const shareLink =
+    data?.shareUrl ??
+    (data?.quote?.shareToken ? `/quote/${data.quote.shareToken}` : null);
   const shouldSend = typeof formData.get("sendQuote") === "string";
-  const isCanvass = typeof workflow === "string" && workflow.trim().toLowerCase() === "canvass";
+  const isCanvass =
+    typeof workflow === "string" && workflow.trim().toLowerCase() === "canvass";
 
-  let successMessage = shareLink ? `Quote created. Share link: ${shareLink}` : "Quote created";
+  let successMessage = shareLink
+    ? `Quote created. Share link: ${shareLink}`
+    : "Quote created";
   let sendError: string | null = null;
 
   if (shouldSend) {
     if (quoteId) {
       const sendResponse = await callAdminApi(`/api/quotes/${quoteId}/send`, {
         method: "POST",
-        body: JSON.stringify({})
+        body: JSON.stringify({}),
       });
 
       if (sendResponse.ok) {
-        successMessage = shareLink ? `Quote emailed. Share link: ${shareLink}` : "Quote emailed";
+        successMessage = shareLink
+          ? `Quote emailed. Share link: ${shareLink}`
+          : "Quote emailed";
       } else {
-        sendError = await readErrorMessage(sendResponse, "Quote created, but the email failed to send");
+        sendError = await readErrorMessage(
+          sendResponse,
+          "Quote created, but the email failed to send",
+        );
       }
     } else {
-      sendError = "Quote created, but no quote ID was returned to send the email.";
+      sendError =
+        "Quote created, but no quote ID was returned to send the email.";
     }
   }
 
@@ -432,13 +516,18 @@ export async function createQuoteAction(formData: FormData) {
   }
 
   if (isCanvass && quoteId && typeof contactId === "string") {
-    const repName = jar.get("myst-team-actor-label")?.value?.trim() || "Stonegate";
+    const repName =
+      jar.get("myst-team-actor-label")?.value?.trim() || "Stonegate";
 
     let firstName = "there";
     try {
-      const lookup = await callAdminApi(`/api/admin/contacts?contactId=${encodeURIComponent(contactId)}&limit=1`);
+      const lookup = await callAdminApi(
+        `/api/admin/contacts?contactId=${encodeURIComponent(contactId)}&limit=1`,
+      );
       if (lookup.ok) {
-        const payload = (await lookup.json()) as { contacts?: Array<{ firstName?: string | null }> };
+        const payload = (await lookup.json()) as {
+          contacts?: Array<{ firstName?: string | null }>;
+        };
         const candidate = payload.contacts?.[0]?.firstName;
         if (candidate && candidate.trim().length) firstName = candidate.trim();
       }
@@ -446,24 +535,32 @@ export async function createQuoteAction(formData: FormData) {
       // ignore lookup failures
     }
 
-    const total = typeof data?.breakdown?.total === "number" ? data.breakdown.total : null;
+    const total =
+      typeof data?.breakdown?.total === "number" ? data.breakdown.total : null;
     const totalText = total !== null ? `$${total.toFixed(0)}` : "your total";
     const draftBody = `Hey ${firstName}, this is ${repName} with Stonegate Junk Removal. Your quote total is ${totalText}. What day works best for pickup?`;
 
     try {
       const ensured = await callAdminApi("/api/admin/inbox/threads/ensure", {
         method: "POST",
-        body: JSON.stringify({ contactId, channel: "sms" })
+        body: JSON.stringify({ contactId, channel: "sms" }),
       });
       if (ensured.ok) {
         const ensuredPayload = (await ensured.json()) as { threadId?: string };
-        const threadId = typeof ensuredPayload.threadId === "string" ? ensuredPayload.threadId : null;
+        const threadId =
+          typeof ensuredPayload.threadId === "string"
+            ? ensuredPayload.threadId
+            : null;
         if (threadId) {
           await callAdminApi(`/api/admin/inbox/threads/${threadId}/draft`, {
             method: "POST",
-            body: JSON.stringify({ channel: "sms", body: draftBody })
+            body: JSON.stringify({ channel: "sms", body: draftBody }),
           });
-          jar.set({ name: "myst-flash", value: "Quote created. Draft SMS prepared in Inbox.", path: "/" });
+          jar.set({
+            name: "myst-flash",
+            value: "Quote created. Draft SMS prepared in Inbox.",
+            path: "/",
+          });
           redirect(`/team?tab=inbox&threadId=${encodeURIComponent(threadId)}`);
         }
       }
@@ -482,6 +579,7 @@ export async function createContactAction(formData: FormData) {
   const lastName = formData.get("lastName");
   const email = formData.get("email");
   const phone = formData.get("phone");
+  const salespersonMemberId = formData.get("salespersonMemberId");
   const pipelineStage = formData.get("pipelineStage");
   const pipelineNotes = formData.get("pipelineNotes");
   const addressLine1 = formData.get("addressLine1");
@@ -495,7 +593,18 @@ export async function createContactAction(formData: FormData) {
     firstName.trim().length === 0 ||
     lastName.trim().length === 0
   ) {
-    jar.set({ name: "myst-flash-error", value: "First and last name are required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "First and last name are required",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const sourceResult = parseLeadSourceFormData(formData);
+  if (!sourceResult.ok) {
+    jar.set({ name: "myst-flash-error", value: sourceResult.error, path: "/" });
     revalidatePath("/team");
     return;
   }
@@ -503,11 +612,29 @@ export async function createContactAction(formData: FormData) {
   const payload: Record<string, unknown> = {
     firstName: firstName.trim(),
     lastName: lastName.trim(),
-    email: typeof email === "string" && email.trim().length ? email.trim() : undefined,
-    phone: typeof phone === "string" && phone.trim().length ? phone.trim() : undefined,
-    pipelineStage: typeof pipelineStage === "string" && pipelineStage.trim().length ? pipelineStage.trim() : undefined,
-    pipelineNotes: typeof pipelineNotes === "string" && pipelineNotes.trim().length ? pipelineNotes.trim() : undefined
+    email:
+      typeof email === "string" && email.trim().length
+        ? email.trim()
+        : undefined,
+    phone:
+      typeof phone === "string" && phone.trim().length
+        ? phone.trim()
+        : undefined,
+    source: buildStoredContactSource(sourceResult.value),
+    pipelineStage:
+      typeof pipelineStage === "string" && pipelineStage.trim().length
+        ? pipelineStage.trim()
+        : undefined,
+    pipelineNotes:
+      typeof pipelineNotes === "string" && pipelineNotes.trim().length
+        ? pipelineNotes.trim()
+        : undefined,
   };
+
+  if (typeof salespersonMemberId === "string") {
+    const trimmed = salespersonMemberId.trim();
+    payload["salespersonMemberId"] = trimmed.length > 0 ? trimmed : null;
+  }
 
   const hasAddress =
     typeof addressLine1 === "string" &&
@@ -528,8 +655,9 @@ export async function createContactAction(formData: FormData) {
   if (anyAddressField && !hasAddress) {
     jar.set({
       name: "myst-flash-error",
-      value: "If you add an address, include street, city, state, and postal code",
-      path: "/"
+      value:
+        "If you add an address, include street, city, state, and postal code",
+      path: "/",
     });
     revalidatePath("/team");
     return;
@@ -540,13 +668,13 @@ export async function createContactAction(formData: FormData) {
       addressLine1: addressLine1.trim(),
       city: city.trim(),
       state: state.trim(),
-      postalCode: postalCode.trim()
+      postalCode: postalCode.trim(),
     };
   }
 
   const response = await callAdminApi("/api/admin/contacts", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -554,11 +682,18 @@ export async function createContactAction(formData: FormData) {
     try {
       const data = (await response.json()) as {
         error?: string;
-        existingContact?: { firstName?: string | null; lastName?: string | null } | null;
+        existingContact?: {
+          firstName?: string | null;
+          lastName?: string | null;
+        } | null;
       };
       if (data.error === "contact_already_exists") {
-        const existingName = `${data.existingContact?.firstName ?? ""} ${data.existingContact?.lastName ?? ""}`.trim();
-        message = existingName.length > 0 ? `Contact already exists (${existingName}).` : "Contact already exists.";
+        const existingName =
+          `${data.existingContact?.firstName ?? ""} ${data.existingContact?.lastName ?? ""}`.trim();
+        message =
+          existingName.length > 0
+            ? `Contact already exists (${existingName}).`
+            : "Contact already exists.";
       } else if (data.error) {
         message = data.error.replace(/_/g, " ");
       }
@@ -580,18 +715,25 @@ export async function bookAppointmentAction(formData: FormData) {
   const contactId = formData.get("contactId");
   const propertyId = formData.get("propertyId");
   const appointmentType = formData.get("appointmentType");
-  const assignedAssociateMemberIdRaw = formData.get("assignedAssociateMemberId");
-  const currentAssignedAssociateMemberIdRaw = formData.get("currentAssignedAssociateMemberId");
+  const assignedAssociateMemberIdRaw = formData.get(
+    "assignedAssociateMemberId",
+  );
+  const currentAssignedAssociateMemberIdRaw = formData.get(
+    "currentAssignedAssociateMemberId",
+  );
   const soldByMemberIdRaw = formData.get("soldByMemberId");
   const startAt = formData.get("startAt");
   const durationMinutes = formData.get("durationMinutes");
   const travelBufferMinutes = formData.get("travelBufferMinutes");
   const servicesRaw = formData.get("services");
   const notesRaw = formData.get("notes");
-  const quotedTotalCents = parseUsdToCents(formData.get("quotedTotal"));
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -599,31 +741,59 @@ export async function bookAppointmentAction(formData: FormData) {
   const contactIdValue = contactId.trim();
 
   if (typeof startAt !== "string" || startAt.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Start time is required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Start time is required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const assignedAssociateMemberId =
-    typeof assignedAssociateMemberIdRaw === "string" && assignedAssociateMemberIdRaw.trim().length > 0
+    typeof assignedAssociateMemberIdRaw === "string" &&
+    assignedAssociateMemberIdRaw.trim().length > 0
       ? assignedAssociateMemberIdRaw.trim()
       : null;
   const currentAssignedAssociateMemberId =
-    typeof currentAssignedAssociateMemberIdRaw === "string" && currentAssignedAssociateMemberIdRaw.trim().length > 0
+    typeof currentAssignedAssociateMemberIdRaw === "string" &&
+    currentAssignedAssociateMemberIdRaw.trim().length > 0
       ? currentAssignedAssociateMemberIdRaw.trim()
       : null;
   const soldByMemberId =
-    typeof soldByMemberIdRaw === "string" && soldByMemberIdRaw.trim().length > 0 ? soldByMemberIdRaw.trim() : null;
-  const appointmentTypeValue = typeof appointmentType === "string" && appointmentType.trim().length > 0 ? appointmentType.trim() : "job";
+    typeof soldByMemberIdRaw === "string" && soldByMemberIdRaw.trim().length > 0
+      ? soldByMemberIdRaw.trim()
+      : null;
+  const appointmentTypeValue =
+    typeof appointmentType === "string" && appointmentType.trim().length > 0
+      ? appointmentType.trim()
+      : "job";
 
   if (appointmentTypeValue !== "in_person_quote" && !soldByMemberId) {
-    jar.set({ name: "myst-flash-error", value: "Who sold the job is required to book a job.", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Who sold the job is required to book a job.",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const parsedDuration = typeof durationMinutes === "string" ? Number(durationMinutes) : NaN;
-  const parsedTravel = typeof travelBufferMinutes === "string" ? Number(travelBufferMinutes) : NaN;
+  const bookingDetailsResult = parseAppointmentBookingFormData(formData);
+  if (!bookingDetailsResult.ok) {
+    jar.set({
+      name: "myst-flash-error",
+      value: bookingDetailsResult.error,
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const parsedDuration =
+    typeof durationMinutes === "string" ? Number(durationMinutes) : NaN;
+  const parsedTravel =
+    typeof travelBufferMinutes === "string" ? Number(travelBufferMinutes) : NaN;
 
   const services =
     typeof servicesRaw === "string" && servicesRaw.trim().length > 0
@@ -636,9 +806,13 @@ export async function bookAppointmentAction(formData: FormData) {
   const payload: Record<string, unknown> = {
     contactId: contactIdValue,
     startAt: startAt.trim(),
-    durationMinutes: Number.isFinite(parsedDuration) && parsedDuration > 0 ? parsedDuration : 60,
-    travelBufferMinutes: Number.isFinite(parsedTravel) && parsedTravel >= 0 ? parsedTravel : 30,
-    services
+    durationMinutes:
+      Number.isFinite(parsedDuration) && parsedDuration > 0
+        ? parsedDuration
+        : 60,
+    travelBufferMinutes:
+      Number.isFinite(parsedTravel) && parsedTravel >= 0 ? parsedTravel : 30,
+    services,
   };
 
   payload["appointmentType"] = appointmentTypeValue;
@@ -648,24 +822,34 @@ export async function bookAppointmentAction(formData: FormData) {
   if (typeof notesRaw === "string" && notesRaw.trim().length > 0) {
     payload["notes"] = notesRaw.trim();
   }
-  if (quotedTotalCents !== null) {
-    payload["quotedTotalCents"] = quotedTotalCents;
+  if (bookingDetailsResult.quotedTotalCents !== null) {
+    payload["quotedTotalCents"] = bookingDetailsResult.quotedTotalCents;
   }
+  payload["bookingDetails"] = bookingDetailsResult.bookingDetails;
   if (soldByMemberId) {
     payload["soldByMemberId"] = soldByMemberId;
   }
 
-  const assigneeChanged = assignedAssociateMemberId !== currentAssignedAssociateMemberId;
+  const assigneeChanged =
+    assignedAssociateMemberId !== currentAssignedAssociateMemberId;
   let assigneeUpdated = false;
 
   if (assigneeChanged) {
-    const assigneeResponse = await callAdminApi(`/api/admin/contacts/${encodeURIComponent(contactIdValue)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ salespersonMemberId: assignedAssociateMemberId })
-    });
+    const assigneeResponse = await callAdminApi(
+      `/api/admin/contacts/${encodeURIComponent(contactIdValue)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          salespersonMemberId: assignedAssociateMemberId,
+        }),
+      },
+    );
 
     if (!assigneeResponse.ok) {
-      const message = await readErrorMessage(assigneeResponse, "Unable to update assigned associate");
+      const message = await readErrorMessage(
+        assigneeResponse,
+        "Unable to update assigned associate",
+      );
       jar.set({ name: "myst-flash-error", value: message, path: "/" });
       revalidatePath("/team");
       return;
@@ -676,17 +860,22 @@ export async function bookAppointmentAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/booking/book", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
     let rollbackFailed = false;
     if (assigneeUpdated) {
       try {
-        const rollbackResponse = await callAdminApi(`/api/admin/contacts/${encodeURIComponent(contactIdValue)}`, {
-          method: "PATCH",
-          body: JSON.stringify({ salespersonMemberId: currentAssignedAssociateMemberId })
-        });
+        const rollbackResponse = await callAdminApi(
+          `/api/admin/contacts/${encodeURIComponent(contactIdValue)}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              salespersonMemberId: currentAssignedAssociateMemberId,
+            }),
+          },
+        );
         rollbackFailed = !rollbackResponse.ok;
       } catch {
         rollbackFailed = true;
@@ -695,15 +884,15 @@ export async function bookAppointmentAction(formData: FormData) {
 
     const message = await readErrorMessage(
       response,
-      "Unable to book appointment"
+      "Unable to book appointment",
     );
-    jar.set(
-      {
-        name: "myst-flash-error",
-        value: rollbackFailed ? `${message} Assigned associate may need to be reset.` : message,
-        path: "/"
-      }
-    );
+    jar.set({
+      name: "myst-flash-error",
+      value: rollbackFailed
+        ? `${message} Assigned associate may need to be reset.`
+        : message,
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -712,9 +901,67 @@ export async function bookAppointmentAction(formData: FormData) {
   revalidatePath("/team");
 }
 
-async function readErrorMessage(response: Response, fallback: string): Promise<string> {
+export async function updateAppointmentBookingDetailsAction(
+  formData: FormData,
+) {
+  const jar = await cookies();
+  const appointmentId = formData.get("appointmentId");
+
+  if (typeof appointmentId !== "string" || appointmentId.trim().length === 0) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Appointment ID missing",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const bookingDetailsResult = parseAppointmentBookingFormData(formData);
+  if (!bookingDetailsResult.ok) {
+    jar.set({
+      name: "myst-flash-error",
+      value: bookingDetailsResult.error,
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(
+    `/api/appointments/${encodeURIComponent(appointmentId.trim())}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        quotedTotalCents: bookingDetailsResult.quotedTotalCents,
+        bookingDetails: bookingDetailsResult.bookingDetails,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const message = await readErrorMessage(
+      response,
+      "Unable to update booking details",
+    );
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Booking details updated", path: "/" });
+  revalidatePath("/team");
+}
+
+async function readErrorMessage(
+  response: Response,
+  fallback: string,
+): Promise<string> {
   try {
-    const data = (await response.json()) as { error?: string; message?: string };
+    const data = (await response.json()) as {
+      error?: string;
+      message?: string;
+    };
     const message = data.message ?? data.error;
     if (typeof message === "string" && message.trim().length > 0) {
       return message.replace(/_/g, " ");
@@ -751,17 +998,29 @@ export async function createCanvassLeadAction(formData: FormData) {
   const hasEmail = typeof email === "string" && email.trim().length > 0;
 
   if (typeof firstName !== "string" || firstName.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "First name is required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "First name is required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
   if (typeof lastName !== "string" || lastName.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Last name is required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Last name is required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
   if (!hasPhone && !hasEmail) {
-    jar.set({ name: "myst-flash-error", value: "Phone or email is required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Phone or email is required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -776,7 +1035,11 @@ export async function createCanvassLeadAction(formData: FormData) {
     state.trim().length === 0 ||
     postalCode.trim().length === 0
   ) {
-    jar.set({ name: "myst-flash-error", value: "Full address is required for canvass leads", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Full address is required for canvass leads",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -790,19 +1053,22 @@ export async function createCanvassLeadAction(formData: FormData) {
       addressLine1: addressLine1.trim(),
       city: city.trim(),
       state: state.trim(),
-      postalCode: postalCode.trim()
-    }
+      postalCode: postalCode.trim(),
+    },
   };
 
   if (hasPhone) payload["phone"] = (phone as string).trim();
   if (hasEmail) payload["email"] = (email as string).trim();
-  if (typeof salespersonMemberId === "string" && salespersonMemberId.trim().length > 0) {
+  if (
+    typeof salespersonMemberId === "string" &&
+    salespersonMemberId.trim().length > 0
+  ) {
     payload["salespersonMemberId"] = salespersonMemberId.trim();
   }
 
   const response = await callAdminApi("/api/admin/contacts", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   type ContactCreateResponse =
@@ -819,33 +1085,60 @@ export async function createCanvassLeadAction(formData: FormData) {
   if (!response.ok) {
     if (response.status === 409) {
       const existingId =
-        data && "existingContact" in data && data.existingContact && typeof data.existingContact.id === "string"
+        data &&
+        "existingContact" in data &&
+        data.existingContact &&
+        typeof data.existingContact.id === "string"
           ? data.existingContact.id
           : null;
       if (existingId) {
-        jar.set({ name: "myst-flash-error", value: "Contact already exists. Opening existing record.", path: "/" });
-        redirect(`/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(existingId)}`);
+        jar.set({
+          name: "myst-flash-error",
+          value: "Contact already exists. Opening existing record.",
+          path: "/",
+        });
+        redirect(
+          `/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(existingId)}`,
+        );
       }
     }
 
-    const message = await readErrorMessage(response, "Unable to create canvass lead");
+    const message = await readErrorMessage(
+      response,
+      "Unable to create canvass lead",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
   const contactId =
-    data && "contact" in data && data.contact && typeof data.contact.id === "string" ? data.contact.id : null;
+    data &&
+    "contact" in data &&
+    data.contact &&
+    typeof data.contact.id === "string"
+      ? data.contact.id
+      : null;
   if (!contactId) {
-    jar.set({ name: "myst-flash-error", value: "Canvass lead created, but no contact ID returned", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Canvass lead created, but no contact ID returned",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const assigneeFromForm =
-    typeof salespersonMemberId === "string" && salespersonMemberId.trim().length > 0 ? salespersonMemberId.trim() : null;
+    typeof salespersonMemberId === "string" &&
+    salespersonMemberId.trim().length > 0
+      ? salespersonMemberId.trim()
+      : null;
   const assigneeFromApi =
-    data && "contact" in data && data.contact && typeof data.contact.salespersonMemberId === "string"
+    data &&
+    "contact" in data &&
+    data.contact &&
+    typeof data.contact.salespersonMemberId === "string"
       ? data.contact.salespersonMemberId
       : null;
   const assignee = assigneeFromForm ?? assigneeFromApi;
@@ -857,8 +1150,8 @@ export async function createCanvassLeadAction(formData: FormData) {
         contactId,
         title: "Canvass lead",
         assignedTo: assignee ?? undefined,
-        notes: "kind=canvass"
-      })
+        notes: "kind=canvass",
+      }),
     });
   } catch {
     // ignore task failures
@@ -868,7 +1161,7 @@ export async function createCanvassLeadAction(formData: FormData) {
   redirect(
     `/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(contactId)}${
       assignee ? `&memberId=${encodeURIComponent(assignee)}` : ""
-    }`
+    }`,
   );
 }
 
@@ -880,12 +1173,20 @@ export async function createCanvassFollowupAction(formData: FormData) {
   const notes = formData.get("notes");
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
   if (typeof dueAt !== "string" || dueAt.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Follow-up time required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Follow-up time required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -894,7 +1195,7 @@ export async function createCanvassFollowupAction(formData: FormData) {
     contactId: contactId.trim(),
     title: "Canvass follow-up",
     dueAt: dueAt.trim(),
-    notes: `kind=canvass${typeof notes === "string" && notes.trim().length ? `\nnotes=${notes.trim()}` : ""}`
+    notes: `kind=canvass${typeof notes === "string" && notes.trim().length ? `\nnotes=${notes.trim()}` : ""}`,
   };
 
   if (typeof assignedTo === "string" && assignedTo.trim().length > 0) {
@@ -903,11 +1204,14 @@ export async function createCanvassFollowupAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/crm/reminders", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to schedule follow-up");
+    const message = await readErrorMessage(
+      response,
+      "Unable to schedule follow-up",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -921,17 +1225,25 @@ export async function startContactCallAction(formData: FormData) {
   const jar = await cookies();
   const contactId = formData.get("contactId");
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const taskId = formData.get("taskId");
-  const resolvedTaskId = typeof taskId === "string" && isUuid(taskId.trim()) ? taskId.trim() : null;
+  const resolvedTaskId =
+    typeof taskId === "string" && isUuid(taskId.trim()) ? taskId.trim() : null;
 
   const response = await callAdminApi("/api/admin/calls/start", {
     method: "POST",
-    body: JSON.stringify({ contactId: contactId.trim(), ...(resolvedTaskId ? { taskId: resolvedTaskId } : {}) })
+    body: JSON.stringify({
+      contactId: contactId.trim(),
+      ...(resolvedTaskId ? { taskId: resolvedTaskId } : {}),
+    }),
   });
 
   if (!response.ok) {
@@ -944,7 +1256,7 @@ export async function startContactCallAction(formData: FormData) {
   jar.set({
     name: "myst-flash",
     value: "Ringing assigned salesperson now... answer to connect",
-    path: "/"
+    path: "/",
   });
   revalidatePath("/team");
 }
@@ -954,45 +1266,69 @@ export async function openContactThreadAction(formData: FormData) {
   const contactId = formData.get("contactId");
   const channel = formData.get("channel");
 
-  const resolvedContactId = typeof contactId === "string" ? contactId.trim() : "";
+  const resolvedContactId =
+    typeof contactId === "string" ? contactId.trim() : "";
   const resolvedChannel = typeof channel === "string" ? channel.trim() : "sms";
 
   if (!resolvedContactId) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   if (resolvedChannel === "dm") {
-    jar.set({ name: "myst-flash-error", value: "Messenger thread not found yet.", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Messenger thread not found yet.",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const ensureRes = await callAdminApi("/api/admin/inbox/threads/ensure", {
     method: "POST",
-    body: JSON.stringify({ contactId: resolvedContactId, channel: resolvedChannel })
+    body: JSON.stringify({
+      contactId: resolvedContactId,
+      channel: resolvedChannel,
+    }),
   });
 
   if (!ensureRes.ok) {
-    const message = await readErrorMessage(ensureRes, "Unable to open a thread for this contact");
+    const message = await readErrorMessage(
+      ensureRes,
+      "Unable to open a thread for this contact",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
-  const ensurePayload = (await ensureRes.json().catch(() => null)) as { threadId?: string } | null;
-  const threadId = typeof ensurePayload?.threadId === "string" ? ensurePayload.threadId.trim() : "";
+  const ensurePayload = (await ensureRes.json().catch(() => null)) as {
+    threadId?: string;
+  } | null;
+  const threadId =
+    typeof ensurePayload?.threadId === "string"
+      ? ensurePayload.threadId.trim()
+      : "";
   if (!threadId) {
-    jar.set({ name: "myst-flash-error", value: "Unable to open a thread for this contact", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Unable to open a thread for this contact",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   redirect(
     `/team?tab=inbox&threadId=${encodeURIComponent(threadId)}&contactId=${encodeURIComponent(
-      resolvedContactId
-    )}&channel=${encodeURIComponent(resolvedChannel)}`
+      resolvedContactId,
+    )}&channel=${encodeURIComponent(resolvedChannel)}`,
   );
 }
 
@@ -1003,15 +1339,22 @@ export async function sendDraftMessageAction(formData: FormData) {
   const contactId = formData.get("contactId");
   const channel = formData.get("channel");
   if (typeof messageId !== "string" || messageId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Message ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Message ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/inbox/messages/${messageId.trim()}/retry`, {
-    method: "POST",
-    body: JSON.stringify({})
-  });
+  const response = await callAdminApi(
+    `/api/admin/inbox/messages/${messageId.trim()}/retry`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to send draft");
@@ -1024,9 +1367,10 @@ export async function sendDraftMessageAction(formData: FormData) {
   revalidatePath("/team");
   if (typeof threadId === "string" && threadId.trim().length > 0) {
     const resolvedChannel = typeof channel === "string" ? channel.trim() : "";
-    const resolvedContactId = typeof contactId === "string" ? contactId.trim() : "";
+    const resolvedContactId =
+      typeof contactId === "string" ? contactId.trim() : "";
     redirect(
-      `/team?tab=inbox&threadId=${encodeURIComponent(threadId.trim())}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`
+      `/team?tab=inbox&threadId=${encodeURIComponent(threadId.trim())}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`,
     );
   }
 }
@@ -1035,17 +1379,23 @@ export async function updateContactAction(formData: FormData) {
   const jar = await cookies();
   const contactId = formData.get("contactId");
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const payload: Record<string, unknown> = {};
-  const stringFields: Array<[keyof Record<string, unknown>, string | FormDataEntryValue | null]> = [
+  const stringFields: Array<
+    [keyof Record<string, unknown>, string | FormDataEntryValue | null]
+  > = [
     ["firstName", formData.get("firstName")],
     ["lastName", formData.get("lastName")],
     ["email", formData.get("email")],
-    ["phone", formData.get("phone")]
+    ["phone", formData.get("phone")],
   ];
 
   for (const [key, value] of stringFields) {
@@ -1056,22 +1406,30 @@ export async function updateContactAction(formData: FormData) {
 
   const salespersonMemberId = formData.get("salespersonMemberId");
   if (typeof salespersonMemberId === "string") {
-    payload["salespersonMemberId"] = salespersonMemberId.trim().length > 0 ? salespersonMemberId.trim() : null;
+    payload["salespersonMemberId"] =
+      salespersonMemberId.trim().length > 0 ? salespersonMemberId.trim() : null;
   }
 
   if (Object.keys(payload).length === 0) {
-    jar.set({ name: "myst-flash-error", value: "No changes to apply", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "No changes to apply",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const response = await callAdminApi(`/api/admin/contacts/${contactId}`, {
     method: "PATCH",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to update contact");
+    const message = await readErrorMessage(
+      response,
+      "Unable to update contact",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -1085,7 +1443,11 @@ export async function updateContactNameAction(formData: FormData) {
   const jar = await cookies();
   const contactId = formData.get("contactId");
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1096,7 +1458,11 @@ export async function updateContactNameAction(formData: FormData) {
   const lastName = typeof lastNameRaw === "string" ? lastNameRaw.trim() : "";
 
   if (!firstName.length) {
-    jar.set({ name: "myst-flash-error", value: "First name is required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "First name is required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1104,13 +1470,19 @@ export async function updateContactNameAction(formData: FormData) {
   const payload: Record<string, unknown> = { firstName };
   if (lastName.length) payload["lastName"] = lastName;
 
-  const response = await callAdminApi(`/api/admin/contacts/${contactId.trim()}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload)
-  });
+  const response = await callAdminApi(
+    `/api/admin/contacts/${contactId.trim()}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+  );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to update contact name");
+    const message = await readErrorMessage(
+      response,
+      "Unable to update contact name",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -1124,14 +1496,23 @@ export async function deleteContactAction(formData: FormData) {
   const jar = await cookies();
   const contactId = formData.get("contactId");
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/contacts/${contactId}`, { method: "DELETE" });
+  const response = await callAdminApi(`/api/admin/contacts/${contactId}`, {
+    method: "DELETE",
+  });
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to delete contact");
+    const message = await readErrorMessage(
+      response,
+      "Unable to delete contact",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -1145,7 +1526,11 @@ export async function addPropertyAction(formData: FormData) {
   const jar = await cookies();
   const contactId = formData.get("contactId");
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1166,21 +1551,31 @@ export async function addPropertyAction(formData: FormData) {
     typeof postalCode !== "string" ||
     postalCode.trim().length === 0
   ) {
-    jar.set({ name: "myst-flash-error", value: "Property details are required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Property details are required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/contacts/${contactId}/properties`, {
-    method: "POST",
-    body: JSON.stringify({
-      addressLine1: addressLine1.trim(),
-      addressLine2: typeof addressLine2 === "string" && addressLine2.trim().length ? addressLine2.trim() : undefined,
-      city: city.trim(),
-      state: state.trim(),
-      postalCode: postalCode.trim()
-    })
-  });
+  const response = await callAdminApi(
+    `/api/admin/contacts/${contactId}/properties`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        addressLine1: addressLine1.trim(),
+        addressLine2:
+          typeof addressLine2 === "string" && addressLine2.trim().length
+            ? addressLine2.trim()
+            : undefined,
+        city: city.trim(),
+        state: state.trim(),
+        postalCode: postalCode.trim(),
+      }),
+    },
+  );
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to add property");
@@ -1203,7 +1598,11 @@ export async function updatePropertyAction(formData: FormData) {
     typeof propertyId !== "string" ||
     propertyId.trim().length === 0
   ) {
-    jar.set({ name: "myst-flash-error", value: "Property details missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Property details missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1214,7 +1613,7 @@ export async function updatePropertyAction(formData: FormData) {
     ["addressLine2", formData.get("addressLine2")],
     ["city", formData.get("city")],
     ["state", formData.get("state")],
-    ["postalCode", formData.get("postalCode")]
+    ["postalCode", formData.get("postalCode")],
   ];
 
   for (const [key, value] of updates) {
@@ -1224,7 +1623,11 @@ export async function updatePropertyAction(formData: FormData) {
   }
 
   if (Object.keys(payload).length === 0) {
-    jar.set({ name: "myst-flash-error", value: "No property changes to apply", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "No property changes to apply",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1233,12 +1636,15 @@ export async function updatePropertyAction(formData: FormData) {
     `/api/admin/contacts/${contactId}/properties/${propertyId}`,
     {
       method: "PATCH",
-      body: JSON.stringify(payload)
-    }
+      body: JSON.stringify(payload),
+    },
   );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to update property");
+    const message = await readErrorMessage(
+      response,
+      "Unable to update property",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -1258,18 +1664,25 @@ export async function deletePropertyAction(formData: FormData) {
     typeof propertyId !== "string" ||
     propertyId.trim().length === 0
   ) {
-    jar.set({ name: "myst-flash-error", value: "Property details missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Property details missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const response = await callAdminApi(
     `/api/admin/contacts/${contactId}/properties/${propertyId}`,
-    { method: "DELETE" }
+    { method: "DELETE" },
   );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to delete property");
+    const message = await readErrorMessage(
+      response,
+      "Unable to delete property",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -1286,12 +1699,20 @@ export async function updatePipelineStageAction(formData: FormData) {
   const notes = formData.get("notes");
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
   if (typeof stage !== "string" || stage.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Stage is required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Stage is required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1303,7 +1724,7 @@ export async function updatePipelineStageAction(formData: FormData) {
 
   const response = await callAdminApi(`/api/admin/crm/pipeline/${contactId}`, {
     method: "PATCH",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -1331,13 +1752,21 @@ export async function createContactNoteAction(formData: FormData) {
   const body = formData.get("body");
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   if (typeof body !== "string" || body.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Note body required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Note body required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1346,12 +1775,12 @@ export async function createContactNoteAction(formData: FormData) {
     contactId: contactId.trim(),
     title: makeNoteTitle(body),
     notes: body.trim(),
-    status: "completed"
+    status: "completed",
   };
 
   const response = await callAdminApi(`/api/admin/crm/tasks`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -1375,7 +1804,9 @@ export async function deleteContactNoteAction(formData: FormData) {
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/crm/tasks/${noteId.trim()}`, { method: "DELETE" });
+  const response = await callAdminApi(`/api/admin/crm/tasks/${noteId.trim()}`, {
+    method: "DELETE",
+  });
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to delete note");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
@@ -1395,19 +1826,27 @@ export async function createTaskAction(formData: FormData) {
   const assignedTo = formData.get("assignedTo");
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
   if (typeof title !== "string" || title.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Task title required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Task title required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const payload: Record<string, unknown> = {
     contactId: contactId.trim(),
-    title: title.trim()
+    title: title.trim(),
   };
 
   if (typeof dueAt === "string" && dueAt.trim().length > 0) {
@@ -1419,7 +1858,7 @@ export async function createTaskAction(formData: FormData) {
 
   const response = await callAdminApi(`/api/admin/crm/tasks`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -1448,7 +1887,7 @@ export async function updateTaskAction(formData: FormData) {
     ["dueAt", formData.get("dueAt")],
     ["assignedTo", formData.get("assignedTo")],
     ["status", formData.get("status")],
-    ["notes", formData.get("notes")]
+    ["notes", formData.get("notes")],
   ];
 
   for (const [key, value] of fields) {
@@ -1458,14 +1897,18 @@ export async function updateTaskAction(formData: FormData) {
   }
 
   if (Object.keys(payload).length === 0) {
-    jar.set({ name: "myst-flash-error", value: "No task changes to apply", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "No task changes to apply",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const response = await callAdminApi(`/api/admin/crm/tasks/${taskId}`, {
     method: "PATCH",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -1488,7 +1931,9 @@ export async function deleteTaskAction(formData: FormData) {
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/crm/tasks/${taskId}`, { method: "DELETE" });
+  const response = await callAdminApi(`/api/admin/crm/tasks/${taskId}`, {
+    method: "DELETE",
+  });
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to delete task");
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
@@ -1506,12 +1951,20 @@ export async function updatePolicyAction(formData: FormData) {
   const value = formData.get("value");
 
   if (typeof key !== "string" || key.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Policy key missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Policy key missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
   if (typeof value !== "string" || value.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Policy value missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Policy value missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1527,7 +1980,7 @@ export async function updatePolicyAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/policy", {
     method: "POST",
-    body: JSON.stringify({ key: key.trim(), value: parsed })
+    body: JSON.stringify({ key: key.trim(), value: parsed }),
   });
 
   if (!response.ok) {
@@ -1541,7 +1994,15 @@ export async function updatePolicyAction(formData: FormData) {
   revalidatePath("/team");
 }
 
-const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+const WEEKDAYS = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+] as const;
 type Weekday = (typeof WEEKDAYS)[number];
 
 function parseTimeField(value: FormDataEntryValue | null): string | null {
@@ -1557,7 +2018,10 @@ function timeToMinutes(value: string): number {
   return (Number(hours) || 0) * 60 + (Number(minutes) || 0);
 }
 
-function parseIntegerField(value: FormDataEntryValue | null, minValue = 0): number | null {
+function parseIntegerField(
+  value: FormDataEntryValue | null,
+  minValue = 0,
+): number | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -1568,7 +2032,10 @@ function parseIntegerField(value: FormDataEntryValue | null, minValue = 0): numb
   return rounded;
 }
 
-function parseNumberField(value: FormDataEntryValue | null, minValue = 0): number | null {
+function parseNumberField(
+  value: FormDataEntryValue | null,
+  minValue = 0,
+): number | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -1604,11 +2071,11 @@ async function submitPolicyUpdate(
   jar: Awaited<ReturnType<typeof cookies>>,
   key: string,
   value: Record<string, unknown>,
-  successMessage: string
+  successMessage: string,
 ): Promise<void> {
   const response = await callAdminApi("/api/admin/policy", {
     method: "POST",
-    body: JSON.stringify({ key, value })
+    body: JSON.stringify({ key, value }),
   });
 
   if (!response.ok) {
@@ -1633,7 +2100,7 @@ export async function updateBusinessHoursPolicyAction(formData: FormData) {
     thursday: [],
     friday: [],
     saturday: [],
-    sunday: []
+    sunday: [],
   };
 
   for (const day of WEEKDAYS) {
@@ -1645,12 +2112,20 @@ export async function updateBusinessHoursPolicyAction(formData: FormData) {
     const start = parseTimeField(formData.get(`${day}_start`));
     const end = parseTimeField(formData.get(`${day}_end`));
     if (!start || !end) {
-      jar.set({ name: "myst-flash-error", value: `Missing hours for ${day}`, path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: `Missing hours for ${day}`,
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
     if (timeToMinutes(end) <= timeToMinutes(start)) {
-      jar.set({ name: "myst-flash-error", value: `End time must be after start on ${day}`, path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: `End time must be after start on ${day}`,
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
@@ -1662,9 +2137,9 @@ export async function updateBusinessHoursPolicyAction(formData: FormData) {
     "business_hours",
     {
       timezone: timezone.length > 0 ? timezone : "America/New_York",
-      weekly
+      weekly,
     },
-    "Business hours updated"
+    "Business hours updated",
   );
 }
 
@@ -1682,29 +2157,48 @@ export async function updateQuietHoursPolicyAction(formData: FormData) {
     const start = parseTimeField(formData.get(`${channel}_start`));
     const end = parseTimeField(formData.get(`${channel}_end`));
     if (!start || !end) {
-      jar.set({ name: "myst-flash-error", value: `Missing quiet hours for ${channel}`, path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: `Missing quiet hours for ${channel}`,
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
     channels[channel] = { start, end };
   }
 
-  await submitPolicyUpdate(jar, "quiet_hours", { channels }, "Quiet hours updated");
+  await submitPolicyUpdate(
+    jar,
+    "quiet_hours",
+    { channels },
+    "Quiet hours updated",
+  );
 }
 
 export async function updateServiceAreaPolicyAction(formData: FormData) {
   const jar = await cookies();
   const modeRaw = formData.get("mode");
-  const mode = modeRaw === "ga_only" || modeRaw === "ga_above_macon" ? String(modeRaw) : "zip_allowlist";
+  const mode =
+    modeRaw === "ga_only" || modeRaw === "ga_above_macon"
+      ? String(modeRaw)
+      : "zip_allowlist";
   const homeBaseRaw = formData.get("homeBase");
   const homeBase = typeof homeBaseRaw === "string" ? homeBaseRaw.trim() : "";
   const radiusMiles = parseNumberField(formData.get("radiusMiles"), 0);
   if (radiusMiles === null) {
-    jar.set({ name: "myst-flash-error", value: "Radius miles must be a number", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Radius miles must be a number",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
-  const zipAllowlist = mode === "ga_only" || mode === "ga_above_macon" ? [] : parseZipListField(formData.get("zipAllowlist"));
+  const zipAllowlist =
+    mode === "ga_only" || mode === "ga_above_macon"
+      ? []
+      : parseZipListField(formData.get("zipAllowlist"));
   const notesRaw = formData.get("notes");
   const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
 
@@ -1716,15 +2210,18 @@ export async function updateServiceAreaPolicyAction(formData: FormData) {
       homeBase: homeBase.length > 0 ? homeBase : undefined,
       radiusMiles,
       zipAllowlist,
-      notes: notes.length > 0 ? notes : undefined
+      notes: notes.length > 0 ? notes : undefined,
     },
-    "Service area updated"
+    "Service area updated",
   );
 }
 
 export async function updateBookingRulesPolicyAction(formData: FormData) {
   const jar = await cookies();
-  const bookingWindowDays = parseIntegerField(formData.get("bookingWindowDays"), 1);
+  const bookingWindowDays = parseIntegerField(
+    formData.get("bookingWindowDays"),
+    1,
+  );
   const bufferMinutes = parseIntegerField(formData.get("bufferMinutes"), 0);
   const maxJobsPerDay = parseIntegerField(formData.get("maxJobsPerDay"), 0);
   const maxJobsPerCrew = parseIntegerField(formData.get("maxJobsPerCrew"), 0);
@@ -1735,7 +2232,11 @@ export async function updateBookingRulesPolicyAction(formData: FormData) {
     maxJobsPerDay === null ||
     maxJobsPerCrew === null
   ) {
-    jar.set({ name: "myst-flash-error", value: "Booking rule values must be numbers", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Booking rule values must be numbers",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1747,9 +2248,9 @@ export async function updateBookingRulesPolicyAction(formData: FormData) {
       bookingWindowDays,
       bufferMinutes,
       maxJobsPerDay,
-      maxJobsPerCrew
+      maxJobsPerCrew,
     },
-    "Booking rules updated"
+    "Booking rules updated",
   );
 }
 
@@ -1757,17 +2258,28 @@ export async function updateStandardJobPolicyAction(formData: FormData) {
   const jar = await cookies();
   const allowedServices = parseListField(formData.get("allowedServices"));
   if (!allowedServices.length) {
-    jar.set({ name: "myst-flash-error", value: "Add at least one allowed service", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Add at least one allowed service",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
-  const maxVolumeCubicYards = parseNumberField(formData.get("maxVolumeCubicYards"), 0);
+  const maxVolumeCubicYards = parseNumberField(
+    formData.get("maxVolumeCubicYards"),
+    0,
+  );
   const maxItemCount = parseIntegerField(formData.get("maxItemCount"), 0);
   const notesRaw = formData.get("notes");
   const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
 
   if (maxVolumeCubicYards === null || maxItemCount === null) {
-    jar.set({ name: "myst-flash-error", value: "Standard job values must be numbers", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Standard job values must be numbers",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1779,9 +2291,9 @@ export async function updateStandardJobPolicyAction(formData: FormData) {
       allowedServices,
       maxVolumeCubicYards,
       maxItemCount,
-      notes: notes.length > 0 ? notes : undefined
+      notes: notes.length > 0 ? notes : undefined,
     },
-    "Standard job rules updated"
+    "Standard job rules updated",
   );
 }
 
@@ -1798,7 +2310,11 @@ export async function updateItemPoliciesAction(formData: FormData) {
     }
     const fee = parseNumberField(feeRaw, 0);
     if (fee === null) {
-      jar.set({ name: "myst-flash-error", value: "Extra fee amounts must be numbers", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Extra fee amounts must be numbers",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
@@ -1810,9 +2326,9 @@ export async function updateItemPoliciesAction(formData: FormData) {
     "item_policies",
     {
       declined,
-      extraFees
+      extraFees,
     },
-    "Item policies updated"
+    "Item policies updated",
   );
 }
 
@@ -1835,7 +2351,11 @@ export async function updateCompanyProfilePolicyAction(formData: FormData) {
   const outboundCallRecordingNotice = readText("outboundCallRecordingNotice");
 
   if (!businessName) {
-    jar.set({ name: "myst-flash-error", value: "Business name is required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Business name is required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1857,22 +2377,30 @@ export async function updateCompanyProfilePolicyAction(formData: FormData) {
       businessName,
       primaryPhone: primaryPhone.length > 0 ? primaryPhone : undefined,
       discountPercent,
-      serviceAreaSummary: serviceAreaSummary.length > 0 ? serviceAreaSummary : undefined,
-      trailerAndPricingSummary: trailerAndPricingSummary.length > 0 ? trailerAndPricingSummary : undefined,
+      serviceAreaSummary:
+        serviceAreaSummary.length > 0 ? serviceAreaSummary : undefined,
+      trailerAndPricingSummary:
+        trailerAndPricingSummary.length > 0
+          ? trailerAndPricingSummary
+          : undefined,
       whatWeDo: whatWeDo.length > 0 ? whatWeDo : undefined,
       whatWeDontDo: whatWeDontDo.length > 0 ? whatWeDontDo : undefined,
       bookingStyle: bookingStyle.length > 0 ? bookingStyle : undefined,
       agentNotes: agentNotes.length > 0 ? agentNotes : undefined,
-      outboundCallRecordingNotice: outboundCallRecordingNotice.length > 0 ? outboundCallRecordingNotice : ""
+      outboundCallRecordingNotice:
+        outboundCallRecordingNotice.length > 0
+          ? outboundCallRecordingNotice
+          : "",
     },
-    "Company profile updated"
+    "Company profile updated",
   );
 }
 
 export async function updateSalesAutopilotSignatureAction(formData: FormData) {
   const jar = await cookies();
   const agentDisplayNameRaw = formData.get("agentDisplayName");
-  const agentDisplayName = typeof agentDisplayNameRaw === "string" ? agentDisplayNameRaw.trim() : "";
+  const agentDisplayName =
+    typeof agentDisplayNameRaw === "string" ? agentDisplayNameRaw.trim() : "";
   if (agentDisplayName.length === 0) {
     jar.set({ name: "myst-flash-error", value: "Name is required", path: "/" });
     revalidatePath("/team");
@@ -1881,10 +2409,13 @@ export async function updateSalesAutopilotSignatureAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/sales/autopilot", {
     method: "PATCH",
-    body: JSON.stringify({ agentDisplayName })
+    body: JSON.stringify({ agentDisplayName }),
   });
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to update Sales Autopilot");
+    const message = await readErrorMessage(
+      response,
+      "Unable to update Sales Autopilot",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -1894,19 +2425,29 @@ export async function updateSalesAutopilotSignatureAction(formData: FormData) {
   revalidatePath("/team");
 }
 
-export async function updateConversationPersonaPolicyAction(formData: FormData) {
+export async function updateConversationPersonaPolicyAction(
+  formData: FormData,
+) {
   const jar = await cookies();
   const raw = formData.get("systemPrompt");
   const systemPrompt = typeof raw === "string" ? raw.trim() : "";
 
   if (!systemPrompt) {
-    jar.set({ name: "myst-flash-error", value: "System prompt is required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "System prompt is required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   if (systemPrompt.length > 4000) {
-    jar.set({ name: "myst-flash-error", value: "System prompt must be 4000 characters or less", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "System prompt must be 4000 characters or less",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -1915,7 +2456,7 @@ export async function updateConversationPersonaPolicyAction(formData: FormData) 
     jar,
     "conversation_persona",
     { systemPrompt },
-    "Conversation persona updated"
+    "Conversation persona updated",
   );
 }
 
@@ -1929,7 +2470,7 @@ export async function updateInboxAlertsPolicyAction(formData: FormData) {
     jar,
     "inbox_alerts",
     { sms, dm, email },
-    "Inbox alerts updated"
+    "Inbox alerts updated",
   );
 }
 
@@ -1976,9 +2517,9 @@ export async function updateTemplatesPolicyAction(formData: FormData) {
       follow_up: followUp,
       confirmations,
       reviews,
-      out_of_area: outOfArea
+      out_of_area: outOfArea,
     },
-    "Templates updated"
+    "Templates updated",
   );
 }
 
@@ -1989,18 +2530,28 @@ export async function updateReviewRequestPolicyAction(formData: FormData) {
   const reviewUrl = typeof rawUrl === "string" ? rawUrl.trim() : "";
 
   if (!reviewUrl) {
-    jar.set({ name: "myst-flash-error", value: "Review link is required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Review link is required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   try {
     // Allow either g.page, https://, etc. If missing scheme, assume https.
-    const normalized = /^https?:\/\//i.test(reviewUrl) ? reviewUrl : `https://${reviewUrl}`;
+    const normalized = /^https?:\/\//i.test(reviewUrl)
+      ? reviewUrl
+      : `https://${reviewUrl}`;
     // eslint-disable-next-line no-new
     new URL(normalized);
   } catch {
-    jar.set({ name: "myst-flash-error", value: "Review link must be a valid URL", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Review link must be a valid URL",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -2009,7 +2560,7 @@ export async function updateReviewRequestPolicyAction(formData: FormData) {
     jar,
     "review_request",
     { enabled, reviewUrl },
-    "Review request settings updated"
+    "Review request settings updated",
   );
 }
 
@@ -2019,7 +2570,7 @@ export async function updateConfirmationLoopPolicyAction(formData: FormData) {
   const windows = [
     parseNumberField(formData.get("window_hours_1"), 0),
     parseNumberField(formData.get("window_hours_2"), 0),
-    parseNumberField(formData.get("window_hours_3"), 0)
+    parseNumberField(formData.get("window_hours_3"), 0),
   ]
     .filter((value): value is number => value !== null && value > 0)
     .map((hours) => Math.round(hours * 60));
@@ -2031,9 +2582,9 @@ export async function updateConfirmationLoopPolicyAction(formData: FormData) {
     "confirmation_loop",
     {
       enabled,
-      windowsMinutes
+      windowsMinutes,
     },
-    "Confirmation loop updated"
+    "Confirmation loop updated",
   );
 }
 
@@ -2044,7 +2595,7 @@ export async function updateFollowUpSequencePolicyAction(formData: FormData) {
     parseNumberField(formData.get("step_hours_1"), 0),
     parseNumberField(formData.get("step_hours_2"), 0),
     parseNumberField(formData.get("step_hours_3"), 0),
-    parseNumberField(formData.get("step_hours_4"), 0)
+    parseNumberField(formData.get("step_hours_4"), 0),
   ]
     .filter((value): value is number => value !== null && value > 0)
     .map((hours) => Math.round(hours * 60));
@@ -2056,9 +2607,9 @@ export async function updateFollowUpSequencePolicyAction(formData: FormData) {
     "follow_up_sequence",
     {
       enabled,
-      stepsMinutes
+      stepsMinutes,
     },
-    "Follow-up sequence updated"
+    "Follow-up sequence updated",
   );
 }
 
@@ -2080,11 +2631,14 @@ export async function updateAutomationModeAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/automation", {
     method: "POST",
-    body: JSON.stringify({ channel: channel.trim(), mode: mode.trim() })
+    body: JSON.stringify({ channel: channel.trim(), mode: mode.trim() }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to update automation mode");
+    const message = await readErrorMessage(
+      response,
+      "Unable to update automation mode",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -2102,7 +2656,9 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const activityWindowMinutes = formData.get("activityWindowMinutes");
   const retryDelayMinutes = formData.get("retryDelayMinutes");
   const dmSmsFallbackAfterMinutes = formData.get("dmSmsFallbackAfterMinutes");
-  const dmMinSilenceBeforeSmsMinutes = formData.get("dmMinSilenceBeforeSmsMinutes");
+  const dmMinSilenceBeforeSmsMinutes = formData.get(
+    "dmMinSilenceBeforeSmsMinutes",
+  );
   const agentDisplayName = formData.get("agentDisplayName");
 
   const payload: Record<string, unknown> = { enabled };
@@ -2112,7 +2668,7 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     ["activityWindowMinutes", activityWindowMinutes],
     ["retryDelayMinutes", retryDelayMinutes],
     ["dmSmsFallbackAfterMinutes", dmSmsFallbackAfterMinutes],
-    ["dmMinSilenceBeforeSmsMinutes", dmMinSilenceBeforeSmsMinutes]
+    ["dmMinSilenceBeforeSmsMinutes", dmMinSilenceBeforeSmsMinutes],
   ] as const) {
     if (typeof value === "string" && value.trim().length > 0) {
       const num = Number(value);
@@ -2122,17 +2678,23 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     }
   }
 
-  if (typeof agentDisplayName === "string" && agentDisplayName.trim().length > 0) {
+  if (
+    typeof agentDisplayName === "string" &&
+    agentDisplayName.trim().length > 0
+  ) {
     payload["agentDisplayName"] = agentDisplayName.trim();
   }
 
   const response = await callAdminApi("/api/admin/sales/autopilot", {
     method: "PATCH",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to update Sales Autopilot");
+    const message = await readErrorMessage(
+      response,
+      "Unable to update Sales Autopilot",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -2168,7 +2730,11 @@ export async function updateLeadAutomationAction(formData: FormData) {
   if (typeof nextFollowupAt === "string" && nextFollowupAt.trim().length > 0) {
     const parsed = new Date(nextFollowupAt);
     if (Number.isNaN(parsed.getTime())) {
-      jar.set({ name: "myst-flash-error", value: "Invalid follow-up date", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Invalid follow-up date",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
@@ -2180,7 +2746,7 @@ export async function updateLeadAutomationAction(formData: FormData) {
     channel: channel.trim(),
     paused: paused === "on",
     dnc: dnc === "on",
-    humanTakeover: humanTakeover === "on"
+    humanTakeover: humanTakeover === "on",
   };
 
   if (typeof followupState === "string" && followupState.trim().length > 0) {
@@ -2198,11 +2764,14 @@ export async function updateLeadAutomationAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/automation/lead", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to update lead automation");
+    const message = await readErrorMessage(
+      response,
+      "Unable to update lead automation",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -2217,11 +2786,14 @@ export async function scanMergeSuggestionsAction() {
 
   const response = await callAdminApi("/api/admin/merge-suggestions/scan", {
     method: "POST",
-    body: JSON.stringify({})
+    body: JSON.stringify({}),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to scan for merges");
+    const message = await readErrorMessage(
+      response,
+      "Unable to scan for merges",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -2235,15 +2807,22 @@ export async function approveMergeSuggestionAction(formData: FormData) {
   const jar = await cookies();
   const suggestionId = formData.get("suggestionId");
   if (typeof suggestionId !== "string" || suggestionId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Suggestion ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Suggestion ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/merge-suggestions/${suggestionId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ action: "approve" })
-  });
+  const response = await callAdminApi(
+    `/api/admin/merge-suggestions/${suggestionId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ action: "approve" }),
+    },
+  );
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to approve merge");
@@ -2260,15 +2839,22 @@ export async function declineMergeSuggestionAction(formData: FormData) {
   const jar = await cookies();
   const suggestionId = formData.get("suggestionId");
   if (typeof suggestionId !== "string" || suggestionId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Suggestion ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Suggestion ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/merge-suggestions/${suggestionId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ action: "decline" })
-  });
+  const response = await callAdminApi(
+    `/api/admin/merge-suggestions/${suggestionId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ action: "decline" }),
+    },
+  );
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to decline merge");
@@ -2293,7 +2879,11 @@ export async function manualMergeContactsAction(formData: FormData) {
     typeof sourceContactId !== "string" ||
     sourceContactId.trim().length === 0
   ) {
-    jar.set({ name: "myst-flash-error", value: "Contact IDs required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact IDs required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -2303,12 +2893,15 @@ export async function manualMergeContactsAction(formData: FormData) {
     body: JSON.stringify({
       targetContactId: targetContactId.trim(),
       sourceContactId: sourceContactId.trim(),
-      reason: typeof reason === "string" ? reason.trim() : undefined
-    })
+      reason: typeof reason === "string" ? reason.trim() : undefined,
+    }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to merge contacts");
+    const message = await readErrorMessage(
+      response,
+      "Unable to merge contacts",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -2325,12 +2918,20 @@ export async function createRoleAction(formData: FormData) {
   const permissions = formData.get("permissions");
 
   if (typeof name !== "string" || name.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Role name required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Role name required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
   if (typeof slug !== "string" || slug.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Role slug required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Role slug required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -2345,7 +2946,11 @@ export async function createRoleAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/roles", {
     method: "POST",
-    body: JSON.stringify({ name: name.trim(), slug: slug.trim(), permissions: perms })
+    body: JSON.stringify({
+      name: name.trim(),
+      slug: slug.trim(),
+      permissions: perms,
+    }),
   });
 
   if (!response.ok) {
@@ -2367,14 +2972,18 @@ export async function createTeamMemberAction(formData: FormData) {
   const active = formData.get("active");
 
   if (typeof name !== "string" || name.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Member name required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Member name required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const payload: Record<string, unknown> = {
     name: name.trim(),
-    active: active === "on"
+    active: active === "on",
   };
 
   if (typeof email === "string" && email.trim().length > 0) {
@@ -2386,7 +2995,7 @@ export async function createTeamMemberAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/team/members", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -2404,20 +3013,28 @@ export async function updateTeamMemberAction(formData: FormData) {
   const jar = await cookies();
   const memberId = formData.get("memberId");
   if (typeof memberId !== "string" || memberId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Member ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Member ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const payload: Record<string, unknown> = {
-    active: formData.get("active") === "on"
+    active: formData.get("active") === "on",
   };
 
   const name = formData.get("name");
   if (typeof name === "string") {
     const trimmed = name.trim();
     if (trimmed.length === 0) {
-      jar.set({ name: "myst-flash-error", value: "Name is required", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Name is required",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
@@ -2450,7 +3067,7 @@ export async function updateTeamMemberAction(formData: FormData) {
         jar.set({
           name: "myst-flash-error",
           value: "Crew split % must be between 0 and 100",
-          path: "/"
+          path: "/",
         });
         revalidatePath("/team");
         return;
@@ -2461,7 +3078,7 @@ export async function updateTeamMemberAction(formData: FormData) {
 
   const response = await callAdminApi(`/api/admin/team/members/${memberId}`, {
     method: "PATCH",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -2481,20 +3098,34 @@ export async function deleteTeamMemberAction(formData: FormData) {
   const confirm = formData.get("confirm");
 
   if (typeof memberId !== "string" || memberId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Member ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Member ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  if (typeof confirm !== "string" || confirm.trim().toUpperCase() !== "DELETE") {
-    jar.set({ name: "myst-flash-error", value: 'Type "DELETE" to confirm', path: "/" });
+  if (
+    typeof confirm !== "string" ||
+    confirm.trim().toUpperCase() !== "DELETE"
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: 'Type "DELETE" to confirm',
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/team/members/${memberId.trim()}`, {
-    method: "DELETE"
-  });
+  const response = await callAdminApi(
+    `/api/admin/team/members/${memberId.trim()}`,
+    {
+      method: "DELETE",
+    },
+  );
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to delete member");
@@ -2514,14 +3145,21 @@ export async function createThreadAction(formData: FormData) {
   const subject = formData.get("subject");
 
   if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const payload: Record<string, unknown> = {
     contactId: contactId.trim(),
-    channel: typeof channel === "string" && channel.trim().length > 0 ? channel.trim() : "sms"
+    channel:
+      typeof channel === "string" && channel.trim().length > 0
+        ? channel.trim()
+        : "sms",
   };
 
   if (typeof subject === "string" && subject.trim().length > 0) {
@@ -2530,7 +3168,7 @@ export async function createThreadAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/inbox/threads", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -2552,7 +3190,11 @@ export async function updateThreadAction(formData: FormData) {
   const allowBackward = formData.get("allowBackward");
 
   if (typeof threadId !== "string" || threadId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Thread ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -2570,7 +3212,7 @@ export async function updateThreadAction(formData: FormData) {
 
   const response = await callAdminApi(`/api/admin/inbox/threads/${threadId}`, {
     method: "PATCH",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
@@ -2599,44 +3241,72 @@ export async function sendThreadMessageAction(formData: FormData) {
 
   let resolvedThreadId = typeof threadId === "string" ? threadId.trim() : "";
   if (resolvedThreadId.length === 0) {
-    const ensuredContactId = typeof contactId === "string" ? contactId.trim() : "";
+    const ensuredContactId =
+      typeof contactId === "string" ? contactId.trim() : "";
     const ensuredChannel = resolvedChannel;
 
     if (!ensuredContactId || !ensuredChannel) {
-      jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Thread ID missing",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
 
     if (ensuredChannel === "dm") {
-      jar.set({ name: "myst-flash-error", value: "Messenger thread not found yet.", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Messenger thread not found yet.",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
 
     const ensureRes = await callAdminApi("/api/admin/inbox/threads/ensure", {
       method: "POST",
-      body: JSON.stringify({ contactId: ensuredContactId, channel: ensuredChannel })
+      body: JSON.stringify({
+        contactId: ensuredContactId,
+        channel: ensuredChannel,
+      }),
     });
 
     if (!ensureRes.ok) {
-      const message = await readErrorMessage(ensureRes, "Unable to open a thread for this contact");
+      const message = await readErrorMessage(
+        ensureRes,
+        "Unable to open a thread for this contact",
+      );
       jar.set({ name: "myst-flash-error", value: message, path: "/" });
       revalidatePath("/team");
       return;
     }
 
-    const ensurePayload = (await ensureRes.json().catch(() => null)) as { threadId?: string } | null;
-    resolvedThreadId = typeof ensurePayload?.threadId === "string" ? ensurePayload.threadId.trim() : "";
+    const ensurePayload = (await ensureRes.json().catch(() => null)) as {
+      threadId?: string;
+    } | null;
+    resolvedThreadId =
+      typeof ensurePayload?.threadId === "string"
+        ? ensurePayload.threadId.trim()
+        : "";
     if (!resolvedThreadId) {
-      jar.set({ name: "myst-flash-error", value: "Unable to open a thread for this contact", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Unable to open a thread for this contact",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
   }
   const trimmedBody = typeof body === "string" ? body.trim() : "";
   if (trimmedBody.length === 0 && attachments.length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Add a message or attach photos first", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Add a message or attach photos first",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -2644,7 +3314,7 @@ export async function sendThreadMessageAction(formData: FormData) {
   const payload: Record<string, unknown> = {
     body: trimmedBody,
     direction: "outbound",
-    ...(resolvedChannel ? { channel: resolvedChannel } : {})
+    ...(resolvedChannel ? { channel: resolvedChannel } : {}),
   };
   if (typeof subject === "string" && subject.trim().length > 0) {
     payload["subject"] = subject.trim();
@@ -2652,7 +3322,12 @@ export async function sendThreadMessageAction(formData: FormData) {
 
   if (attachments.length > 0) {
     if (resolvedChannel !== "sms" && resolvedChannel !== "dm") {
-      jar.set({ name: "myst-flash-error", value: "Attachments are only supported for SMS and Messenger right now.", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value:
+          "Attachments are only supported for SMS and Messenger right now.",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
@@ -2664,24 +3339,35 @@ export async function sendThreadMessageAction(formData: FormData) {
 
     const uploadRes = await callAdminApi("/api/admin/inbox/uploads", {
       method: "POST",
-      body: uploadForm
+      body: uploadForm,
     });
 
     if (!uploadRes.ok) {
-      const message = await readErrorMessage(uploadRes, "Unable to upload attachments");
+      const message = await readErrorMessage(
+        uploadRes,
+        "Unable to upload attachments",
+      );
       jar.set({ name: "myst-flash-error", value: message, path: "/" });
       revalidatePath("/team");
       return;
     }
 
-    const uploadPayload = (await uploadRes.json().catch(() => null)) as { uploads?: { url?: unknown }[] } | null;
+    const uploadPayload = (await uploadRes.json().catch(() => null)) as {
+      uploads?: { url?: unknown }[];
+    } | null;
     const mediaUrls =
       uploadPayload?.uploads
-        ?.map((item) => (item && typeof item.url === "string" ? item.url.trim() : ""))
+        ?.map((item) =>
+          item && typeof item.url === "string" ? item.url.trim() : "",
+        )
         .filter((url) => url.length > 0) ?? [];
 
     if (mediaUrls.length === 0) {
-      jar.set({ name: "myst-flash-error", value: "Unable to upload attachments", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Unable to upload attachments",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
@@ -2689,10 +3375,13 @@ export async function sendThreadMessageAction(formData: FormData) {
     payload["mediaUrls"] = mediaUrls;
   }
 
-  const response = await callAdminApi(`/api/admin/inbox/threads/${resolvedThreadId}/messages`, {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
+  const response = await callAdminApi(
+    `/api/admin/inbox/threads/${resolvedThreadId}/messages`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to send message");
@@ -2701,11 +3390,16 @@ export async function sendThreadMessageAction(formData: FormData) {
     return;
   }
 
-  jar.set({ name: "myst-flash", value: attachments.length ? "Message + photos queued" : "Message queued", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: attachments.length ? "Message + photos queued" : "Message queued",
+    path: "/",
+  });
   revalidatePath("/team");
-  const resolvedContactId = typeof contactId === "string" ? contactId.trim() : "";
+  const resolvedContactId =
+    typeof contactId === "string" ? contactId.trim() : "";
   redirect(
-    `/team?tab=inbox&threadId=${encodeURIComponent(resolvedThreadId)}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`
+    `/team?tab=inbox&threadId=${encodeURIComponent(resolvedThreadId)}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`,
   );
 }
 
@@ -2713,15 +3407,22 @@ export async function retryFailedMessageAction(formData: FormData) {
   const jar = await cookies();
   const messageId = formData.get("messageId");
   if (typeof messageId !== "string" || messageId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Message ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Message ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/inbox/messages/${messageId}/retry`, {
-    method: "POST",
-    body: JSON.stringify({})
-  });
+  const response = await callAdminApi(
+    `/api/admin/inbox/messages/${messageId}/retry`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 
   if (!response.ok) {
     const message = await readErrorMessage(response, "Unable to retry message");
@@ -2738,17 +3439,27 @@ export async function deleteMessageAction(formData: FormData) {
   const jar = await cookies();
   const messageId = formData.get("messageId");
   if (typeof messageId !== "string" || messageId.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Message ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Message ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  const response = await callAdminApi(`/api/admin/inbox/messages/${messageId}`, {
-    method: "DELETE"
-  });
+  const response = await callAdminApi(
+    `/api/admin/inbox/messages/${messageId}`,
+    {
+      method: "DELETE",
+    },
+  );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to delete message");
+    const message = await readErrorMessage(
+      response,
+      "Unable to delete message",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -2766,60 +3477,94 @@ export async function suggestThreadReplyAction(formData: FormData) {
 
   let resolvedThreadId = typeof threadId === "string" ? threadId.trim() : "";
   const resolvedChannel = typeof channel === "string" ? channel.trim() : "";
-  const resolvedContactId = typeof contactId === "string" ? contactId.trim() : "";
+  const resolvedContactId =
+    typeof contactId === "string" ? contactId.trim() : "";
   if (resolvedThreadId.length === 0) {
     const ensuredContactId = resolvedContactId;
     const ensuredChannel = resolvedChannel;
 
     if (!ensuredContactId || !ensuredChannel) {
-      jar.set({ name: "myst-flash-error", value: "Thread ID missing", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Thread ID missing",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
 
     if (ensuredChannel === "dm") {
-      jar.set({ name: "myst-flash-error", value: "Messenger thread not found yet.", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Messenger thread not found yet.",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
 
     const ensureRes = await callAdminApi("/api/admin/inbox/threads/ensure", {
       method: "POST",
-      body: JSON.stringify({ contactId: ensuredContactId, channel: ensuredChannel })
+      body: JSON.stringify({
+        contactId: ensuredContactId,
+        channel: ensuredChannel,
+      }),
     });
 
     if (!ensureRes.ok) {
-      const message = await readErrorMessage(ensureRes, "Unable to open a thread for this contact");
+      const message = await readErrorMessage(
+        ensureRes,
+        "Unable to open a thread for this contact",
+      );
       jar.set({ name: "myst-flash-error", value: message, path: "/" });
       revalidatePath("/team");
       return;
     }
 
-    const ensurePayload = (await ensureRes.json().catch(() => null)) as { threadId?: string } | null;
-    resolvedThreadId = typeof ensurePayload?.threadId === "string" ? ensurePayload.threadId.trim() : "";
+    const ensurePayload = (await ensureRes.json().catch(() => null)) as {
+      threadId?: string;
+    } | null;
+    resolvedThreadId =
+      typeof ensurePayload?.threadId === "string"
+        ? ensurePayload.threadId.trim()
+        : "";
     if (!resolvedThreadId) {
-      jar.set({ name: "myst-flash-error", value: "Unable to open a thread for this contact", path: "/" });
+      jar.set({
+        name: "myst-flash-error",
+        value: "Unable to open a thread for this contact",
+        path: "/",
+      });
       revalidatePath("/team");
       return;
     }
   }
 
-  const response = await callAdminApi(`/api/admin/inbox/threads/${resolvedThreadId}/suggest`, {
-    method: "POST",
-    body: JSON.stringify({})
-  });
+  const response = await callAdminApi(
+    `/api/admin/inbox/threads/${resolvedThreadId}/suggest`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to generate suggestion");
+    const message = await readErrorMessage(
+      response,
+      "Unable to generate suggestion",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "AI draft created. Review and click Send when ready.", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "AI draft created. Review and click Send when ready.",
+    path: "/",
+  });
   revalidatePath("/team");
   redirect(
-    `/team?tab=inbox&threadId=${encodeURIComponent(resolvedThreadId)}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`
+    `/team?tab=inbox&threadId=${encodeURIComponent(resolvedThreadId)}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`,
   );
 }
 
@@ -2849,14 +3594,14 @@ export async function dismissNewLeadAction(formData: FormData) {
     name: "myst-new-lead-hidden-until",
     value: String(Date.now() + 24 * 60 * 60 * 1000),
     path: "/",
-    maxAge: 60 * 60 * 24
+    maxAge: 60 * 60 * 24,
   });
 
   jar.set({
     name: "myst-new-lead-dismissed",
     value: contactId.trim(),
     path: "/",
-    maxAge: 60 * 60 * 24
+    maxAge: 60 * 60 * 24,
   });
 
   revalidatePath("/team");
@@ -2867,7 +3612,11 @@ export async function updateDefaultSalesAssigneeAction(formData: FormData) {
   const memberIdRaw = formData.get("defaultAssigneeMemberId");
 
   if (memberIdRaw !== null && typeof memberIdRaw !== "string") {
-    jar.set({ name: "myst-flash-error", value: "Invalid selection", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Invalid selection",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -2877,18 +3626,25 @@ export async function updateDefaultSalesAssigneeAction(formData: FormData) {
   const response = await callAdminApi("/api/admin/sales/settings", {
     method: "PATCH",
     body: JSON.stringify({
-      defaultAssigneeMemberId: memberId.length ? memberId : null
-    })
+      defaultAssigneeMemberId: memberId.length ? memberId : null,
+    }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to update default salesperson");
+    const message = await readErrorMessage(
+      response,
+      "Unable to update default salesperson",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "Default salesperson updated", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "Default salesperson updated",
+    path: "/",
+  });
   revalidatePath("/team");
   redirect("/team?tab=access");
 }
@@ -2898,17 +3654,24 @@ export async function resetSalesHqAction() {
 
   const response = await callAdminApi("/api/admin/sales/reset", {
     method: "POST",
-    body: JSON.stringify({})
+    body: JSON.stringify({}),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to reset Sales HQ");
+    const message = await readErrorMessage(
+      response,
+      "Unable to reset Sales HQ",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "Sales HQ cleared. Only new leads will appear going forward.", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "Sales HQ cleared. Only new leads will appear going forward.",
+    path: "/",
+  });
   revalidatePath("/team");
 }
 
@@ -2916,19 +3679,28 @@ export async function deleteCallCoachingAction(formData: FormData) {
   const jar = await cookies();
   const callRecordIdRaw = formData.get("callRecordId");
 
-  if (typeof callRecordIdRaw !== "string" || callRecordIdRaw.trim().length === 0) {
+  if (
+    typeof callRecordIdRaw !== "string" ||
+    callRecordIdRaw.trim().length === 0
+  ) {
     jar.set({ name: "myst-flash-error", value: "Missing call id", path: "/" });
     revalidatePath("/team");
     return;
   }
 
   const callRecordId = callRecordIdRaw.trim();
-  const response = await callAdminApi(`/api/admin/calls/coaching/${encodeURIComponent(callRecordId)}`, {
-    method: "DELETE"
-  });
+  const response = await callAdminApi(
+    `/api/admin/calls/coaching/${encodeURIComponent(callRecordId)}`,
+    {
+      method: "DELETE",
+    },
+  );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to delete call coaching");
+    const message = await readErrorMessage(
+      response,
+      "Unable to delete call coaching",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -2943,18 +3715,25 @@ export async function markSalesTouchAction(formData: FormData) {
   const contactIdRaw = formData.get("contactId");
 
   if (typeof contactIdRaw !== "string" || contactIdRaw.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Missing contact id", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Missing contact id",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const response = await callAdminApi("/api/admin/sales/touch", {
     method: "POST",
-    body: JSON.stringify({ contactId: contactIdRaw.trim() })
+    body: JSON.stringify({ contactId: contactIdRaw.trim() }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to mark contacted");
+    const message = await readErrorMessage(
+      response,
+      "Unable to mark contacted",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -2970,13 +3749,24 @@ export async function setSalesDispositionAction(formData: FormData) {
   const dispositionRaw = formData.get("disposition");
 
   if (typeof contactIdRaw !== "string" || contactIdRaw.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Missing contact id", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Missing contact id",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  if (typeof dispositionRaw !== "string" || dispositionRaw.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Missing disposition", path: "/" });
+  if (
+    typeof dispositionRaw !== "string" ||
+    dispositionRaw.trim().length === 0
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Missing disposition",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -2985,12 +3775,15 @@ export async function setSalesDispositionAction(formData: FormData) {
     method: "POST",
     body: JSON.stringify({
       contactId: contactIdRaw.trim(),
-      disposition: dispositionRaw.trim()
-    })
+      disposition: dispositionRaw.trim(),
+    }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to remove from Sales HQ");
+    const message = await readErrorMessage(
+      response,
+      "Unable to remove from Sales HQ",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -3005,7 +3798,7 @@ export async function runSeoAutopublishAction() {
 
   const response = await callAdminApi("/api/admin/seo/run", {
     method: "POST",
-    body: JSON.stringify({ force: true })
+    body: JSON.stringify({ force: true }),
   });
 
   if (!response.ok) {
@@ -3017,12 +3810,32 @@ export async function runSeoAutopublishAction() {
   const payload = (await response.json().catch(() => ({}))) as any;
   const result = payload?.result;
 
-  if (result?.ok === true && result?.skipped === false && typeof result?.slug === "string") {
-    jar.set({ name: "myst-flash", value: `SEO post published: /blog/${result.slug}`, path: "/" });
-  } else if (result?.ok === true && result?.skipped === true && typeof result?.reason === "string") {
-    jar.set({ name: "myst-flash", value: `SEO run skipped: ${result.reason}`, path: "/" });
+  if (
+    result?.ok === true &&
+    result?.skipped === false &&
+    typeof result?.slug === "string"
+  ) {
+    jar.set({
+      name: "myst-flash",
+      value: `SEO post published: /blog/${result.slug}`,
+      path: "/",
+    });
+  } else if (
+    result?.ok === true &&
+    result?.skipped === true &&
+    typeof result?.reason === "string"
+  ) {
+    jar.set({
+      name: "myst-flash",
+      value: `SEO run skipped: ${result.reason}`,
+      path: "/",
+    });
   } else if (result?.ok === false && typeof result?.error === "string") {
-    jar.set({ name: "myst-flash-error", value: `SEO run failed: ${result.error}`, path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: `SEO run failed: ${result.error}`,
+      path: "/",
+    });
   } else {
     jar.set({ name: "myst-flash", value: "SEO run started", path: "/" });
   }
@@ -3035,11 +3848,14 @@ export async function runGoogleAdsSyncAction() {
 
   const response = await callAdminApi("/api/admin/google/ads/sync", {
     method: "POST",
-    body: JSON.stringify({ days: 14 })
+    body: JSON.stringify({ days: 14 }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to sync Google Ads");
+    const message = await readErrorMessage(
+      response,
+      "Unable to sync Google Ads",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     redirect("/team?tab=google-ads");
   }
@@ -3053,57 +3869,85 @@ export async function runGoogleAdsAnalystAction() {
 
   const response = await callAdminApi("/api/admin/google/ads/analyst/run", {
     method: "POST",
-    body: JSON.stringify({ rangeDays: 7 })
+    body: JSON.stringify({ rangeDays: 7 }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to run marketing analyst");
+    const message = await readErrorMessage(
+      response,
+      "Unable to run marketing analyst",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     redirect("/team?tab=google-ads");
   }
 
-  jar.set({ name: "myst-flash", value: "Marketing analyst queued.", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "Marketing analyst queued.",
+    path: "/",
+  });
   redirect("/team?tab=google-ads");
 }
 
 export async function saveGoogleAdsAnalystSettingsAction(formData: FormData) {
   const jar = await cookies();
   const autonomous = formData.get("autonomous");
-  const autonomousEnabled =
-    autonomous === "on" || autonomous === "true";
+  const autonomousEnabled = autonomous === "on" || autonomous === "true";
 
-  const response = await callAdminApi("/api/admin/google/ads/analyst/settings", {
-    method: "POST",
-    body: JSON.stringify({ autonomous: autonomousEnabled })
-  });
+  const response = await callAdminApi(
+    "/api/admin/google/ads/analyst/settings",
+    {
+      method: "POST",
+      body: JSON.stringify({ autonomous: autonomousEnabled }),
+    },
+  );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to save marketing analyst settings");
+    const message = await readErrorMessage(
+      response,
+      "Unable to save marketing analyst settings",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     redirect("/team?tab=google-ads");
   }
 
-  jar.set({ name: "myst-flash", value: "Marketing analyst settings updated.", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "Marketing analyst settings updated.",
+    path: "/",
+  });
   redirect("/team?tab=google-ads");
 }
 
-export async function updateGoogleAdsAnalystRecommendationAction(formData: FormData) {
+export async function updateGoogleAdsAnalystRecommendationAction(
+  formData: FormData,
+) {
   const jar = await cookies();
   const id = formData.get("id");
   const status = formData.get("status");
 
   if (typeof id !== "string" || typeof status !== "string") {
-    jar.set({ name: "myst-flash-error", value: "Missing recommendation update", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Missing recommendation update",
+      path: "/",
+    });
     redirect("/team?tab=google-ads");
   }
 
-  const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations", {
-    method: "POST",
-    body: JSON.stringify({ id, status })
-  });
+  const response = await callAdminApi(
+    "/api/admin/google/ads/analyst/recommendations",
+    {
+      method: "POST",
+      body: JSON.stringify({ id, status }),
+    },
+  );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to update recommendation");
+    const message = await readErrorMessage(
+      response,
+      "Unable to update recommendation",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     redirect("/team?tab=google-ads");
   }
@@ -3112,22 +3956,34 @@ export async function updateGoogleAdsAnalystRecommendationAction(formData: FormD
   redirect("/team?tab=google-ads");
 }
 
-export async function applyGoogleAdsAnalystRecommendationAction(formData: FormData) {
+export async function applyGoogleAdsAnalystRecommendationAction(
+  formData: FormData,
+) {
   const jar = await cookies();
   const id = formData.get("id");
 
   if (typeof id !== "string") {
-    jar.set({ name: "myst-flash-error", value: "Missing recommendation id", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Missing recommendation id",
+      path: "/",
+    });
     redirect("/team?tab=google-ads");
   }
 
-  const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations/apply", {
-    method: "POST",
-    body: JSON.stringify({ id })
-  });
+  const response = await callAdminApi(
+    "/api/admin/google/ads/analyst/recommendations/apply",
+    {
+      method: "POST",
+      body: JSON.stringify({ id }),
+    },
+  );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to apply recommendation");
+    const message = await readErrorMessage(
+      response,
+      "Unable to apply recommendation",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     redirect("/team?tab=google-ads");
   }
@@ -3143,7 +3999,9 @@ function parseJsonStringArray(value: unknown): string[] {
   try {
     const parsed = JSON.parse(trimmed) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+    return parsed.filter(
+      (v): v is string => typeof v === "string" && v.trim().length > 0,
+    );
   } catch {
     return trimmed
       .split(",")
@@ -3152,52 +4010,87 @@ function parseJsonStringArray(value: unknown): string[] {
   }
 }
 
-export async function bulkUpdateGoogleAdsAnalystRecommendationsAction(formData: FormData) {
+export async function bulkUpdateGoogleAdsAnalystRecommendationsAction(
+  formData: FormData,
+) {
   const jar = await cookies();
   const ids = parseJsonStringArray(formData.get("ids"));
   const status = formData.get("status");
 
-  if (ids.length === 0 || (status !== "approved" && status !== "ignored" && status !== "proposed")) {
-    jar.set({ name: "myst-flash-error", value: "Missing bulk update", path: "/" });
+  if (
+    ids.length === 0 ||
+    (status !== "approved" && status !== "ignored" && status !== "proposed")
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Missing bulk update",
+      path: "/",
+    });
     redirect("/team?tab=google-ads");
   }
 
-  const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations/bulk", {
-    method: "POST",
-    body: JSON.stringify({ ids, status })
-  });
+  const response = await callAdminApi(
+    "/api/admin/google/ads/analyst/recommendations/bulk",
+    {
+      method: "POST",
+      body: JSON.stringify({ ids, status }),
+    },
+  );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to bulk update recommendations");
+    const message = await readErrorMessage(
+      response,
+      "Unable to bulk update recommendations",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     redirect("/team?tab=google-ads");
   }
 
-  jar.set({ name: "myst-flash", value: `Updated ${ids.length} recommendation(s).`, path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: `Updated ${ids.length} recommendation(s).`,
+    path: "/",
+  });
   redirect("/team?tab=google-ads");
 }
 
-export async function bulkApplyGoogleAdsAnalystRecommendationsAction(formData: FormData) {
+export async function bulkApplyGoogleAdsAnalystRecommendationsAction(
+  formData: FormData,
+) {
   const jar = await cookies();
   const ids = parseJsonStringArray(formData.get("ids"));
 
   if (ids.length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Missing bulk apply selection", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Missing bulk apply selection",
+      path: "/",
+    });
     redirect("/team?tab=google-ads");
   }
 
-  const response = await callAdminApi("/api/admin/google/ads/analyst/recommendations/apply/bulk", {
-    method: "POST",
-    body: JSON.stringify({ ids })
-  });
+  const response = await callAdminApi(
+    "/api/admin/google/ads/analyst/recommendations/apply/bulk",
+    {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    },
+  );
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to bulk apply recommendations");
+    const message = await readErrorMessage(
+      response,
+      "Unable to bulk apply recommendations",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     redirect("/team?tab=google-ads");
   }
 
-  jar.set({ name: "myst-flash", value: "Applied approved negatives in Google Ads.", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "Applied approved negatives in Google Ads.",
+    path: "/",
+  });
   redirect("/team?tab=google-ads");
 }
 
@@ -3219,10 +4112,10 @@ function parseDelimitedLine(line: string, delimiter: string): string[] {
 
   for (let i = 0; i < line.length; i += 1) {
     const char = line[i];
-    if (char === "\"") {
+    if (char === '"') {
       const next = line[i + 1];
-      if (inQuotes && next === "\"") {
-        current += "\"";
+      if (inQuotes && next === '"') {
+        current += '"';
         i += 1;
         continue;
       }
@@ -3254,10 +4147,17 @@ function detectDelimiter(headerLine: string): string {
 }
 
 function normalizeHeader(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
 }
 
-function coerceRow(rows: Record<string, string>, keys: string[]): string | undefined {
+function coerceRow(
+  rows: Record<string, string>,
+  keys: string[],
+): string | undefined {
   for (const key of keys) {
     const value = rows[key];
     if (typeof value === "string" && value.trim().length) return value.trim();
@@ -3286,9 +4186,26 @@ function parseOutboundCsv(text: string): OutboundImportRow[] {
       record[header] = (cells[i] ?? "").trim();
     }
 
-    const company = coerceRow(record, ["company", "company_name", "business", "property_manager", "property_management_company"]);
-    const contactName = coerceRow(record, ["contactname", "contact_name", "name", "contact", "full_name"]);
-    const phone = coerceRow(record, ["phone", "phone_number", "mobile", "cell"]);
+    const company = coerceRow(record, [
+      "company",
+      "company_name",
+      "business",
+      "property_manager",
+      "property_management_company",
+    ]);
+    const contactName = coerceRow(record, [
+      "contactname",
+      "contact_name",
+      "name",
+      "contact",
+      "full_name",
+    ]);
+    const phone = coerceRow(record, [
+      "phone",
+      "phone_number",
+      "mobile",
+      "cell",
+    ]);
     const email = coerceRow(record, ["email", "email_address"]);
     const city = coerceRow(record, ["city"]);
     const state = coerceRow(record, ["state"]);
@@ -3305,7 +4222,7 @@ function parseOutboundCsv(text: string): OutboundImportRow[] {
       city,
       state,
       zip,
-      notes
+      notes,
     });
   }
 
@@ -3316,27 +4233,45 @@ export async function importOutboundProspectsAction(formData: FormData) {
   const jar = await cookies();
 
   const campaignRaw = formData.get("campaign");
-  const campaign = typeof campaignRaw === "string" && campaignRaw.trim().length ? campaignRaw.trim() : "property_management";
+  const campaign =
+    typeof campaignRaw === "string" && campaignRaw.trim().length
+      ? campaignRaw.trim()
+      : "property_management";
 
   const assigneeRaw = formData.get("assignedToMemberId");
-  const assignedToMemberId = typeof assigneeRaw === "string" && assigneeRaw.trim().length ? assigneeRaw.trim() : null;
+  const assignedToMemberId =
+    typeof assigneeRaw === "string" && assigneeRaw.trim().length
+      ? assigneeRaw.trim()
+      : null;
 
   const file = formData.get("file");
   const csvTextRaw = formData.get("csv");
 
   let text = typeof csvTextRaw === "string" ? csvTextRaw : "";
-  if ((!text || text.trim().length === 0) && file instanceof File && file.size > 0) {
+  if (
+    (!text || text.trim().length === 0) &&
+    file instanceof File &&
+    file.size > 0
+  ) {
     text = await file.text();
   }
 
   if (!text || text.trim().length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Paste a CSV or upload a file first.", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Paste a CSV or upload a file first.",
+      path: "/",
+    });
     redirect("/team?tab=outbound");
   }
 
   const parsed = parseOutboundCsv(text);
   if (parsed.length === 0) {
-    jar.set({ name: "myst-flash-error", value: "No valid rows found. Include at least email or phone.", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "No valid rows found. Include at least email or phone.",
+      path: "/",
+    });
     redirect("/team?tab=outbound");
   }
 
@@ -3347,12 +4282,15 @@ export async function importOutboundProspectsAction(formData: FormData) {
     body: JSON.stringify({
       campaign,
       assignedToMemberId: assignedToMemberId ?? undefined,
-      rows
-    })
+      rows,
+    }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to import outbound list");
+    const message = await readErrorMessage(
+      response,
+      "Unable to import outbound list",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     redirect("/team?tab=outbound");
   }
@@ -3362,15 +4300,20 @@ export async function importOutboundProspectsAction(formData: FormData) {
   const updated = Number(payload?.updated ?? 0);
   const tasksCreated = Number(payload?.tasksCreated ?? 0);
   const skipped = Number(payload?.skipped ?? 0);
-  const resolvedAssignee = typeof payload?.assignedToMemberId === "string" ? payload.assignedToMemberId : assignedToMemberId;
+  const resolvedAssignee =
+    typeof payload?.assignedToMemberId === "string"
+      ? payload.assignedToMemberId
+      : assignedToMemberId;
 
   jar.set({
     name: "myst-flash",
     value: `Outbound imported: ${created} new, ${updated} updated, ${tasksCreated} tasks, ${skipped} skipped.`,
-    path: "/"
+    path: "/",
   });
 
-  redirect(`/team?tab=outbound${resolvedAssignee ? `&memberId=${encodeURIComponent(resolvedAssignee)}` : ""}`);
+  redirect(
+    `/team?tab=outbound${resolvedAssignee ? `&memberId=${encodeURIComponent(resolvedAssignee)}` : ""}`,
+  );
 }
 
 export async function setOutboundDispositionAction(formData: FormData) {
@@ -3380,10 +4323,14 @@ export async function setOutboundDispositionAction(formData: FormData) {
   const callbackAtRaw = formData.get("callbackAt");
 
   const taskId = typeof taskIdRaw === "string" ? taskIdRaw.trim() : "";
-  const disposition = typeof dispositionRaw === "string" ? dispositionRaw.trim() : "";
-  const callbackAtString = typeof callbackAtRaw === "string" ? callbackAtRaw.trim() : "";
+  const disposition =
+    typeof dispositionRaw === "string" ? dispositionRaw.trim() : "";
+  const callbackAtString =
+    typeof callbackAtRaw === "string" ? callbackAtRaw.trim() : "";
   const callbackAt =
-    callbackAtString && Number.isFinite(Date.parse(callbackAtString)) ? new Date(callbackAtString).toISOString() : null;
+    callbackAtString && Number.isFinite(Date.parse(callbackAtString))
+      ? new Date(callbackAtString).toISOString()
+      : null;
 
   if (!taskId) {
     jar.set({ name: "myst-flash-error", value: "Task ID missing", path: "/" });
@@ -3391,7 +4338,11 @@ export async function setOutboundDispositionAction(formData: FormData) {
     return;
   }
   if (!disposition) {
-    jar.set({ name: "myst-flash-error", value: "Disposition required", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Disposition required",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -3401,12 +4352,15 @@ export async function setOutboundDispositionAction(formData: FormData) {
     body: JSON.stringify({
       taskId,
       disposition,
-      callbackAt: callbackAt ?? undefined
-    })
+      callbackAt: callbackAt ?? undefined,
+    }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to save disposition");
+    const message = await readErrorMessage(
+      response,
+      "Unable to save disposition",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -3429,17 +4383,24 @@ export async function startOutboundCadenceAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/outbound/start", {
     method: "POST",
-    body: JSON.stringify({ taskId })
+    body: JSON.stringify({ taskId }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to start outbound cadence");
+    const message = await readErrorMessage(
+      response,
+      "Unable to start outbound cadence",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "Outbound cadence started.", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "Outbound cadence started.",
+    path: "/",
+  });
   revalidatePath("/team");
 }
 
@@ -3454,7 +4415,11 @@ export async function draftOutboundFirstTouchAction(formData: FormData) {
   const channel = typeof channelRaw === "string" ? channelRaw.trim() : "";
 
   if (!contactId) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -3464,36 +4429,52 @@ export async function draftOutboundFirstTouchAction(formData: FormData) {
     body: JSON.stringify({
       contactId,
       ...(taskId ? { taskId } : {}),
-      ...(channel ? { channel } : {})
-    })
+      ...(channel ? { channel } : {}),
+    }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to draft outreach");
+    const message = await readErrorMessage(
+      response,
+      "Unable to draft outreach",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
-  const payload = (await response.json().catch(() => null)) as
-    | { threadId?: string; channel?: string }
-    | null;
+  const payload = (await response.json().catch(() => null)) as {
+    threadId?: string;
+    channel?: string;
+  } | null;
 
-  const threadId = typeof payload?.threadId === "string" ? payload.threadId.trim() : "";
-  const resolvedChannel = typeof payload?.channel === "string" ? payload.channel.trim() : channel || "sms";
+  const threadId =
+    typeof payload?.threadId === "string" ? payload.threadId.trim() : "";
+  const resolvedChannel =
+    typeof payload?.channel === "string"
+      ? payload.channel.trim()
+      : channel || "sms";
 
   if (!threadId) {
-    jar.set({ name: "myst-flash-error", value: "Draft created but thread is missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Draft created but thread is missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "Draft created. Review and send from Inbox.", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "Draft created. Review and send from Inbox.",
+    path: "/",
+  });
 
   redirect(
     `/team?tab=inbox&threadId=${encodeURIComponent(threadId)}&contactId=${encodeURIComponent(
-      contactId
-    )}&channel=${encodeURIComponent(resolvedChannel)}`
+      contactId,
+    )}&channel=${encodeURIComponent(resolvedChannel)}`,
   );
 }
 
@@ -3504,36 +4485,69 @@ export async function bulkOutboundAction(formData: FormData) {
   const action = typeof actionRaw === "string" ? actionRaw.trim() : "";
 
   const assignedToRaw = formData.get("assignedToMemberId");
-  const assignedToMemberId = typeof assignedToRaw === "string" && assignedToRaw.trim().length ? assignedToRaw.trim() : null;
+  const assignedToMemberId =
+    typeof assignedToRaw === "string" && assignedToRaw.trim().length
+      ? assignedToRaw.trim()
+      : null;
 
   const snoozePresetRaw = formData.get("snoozePreset");
-  const snoozePreset = typeof snoozePresetRaw === "string" && snoozePresetRaw.trim().length ? snoozePresetRaw.trim() : null;
+  const snoozePreset =
+    typeof snoozePresetRaw === "string" && snoozePresetRaw.trim().length
+      ? snoozePresetRaw.trim()
+      : null;
 
   const taskIds = formData
     .getAll("taskIds")
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .map((value) => value.trim());
 
   if (taskIds.length === 0) {
-    jar.set({ name: "myst-flash-error", value: "Select at least one prospect first.", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Select at least one prospect first.",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  if (action !== "assign" && action !== "start" && action !== "assign_start" && action !== "snooze") {
-    jar.set({ name: "myst-flash-error", value: "Pick a bulk action first.", path: "/" });
+  if (
+    action !== "assign" &&
+    action !== "start" &&
+    action !== "assign_start" &&
+    action !== "snooze"
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Pick a bulk action first.",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
-  if ((action === "assign" || action === "assign_start") && !assignedToMemberId) {
-    jar.set({ name: "myst-flash-error", value: "Pick a team member to assign to.", path: "/" });
+  if (
+    (action === "assign" || action === "assign_start") &&
+    !assignedToMemberId
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Pick a team member to assign to.",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   if (action === "snooze" && !snoozePreset) {
-    jar.set({ name: "myst-flash-error", value: "Pick a snooze time first.", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Pick a snooze time first.",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -3544,12 +4558,15 @@ export async function bulkOutboundAction(formData: FormData) {
       action,
       assignedToMemberId: assignedToMemberId ?? undefined,
       snoozePreset: snoozePreset ?? undefined,
-      taskIds
-    })
+      taskIds,
+    }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to apply bulk action");
+    const message = await readErrorMessage(
+      response,
+      "Unable to apply bulk action",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -3561,7 +4578,7 @@ export async function bulkOutboundAction(formData: FormData) {
   jar.set({
     name: "myst-flash",
     value: `Outbound updated: ${updated} changed (${skipped} skipped).`,
-    path: "/"
+    path: "/",
   });
   revalidatePath("/team");
 }
@@ -3572,16 +4589,29 @@ export async function partnerScheduleCheckinAction(formData: FormData) {
   const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
 
   const daysRaw = formData.get("daysFromNow");
-  const daysFromNow = typeof daysRaw === "string" && daysRaw.trim().length ? Number(daysRaw.trim()) : null;
+  const daysFromNow =
+    typeof daysRaw === "string" && daysRaw.trim().length
+      ? Number(daysRaw.trim())
+      : null;
 
   const dueAtRaw = formData.get("dueAt");
-  const dueAt = typeof dueAtRaw === "string" && dueAtRaw.trim().length ? dueAtRaw.trim() : null;
+  const dueAt =
+    typeof dueAtRaw === "string" && dueAtRaw.trim().length
+      ? dueAtRaw.trim()
+      : null;
 
   const assignedToRaw = formData.get("assignedToMemberId");
-  const assignedToMemberId = typeof assignedToRaw === "string" && assignedToRaw.trim().length ? assignedToRaw.trim() : null;
+  const assignedToMemberId =
+    typeof assignedToRaw === "string" && assignedToRaw.trim().length
+      ? assignedToRaw.trim()
+      : null;
 
   if (!contactId) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -3591,19 +4621,28 @@ export async function partnerScheduleCheckinAction(formData: FormData) {
     body: JSON.stringify({
       contactId,
       ...(dueAt ? { dueAt } : {}),
-      ...(daysFromNow !== null && Number.isFinite(daysFromNow) ? { daysFromNow } : {}),
-      ...(assignedToMemberId ? { assignedToMemberId } : {})
-    })
+      ...(daysFromNow !== null && Number.isFinite(daysFromNow)
+        ? { daysFromNow }
+        : {}),
+      ...(assignedToMemberId ? { assignedToMemberId } : {}),
+    }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to schedule check-in");
+    const message = await readErrorMessage(
+      response,
+      "Unable to schedule check-in",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
   }
 
-  jar.set({ name: "myst-flash", value: "Partner check-in scheduled.", path: "/" });
+  jar.set({
+    name: "myst-flash",
+    value: "Partner check-in scheduled.",
+    path: "/",
+  });
   revalidatePath("/team");
 }
 
@@ -3614,10 +4653,16 @@ export async function partnerLogTouchAction(formData: FormData) {
 
   const nextTouchDaysRaw = formData.get("nextTouchDays");
   const nextTouchDays =
-    typeof nextTouchDaysRaw === "string" && nextTouchDaysRaw.trim().length ? Number(nextTouchDaysRaw.trim()) : null;
+    typeof nextTouchDaysRaw === "string" && nextTouchDaysRaw.trim().length
+      ? Number(nextTouchDaysRaw.trim())
+      : null;
 
   if (!contactId) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
@@ -3626,8 +4671,10 @@ export async function partnerLogTouchAction(formData: FormData) {
     method: "POST",
     body: JSON.stringify({
       contactId,
-      ...(nextTouchDays !== null && Number.isFinite(nextTouchDays) ? { nextTouchDays } : {})
-    })
+      ...(nextTouchDays !== null && Number.isFinite(nextTouchDays)
+        ? { nextTouchDays }
+        : {}),
+    }),
   });
 
   if (!response.ok) {
@@ -3647,14 +4694,18 @@ export async function partnerLogReferralAction(formData: FormData) {
   const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
 
   if (!contactId) {
-    jar.set({ name: "myst-flash-error", value: "Contact ID missing", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const response = await callAdminApi("/api/admin/partners/referral", {
     method: "POST",
-    body: JSON.stringify({ contactId })
+    body: JSON.stringify({ contactId }),
   });
 
   if (!response.ok) {
@@ -3696,7 +4747,7 @@ function parseRatesCsv(raw: string): Array<{
     const serviceKey = (parts[0] ?? "").toLowerCase();
     const tierKey = parts[1] ?? "";
     const label = parts.length >= 4 ? (parts[2] ?? "") || null : null;
-    const amountRaw = parts.length >= 4 ? parts[3] ?? "" : parts[2] ?? "";
+    const amountRaw = parts.length >= 4 ? (parts[3] ?? "") : (parts[2] ?? "");
 
     const amount = Number(String(amountRaw).replace(/[^0-9.]/g, ""));
     if (!serviceKey || !tierKey || !Number.isFinite(amount)) continue;
@@ -3706,7 +4757,7 @@ function parseRatesCsv(raw: string): Array<{
       tierKey,
       label,
       amountCents: Math.max(0, Math.round(amount * 100)),
-      sortOrder
+      sortOrder,
     });
     sortOrder += 1;
   }
@@ -3717,7 +4768,8 @@ function parseRatesCsv(raw: string): Array<{
 export async function partnerPortalInviteUserAction(formData: FormData) {
   const jar = await cookies();
   const orgContactIdRaw = formData.get("orgContactId");
-  const orgContactId = typeof orgContactIdRaw === "string" ? orgContactIdRaw.trim() : "";
+  const orgContactId =
+    typeof orgContactIdRaw === "string" ? orgContactIdRaw.trim() : "";
 
   const emailRaw = formData.get("email");
   const email = typeof emailRaw === "string" ? emailRaw.trim() : "";
@@ -3729,18 +4781,30 @@ export async function partnerPortalInviteUserAction(formData: FormData) {
   const name = typeof nameRaw === "string" ? nameRaw.trim() : "";
 
   if (!orgContactId || !email || !name) {
-    jar.set({ name: "myst-flash-error", value: "Partner + email + name are required.", path: "/" });
+    jar.set({
+      name: "myst-flash-error",
+      value: "Partner + email + name are required.",
+      path: "/",
+    });
     revalidatePath("/team");
     return;
   }
 
   const response = await callAdminApi("/api/admin/partners/users", {
     method: "POST",
-    body: JSON.stringify({ orgContactId, email, name, phone: phone.length ? phone : null })
+    body: JSON.stringify({
+      orgContactId,
+      email,
+      name,
+      phone: phone.length ? phone : null,
+    }),
   });
 
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to invite partner user");
+    const message = await readErrorMessage(
+      response,
+      "Unable to invite partner user",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
     return;
@@ -3753,7 +4817,8 @@ export async function partnerPortalInviteUserAction(formData: FormData) {
 export async function partnerPortalSaveRatesAction(formData: FormData) {
   const jar = await cookies();
   const orgContactIdRaw = formData.get("orgContactId");
-  const orgContactId = typeof orgContactIdRaw === "string" ? orgContactIdRaw.trim() : "";
+  const orgContactId =
+    typeof orgContactIdRaw === "string" ? orgContactIdRaw.trim() : "";
 
   const csvRaw = formData.get("ratesCsv");
   const csv = typeof csvRaw === "string" ? csvRaw : "";
@@ -3768,8 +4833,9 @@ export async function partnerPortalSaveRatesAction(formData: FormData) {
   if (!items.length) {
     jar.set({
       name: "myst-flash-error",
-      value: "No valid rates found. Format: serviceKey,tierKey,label,amount (or serviceKey,tierKey,amount).",
-      path: "/"
+      value:
+        "No valid rates found. Format: serviceKey,tierKey,label,amount (or serviceKey,tierKey,amount).",
+      path: "/",
     });
     revalidatePath("/team");
     return;
@@ -3777,7 +4843,7 @@ export async function partnerPortalSaveRatesAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/partners/rates", {
     method: "POST",
-    body: JSON.stringify({ orgContactId, currency: "USD", items })
+    body: JSON.stringify({ orgContactId, currency: "USD", items }),
   });
 
   if (!response.ok) {

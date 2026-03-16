@@ -7,20 +7,31 @@ import {
   appointments,
   quotes,
   crmPipeline,
-  crmTasks
+  crmTasks,
 } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { isAdminRequest } from "../../web/admin";
 import { normalizePhone } from "../../web/utils";
 import { forwardGeocode } from "@/lib/geocode";
-import { getContactAssigneeMap, setContactAssignee } from "@/lib/contact-assignees";
+import {
+  getContactAssigneeMap,
+  setContactAssignee,
+} from "@/lib/contact-assignees";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
 import type { SQL } from "drizzle-orm";
 import { and, asc, desc, eq, inArray, ilike, or, sql } from "drizzle-orm";
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 200;
-const PIPELINE_STAGES = ["new", "contacted", "quoted", "in_person_quote", "qualified", "won", "lost"] as const;
+const PIPELINE_STAGES = [
+  "new",
+  "contacted",
+  "quoted",
+  "in_person_quote",
+  "qualified",
+  "won",
+  "lost",
+] as const;
 type PipelineStage = (typeof PIPELINE_STAGES)[number];
 const PIPELINE_STAGE_SET = new Set<string>(PIPELINE_STAGES);
 
@@ -60,14 +71,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function extractPgMeta(error: unknown): { code?: string; constraint?: string } {
   const direct = isRecord(error) ? error : null;
-  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : undefined;
+  const directCode =
+    direct && typeof direct["code"] === "string" ? direct["code"] : undefined;
   const directConstraint =
-    direct && typeof direct["constraint_name"] === "string" ? direct["constraint_name"] : undefined;
-  if (directCode || directConstraint) return { code: directCode, constraint: directConstraint };
+    direct && typeof direct["constraint_name"] === "string"
+      ? direct["constraint_name"]
+      : undefined;
+  if (directCode || directConstraint)
+    return { code: directCode, constraint: directConstraint };
 
-  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
-  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : undefined;
-  const causeConstraint = cause && typeof cause["constraint_name"] === "string" ? cause["constraint_name"] : undefined;
+  const cause =
+    direct && isRecord(direct["cause"])
+      ? (direct["cause"] as Record<string, unknown>)
+      : null;
+  const causeCode =
+    cause && typeof cause["code"] === "string" ? cause["code"] : undefined;
+  const causeConstraint =
+    cause && typeof cause["constraint_name"] === "string"
+      ? cause["constraint_name"]
+      : undefined;
   return { code: causeCode, constraint: causeConstraint };
 }
 
@@ -80,7 +102,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   const { searchParams } = request.nextUrl;
   const rawSearch = searchParams.get("q");
   const contactIdRaw = searchParams.get("contactId");
-  const contactIdFilter = contactIdRaw && contactIdRaw.trim().length > 0 ? contactIdRaw.trim() : null;
+  const contactIdFilter =
+    contactIdRaw && contactIdRaw.trim().length > 0 ? contactIdRaw.trim() : null;
   const searchTerm = rawSearch ? sanitizeSearchTerm(rawSearch) : null;
   const excludeOutbound = searchParams.get("excludeOutbound") === "1";
   const onlyOutbound = searchParams.get("onlyOutbound") === "1";
@@ -88,7 +111,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const offset = contactIdFilter ? 0 : parseOffset(searchParams.get("offset"));
 
   const likePattern =
-    searchTerm && searchTerm.length > 0 ? `%${searchTerm.replace(/\s+/g, "%")}%` : null;
+    searchTerm && searchTerm.length > 0
+      ? `%${searchTerm.replace(/\s+/g, "%")}%`
+      : null;
 
   let propertyContactIds: string[] = [];
   if (likePattern) {
@@ -101,8 +126,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           ilike(properties.addressLine2, likePattern),
           ilike(properties.city, likePattern),
           ilike(properties.state, likePattern),
-          ilike(properties.postalCode, likePattern)
-        )
+          ilike(properties.postalCode, likePattern),
+        ),
       );
     propertyContactIds = propertyMatches
       .map((row) => row.contactId)
@@ -120,7 +145,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       ilike(contacts.lastName, likePattern),
       ilike(contacts.email, likePattern),
       ilike(contacts.phone, likePattern),
-      ilike(contacts.phoneE164, likePattern)
+      ilike(contacts.phoneE164, likePattern),
     ];
     if (propertyContactIds.length > 0) {
       searchFilters.push(inArray(contacts.id, propertyContactIds));
@@ -131,10 +156,17 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (onlyOutbound && !contactIdFilter) {
     filters.push(sql`coalesce(${contacts.source}, '') ilike ${"outbound:%"}`);
   } else if (excludeOutbound && !contactIdFilter) {
-    filters.push(sql`coalesce(${contacts.source}, '') not ilike ${"outbound:%"}`);
+    filters.push(
+      sql`coalesce(${contacts.source}, '') not ilike ${"outbound:%"}`,
+    );
   }
 
-  const whereClause = filters.length === 0 ? undefined : filters.length === 1 ? filters[0] : and(...filters);
+  const whereClause =
+    filters.length === 0
+      ? undefined
+      : filters.length === 1
+        ? filters[0]
+        : and(...filters);
 
   const totalResult = whereClause
     ? await db
@@ -156,7 +188,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     salespersonMemberId: contacts.salespersonMemberId,
     source: contacts.source,
     createdAt: contacts.createdAt,
-    updatedAt: contacts.updatedAt
+    updatedAt: contacts.updatedAt,
   } as const;
 
   const selectWithoutSalesperson = {
@@ -168,7 +200,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     phoneE164: contacts.phoneE164,
     source: contacts.source,
     createdAt: contacts.createdAt,
-    updatedAt: contacts.updatedAt
+    updatedAt: contacts.updatedAt,
   } as const;
 
   let contactRows: Array<{
@@ -187,22 +219,37 @@ export async function GET(request: NextRequest): Promise<Response> {
   try {
     const baseQuery = db.select(selectWithSalesperson).from(contacts);
     const rows = await (whereClause
-      ? baseQuery.where(whereClause).orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset)
-      : baseQuery.orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset));
+      ? baseQuery
+          .where(whereClause)
+          .orderBy(desc(contacts.updatedAt))
+          .limit(limit)
+          .offset(offset)
+      : baseQuery
+          .orderBy(desc(contacts.updatedAt))
+          .limit(limit)
+          .offset(offset));
     contactRows = rows.map((row) => ({
       ...row,
-      salespersonMemberId: row.salespersonMemberId ?? fallbackAssignees[row.id] ?? null
+      salespersonMemberId:
+        row.salespersonMemberId ?? fallbackAssignees[row.id] ?? null,
     }));
   } catch (error) {
     const meta = extractPgMeta(error);
     if (meta.code !== "42703") throw error;
     const baseQuery = db.select(selectWithoutSalesperson).from(contacts);
     const rows = await (whereClause
-      ? baseQuery.where(whereClause).orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset)
-      : baseQuery.orderBy(desc(contacts.updatedAt)).limit(limit).offset(offset));
+      ? baseQuery
+          .where(whereClause)
+          .orderBy(desc(contacts.updatedAt))
+          .limit(limit)
+          .offset(offset)
+      : baseQuery
+          .orderBy(desc(contacts.updatedAt))
+          .limit(limit)
+          .offset(offset));
     contactRows = rows.map((row) => ({
       ...row,
-      salespersonMemberId: fallbackAssignees[row.id] ?? null
+      salespersonMemberId: fallbackAssignees[row.id] ?? null,
     }));
   }
 
@@ -219,7 +266,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             city: properties.city,
             state: properties.state,
             postalCode: properties.postalCode,
-            createdAt: properties.createdAt
+            createdAt: properties.createdAt,
           })
           .from(properties)
           .where(inArray(properties.contactId, contactIds))
@@ -232,7 +279,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             contactId: crmPipeline.contactId,
             stage: crmPipeline.stage,
             notes: crmPipeline.notes,
-            updatedAt: crmPipeline.updatedAt
+            updatedAt: crmPipeline.updatedAt,
           })
           .from(crmPipeline)
           .where(inArray(crmPipeline.contactId, contactIds))
@@ -250,14 +297,14 @@ export async function GET(request: NextRequest): Promise<Response> {
             status: crmTasks.status,
             notes: crmTasks.notes,
             createdAt: crmTasks.createdAt,
-            updatedAt: crmTasks.updatedAt
+            updatedAt: crmTasks.updatedAt,
           })
           .from(crmTasks)
           .where(inArray(crmTasks.contactId, contactIds))
           .orderBy(
             sql`case when ${crmTasks.status} = 'open' then 0 else 1 end`,
             asc(crmTasks.dueAt),
-            desc(crmTasks.createdAt)
+            desc(crmTasks.createdAt),
           )
       : [];
 
@@ -267,7 +314,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           .select({
             contactId: appointments.contactId,
             count: sql<number>`count(*)`,
-            latest: sql<Date | null>`max(coalesce(${appointments.updatedAt}, ${appointments.startAt}))`
+            latest: sql<Date | null>`max(coalesce(${appointments.updatedAt}, ${appointments.startAt}))`,
           })
           .from(appointments)
           .where(inArray(appointments.contactId, contactIds))
@@ -280,7 +327,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           .select({
             contactId: quotes.contactId,
             count: sql<number>`count(*)`,
-            latest: sql<Date | null>`max(${quotes.updatedAt})`
+            latest: sql<Date | null>`max(${quotes.updatedAt})`,
           })
           .from(quotes)
           .where(inArray(quotes.contactId, contactIds))
@@ -305,7 +352,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     pipelineMap.set(pipeline.contactId, {
       stage: pipeline.stage ?? "new",
       notes: pipeline.notes ?? null,
-      updatedAt: pipeline.updatedAt ?? null
+      updatedAt: pipeline.updatedAt ?? null,
     });
   }
 
@@ -318,16 +365,25 @@ export async function GET(request: NextRequest): Promise<Response> {
     tasksMap.get(task.contactId)!.push(task);
   }
 
-  const appointmentMap = new Map<string, { count: number; latest: Date | null }>();
+  const appointmentMap = new Map<
+    string,
+    { count: number; latest: Date | null }
+  >();
   for (const stat of appointmentStats) {
     if (!stat.contactId) continue;
-    appointmentMap.set(stat.contactId, { count: Number(stat.count), latest: stat.latest });
+    appointmentMap.set(stat.contactId, {
+      count: Number(stat.count),
+      latest: stat.latest,
+    });
   }
 
   const quoteMap = new Map<string, { count: number; latest: Date | null }>();
   for (const stat of quoteStats) {
     if (!stat.contactId) continue;
-    quoteMap.set(stat.contactId, { count: Number(stat.count), latest: stat.latest });
+    quoteMap.set(stat.contactId, {
+      count: Number(stat.count),
+      latest: stat.latest,
+    });
   }
 
   const contactsDto = contactRows.map((contact) => {
@@ -339,7 +395,9 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     const reminderTasks = tasksForContact
       .filter((task) => task.status === "open" && task.dueAt instanceof Date)
-      .sort((a, b) => (a.dueAt?.getTime?.() ?? 0) - (b.dueAt?.getTime?.() ?? 0));
+      .sort(
+        (a, b) => (a.dueAt?.getTime?.() ?? 0) - (b.dueAt?.getTime?.() ?? 0),
+      );
     const reminders = reminderTasks.slice(0, 3).map((task) => ({
       id: task.id,
       title: task.title ?? "Reminder",
@@ -348,31 +406,35 @@ export async function GET(request: NextRequest): Promise<Response> {
       assignedTo: task.assignedTo ?? null,
       status: task.status,
       createdAt: task.createdAt.toISOString(),
-      updatedAt: task.updatedAt.toISOString()
+      updatedAt: task.updatedAt.toISOString(),
     }));
 
     const noteTasks = tasksForContact.filter(isContactNoteTask);
 
     const notes = noteTasks
       .slice()
-      .sort((a, b) => (b.updatedAt?.getTime?.() ?? 0) - (a.updatedAt?.getTime?.() ?? 0))
+      .sort(
+        (a, b) =>
+          (b.updatedAt?.getTime?.() ?? 0) - (a.updatedAt?.getTime?.() ?? 0),
+      )
       .map((task) => ({
         id: task.id,
         body: (task.notes ?? task.title ?? "").trim(),
         createdAt: task.createdAt.toISOString(),
-        updatedAt: task.updatedAt.toISOString()
+        updatedAt: task.updatedAt.toISOString(),
       }));
 
-    const latestNoteUpdatedAt = noteTasks
-      .map((task) => task.updatedAt)
-      .filter((value): value is Date => value instanceof Date)
-      .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+    const latestNoteUpdatedAt =
+      noteTasks
+        .map((task) => task.updatedAt)
+        .filter((value): value is Date => value instanceof Date)
+        .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
 
     const dates = [
       toDate(contact.updatedAt),
       toDate(appointmentStat?.latest ?? null),
       toDate(quoteStat?.latest ?? null),
-      toDate(latestNoteUpdatedAt)
+      toDate(latestNoteUpdatedAt),
     ];
     const lastActivity =
       dates
@@ -397,7 +459,9 @@ export async function GET(request: NextRequest): Promise<Response> {
       pipeline: {
         stage: pipeline?.stage ?? "new",
         notes: pipeline?.notes ?? null,
-        updatedAt: pipeline?.updatedAt ? pipeline.updatedAt.toISOString() : null
+        updatedAt: pipeline?.updatedAt
+          ? pipeline.updatedAt.toISOString()
+          : null,
       },
       properties: propertiesForContact.map((property) => ({
         id: property.id,
@@ -406,7 +470,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         city: property.city,
         state: property.state,
         postalCode: property.postalCode,
-        createdAt: property.createdAt.toISOString()
+        createdAt: property.createdAt.toISOString(),
       })),
       notes,
       notesCount: notes.length,
@@ -414,8 +478,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       remindersCount: reminderTasks.length,
       stats: {
         appointments: appointmentStat?.count ?? 0,
-        quotes: quoteStat?.count ?? 0
-      }
+        quotes: quoteStat?.count ?? 0,
+      },
     };
   });
 
@@ -427,8 +491,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       limit,
       offset,
       total,
-      nextOffset: nextOffset < total ? nextOffset : null
-    }
+      nextOffset: nextOffset < total ? nextOffset : null,
+    },
   });
 }
 
@@ -451,7 +515,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     salespersonMemberId,
     pipelineStage,
     pipelineNotes,
-    property: propertyInput
+    property: propertyInput,
   } = payload as Record<string, unknown>;
 
   if (typeof firstName !== "string" || firstName.trim().length === 0) {
@@ -461,12 +525,22 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "last_name_required" }, { status: 400 });
   }
 
-  const stageValue = typeof pipelineStage === "string" ? pipelineStage.trim() : "";
-  const resolvedStage: PipelineStage = PIPELINE_STAGE_SET.has(stageValue) ? (stageValue as PipelineStage) : "new";
-  const resolvedNotes = typeof pipelineNotes === "string" && pipelineNotes.trim().length > 0 ? pipelineNotes.trim() : null;
+  const stageValue =
+    typeof pipelineStage === "string" ? pipelineStage.trim() : "";
+  const resolvedStage: PipelineStage = PIPELINE_STAGE_SET.has(stageValue)
+    ? (stageValue as PipelineStage)
+    : "new";
+  const resolvedNotes =
+    typeof pipelineNotes === "string" && pipelineNotes.trim().length > 0
+      ? pipelineNotes.trim()
+      : null;
 
-  const hasProperty = Boolean(propertyInput && typeof propertyInput === "object");
-  const propertyValues = hasProperty ? (propertyInput as Record<string, unknown>) : null;
+  const hasProperty = Boolean(
+    propertyInput && typeof propertyInput === "object",
+  );
+  const propertyValues = hasProperty
+    ? (propertyInput as Record<string, unknown>)
+    : null;
   const addressLine1 = hasProperty ? propertyValues?.["addressLine1"] : null;
   const addressLine2 = hasProperty ? propertyValues?.["addressLine2"] : null;
   const city = hasProperty ? propertyValues?.["city"] : null;
@@ -484,7 +558,10 @@ export async function POST(request: NextRequest): Promise<Response> {
       return NextResponse.json({ error: "state_required" }, { status: 400 });
     }
     if (typeof postalCode !== "string" || postalCode.trim().length === 0) {
-      return NextResponse.json({ error: "postal_code_required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "postal_code_required" },
+        { status: 400 },
+      );
     }
   }
 
@@ -498,7 +575,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const normalizedSalespersonMemberId =
-    typeof salespersonMemberId === "string" && salespersonMemberId.trim().length > 0
+    typeof salespersonMemberId === "string" &&
+    salespersonMemberId.trim().length > 0
       ? salespersonMemberId.trim()
       : salespersonMemberId === null
         ? null
@@ -508,7 +586,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     normalizedSalespersonMemberId !== undefined &&
     normalizedSalespersonMemberId !== null &&
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      normalizedSalespersonMemberId
+      normalizedSalespersonMemberId,
     )
   ) {
     return NextResponse.json({ error: "invalid_salesperson" }, { status: 400 });
@@ -516,22 +594,34 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
-  const resolvedSource = typeof source === "string" && source.trim().toLowerCase() === "canvass" ? "canvass" : "manual";
+  const resolvedSource =
+    typeof source === "string" && source.trim().length > 0
+      ? source.trim().slice(0, 120)
+      : "manual";
 
   try {
     const result = await db.transaction(async (tx) => {
-      const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(tx as any);
+      const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(
+        tx as any,
+      );
       const baseValues: typeof contacts.$inferInsert = {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
-        email: typeof email === "string" && email.trim().length ? email.trim() : null,
-        phone: normalizedPhone?.raw ?? (typeof phone === "string" ? phone.trim() : null),
+        email:
+          typeof email === "string" && email.trim().length
+            ? email.trim()
+            : null,
+        phone:
+          normalizedPhone?.raw ??
+          (typeof phone === "string" ? phone.trim() : null),
         phoneE164: normalizedPhone?.e164 ?? null,
         salespersonMemberId:
-          normalizedSalespersonMemberId !== undefined ? normalizedSalespersonMemberId : defaultAssigneeMemberId,
+          normalizedSalespersonMemberId !== undefined
+            ? normalizedSalespersonMemberId
+            : defaultAssigneeMemberId,
         source: resolvedSource,
         createdAt: new Date(),
-        updatedAt: new Date()
+        updatedAt: new Date(),
       };
 
       const returningWithSalesperson = {
@@ -543,7 +633,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         phoneE164: contacts.phoneE164,
         salespersonMemberId: contacts.salespersonMemberId,
         createdAt: contacts.createdAt,
-        updatedAt: contacts.updatedAt
+        updatedAt: contacts.updatedAt,
       } as const;
 
       const returningWithoutSalesperson = {
@@ -554,7 +644,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         phone: contacts.phone,
         phoneE164: contacts.phoneE164,
         createdAt: contacts.createdAt,
-        updatedAt: contacts.updatedAt
+        updatedAt: contacts.updatedAt,
       } as const;
 
       let contact:
@@ -573,17 +663,26 @@ export async function POST(request: NextRequest): Promise<Response> {
       try {
         const values: typeof contacts.$inferInsert =
           normalizedSalespersonMemberId !== undefined
-            ? { ...baseValues, salespersonMemberId: normalizedSalespersonMemberId }
+            ? {
+                ...baseValues,
+                salespersonMemberId: normalizedSalespersonMemberId,
+              }
             : baseValues;
 
-        const [row] = await tx.insert(contacts).values(values).returning(returningWithSalesperson);
+        const [row] = await tx
+          .insert(contacts)
+          .values(values)
+          .returning(returningWithSalesperson);
         contact = row ?? null;
       } catch (error) {
         const meta = extractPgMeta(error);
         if (meta.code !== "42703") {
           throw error;
         }
-        const [row] = await tx.insert(contacts).values(baseValues).returning(returningWithoutSalesperson);
+        const [row] = await tx
+          .insert(contacts)
+          .values(baseValues)
+          .returning(returningWithoutSalesperson);
         contact = row ? { ...row, salespersonMemberId: null } : null;
       }
 
@@ -593,12 +692,14 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       if (normalizedSalespersonMemberId !== undefined) {
         const shouldFallback =
-          !("salespersonMemberId" in contact) || (contact as { salespersonMemberId?: unknown }).salespersonMemberId === null;
+          !("salespersonMemberId" in contact) ||
+          (contact as { salespersonMemberId?: unknown }).salespersonMemberId ===
+            null;
         if (shouldFallback) {
           await setContactAssignee(tx, {
             contactId: contact.id,
             memberId: normalizedSalespersonMemberId,
-            actorId: actor.id ?? null
+            actorId: actor.id ?? null,
           });
           (contact as any).salespersonMemberId = normalizedSalespersonMemberId;
         }
@@ -610,7 +711,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           addressLine1: (addressLine1 as string).trim(),
           city: (city as string).trim(),
           state: (state as string).trim().slice(0, 2).toUpperCase(),
-          postalCode: (postalCode as string).trim()
+          postalCode: (postalCode as string).trim(),
         });
 
         const [createdProperty] = await tx
@@ -625,8 +726,14 @@ export async function POST(request: NextRequest): Promise<Response> {
             city: (city as string).trim(),
             state: (state as string).trim().slice(0, 2).toUpperCase(),
             postalCode: (postalCode as string).trim(),
-            lat: geo?.lat !== undefined && geo?.lat !== null ? geo.lat.toString() : null,
-            lng: geo?.lng !== undefined && geo?.lng !== null ? geo.lng.toString() : null
+            lat:
+              geo?.lat !== undefined && geo?.lat !== null
+                ? geo.lat.toString()
+                : null,
+            lng:
+              geo?.lng !== undefined && geo?.lng !== null
+                ? geo.lng.toString()
+                : null,
           })
           .returning();
         property = createdProperty ?? null;
@@ -637,10 +744,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         .values({
           contactId: contact.id,
           stage: resolvedStage,
-          notes: null
+          notes: null,
         })
         .onConflictDoNothing({
-          target: crmPipeline.contactId
+          target: crmPipeline.contactId,
         });
 
       if (resolvedNotes) {
@@ -650,7 +757,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           status: "completed",
           notes: resolvedNotes,
           dueAt: null,
-          assignedTo: null
+          assignedTo: null,
         });
       }
 
@@ -666,8 +773,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       entityId: contact.id,
       meta: {
         propertyId: property?.id ?? null,
-        source: resolvedSource
-      }
+        source: resolvedSource,
+      },
     });
 
     if (property?.id) {
@@ -676,7 +783,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         action: "property.created",
         entityType: "property",
         entityId: property.id,
-        meta: { contactId: contact.id }
+        meta: { contactId: contact.id },
       });
     }
 
@@ -694,7 +801,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         pipeline: {
           stage: resolvedStage,
           notes: null,
-          updatedAt: contact.updatedAt.toISOString()
+          updatedAt: contact.updatedAt.toISOString(),
         },
         property: property
           ? {
@@ -703,25 +810,33 @@ export async function POST(request: NextRequest): Promise<Response> {
               addressLine2: property.addressLine2,
               city: property.city,
               state: property.state,
-              postalCode: property.postalCode
+              postalCode: property.postalCode,
             }
-          : null
-      }
+          : null,
+      },
     });
   } catch (error) {
     const meta = extractPgMeta(error);
     if (meta.code === "23505") {
-      const normalizedEmail = typeof email === "string" && email.trim().length ? email.trim() : null;
-      const normalizedPhoneRaw = typeof phone === "string" && phone.trim().length ? phone.trim() : null;
+      const normalizedEmail =
+        typeof email === "string" && email.trim().length ? email.trim() : null;
+      const normalizedPhoneRaw =
+        typeof phone === "string" && phone.trim().length ? phone.trim() : null;
       const normalizedPhoneE164 = normalizedPhone?.e164 ?? null;
 
       const conditions: SQL[] = [];
       if (normalizedEmail) conditions.push(eq(contacts.email, normalizedEmail));
-      if (normalizedPhoneE164) conditions.push(eq(contacts.phoneE164, normalizedPhoneE164));
-      if (normalizedPhoneRaw) conditions.push(eq(contacts.phone, normalizedPhoneRaw));
+      if (normalizedPhoneE164)
+        conditions.push(eq(contacts.phoneE164, normalizedPhoneE164));
+      if (normalizedPhoneRaw)
+        conditions.push(eq(contacts.phone, normalizedPhoneRaw));
 
       const whereClause =
-        conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : or(...conditions);
+        conditions.length === 0
+          ? undefined
+          : conditions.length === 1
+            ? conditions[0]
+            : or(...conditions);
 
       const existing = whereClause
         ? await db
@@ -731,7 +846,7 @@ export async function POST(request: NextRequest): Promise<Response> {
               lastName: contacts.lastName,
               email: contacts.email,
               phone: contacts.phone,
-              phoneE164: contacts.phoneE164
+              phoneE164: contacts.phoneE164,
             })
             .from(contacts)
             .where(whereClause)
@@ -742,13 +857,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       return NextResponse.json(
         {
           error: "contact_already_exists",
-          existingContact: existing
+          existingContact: existing,
         },
-        { status: 409 }
+        { status: 409 },
       );
     }
 
-    const message = error instanceof Error ? error.message : "contact_create_failed";
+    const message =
+      error instanceof Error ? error.message : "contact_create_failed";
     const status = message === "contact_insert_failed" ? 500 : 400;
     return NextResponse.json({ error: message }, { status });
   }

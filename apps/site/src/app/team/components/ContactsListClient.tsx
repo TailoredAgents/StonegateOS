@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -9,14 +9,14 @@ import {
   MessageSquareText,
   Pencil,
   Phone,
-  Trash2
+  Trash2,
 } from "lucide-react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import {
   PIPELINE_STAGES,
   badgeClassForPipelineStage,
-  labelForPipelineStage
+  labelForPipelineStage,
 } from "./pipeline.stages";
 import { teamButtonClass } from "./team-ui";
 import {
@@ -27,9 +27,15 @@ import {
   startContactCallAction,
   updateContactAction,
   updatePipelineStageAction,
-  updatePropertyAction
+  updatePropertyAction,
 } from "../actions";
-import type { ContactNoteSummary, ContactReminderSummary, ContactSummary, PropertySummary } from "./contacts.types";
+import type {
+  ContactNoteSummary,
+  ContactReminderSummary,
+  ContactSummary,
+  PropertySummary,
+} from "./contacts.types";
+import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFields";
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "N/A";
@@ -38,7 +44,7 @@ function formatDateTime(iso: string | null): string {
   return new Intl.DateTimeFormat("en-US", {
     timeZone: TEAM_TIME_ZONE,
     dateStyle: "medium",
-    timeStyle: "short"
+    timeStyle: "short",
   }).format(date);
 }
 
@@ -47,7 +53,7 @@ function mapsUrl(property: PropertySummary | undefined): string | null {
   const parts = [
     property.addressLine1,
     property.addressLine2 ?? "",
-    `${property.city}, ${property.state} ${property.postalCode}`
+    `${property.city}, ${property.state} ${property.postalCode}`,
   ]
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
@@ -70,7 +76,10 @@ function toLocalDateTimeInputValue(iso: string | null): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function teamLink(tab: string, params?: Record<string, string | null | undefined>): string {
+function teamLink(
+  tab: string,
+  params?: Record<string, string | null | undefined>,
+): string {
   const query = new URLSearchParams();
   query.set("tab", tab);
   if (params) {
@@ -95,7 +104,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [assigneeError, setAssigneeError] = useState<string | null>(null);
   const [showBookingForm, setShowBookingForm] = useState(false);
   const [addingProperty, setAddingProperty] = useState(false);
-  const [editingPropertyId, setEditingPropertyId] = useState<string | null>(null);
+  const [editingPropertyId, setEditingPropertyId] = useState<string | null>(
+    null,
+  );
   const [showNoteForm, setShowNoteForm] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [noteError, setNoteError] = useState<string | null>(null);
@@ -110,12 +121,18 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [reminderNotesDraft, setReminderNotesDraft] = useState("");
   const [reminderError, setReminderError] = useState<string | null>(null);
   const [reminderSaving, setReminderSaving] = useState(false);
-  const [reminderCompletingId, setReminderCompletingId] = useState<string | null>(null);
-  const [reminderEditingId, setReminderEditingId] = useState<string | null>(null);
+  const [reminderCompletingId, setReminderCompletingId] = useState<
+    string | null
+  >(null);
+  const [reminderEditingId, setReminderEditingId] = useState<string | null>(
+    null,
+  );
   const [reminderEditTitleDraft, setReminderEditTitleDraft] = useState("");
   const [reminderEditDueDraft, setReminderEditDueDraft] = useState("");
   const [reminderEditNotesDraft, setReminderEditNotesDraft] = useState("");
-  const [reminderEditSavingId, setReminderEditSavingId] = useState<string | null>(null);
+  const [reminderEditSavingId, setReminderEditSavingId] = useState<
+    string | null
+  >(null);
   const contactIdRef = useRef(contact.id);
 
   useEffect(() => {
@@ -155,7 +172,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const disabledLinkClass = "pointer-events-none opacity-50";
   const salespersonLabel =
     contactState.salespersonMemberId && teamMembers.length
-      ? teamMembers.find((m) => m.id === contactState.salespersonMemberId)?.name ?? null
+      ? (teamMembers.find((m) => m.id === contactState.salespersonMemberId)
+          ?.name ?? null)
       : null;
 
   async function setAssignee(nextMemberId: string | null) {
@@ -167,18 +185,20 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
         method: "POST",
         headers: {
           Accept: "application/json",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           contactId: contactState.id,
-          salespersonMemberId: nextMemberId
-        })
+          salespersonMemberId: nextMemberId,
+        }),
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to update assignment. Please try again.";
         setAssigneeError(message);
@@ -187,7 +207,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
 
       setContactState((prev) => ({
         ...prev,
-        salespersonMemberId: nextMemberId
+        salespersonMemberId: nextMemberId,
       }));
     } finally {
       setAssigneeSaving(false);
@@ -195,7 +215,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   }
 
   const sortedNotes = useMemo(() => {
-    return [...(contactState.notes ?? [])].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    return [...(contactState.notes ?? [])].sort(
+      (a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt),
+    );
   }, [contactState.notes]);
 
   const sortedReminders = useMemo(() => {
@@ -224,15 +246,17 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
         method: "POST",
         headers: {
           Accept: "application/json",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ contactId: contactState.id, body })
+        body: JSON.stringify({ contactId: contactState.id, body }),
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to save note. Please try again.";
         setNoteError(message);
@@ -241,7 +265,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
 
       const data = (await response.json().catch(() => null)) as unknown;
       const note =
-        data && typeof data === "object" ? (data as Record<string, unknown>)["note"] : null;
+        data && typeof data === "object"
+          ? (data as Record<string, unknown>)["note"]
+          : null;
       if (!note || typeof note !== "object") {
         setNoteError("Unable to save note. Please try again.");
         return;
@@ -262,21 +288,22 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
         id: noteRecord["id"],
         body: noteRecord["body"],
         createdAt: noteRecord["createdAt"],
-        updatedAt: noteRecord["updatedAt"]
+        updatedAt: noteRecord["updatedAt"],
       } satisfies ContactNoteSummary;
 
       setContactState((prev) => {
         const nextNotes = [created, ...(prev.notes ?? [])];
-        const previousCount = prev.notesCount ?? (prev.notes?.length ?? 0);
+        const previousCount = prev.notesCount ?? prev.notes?.length ?? 0;
         const nextLastActivity =
-          prev.lastActivityAt && Date.parse(prev.lastActivityAt) > Date.parse(created.updatedAt)
+          prev.lastActivityAt &&
+          Date.parse(prev.lastActivityAt) > Date.parse(created.updatedAt)
             ? prev.lastActivityAt
             : created.updatedAt;
         return {
           ...prev,
           notes: nextNotes,
           notesCount: previousCount + 1,
-          lastActivityAt: nextLastActivity
+          lastActivityAt: nextLastActivity,
         };
       });
 
@@ -297,13 +324,15 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
     try {
       const response = await fetch(`/api/team/contacts/notes/${noteId}`, {
         method: "POST",
-        headers: { Accept: "application/json" }
+        headers: { Accept: "application/json" },
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to delete note. Please try again.";
         setNoteError(message);
@@ -311,12 +340,14 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       }
 
       setContactState((prev) => {
-        const nextNotes = (prev.notes ?? []).filter((existing) => existing.id !== noteId);
-        const previousCount = prev.notesCount ?? (prev.notes?.length ?? 0);
+        const nextNotes = (prev.notes ?? []).filter(
+          (existing) => existing.id !== noteId,
+        );
+        const previousCount = prev.notesCount ?? prev.notes?.length ?? 0;
         return {
           ...prev,
           notes: nextNotes,
-          notesCount: Math.max(0, previousCount - 1)
+          notesCount: Math.max(0, previousCount - 1),
         };
       });
     } finally {
@@ -346,15 +377,17 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
         method: "PATCH",
         headers: {
           Accept: "application/json",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify({ body })
+        body: JSON.stringify({ body }),
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to update note. Please try again.";
         setNoteError(message);
@@ -362,9 +395,18 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       }
 
       const data = (await response.json().catch(() => null)) as unknown;
-      const note = data && typeof data === "object" ? (data as Record<string, unknown>)["note"] : null;
-      const noteRecord = note && typeof note === "object" ? (note as Record<string, unknown>) : null;
-      const updatedAt = typeof noteRecord?.["updatedAt"] === "string" ? noteRecord["updatedAt"] : null;
+      const note =
+        data && typeof data === "object"
+          ? (data as Record<string, unknown>)["note"]
+          : null;
+      const noteRecord =
+        note && typeof note === "object"
+          ? (note as Record<string, unknown>)
+          : null;
+      const updatedAt =
+        typeof noteRecord?.["updatedAt"] === "string"
+          ? noteRecord["updatedAt"]
+          : null;
 
       setContactState((prev) => ({
         ...prev,
@@ -373,10 +415,10 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             ? {
                 ...existing,
                 body,
-                updatedAt: updatedAt ?? existing.updatedAt
+                updatedAt: updatedAt ?? existing.updatedAt,
               }
-            : existing
-        )
+            : existing,
+        ),
       }));
 
       setNoteEditingId(null);
@@ -390,7 +432,11 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
     const title = reminder.title.toLowerCase();
     if (title.startsWith("auto:")) return true;
     const notes = (reminder.notes ?? "").toLowerCase();
-    return notes.includes("kind=speed_to_lead") || notes.includes("kind=follow_up") || notes.includes("[auto]");
+    return (
+      notes.includes("kind=speed_to_lead") ||
+      notes.includes("kind=follow_up") ||
+      notes.includes("[auto]")
+    );
   }
 
   function startEditReminder(reminder: ContactReminderSummary) {
@@ -405,7 +451,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   async function saveEditedReminder(taskId: string) {
     if (reminderEditSavingId) return;
 
-    const title = reminderEditTitleDraft.trim().length ? reminderEditTitleDraft.trim() : "Call back";
+    const title = reminderEditTitleDraft.trim().length
+      ? reminderEditTitleDraft.trim()
+      : "Call back";
     const dueRaw = reminderEditDueDraft.trim();
     if (!dueRaw) {
       setReminderError("Pick a date/time for the reminder.");
@@ -429,19 +477,21 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
         method: "PATCH",
         headers: {
           Accept: "application/json",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           title,
           dueAt,
-          notes
-        })
+          notes,
+        }),
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to update reminder. Please try again.";
         setReminderError(message);
@@ -450,11 +500,25 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
 
       const data = (await response.json().catch(() => null)) as unknown;
       const reminder =
-        data && typeof data === "object" ? (data as Record<string, unknown>)["reminder"] : null;
-      const reminderRecord = reminder && typeof reminder === "object" ? (reminder as Record<string, unknown>) : null;
-      const updatedAt = typeof reminderRecord?.["updatedAt"] === "string" ? reminderRecord["updatedAt"] : null;
-      const serverDueAt = typeof reminderRecord?.["dueAt"] === "string" ? reminderRecord["dueAt"] : dueAt;
-      const serverNotes = typeof reminderRecord?.["notes"] === "string" ? reminderRecord["notes"] : null;
+        data && typeof data === "object"
+          ? (data as Record<string, unknown>)["reminder"]
+          : null;
+      const reminderRecord =
+        reminder && typeof reminder === "object"
+          ? (reminder as Record<string, unknown>)
+          : null;
+      const updatedAt =
+        typeof reminderRecord?.["updatedAt"] === "string"
+          ? reminderRecord["updatedAt"]
+          : null;
+      const serverDueAt =
+        typeof reminderRecord?.["dueAt"] === "string"
+          ? reminderRecord["dueAt"]
+          : dueAt;
+      const serverNotes =
+        typeof reminderRecord?.["notes"] === "string"
+          ? reminderRecord["notes"]
+          : null;
 
       setContactState((prev) => ({
         ...prev,
@@ -465,10 +529,10 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 title,
                 dueAt: serverDueAt,
                 notes: serverNotes ?? (notes.length ? notes : null),
-                updatedAt: updatedAt ?? existing.updatedAt
+                updatedAt: updatedAt ?? existing.updatedAt,
               }
-            : existing
-        )
+            : existing,
+        ),
       }));
 
       setReminderEditingId(null);
@@ -497,7 +561,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
     }
 
     const dueAt = dueDate.toISOString();
-    const title = reminderTitleDraft.trim().length ? reminderTitleDraft.trim() : "Call back";
+    const title = reminderTitleDraft.trim().length
+      ? reminderTitleDraft.trim()
+      : "Call back";
     const notes = reminderNotesDraft.trim();
 
     setReminderSaving(true);
@@ -508,20 +574,22 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
         method: "POST",
         headers: {
           Accept: "application/json",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           contactId: contactState.id,
           dueAt,
           title,
-          notes: notes.length ? notes : undefined
-        })
+          notes: notes.length ? notes : undefined,
+        }),
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to create reminder. Please try again.";
         setReminderError(message);
@@ -530,7 +598,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
 
       const data = (await response.json().catch(() => null)) as unknown;
       const reminder =
-        data && typeof data === "object" ? (data as Record<string, unknown>)["reminder"] : null;
+        data && typeof data === "object"
+          ? (data as Record<string, unknown>)["reminder"]
+          : null;
       if (!reminder || typeof reminder !== "object") {
         setReminderError("Unable to create reminder. Please try again.");
         return;
@@ -551,18 +621,28 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       const created: ContactReminderSummary = {
         id: reminderRecord["id"],
         title: reminderRecord["title"],
-        notes: typeof reminderRecord["notes"] === "string" ? reminderRecord["notes"] : null,
-        dueAt: typeof reminderRecord["dueAt"] === "string" ? reminderRecord["dueAt"] : null,
-        assignedTo: typeof reminderRecord["assignedTo"] === "string" ? reminderRecord["assignedTo"] : null,
+        notes:
+          typeof reminderRecord["notes"] === "string"
+            ? reminderRecord["notes"]
+            : null,
+        dueAt:
+          typeof reminderRecord["dueAt"] === "string"
+            ? reminderRecord["dueAt"]
+            : null,
+        assignedTo:
+          typeof reminderRecord["assignedTo"] === "string"
+            ? reminderRecord["assignedTo"]
+            : null,
         status: reminderRecord["status"] === "completed" ? "completed" : "open",
         createdAt: reminderRecord["createdAt"],
-        updatedAt: reminderRecord["updatedAt"]
+        updatedAt: reminderRecord["updatedAt"],
       };
 
       setContactState((prev) => ({
         ...prev,
         reminders: [created, ...(prev.reminders ?? [])],
-        remindersCount: (prev.remindersCount ?? (prev.reminders?.length ?? 0)) + 1
+        remindersCount:
+          (prev.remindersCount ?? prev.reminders?.length ?? 0) + 1,
       }));
 
       setReminderTitleDraft("Call back");
@@ -582,13 +662,15 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
     try {
       const response = await fetch(`/api/team/contacts/reminders/${taskId}`, {
         method: "POST",
-        headers: { Accept: "application/json" }
+        headers: { Accept: "application/json" },
       });
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as unknown;
         const message =
-          data && typeof data === "object" && typeof (data as Record<string, unknown>)["message"] === "string"
+          data &&
+          typeof data === "object" &&
+          typeof (data as Record<string, unknown>)["message"] === "string"
             ? String((data as Record<string, unknown>)["message"])
             : "Unable to complete reminder. Please try again.";
         setReminderError(message);
@@ -596,12 +678,15 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       }
 
       setContactState((prev) => {
-        const next = (prev.reminders ?? []).filter((reminder) => reminder.id !== taskId);
-        const previousCount = prev.remindersCount ?? (prev.reminders?.length ?? 0);
+        const next = (prev.reminders ?? []).filter(
+          (reminder) => reminder.id !== taskId,
+        );
+        const previousCount =
+          prev.remindersCount ?? prev.reminders?.length ?? 0;
         return {
           ...prev,
           reminders: next,
-          remindersCount: Math.max(0, previousCount - 1)
+          remindersCount: Math.max(0, previousCount - 1),
         };
       });
     } finally {
@@ -615,19 +700,26 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-              <h3 className="text-lg font-semibold text-slate-900">{contactState.name}</h3>
+              <h3 className="text-lg font-semibold text-slate-900">
+                {contactState.name}
+              </h3>
               <span
                 className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${badgeClassForPipelineStage(
-                  contactState.pipeline.stage
+                  contactState.pipeline.stage,
                 )}`}
               >
                 {labelForPipelineStage(contactState.pipeline.stage)}
               </span>
             </div>
-            <form action={updatePipelineStageAction} className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            <form
+              action={updatePipelineStageAction}
+              className="flex flex-wrap items-center gap-2 text-xs text-slate-600"
+            >
               <input type="hidden" name="contactId" value={contactState.id} />
               <label className="flex items-center gap-2">
-                <span className="text-[11px] font-medium text-slate-500">Stage</span>
+                <span className="text-[11px] font-medium text-slate-500">
+                  Stage
+                </span>
                 <select
                   name="stage"
                   defaultValue={contactState.pipeline.stage}
@@ -649,17 +741,23 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             </form>
             <div className="flex flex-wrap gap-3 text-xs text-slate-500">
               {contactState.email ? (
-                <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">{contactState.email}</span>
+                <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">
+                  {contactState.email}
+                </span>
               ) : null}
               {contactState.phone ? (
-                <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">{contactState.phone}</span>
+                <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">
+                  {contactState.phone}
+                </span>
               ) : null}
               <span className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1">
                 Assigned to: {salespersonLabel ?? "Unassigned"}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-              <span className="text-[11px] font-medium text-slate-500">Assigned to</span>
+              <span className="text-[11px] font-medium text-slate-500">
+                Assigned to
+              </span>
               <select
                 value={contactState.salespersonMemberId ?? ""}
                 disabled={assigneeSaving}
@@ -676,7 +774,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   </option>
                 ))}
               </select>
-              {assigneeSaving ? <span className="text-[11px] text-slate-500">Saving...</span> : null}
+              {assigneeSaving ? (
+                <span className="text-[11px] text-slate-500">Saving...</span>
+              ) : null}
             </div>
             {assigneeError ? (
               <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
@@ -694,7 +794,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 Notes: {contactState.notesCount ?? contactState.notes.length}
               </span>
             </div>
-            <p className="text-xs text-slate-400">Last activity: {formatDateTime(contactState.lastActivityAt)}</p>
+            <p className="text-xs text-slate-400">
+              Last activity: {formatDateTime(contactState.lastActivityAt)}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
             <button
@@ -715,7 +817,10 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             </button>
             <form action={deleteContactAction} className="inline">
               <input type="hidden" name="contactId" value={contactState.id} />
-              <SubmitButton className={`${teamButtonClass("danger", "sm")} gap-2`} pendingLabel="Removing...">
+              <SubmitButton
+                className={`${teamButtonClass("danger", "sm")} gap-2`}
+                pendingLabel="Removing..."
+              >
                 <Trash2 className="h-4 w-4" aria-hidden="true" />
                 Delete
               </SubmitButton>
@@ -729,7 +834,11 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   return;
                 }
                 const label = contactState.phone ?? "this contact";
-                if (!window.confirm(`Call ${contactState.name} (${label}) from the Stonegate number?`)) {
+                if (
+                  !window.confirm(
+                    `Call ${contactState.name} (${label}) from the Stonegate number?`,
+                  )
+                ) {
                   event.preventDefault();
                 }
               }}
@@ -753,7 +862,10 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             </a>
             <a
               className={`${teamButtonClass("secondary", "sm")} gap-2`}
-              href={teamLink("quotes", { quoteMode: "builder", contactId: contactState.id })}
+              href={teamLink("quotes", {
+                quoteMode: "builder",
+                contactId: contactState.id,
+              })}
             >
               <FileText className="h-4 w-4" aria-hidden="true" />
               Create quote
@@ -805,11 +917,19 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               </label>
               <label className="flex flex-col gap-1">
                 <span>Email</span>
-                <input name="email" defaultValue={contactState.email ?? ""} className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                <input
+                  name="email"
+                  defaultValue={contactState.email ?? ""}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                />
               </label>
               <label className="flex flex-col gap-1">
                 <span>Phone</span>
-                <input name="phone" defaultValue={contactState.phone ?? ""} className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                <input
+                  name="phone"
+                  defaultValue={contactState.phone ?? ""}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                />
               </label>
               <label className="flex flex-col gap-1 sm:col-span-2">
                 <span>Assigned to</span>
@@ -828,7 +948,10 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               </label>
             </div>
             <div className="flex gap-2">
-              <SubmitButton className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700" pendingLabel="Saving...">
+              <SubmitButton
+                className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700"
+                pendingLabel="Saving..."
+              >
                 Save changes
               </SubmitButton>
               <button
@@ -848,9 +971,16 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             className="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-xs text-slate-600 shadow-inner"
           >
             <input type="hidden" name="contactId" value={contactState.id} />
-            <input type="hidden" name="currentAssignedAssociateMemberId" value={contactState.salespersonMemberId ?? ""} />
+            <input
+              type="hidden"
+              name="currentAssignedAssociateMemberId"
+              value={contactState.salespersonMemberId ?? ""}
+            />
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="sm:col-span-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Scheduling
+              </div>
               <label className="flex flex-col gap-1">
                 <span>Appointment type</span>
                 <select
@@ -869,12 +999,11 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   defaultValue={primaryProperty?.id ?? ""}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                 >
-                  <option value="">
-                    No address yet (create placeholder)
-                  </option>
+                  <option value="">No address yet (create placeholder)</option>
                   {contactState.properties.map((property) => (
                     <option key={property.id} value={property.id}>
-                      {property.addressLine1}, {property.city}, {property.state} {property.postalCode}
+                      {property.addressLine1}, {property.city}, {property.state}{" "}
+                      {property.postalCode}
                     </option>
                   ))}
                 </select>
@@ -911,6 +1040,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                 />
               </label>
+              <div className="sm:col-span-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Ownership
+              </div>
               <label className="flex flex-col gap-1">
                 <span>Assigned Associate</span>
                 <select
@@ -942,25 +1074,24 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 </select>
               </label>
               <p className="sm:col-span-2 text-[11px] text-slate-500">
-                Assigned Associate controls call routing and follow-up ownership. Who sold the job controls sales
-                commission and locks once the appointment is booked.
+                Assigned Associate controls call routing and follow-up
+                ownership. Who sold the job controls sales commission and locks
+                once the appointment is booked.
               </p>
+              <AppointmentBookingDetailsFields
+                teamMembers={teamMembers}
+                labelClassName="flex flex-col gap-1"
+                fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2"
+              />
+              <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
+                Range-only jobs stay out of exact revenue projections until an
+                exact collected total or exact quote is saved.
+              </div>
               <label className="flex flex-col gap-1 sm:col-span-2">
                 <span>Services (optional)</span>
                 <input
                   name="services"
                   placeholder="e.g. junk_removal_primary"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                />
-              </label>
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span>Quoted price (optional)</span>
-                <input
-                  name="quotedTotal"
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  placeholder="e.g. 350"
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                 />
               </label>
@@ -975,7 +1106,10 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               </label>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <SubmitButton className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700" pendingLabel="Booking...">
+              <SubmitButton
+                className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700"
+                pendingLabel="Booking..."
+              >
                 Confirm booking (adds to calendar)
               </SubmitButton>
               <button
@@ -998,7 +1132,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
           <div className="space-y-4 lg:col-span-3">
             <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 shadow-inner">
               <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold text-slate-800">Properties</h4>
+                <h4 className="text-sm font-semibold text-slate-800">
+                  Properties
+                </h4>
                 {addingProperty ? null : (
                   <button
                     type="button"
@@ -1014,33 +1150,54 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               </div>
               <div className="mt-3 space-y-3">
                 {contactState.properties.map((property) => (
-                  <div key={property.id} className="rounded-2xl border border-white/60 bg-white/90 p-4 shadow-sm shadow-slate-200/40">
+                  <div
+                    key={property.id}
+                    className="rounded-2xl border border-white/60 bg-white/90 p-4 shadow-sm shadow-slate-200/40"
+                  >
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="space-y-1 text-sm text-slate-600">
                         <p className="font-medium text-slate-800">
                           {property.addressLine1}
-                          {property.addressLine2 ? `, ${property.addressLine2}` : ""}
+                          {property.addressLine2
+                            ? `, ${property.addressLine2}`
+                            : ""}
                         </p>
                         <p>
-                          {property.city}, {property.state} {property.postalCode}
+                          {property.city}, {property.state}{" "}
+                          {property.postalCode}
                         </p>
-                        <p className="text-xs text-slate-400">Added {formatDateTime(property.createdAt)}</p>
+                        <p className="text-xs text-slate-400">
+                          Added {formatDateTime(property.createdAt)}
+                        </p>
                       </div>
                       <div className="flex gap-2 text-xs">
                         <button
                           type="button"
                           className="rounded-full border border-slate-200 px-3 py-1.5 font-medium text-slate-600 hover:border-primary-300 hover:text-primary-700"
                           onClick={() => {
-                            setEditingPropertyId((current) => (current === property.id ? null : property.id));
+                            setEditingPropertyId((current) =>
+                              current === property.id ? null : property.id,
+                            );
                             setAddingProperty(false);
                           }}
                         >
                           {editingPropertyId === property.id ? "Close" : "Edit"}
                         </button>
                         <form action={deletePropertyAction}>
-                          <input type="hidden" name="contactId" value={contactState.id} />
-                          <input type="hidden" name="propertyId" value={property.id} />
-                          <SubmitButton className="rounded-full border border-rose-200 px-3 py-1.5 font-medium text-rose-600 hover:bg-rose-50" pendingLabel="Removing...">
+                          <input
+                            type="hidden"
+                            name="contactId"
+                            value={contactState.id}
+                          />
+                          <input
+                            type="hidden"
+                            name="propertyId"
+                            value={property.id}
+                          />
+                          <SubmitButton
+                            className="rounded-full border border-rose-200 px-3 py-1.5 font-medium text-rose-600 hover:bg-rose-50"
+                            pendingLabel="Removing..."
+                          >
                             Delete
                           </SubmitButton>
                         </form>
@@ -1052,32 +1209,68 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                         className="mt-3 grid grid-cols-1 gap-3 text-xs text-slate-600 sm:grid-cols-2"
                         onSubmit={() => setEditingPropertyId(null)}
                       >
-                        <input type="hidden" name="contactId" value={contactState.id} />
-                        <input type="hidden" name="propertyId" value={property.id} />
+                        <input
+                          type="hidden"
+                          name="contactId"
+                          value={contactState.id}
+                        />
+                        <input
+                          type="hidden"
+                          name="propertyId"
+                          value={property.id}
+                        />
                         <label className="flex flex-col gap-1">
                           <span>Address line 1</span>
-                          <input name="addressLine1" defaultValue={property.addressLine1} required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                          <input
+                            name="addressLine1"
+                            defaultValue={property.addressLine1}
+                            required
+                            className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                          />
                         </label>
                         <label className="flex flex-col gap-1">
                           <span>Address line 2</span>
-                          <input name="addressLine2" defaultValue={property.addressLine2 ?? ""} className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                          <input
+                            name="addressLine2"
+                            defaultValue={property.addressLine2 ?? ""}
+                            className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                          />
                         </label>
                         <label className="flex flex-col gap-1">
                           <span>City</span>
-                          <input name="city" defaultValue={property.city} required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                          <input
+                            name="city"
+                            defaultValue={property.city}
+                            required
+                            className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                          />
                         </label>
                         <div className="grid grid-cols-2 gap-3">
                           <label className="flex flex-col gap-1">
                             <span>State</span>
-                            <input name="state" defaultValue={property.state} required maxLength={2} className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase" />
+                            <input
+                              name="state"
+                              defaultValue={property.state}
+                              required
+                              maxLength={2}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase"
+                            />
                           </label>
                           <label className="flex flex-col gap-1">
                             <span>Postal code</span>
-                            <input name="postalCode" defaultValue={property.postalCode} required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                            <input
+                              name="postalCode"
+                              defaultValue={property.postalCode}
+                              required
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                            />
                           </label>
                         </div>
                         <div className="flex gap-2 sm:col-span-2">
-                          <SubmitButton className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700" pendingLabel="Saving...">
+                          <SubmitButton
+                            className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700"
+                            pendingLabel="Saving..."
+                          >
                             Save property
                           </SubmitButton>
                           <button
@@ -1099,31 +1292,58 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   className="mt-4 grid grid-cols-1 gap-3 rounded-2xl border border-dashed border-slate-300 bg-white/70 p-4 text-xs text-slate-600 shadow-inner sm:grid-cols-2"
                   onSubmit={() => setAddingProperty(false)}
                 >
-                  <input type="hidden" name="contactId" value={contactState.id} />
+                  <input
+                    type="hidden"
+                    name="contactId"
+                    value={contactState.id}
+                  />
                   <label className="flex flex-col gap-1">
                     <span>Address line 1</span>
-                    <input name="addressLine1" required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                    <input
+                      name="addressLine1"
+                      required
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    />
                   </label>
                   <label className="flex flex-col gap-1">
                     <span>Address line 2</span>
-                    <input name="addressLine2" className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                    <input
+                      name="addressLine2"
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    />
                   </label>
                   <label className="flex flex-col gap-1">
                     <span>City</span>
-                    <input name="city" required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                    <input
+                      name="city"
+                      required
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    />
                   </label>
                   <div className="grid grid-cols-2 gap-3">
                     <label className="flex flex-col gap-1">
                       <span>State</span>
-                      <input name="state" required maxLength={2} className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase" />
+                      <input
+                        name="state"
+                        required
+                        maxLength={2}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 uppercase"
+                      />
                     </label>
                     <label className="flex flex-col gap-1">
                       <span>Postal code</span>
-                      <input name="postalCode" required className="rounded-xl border border-slate-200 bg-white px-3 py-2" />
+                      <input
+                        name="postalCode"
+                        required
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                      />
                     </label>
                   </div>
                   <div className="flex gap-2 sm:col-span-2">
-                    <SubmitButton className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700" pendingLabel="Saving...">
+                    <SubmitButton
+                      className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700"
+                      pendingLabel="Saving..."
+                    >
                       Save property
                     </SubmitButton>
                     <button
@@ -1145,7 +1365,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 <h4 className="text-sm font-semibold text-slate-800">
                   Reminders{" "}
                   <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                    {contactState.remindersCount ?? (contactState.reminders?.length ?? 0)}
+                    {contactState.remindersCount ??
+                      contactState.reminders?.length ??
+                      0}
                   </span>
                 </h4>
                 <button
@@ -1163,7 +1385,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               <div className="mt-3 space-y-3">
                 {sortedReminders.length === 0 ? (
                   <p className="rounded-xl border border-dashed border-slate-200 bg-white/60 px-3 py-2 text-xs text-slate-500">
-                    No reminders yet. Use these for call-backs, no-response follow-ups, and payment follow-ups.
+                    No reminders yet. Use these for call-backs, no-response
+                    follow-ups, and payment follow-ups.
                   </p>
                 ) : (
                   sortedReminders.map((reminder) => (
@@ -1176,9 +1399,13 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                           <p className="text-[11px] text-slate-500">
                             Due {formatDateTime(reminder.dueAt)}
                           </p>
-                          <p className="text-sm font-semibold text-slate-800">{reminder.title}</p>
+                          <p className="text-sm font-semibold text-slate-800">
+                            {reminder.title}
+                          </p>
                           {reminder.notes ? (
-                            <p className="whitespace-pre-wrap text-[11px] text-slate-600">{reminder.notes}</p>
+                            <p className="whitespace-pre-wrap text-[11px] text-slate-600">
+                              {reminder.notes}
+                            </p>
                           ) : null}
                         </div>
                         <div className="flex flex-wrap gap-2 sm:flex-col sm:items-end">
@@ -1202,7 +1429,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                             className="rounded-full border border-emerald-200 px-3 py-1.5 font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-70"
                             onClick={() => completeReminder(reminder.id)}
                           >
-                            {reminderCompletingId === reminder.id ? "Saving..." : "Mark done"}
+                            {reminderCompletingId === reminder.id
+                              ? "Saving..."
+                              : "Mark done"}
                           </button>
                         </div>
                       </div>
@@ -1220,7 +1449,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                             <input
                               type="datetime-local"
                               value={reminderEditDueDraft}
-                              onChange={(event) => setReminderEditDueDraft(event.target.value)}
+                              onChange={(event) =>
+                                setReminderEditDueDraft(event.target.value)
+                              }
                               className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                               required
                             />
@@ -1229,7 +1460,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                             <span>What</span>
                             <input
                               value={reminderEditTitleDraft}
-                              onChange={(event) => setReminderEditTitleDraft(event.target.value)}
+                              onChange={(event) =>
+                                setReminderEditTitleDraft(event.target.value)
+                              }
                               className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                               required
                             />
@@ -1239,7 +1472,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                             <textarea
                               rows={2}
                               value={reminderEditNotesDraft}
-                              onChange={(event) => setReminderEditNotesDraft(event.target.value)}
+                              onChange={(event) =>
+                                setReminderEditNotesDraft(event.target.value)
+                              }
                               className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                             />
                           </label>
@@ -1249,7 +1484,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                               disabled={reminderEditSavingId === reminder.id}
                               className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-70"
                             >
-                              {reminderEditSavingId === reminder.id ? "Saving..." : "Save changes"}
+                              {reminderEditSavingId === reminder.id
+                                ? "Saving..."
+                                : "Save changes"}
                             </button>
                             <button
                               type="button"
@@ -1276,13 +1513,18 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               ) : null}
 
               {showReminderForm ? (
-                <form className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600" onSubmit={submitReminder}>
+                <form
+                  className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600"
+                  onSubmit={submitReminder}
+                >
                   <label className="flex flex-col gap-1">
                     <span>When</span>
                     <input
                       type="datetime-local"
                       value={reminderDueDraft}
-                      onChange={(event) => setReminderDueDraft(event.target.value)}
+                      onChange={(event) =>
+                        setReminderDueDraft(event.target.value)
+                      }
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                       required
                     />
@@ -1291,7 +1533,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                     <span>What</span>
                     <input
                       value={reminderTitleDraft}
-                      onChange={(event) => setReminderTitleDraft(event.target.value)}
+                      onChange={(event) =>
+                        setReminderTitleDraft(event.target.value)
+                      }
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                       placeholder="Call back, follow up, payment, etc."
                       required
@@ -1302,7 +1546,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                     <textarea
                       rows={2}
                       value={reminderNotesDraft}
-                      onChange={(event) => setReminderNotesDraft(event.target.value)}
+                      onChange={(event) =>
+                        setReminderNotesDraft(event.target.value)
+                      }
                       className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                       placeholder="Any context the salesperson should see in the SMS"
                     />
@@ -1347,7 +1593,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               <div className="mt-3 space-y-3">
                 {sortedNotes.length === 0 ? (
                   <p className="rounded-xl border border-dashed border-slate-200 bg-white/60 px-3 py-2 text-xs text-slate-500">
-                    No notes yet. Capture details from calls and follow-ups so everyone stays aligned.
+                    No notes yet. Capture details from calls and follow-ups so
+                    everyone stays aligned.
                   </p>
                 ) : (
                   sortedNotes.map((note) => (
@@ -1383,7 +1630,11 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600"
                   onSubmit={submitNote}
                 >
-                  <input type="hidden" name="contactId" value={contactState.id} />
+                  <input
+                    type="hidden"
+                    name="contactId"
+                    value={contactState.id}
+                  />
                   <label className="flex flex-col gap-1">
                     <span>Note</span>
                     <textarea
@@ -1432,11 +1683,10 @@ function NoteRow({
   saving,
   editDraft,
   onChangeDraft,
-  onDelete
-  ,
+  onDelete,
   onStartEdit,
   onCancelEdit,
-  onSaveEdit
+  onSaveEdit,
 }: {
   note: ContactNoteSummary;
   deleting: boolean;
@@ -1453,7 +1703,9 @@ function NoteRow({
     <div className="rounded-2xl border border-slate-200 bg-white/70 px-4 py-3 text-xs text-slate-700 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
-          <p className="text-[11px] text-slate-500">Added {formatDateTime(note.createdAt)}</p>
+          <p className="text-[11px] text-slate-500">
+            Added {formatDateTime(note.createdAt)}
+          </p>
           {editing ? (
             <textarea
               rows={3}
@@ -1462,7 +1714,9 @@ function NoteRow({
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800"
             />
           ) : (
-            <p className="whitespace-pre-wrap text-sm font-semibold text-slate-800">{note.body}</p>
+            <p className="whitespace-pre-wrap text-sm font-semibold text-slate-800">
+              {note.body}
+            </p>
           )}
         </div>
         <div className="flex flex-wrap gap-2 sm:flex-col sm:items-end sm:justify-start">
@@ -1512,7 +1766,7 @@ function NoteRow({
 
 export default function ContactsListClient({
   contacts,
-  teamMembers
+  teamMembers,
 }: {
   contacts: ContactSummary[];
   teamMembers: Array<{ id: string; name: string }>;
@@ -1520,7 +1774,11 @@ export default function ContactsListClient({
   return (
     <ul className="space-y-4">
       {contacts.map((contact) => (
-        <ContactCard key={contact.id} contact={contact} teamMembers={teamMembers} />
+        <ContactCard
+          key={contact.id}
+          contact={contact}
+          teamMembers={teamMembers}
+        />
       ))}
     </ul>
   );

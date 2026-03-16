@@ -267,6 +267,13 @@
       "when": 1773180004000,
       "tag": "0037_freeze_existing_sold_by",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1773180005000,
+      "tag": "0038_appointment_booking_details",
+      "breakpoints": true
     }
   ]
 }

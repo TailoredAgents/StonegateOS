@@ -3,7 +3,20 @@ import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { desc, eq, sql } from "drizzle-orm";
-import { appointmentNotes, appointments, crmPipeline, crmTasks, getDb, outboxEvents, properties, teamMembers } from "@/db";
+import {
+  appointmentNotes,
+  appointments,
+  crmPipeline,
+  crmTasks,
+  getDb,
+  outboxEvents,
+  properties,
+  teamMembers,
+} from "@/db";
+import {
+  parseAppointmentBookingDetails,
+  validateQuotedTotalForBookingDetails,
+} from "@/lib/appointment-booking-details";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { getBusinessHoursPolicy } from "@/lib/policy";
@@ -28,6 +41,7 @@ type BookRequest = {
   travelBufferMinutes?: number;
   services?: string[];
   quotedTotalCents?: number;
+  bookingDetails?: unknown;
   notes?: string;
   soldByMemberId?: string | null;
   marketingMemberId?: string | null;
@@ -56,9 +70,18 @@ export async function POST(request: NextRequest): Promise<Response> {
       propertyId: form.get("propertyId")?.toString(),
       appointmentType: form.get("appointmentType")?.toString(),
       startAt: form.get("startAt")?.toString(),
-      durationMinutes: form.get("durationMinutes") ? Number(form.get("durationMinutes")) : undefined,
-      travelBufferMinutes: form.get("travelBufferMinutes") ? Number(form.get("travelBufferMinutes")) : undefined,
-      quotedTotalCents: form.get("quotedTotalCents") ? Number(form.get("quotedTotalCents")) : undefined,
+      durationMinutes: form.get("durationMinutes")
+        ? Number(form.get("durationMinutes"))
+        : undefined,
+      travelBufferMinutes: form.get("travelBufferMinutes")
+        ? Number(form.get("travelBufferMinutes"))
+        : undefined,
+      quotedTotalCents: form.get("quotedTotalCents")
+        ? Number(form.get("quotedTotalCents"))
+        : undefined,
+      bookingDetails: form.get("bookingDetails")
+        ? JSON.parse(form.get("bookingDetails")!.toString())
+        : undefined,
       notes: form.get("notes")?.toString(),
       services: form.get("services")
         ? form
@@ -67,19 +90,37 @@ export async function POST(request: NextRequest): Promise<Response> {
             .split(",")
             .map((s) => s.trim())
             .filter(Boolean)
-        : undefined
+        : undefined,
     };
   }
 
-  const contactId = typeof payload.contactId === "string" && payload.contactId.length ? payload.contactId : null;
-  const propertyId = typeof payload.propertyId === "string" && payload.propertyId.length ? payload.propertyId : null;
-  const startAtIso = typeof payload.startAt === "string" && payload.startAt.length ? payload.startAt : null;
-  const appointmentTypeRaw = typeof payload.appointmentType === "string" ? payload.appointmentType.trim() : "";
-  const appointmentType = appointmentTypeRaw.toLowerCase() === "in_person_quote" ? "in_person_quote" : "job";
+  const contactId =
+    typeof payload.contactId === "string" && payload.contactId.length
+      ? payload.contactId
+      : null;
+  const propertyId =
+    typeof payload.propertyId === "string" && payload.propertyId.length
+      ? payload.propertyId
+      : null;
+  const startAtIso =
+    typeof payload.startAt === "string" && payload.startAt.length
+      ? payload.startAt
+      : null;
+  const appointmentTypeRaw =
+    typeof payload.appointmentType === "string"
+      ? payload.appointmentType.trim()
+      : "";
+  const appointmentType =
+    appointmentTypeRaw.toLowerCase() === "in_person_quote"
+      ? "in_person_quote"
+      : "job";
   const durationMinutes =
-    typeof payload.durationMinutes === "number" && payload.durationMinutes > 0 ? payload.durationMinutes : 60;
+    typeof payload.durationMinutes === "number" && payload.durationMinutes > 0
+      ? payload.durationMinutes
+      : 60;
   const travelBufferMinutes =
-    typeof payload.travelBufferMinutes === "number" && payload.travelBufferMinutes >= 0
+    typeof payload.travelBufferMinutes === "number" &&
+    payload.travelBufferMinutes >= 0
       ? payload.travelBufferMinutes
       : 30;
   const quotedTotalCents =
@@ -89,25 +130,64 @@ export async function POST(request: NextRequest): Promise<Response> {
     payload.quotedTotalCents >= 0
       ? payload.quotedTotalCents
       : null;
-  const notes = typeof payload.notes === "string" && payload.notes.trim().length > 0 ? payload.notes.trim() : null;
+  const bookingDetails =
+    payload.bookingDetails === undefined
+      ? null
+      : parseAppointmentBookingDetails(payload.bookingDetails);
+  const notes =
+    typeof payload.notes === "string" && payload.notes.trim().length > 0
+      ? payload.notes.trim()
+      : null;
   const soldByMemberId =
-    typeof payload.soldByMemberId === "string" && payload.soldByMemberId.trim().length > 0 ? payload.soldByMemberId.trim() : null;
+    typeof payload.soldByMemberId === "string" &&
+    payload.soldByMemberId.trim().length > 0
+      ? payload.soldByMemberId.trim()
+      : null;
   const marketingMemberId =
-    typeof payload.marketingMemberId === "string" && payload.marketingMemberId.trim().length > 0 ? payload.marketingMemberId.trim() : null;
-  const source = typeof payload.source === "string" && payload.source.trim().length > 0 ? payload.source.trim() : "manual_booking";
+    typeof payload.marketingMemberId === "string" &&
+    payload.marketingMemberId.trim().length > 0
+      ? payload.marketingMemberId.trim()
+      : null;
+  const source =
+    typeof payload.source === "string" && payload.source.trim().length > 0
+      ? payload.source.trim()
+      : "manual_booking";
 
   if (!contactId || !startAtIso) {
-    return NextResponse.json({ error: "contact_and_start_required" }, { status: 400 });
+    return NextResponse.json(
+      { error: "contact_and_start_required" },
+      { status: 400 },
+    );
+  }
+
+  if (payload.bookingDetails !== undefined && !bookingDetails) {
+    return NextResponse.json(
+      { error: "invalid_booking_details" },
+      { status: 400 },
+    );
+  }
+
+  const quotedTotalError = validateQuotedTotalForBookingDetails(
+    bookingDetails,
+    quotedTotalCents,
+  );
+  if (quotedTotalError) {
+    return NextResponse.json({ error: quotedTotalError }, { status: 400 });
   }
 
   const services =
     Array.isArray(payload.services) && payload.services.length
-      ? payload.services.filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      ? payload.services.filter(
+          (s): s is string => typeof s === "string" && s.trim().length > 0,
+        )
       : [];
 
   const db = getDb();
   const businessHours = await getBusinessHoursPolicy(db);
-  const timezone = businessHours.timezone || process.env["APPOINTMENT_TIMEZONE"] || "America/New_York";
+  const timezone =
+    businessHours.timezone ||
+    process.env["APPOINTMENT_TIMEZONE"] ||
+    "America/New_York";
   const startAt = parseStartAt(startAtIso, timezone);
   if (!startAt) {
     return NextResponse.json({ error: "invalid_startAt" }, { status: 400 });
@@ -158,7 +238,7 @@ export async function POST(request: NextRequest): Promise<Response> {
               postalCode: PLACEHOLDER_POSTAL_CODE,
               gated: false,
               createdAt: now,
-              updatedAt: now
+              updatedAt: now,
             })
             .returning({ id: properties.id });
           createdPropertyId = created?.id ?? null;
@@ -182,11 +262,15 @@ export async function POST(request: NextRequest): Promise<Response> {
           status: "confirmed",
           rescheduleToken: token,
           travelBufferMinutes,
-          ...(resolvedSoldByMemberId ? { soldByMemberId: resolvedSoldByMemberId } : {}),
+          ...(bookingDetails ? { bookingDetails } : {}),
+          ...(resolvedSoldByMemberId
+            ? { soldByMemberId: resolvedSoldByMemberId }
+            : {}),
           ...(marketingMemberId ? { marketingMemberId } : {}),
-          ...(typeof quotedTotalCents === "number" && Number.isFinite(quotedTotalCents)
+          ...(typeof quotedTotalCents === "number" &&
+          Number.isFinite(quotedTotalCents)
             ? { quotedTotalCents: Math.trunc(quotedTotalCents) }
-            : {})
+            : {}),
         })
         .returning({ id: appointments.id });
 
@@ -197,7 +281,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         await tx.insert(appointmentNotes).values({
           appointmentId,
           body: notes,
-          createdAt: now
+          createdAt: now,
         });
         await tx.insert(crmTasks).values({
           contactId,
@@ -207,7 +291,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           dueAt: null,
           assignedTo: null,
           createdAt: now,
-          updatedAt: now
+          updatedAt: now,
         });
       }
 
@@ -215,24 +299,30 @@ export async function POST(request: NextRequest): Promise<Response> {
         type: "estimate.requested",
         payload: {
           appointmentId,
-          services
-        }
+          services,
+        },
       });
 
-      const nextStage = appointmentType === "in_person_quote" ? "in_person_quote" : "qualified";
+      const nextStage =
+        appointmentType === "in_person_quote" ? "in_person_quote" : "qualified";
       const [pipelineRow] = await tx
         .select({ stage: crmPipeline.stage })
         .from(crmPipeline)
         .where(eq(crmPipeline.contactId, contactId))
         .limit(1);
-      const previousStage = typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
-      if (previousStage !== "won" && previousStage !== "lost" && previousStage !== nextStage) {
+      const previousStage =
+        typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
+      if (
+        previousStage !== "won" &&
+        previousStage !== "lost" &&
+        previousStage !== nextStage
+      ) {
         await tx
           .insert(crmPipeline)
           .values({ contactId, stage: nextStage })
           .onConflictDoUpdate({
             target: crmPipeline.contactId,
-            set: { stage: nextStage, updatedAt: now }
+            set: { stage: nextStage, updatedAt: now },
           });
 
         await tx.insert(outboxEvents).values({
@@ -244,9 +334,9 @@ export async function POST(request: NextRequest): Promise<Response> {
             reason: "admin.booking.created",
             meta: {
               appointmentId,
-              appointmentType
-            }
-          }
+              appointmentType,
+            },
+          },
         });
       }
 
@@ -256,7 +346,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         propertyId: resolvedPropertyId,
         soldByMemberId: resolvedSoldByMemberId,
         marketingMemberId,
-        source
+        source,
       };
     });
 
@@ -266,7 +356,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         action: "property.created",
         entityType: "property",
         entityId: result.createdPropertyId,
-        meta: { contactId, placeholder: true, source: result.source }
+        meta: { contactId, placeholder: true, source: result.source },
       });
     }
 
@@ -283,11 +373,12 @@ export async function POST(request: NextRequest): Promise<Response> {
         travelBufferMinutes,
         services,
         quotedTotalCents,
+        bookingDetails,
         notesProvided: Boolean(notes),
         source: result.source,
         soldByMemberId: result.soldByMemberId ?? null,
-        marketingMemberId: result.marketingMemberId ?? null
-      }
+        marketingMemberId: result.marketingMemberId ?? null,
+      },
     });
 
     return NextResponse.json({
@@ -295,7 +386,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       appointmentId: result.appointmentId,
       propertyId: result.propertyId,
       createdPlaceholderProperty: Boolean(result.createdPropertyId),
-      startAt: startAt.toISOString()
+      startAt: startAt.toISOString(),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "booking_failed";

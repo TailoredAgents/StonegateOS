@@ -2,13 +2,18 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
-
-const ADMIN_COOKIE = "myst-admin-session";
-const CREW_COOKIE = "myst-crew-session";
+import { requireTeamRole } from "@/app/api/team/auth";
+import {
+  buildStoredContactSource,
+  parseLeadSourceFormData,
+} from "@/app/team/lib/booking-details";
 
 export const dynamic = "force-dynamic";
 
-function buildContactsRedirect(request: NextRequest, contactId?: string | null): URL {
+function buildContactsRedirect(
+  request: NextRequest,
+  contactId?: string | null,
+): URL {
   const url = getSafeRedirectUrl(request, "/team?tab=contacts");
   url.searchParams.set("tab", "contacts");
   if (contactId) url.searchParams.set("created", contactId);
@@ -16,20 +21,13 @@ function buildContactsRedirect(request: NextRequest, contactId?: string | null):
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const jar = request.cookies;
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
-  const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
   const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
+  const auth = await requireTeamRole(request, {
+    redirectTo,
+    roles: ["owner", "office", "crew"],
+  });
 
-  if (!hasOwner && !hasCrew) {
-    const response = NextResponse.redirect(redirectTo, 303);
-    response.cookies.set({
-      name: "myst-flash-error",
-      value: "Please sign in again and retry.",
-      path: "/"
-    });
-    return response;
-  }
+  if (!auth.ok) return auth.response;
 
   const formData = await request.formData();
   const firstName = formData.get("firstName");
@@ -54,7 +52,18 @@ export async function POST(request: NextRequest): Promise<Response> {
     response.cookies.set({
       name: "myst-flash-error",
       value: "First and last name are required",
-      path: "/"
+      path: "/",
+    });
+    return response;
+  }
+
+  const sourceResult = parseLeadSourceFormData(formData);
+  if (!sourceResult.ok) {
+    const response = NextResponse.redirect(redirectTo, 303);
+    response.cookies.set({
+      name: "myst-flash-error",
+      value: sourceResult.error,
+      path: "/",
     });
     return response;
   }
@@ -62,12 +71,23 @@ export async function POST(request: NextRequest): Promise<Response> {
   const payload: Record<string, unknown> = {
     firstName: firstName.trim(),
     lastName: lastName.trim(),
-    email: typeof email === "string" && email.trim().length ? email.trim() : undefined,
-    phone: typeof phone === "string" && phone.trim().length ? phone.trim() : undefined,
+    email:
+      typeof email === "string" && email.trim().length
+        ? email.trim()
+        : undefined,
+    phone:
+      typeof phone === "string" && phone.trim().length
+        ? phone.trim()
+        : undefined,
+    source: buildStoredContactSource(sourceResult.value),
     pipelineStage:
-      typeof pipelineStage === "string" && pipelineStage.trim().length ? pipelineStage.trim() : undefined,
+      typeof pipelineStage === "string" && pipelineStage.trim().length
+        ? pipelineStage.trim()
+        : undefined,
     pipelineNotes:
-      typeof pipelineNotes === "string" && pipelineNotes.trim().length ? pipelineNotes.trim() : undefined
+      typeof pipelineNotes === "string" && pipelineNotes.trim().length
+        ? pipelineNotes.trim()
+        : undefined,
   };
 
   if (typeof salespersonMemberId === "string") {
@@ -95,8 +115,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     const response = NextResponse.redirect(redirectTo, 303);
     response.cookies.set({
       name: "myst-flash-error",
-      value: "If you add an address, include street, city, state, and postal code",
-      path: "/"
+      value:
+        "If you add an address, include street, city, state, and postal code",
+      path: "/",
     });
     return response;
   }
@@ -106,13 +127,13 @@ export async function POST(request: NextRequest): Promise<Response> {
       addressLine1: (addressLine1 as string).trim(),
       city: (city as string).trim(),
       state: (state as string).trim(),
-      postalCode: (postalCode as string).trim()
+      postalCode: (postalCode as string).trim(),
     };
   }
 
   const apiResponse = await callAdminApi("/api/admin/contacts", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!apiResponse.ok) {
@@ -120,14 +141,32 @@ export async function POST(request: NextRequest): Promise<Response> {
     try {
       const data = (await apiResponse.json()) as {
         error?: string;
-        existingContact?: { id?: string; firstName?: string | null; lastName?: string | null } | null;
+        existingContact?: {
+          id?: string;
+          firstName?: string | null;
+          lastName?: string | null;
+        } | null;
       };
       if (data.error === "contact_already_exists") {
-        const existingName = `${data.existingContact?.firstName ?? ""} ${data.existingContact?.lastName ?? ""}`.trim();
-        message = existingName.length > 0 ? `Contact already exists (${existingName}).` : "Contact already exists.";
-        const existingId = typeof data.existingContact?.id === "string" ? data.existingContact.id : null;
-        const response = NextResponse.redirect(buildContactsRedirect(request, existingId), 303);
-        response.cookies.set({ name: "myst-flash-error", value: message, path: "/" });
+        const existingName =
+          `${data.existingContact?.firstName ?? ""} ${data.existingContact?.lastName ?? ""}`.trim();
+        message =
+          existingName.length > 0
+            ? `Contact already exists (${existingName}).`
+            : "Contact already exists.";
+        const existingId =
+          typeof data.existingContact?.id === "string"
+            ? data.existingContact.id
+            : null;
+        const response = NextResponse.redirect(
+          buildContactsRedirect(request, existingId),
+          303,
+        );
+        response.cookies.set({
+          name: "myst-flash-error",
+          value: message,
+          path: "/",
+        });
         return response;
       } else if (data.error) {
         message = data.error.replace(/_/g, " ");
@@ -136,22 +175,35 @@ export async function POST(request: NextRequest): Promise<Response> {
       // ignore
     }
     const response = NextResponse.redirect(redirectTo, 303);
-    response.cookies.set({ name: "myst-flash-error", value: message, path: "/" });
+    response.cookies.set({
+      name: "myst-flash-error",
+      value: message,
+      path: "/",
+    });
     return response;
   }
 
   let createdId: string | null = null;
   try {
     const data = (await apiResponse.json()) as { contact?: { id?: string } };
-    if (typeof data?.contact?.id === "string" && data.contact.id.trim().length > 0) {
+    if (
+      typeof data?.contact?.id === "string" &&
+      data.contact.id.trim().length > 0
+    ) {
       createdId = data.contact.id.trim();
     }
   } catch {
     createdId = null;
   }
 
-  const response = NextResponse.redirect(buildContactsRedirect(request, createdId), 303);
-  response.cookies.set({ name: "myst-flash", value: "Contact created", path: "/" });
+  const response = NextResponse.redirect(
+    buildContactsRedirect(request, createdId),
+    303,
+  );
+  response.cookies.set({
+    name: "myst-flash",
+    value: "Contact created",
+    path: "/",
+  });
   return response;
 }
-

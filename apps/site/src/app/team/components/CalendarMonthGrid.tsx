@@ -1,6 +1,10 @@
 import React from "react";
 import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
-import { formatCalendarEventAmounts, formatCompactUsdCents } from "./calendarEventAmounts";
+import {
+  formatCalendarEventAmounts,
+  formatUsdCents,
+  type CalendarDayRevenueSummary,
+} from "./calendarEventAmounts";
 
 type CalendarEvent = {
   id: string;
@@ -21,7 +25,7 @@ type CalendarEvent = {
 type Props = {
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
-  projectedRevenueByDay: Record<string, number>;
+  revenueSummaryByDay: Record<string, CalendarDayRevenueSummary>;
   onSelectEvent?: (id: string) => void;
   anchorDay: string;
   selectedDay?: string | null;
@@ -33,17 +37,21 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export function CalendarMonthGrid({
   events,
   conflicts,
-  projectedRevenueByDay,
+  revenueSummaryByDay,
   onSelectEvent,
   anchorDay,
   selectedDay,
-  onSelectDay
+  onSelectDay,
 }: Props): React.ReactElement {
   const anchor = parseDayKey(anchorDay) ?? new Date();
   const firstOfMonth = getMonthStart(anchor);
   const monthStartWeekday = getWeekdayIndex(firstOfMonth);
-  const startDate = new Date(firstOfMonth.getTime() - monthStartWeekday * DAY_MS);
-  const cells = Array.from({ length: 42 }).map((_, i) => new Date(startDate.getTime() + i * DAY_MS));
+  const startDate = new Date(
+    firstOfMonth.getTime() - monthStartWeekday * DAY_MS,
+  );
+  const cells = Array.from({ length: 42 }).map(
+    (_, i) => new Date(startDate.getTime() + i * DAY_MS),
+  );
 
   const buckets = new Map<string, CalendarEvent[]>();
   for (const cell of cells) {
@@ -57,9 +65,11 @@ export function CalendarMonthGrid({
     }
   }
 
-  const isConflict = (id: string) => conflicts.some((c) => c.a === id || c.b === id);
+  const isConflict = (id: string) =>
+    conflicts.some((c) => c.a === id || c.b === id);
   const isInPersonQuote = (evt: CalendarEvent): boolean =>
-    evt.source === "db" && (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote";
+    evt.source === "db" &&
+    (evt.appointmentType ?? "").trim().toLowerCase() === "in_person_quote";
 
   return (
     <div className="grid grid-cols-7 gap-2 text-sm">
@@ -67,20 +77,31 @@ export function CalendarMonthGrid({
         const key = formatDayKey(day);
         const inMonth = getMonthStart(day).getTime() === firstOfMonth.getTime();
         const bucket = buckets.get(key) ?? [];
-        const projectedRevenue = projectedRevenueByDay[key] ?? 0;
-        const projectedRevenueLabel = projectedRevenue > 0 ? formatCompactUsdCents(projectedRevenue) : null;
-        const isSelected = typeof selectedDay === "string" && selectedDay.length > 0 ? selectedDay === key : false;
+        const revenueSummary = revenueSummaryByDay[key] ?? null;
+        const revenueLabel = revenueSummary
+          ? formatUsdCents(revenueSummary.amountCents)
+          : null;
+        const isSelected =
+          typeof selectedDay === "string" && selectedDay.length > 0
+            ? selectedDay === key
+            : false;
         return (
           <div
             key={key + idx}
             className={`min-h-[120px] min-w-0 overflow-hidden rounded-xl border p-2 ${
-              inMonth ? "border-slate-200 bg-white/90" : "border-slate-100 bg-slate-50"
+              inMonth
+                ? "border-slate-200 bg-white/90"
+                : "border-slate-100 bg-slate-50"
             } ${isSelected ? "ring-2 ring-primary-200" : ""}`}
           >
             <button
               type="button"
               onClick={() => onSelectDay?.(key)}
-              title={projectedRevenueLabel ? `Projected revenue ${projectedRevenueLabel}` : undefined}
+              title={
+                revenueSummary && revenueLabel
+                  ? `${revenueSummary.label} revenue ${revenueLabel}`
+                  : undefined
+              }
               className={`mb-1 w-full text-left text-[11px] font-semibold uppercase ${
                 isSelected ? "text-primary-700" : "text-slate-500"
               }`}
@@ -89,28 +110,37 @@ export function CalendarMonthGrid({
                 {day.toLocaleDateString(undefined, {
                   timeZone: TEAM_TIME_ZONE,
                   weekday: "short",
-                  day: "numeric"
+                  day: "numeric",
                 })}
               </span>
-              {projectedRevenueLabel ? (
-                <span className="block truncate text-[10px] font-semibold normal-case text-emerald-700">
-                  Proj {projectedRevenueLabel}
+              {revenueSummary && revenueLabel ? (
+                <span className="block whitespace-normal text-[10px] font-semibold normal-case leading-4 text-emerald-700">
+                  {revenueSummary.label} {revenueLabel}
                 </span>
               ) : null}
             </button>
 
             {bucket.length ? (
-              <div className="flex flex-wrap items-center gap-1 sm:hidden" aria-label={`${bucket.length} events`}>
+              <div
+                className="flex flex-wrap items-center gap-1 sm:hidden"
+                aria-label={`${bucket.length} events`}
+              >
                 {bucket.slice(0, 3).map((evt) => (
                   <span
                     key={evt.id}
                     className={`h-1.5 w-1.5 rounded-full ${
-                      evt.source === "db" ? (isInPersonQuote(evt) ? "bg-fuchsia-500" : "bg-primary-500") : "bg-slate-400"
+                      evt.source === "db"
+                        ? isInPersonQuote(evt)
+                          ? "bg-fuchsia-500"
+                          : "bg-primary-500"
+                        : "bg-slate-400"
                     } ${isConflict(evt.id) ? "ring-1 ring-rose-400" : ""}`}
                   />
                 ))}
                 {bucket.length > 3 ? (
-                  <span className="text-[10px] text-slate-500">+{bucket.length - 3}</span>
+                  <span className="text-[10px] text-slate-500">
+                    +{bucket.length - 3}
+                  </span>
                 ) : null}
               </div>
             ) : null}
@@ -122,7 +152,10 @@ export function CalendarMonthGrid({
                   {bucket
                     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
                     .map((evt) => {
-                      const amountSummary = evt.source === "db" ? formatCalendarEventAmounts(evt) : null;
+                      const amountSummary =
+                        evt.source === "db"
+                          ? formatCalendarEventAmounts(evt)
+                          : null;
                       return (
                         <button
                           key={evt.id}
@@ -140,17 +173,27 @@ export function CalendarMonthGrid({
                             <span className="whitespace-nowrap font-semibold tabular-nums text-slate-800">
                               {formatTime(evt.start)}
                             </span>
-                            <span className="min-w-0 flex-1 truncate text-slate-700">{evt.title}</span>
+                            <span className="min-w-0 flex-1 truncate text-slate-700">
+                              {evt.title}
+                            </span>
                             {isInPersonQuote(evt) ? (
-                              <span className="rounded bg-white px-1 text-[10px] uppercase text-fuchsia-700">quote</span>
+                              <span className="rounded bg-white px-1 text-[10px] uppercase text-fuchsia-700">
+                                quote
+                              </span>
                             ) : null}
                             {evt.status ? (
-                              <span className={`rounded bg-white px-1 text-[10px] uppercase ${isInPersonQuote(evt) ? "text-fuchsia-700" : "text-primary-700"}`}>
+                              <span
+                                className={`rounded bg-white px-1 text-[10px] uppercase ${isInPersonQuote(evt) ? "text-fuchsia-700" : "text-primary-700"}`}
+                              >
                                 {evt.status}
                               </span>
                             ) : null}
                           </div>
-                          {amountSummary ? <div className="truncate text-[10px] text-slate-600">{amountSummary}</div> : null}
+                          {amountSummary ? (
+                            <div className="truncate text-[10px] text-slate-600">
+                              {amountSummary}
+                            </div>
+                          ) : null}
                         </button>
                       );
                     })}
@@ -171,7 +214,7 @@ function formatTime(iso: string): string {
     timeZone: TEAM_TIME_ZONE,
     hour: "numeric",
     minute: "2-digit",
-    hour12: true
+    hour12: true,
   }).formatToParts(d);
   const hour = parts.find((p) => p.type === "hour")?.value ?? "";
   const minute = parts.find((p) => p.type === "minute")?.value ?? "";
@@ -187,12 +230,20 @@ function parseDayKey(dayKey: string): Date | null {
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day)
+  )
+    return null;
   return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
 }
 
 function getWeekdayIndex(date: Date): number {
-  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: TEAM_TIME_ZONE, weekday: "short" }).format(date);
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
+    weekday: "short",
+  }).format(date);
   switch (weekday.toLowerCase().slice(0, 3)) {
     case "sun":
       return 0;
@@ -214,13 +265,22 @@ function getWeekdayIndex(date: Date): number {
 }
 
 function getMonthStart(date: Date): Date {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: TEAM_TIME_ZONE, year: "numeric", month: "2-digit" }).formatToParts(
-    date
-  );
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(date);
   const year = Number(parts.find((p) => p.type === "year")?.value ?? "");
   const month = Number(parts.find((p) => p.type === "month")?.value ?? "");
-  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
-    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1, 12, 0, 0, 0));
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    month < 1 ||
+    month > 12
+  ) {
+    return new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1, 12, 0, 0, 0),
+    );
   }
   return new Date(Date.UTC(year, month - 1, 1, 12, 0, 0, 0));
 }
