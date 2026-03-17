@@ -103,6 +103,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [assigneeSaving, setAssigneeSaving] = useState(false);
   const [assigneeError, setAssigneeError] = useState<string | null>(null);
   const [showBookingForm, setShowBookingForm] = useState(false);
+  const [bookingAppointmentType, setBookingAppointmentType] = useState<
+    "job" | "in_person_quote"
+  >("job");
   const [addingProperty, setAddingProperty] = useState(false);
   const [editingPropertyId, setEditingPropertyId] = useState<string | null>(
     null,
@@ -141,6 +144,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       contactIdRef.current = contact.id;
       setAssigneeSaving(false);
       setAssigneeError(null);
+      setBookingAppointmentType("job");
       setShowNoteForm(false);
       setNoteDraft("");
       setNoteError(null);
@@ -168,6 +172,14 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const mapsLink = mapsUrl(primaryProperty);
   const phoneLink = normalizePhoneLink(contactState.phone);
   const canCall = Boolean(phoneLink);
+  const hasBookingName = contactState.name.trim().length > 0;
+  const hasBookingPhone = Boolean(
+    (contactState.phoneE164 ?? contactState.phone ?? "").trim(),
+  );
+  const hasBookingProperty = contactState.properties.length > 0;
+  const isInPersonQuoteBooking = bookingAppointmentType === "in_person_quote";
+  const canSubmitQuoteBooking =
+    hasBookingName && hasBookingPhone && hasBookingProperty;
   const inboxLink = teamLink("inbox", { contactId: contactState.id });
   const disabledLinkClass = "pointer-events-none opacity-50";
   const salespersonLabel =
@@ -976,6 +988,13 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               name="currentAssignedAssociateMemberId"
               value={contactState.salespersonMemberId ?? ""}
             />
+            {isInPersonQuoteBooking ? (
+              <input
+                type="hidden"
+                name="assignedAssociateMemberId"
+                value={contactState.salespersonMemberId ?? ""}
+              />
+            ) : null}
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -985,7 +1004,14 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 <span>Appointment type</span>
                 <select
                   name="appointmentType"
-                  defaultValue="job"
+                  value={bookingAppointmentType}
+                  onChange={(event) =>
+                    setBookingAppointmentType(
+                      event.target.value === "in_person_quote"
+                        ? "in_person_quote"
+                        : "job",
+                    )
+                  }
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                 >
                   <option value="job">Job (junk removal)</option>
@@ -997,9 +1023,14 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 <select
                   name="propertyId"
                   defaultValue={primaryProperty?.id ?? ""}
+                  required={isInPersonQuoteBooking}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                 >
-                  <option value="">No address yet (create placeholder)</option>
+                  <option value="">
+                    {isInPersonQuoteBooking
+                      ? "Select saved address"
+                      : "No address yet (create placeholder)"}
+                  </option>
                   {contactState.properties.map((property) => (
                     <option key={property.id} value={property.id}>
                       {property.addressLine1}, {property.city}, {property.state}{" "}
@@ -1018,97 +1049,110 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                 />
               </label>
-              <label className="flex flex-col gap-1">
-                <span>Duration (minutes)</span>
-                <input
-                  name="durationMinutes"
-                  type="number"
-                  min={15}
-                  step={5}
-                  defaultValue={60}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                />
-              </label>
-              <label className="flex flex-col gap-1">
-                <span>Travel buffer (minutes)</span>
-                <input
-                  name="travelBufferMinutes"
-                  type="number"
-                  min={0}
-                  step={5}
-                  defaultValue={30}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                />
-              </label>
-              <div className="sm:col-span-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Ownership
-              </div>
-              <label className="flex flex-col gap-1">
-                <span>Assigned Associate</span>
-                <select
-                  name="assignedAssociateMemberId"
-                  defaultValue={contactState.salespersonMemberId ?? ""}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                >
-                  <option value="">(Unassigned)</option>
-                  {teamMembers.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1">
-                <span>Who sold the job?</span>
-                <select
-                  name="soldByMemberId"
-                  defaultValue={contactState.salespersonMemberId ?? ""}
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                >
-                  <option value="">(Select seller)</option>
-                  {teamMembers.map((member) => (
-                    <option key={member.id} value={member.id}>
-                      {member.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <p className="sm:col-span-2 text-[11px] text-slate-500">
-                Assigned Associate controls call routing and follow-up
-                ownership. Who sold the job controls sales commission and locks
-                once the appointment is booked.
-              </p>
-              <AppointmentBookingDetailsFields
-                teamMembers={teamMembers}
-                labelClassName="flex flex-col gap-1"
-                fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              />
-              <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
-                Range-only jobs stay out of exact revenue projections until an
-                exact collected total or exact quote is saved.
-              </div>
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span>Services (optional)</span>
-                <input
-                  name="services"
-                  placeholder="e.g. junk_removal_primary"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                />
-              </label>
-              <label className="flex flex-col gap-1 sm:col-span-2">
-                <span>Appointment notes (optional)</span>
-                <textarea
-                  name="notes"
-                  rows={3}
-                  placeholder="What did they say? Parking/gate notes? Items? Time constraints?"
-                  className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                />
-              </label>
+              {isInPersonQuoteBooking ? (
+                <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
+                  In-person quote only uses the saved contact name and phone
+                  plus a saved address, date, and time.
+                  {!hasBookingName ? " Add the contact name first." : ""}
+                  {!hasBookingPhone ? " Add a phone number first." : ""}
+                  {!hasBookingProperty ? " Add a property address first." : ""}
+                </div>
+              ) : (
+                <>
+                  <label className="flex flex-col gap-1">
+                    <span>Duration (minutes)</span>
+                    <input
+                      name="durationMinutes"
+                      type="number"
+                      min={15}
+                      step={5}
+                      defaultValue={60}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span>Travel buffer (minutes)</span>
+                    <input
+                      name="travelBufferMinutes"
+                      type="number"
+                      min={0}
+                      step={5}
+                      defaultValue={30}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    />
+                  </label>
+                  <div className="sm:col-span-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Ownership
+                  </div>
+                  <label className="flex flex-col gap-1">
+                    <span>Assigned Associate</span>
+                    <select
+                      name="assignedAssociateMemberId"
+                      defaultValue={contactState.salespersonMemberId ?? ""}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    >
+                      <option value="">(Unassigned)</option>
+                      {teamMembers.map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span>Who sold the job?</span>
+                    <select
+                      name="soldByMemberId"
+                      defaultValue={contactState.salespersonMemberId ?? ""}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    >
+                      <option value="">(Select seller)</option>
+                      {teamMembers.map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="sm:col-span-2 text-[11px] text-slate-500">
+                    Assigned Associate controls call routing and follow-up
+                    ownership. Who sold the job controls sales commission and
+                    locks once the appointment is booked.
+                  </p>
+                  <AppointmentBookingDetailsFields
+                    teamMembers={teamMembers}
+                    labelClassName="flex flex-col gap-1"
+                    fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                  />
+                  <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
+                    Range-only jobs stay out of exact revenue projections until
+                    an exact collected total or exact quote is saved.
+                  </div>
+                  <label className="flex flex-col gap-1 sm:col-span-2">
+                    <span>Services (optional)</span>
+                    <input
+                      name="services"
+                      placeholder="e.g. junk_removal_primary"
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 sm:col-span-2">
+                    <span>Appointment notes (optional)</span>
+                    <textarea
+                      name="notes"
+                      rows={3}
+                      placeholder="What did they say? Parking/gate notes? Items? Time constraints?"
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    />
+                  </label>
+                </>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <SubmitButton
                 className="rounded-full bg-primary-600 px-4 py-2 font-semibold text-white shadow hover:bg-primary-700"
                 pendingLabel="Booking..."
+                disabled={isInPersonQuoteBooking && !canSubmitQuoteBooking}
               >
                 Confirm booking (adds to calendar)
               </SubmitButton>

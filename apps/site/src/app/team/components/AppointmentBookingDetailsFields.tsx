@@ -5,6 +5,7 @@ import {
   LOAD_SIZE_OPTIONS,
   PRICE_INPUT_MODE_OPTIONS,
   type AppointmentBookingDetails,
+  type AppointmentLeadSource,
   type LoadSizeKind,
   type PriceInputMode,
 } from "../lib/booking-details";
@@ -23,6 +24,8 @@ type Props = {
   fieldClassName: string;
   sectionClassName?: string;
   sourceLabel?: string;
+  hideLeadSource?: boolean;
+  fixedSource?: AppointmentLeadSource | null;
 };
 
 function centsToInputValue(value: number | null | undefined): string {
@@ -46,6 +49,8 @@ export function AppointmentBookingDetailsFields({
   fieldClassName,
   sectionClassName = "sm:col-span-2",
   sourceLabel = "Where from?",
+  hideLeadSource = false,
+  fixedSource = null,
 }: Props): React.ReactElement {
   const [priceMode, setPriceMode] = React.useState<PriceInputMode | "">(
     bookingDetails?.pricing.mode ?? "",
@@ -53,6 +58,7 @@ export function AppointmentBookingDetailsFields({
   const [loadSize, setLoadSize] = React.useState<LoadSizeKind | "">(
     bookingDetails?.loadSize.kind ?? "",
   );
+  const resolvedSource = fixedSource ?? bookingDetails?.source ?? null;
 
   React.useEffect(() => {
     setPriceMode(bookingDetails?.pricing.mode ?? "");
@@ -67,16 +73,44 @@ export function AppointmentBookingDetailsFields({
         </div>
       </div>
 
-      <LeadSourceFields
-        teamMembers={teamMembers}
-        defaultType={bookingDetails?.source.type ?? ""}
-        defaultTeamMemberId={bookingDetails?.source.teamMemberId ?? null}
-        defaultReferralName={bookingDetails?.source.referralName ?? null}
-        required
-        label={sourceLabel}
-        labelClassName={labelClassName}
-        fieldClassName={fieldClassName}
-      />
+      {hideLeadSource ? (
+        resolvedSource ? (
+          <>
+            <input
+              type="hidden"
+              name="sourceType"
+              value={resolvedSource.type}
+            />
+            {resolvedSource.type === "team_member" &&
+            resolvedSource.teamMemberId ? (
+              <input
+                type="hidden"
+                name="sourceTeamMemberId"
+                value={resolvedSource.teamMemberId}
+              />
+            ) : null}
+            {resolvedSource.type === "referral" &&
+            resolvedSource.referralName ? (
+              <input
+                type="hidden"
+                name="sourceReferralName"
+                value={resolvedSource.referralName}
+              />
+            ) : null}
+          </>
+        ) : null
+      ) : (
+        <LeadSourceFields
+          teamMembers={teamMembers}
+          defaultType={resolvedSource?.type ?? ""}
+          defaultTeamMemberId={resolvedSource?.teamMemberId ?? null}
+          defaultReferralName={resolvedSource?.referralName ?? null}
+          required
+          label={sourceLabel}
+          labelClassName={labelClassName}
+          fieldClassName={fieldClassName}
+        />
+      )}
 
       <label className={labelClassName}>
         <span>Price range, exact quote, or both?</span>

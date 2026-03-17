@@ -192,7 +192,8 @@ export async function OwnerSection(): Promise<React.ReactElement> {
           <div>
             <h3 className="text-lg font-semibold text-slate-900">Revenue</h3>
             <p className="text-sm text-slate-600">
-              Completed appointments counted from actual collected totals only.
+              Completed appointments counted from actual collected totals on
+              their scheduled calendar date.
             </p>
           </div>
         </div>

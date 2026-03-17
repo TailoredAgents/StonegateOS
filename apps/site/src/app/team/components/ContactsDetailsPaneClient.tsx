@@ -106,6 +106,9 @@ export function ContactsDetailsPaneClient({
     () => contact.salespersonMemberId ?? null,
   );
   const [showBookingForm, setShowBookingForm] = React.useState(false);
+  const [bookingAppointmentType, setBookingAppointmentType] = React.useState<
+    "job" | "in_person_quote"
+  >("job");
   const [addingProperty, setAddingProperty] = React.useState(false);
   const [editingPropertyId, setEditingPropertyId] = React.useState<
     string | null
@@ -117,6 +120,7 @@ export function ContactsDetailsPaneClient({
 
   React.useEffect(() => {
     setShowBookingForm(false);
+    setBookingAppointmentType("job");
     setAddingProperty(false);
     setEditingPropertyId(null);
     setStage(contact.pipeline?.stage ?? "new");
@@ -277,6 +281,14 @@ export function ContactsDetailsPaneClient({
     : "Unassigned";
   const canCall = Boolean(contact.phoneE164 ?? contact.phone);
   const primaryPropertyId = (contact.properties ?? [])[0]?.id ?? "";
+  const hasBookingName = contact.name.trim().length > 0;
+  const hasBookingPhone = Boolean(
+    (contact.phoneE164 ?? contact.phone ?? "").trim(),
+  );
+  const hasBookingProperty = (contact.properties ?? []).length > 0;
+  const isInPersonQuoteBooking = bookingAppointmentType === "in_person_quote";
+  const canSubmitQuoteBooking =
+    hasBookingName && hasBookingPhone && hasBookingProperty;
 
   return (
     <div className="space-y-4">
@@ -496,6 +508,13 @@ export function ContactsDetailsPaneClient({
             name="currentAssignedAssociateMemberId"
             value={assignee ?? ""}
           />
+          {isInPersonQuoteBooking ? (
+            <input
+              type="hidden"
+              name="assignedAssociateMemberId"
+              value={assignee ?? ""}
+            />
+          ) : null}
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="sm:col-span-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -507,7 +526,14 @@ export function ContactsDetailsPaneClient({
               </span>
               <select
                 name="appointmentType"
-                defaultValue="job"
+                value={bookingAppointmentType}
+                onChange={(event) =>
+                  setBookingAppointmentType(
+                    event.target.value === "in_person_quote"
+                      ? "in_person_quote"
+                      : "job",
+                  )
+                }
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               >
                 <option value="job">Job (junk removal)</option>
@@ -522,9 +548,14 @@ export function ContactsDetailsPaneClient({
               <select
                 name="propertyId"
                 defaultValue={primaryPropertyId}
+                required={isInPersonQuoteBooking}
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               >
-                <option value="">No address yet (create placeholder)</option>
+                <option value="">
+                  {isInPersonQuoteBooking
+                    ? "Select saved address"
+                    : "No address yet (create placeholder)"}
+                </option>
                 {(contact.properties ?? []).map((property) => (
                   <option key={property.id} value={property.id}>
                     {property.addressLine1}, {property.city}, {property.state}{" "}
@@ -547,106 +578,119 @@ export function ContactsDetailsPaneClient({
               />
             </label>
 
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Duration (minutes)
-              </span>
-              <input
-                name="durationMinutes"
-                type="number"
-                min={15}
-                step={5}
-                defaultValue={60}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              />
-            </label>
+            {isInPersonQuoteBooking ? (
+              <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
+                In-person quote only uses the saved contact name and phone plus
+                a saved address, date, and time.
+                {!hasBookingName ? " Add the contact name first." : ""}
+                {!hasBookingPhone ? " Add a phone number first." : ""}
+                {!hasBookingProperty ? " Add a property address first." : ""}
+              </div>
+            ) : (
+              <>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Duration (minutes)
+                  </span>
+                  <input
+                    name="durationMinutes"
+                    type="number"
+                    min={15}
+                    step={5}
+                    defaultValue={60}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  />
+                </label>
 
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Travel buffer (minutes)
-              </span>
-              <input
-                name="travelBufferMinutes"
-                type="number"
-                min={0}
-                step={5}
-                defaultValue={30}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              />
-            </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Travel buffer (minutes)
+                  </span>
+                  <input
+                    name="travelBufferMinutes"
+                    type="number"
+                    min={0}
+                    step={5}
+                    defaultValue={30}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  />
+                </label>
 
-            <div className="sm:col-span-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Ownership
-            </div>
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Assigned Associate
-              </span>
-              <select
-                name="assignedAssociateMemberId"
-                defaultValue={assignee ?? ""}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              >
-                <option value="">(Unassigned)</option>
-                {teamMembers.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <div className="sm:col-span-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Ownership
+                </div>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Assigned Associate
+                  </span>
+                  <select
+                    name="assignedAssociateMemberId"
+                    defaultValue={assignee ?? ""}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  >
+                    <option value="">(Unassigned)</option>
+                    {teamMembers.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            <label className="flex flex-col gap-1">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Who sold the job?
-              </span>
-              <select
-                name="soldByMemberId"
-                defaultValue={assignee ?? ""}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              >
-                <option value="">(Select seller)</option>
-                {teamMembers.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Who sold the job?
+                  </span>
+                  <select
+                    name="soldByMemberId"
+                    defaultValue={assignee ?? ""}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  >
+                    <option value="">(Select seller)</option>
+                    {teamMembers.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            <p className="sm:col-span-2 text-[11px] text-slate-500">
-              Assigned Associate keeps the contact routed to the right phone and
-              owner. Who sold the job is stored on the appointment for
-              commission payouts and is not editable after booking.
-            </p>
-            <AppointmentBookingDetailsFields
-              teamMembers={teamMembers}
-              labelClassName="flex flex-col gap-1"
-              fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-            />
+                <p className="sm:col-span-2 text-[11px] text-slate-500">
+                  Assigned Associate keeps the contact routed to the right phone
+                  and owner. Who sold the job is stored on the appointment for
+                  commission payouts and is not editable after booking.
+                </p>
+                <AppointmentBookingDetailsFields
+                  teamMembers={teamMembers}
+                  labelClassName="flex flex-col gap-1"
+                  fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
 
-            <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
-              Range-only jobs stay out of exact revenue projections until an
-              exact quote or exact collected total is saved.
-            </div>
+                <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
+                  Range-only jobs stay out of exact revenue projections until an
+                  exact quote or exact collected total is saved.
+                </div>
 
-            <label className="flex flex-col gap-1 sm:col-span-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Appointment notes (optional)
-              </span>
-              <textarea
-                name="notes"
-                rows={3}
-                placeholder="What did they say? Parking/gate notes? Items? Time constraints?"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              />
-            </label>
+                <label className="flex flex-col gap-1 sm:col-span-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Appointment notes (optional)
+                  </span>
+                  <textarea
+                    name="notes"
+                    rows={3}
+                    placeholder="What did they say? Parking/gate notes? Items? Time constraints?"
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  />
+                </label>
+              </>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <SubmitButton
               className={teamButtonClass("primary", "sm")}
               pendingLabel="Booking..."
+              disabled={isInPersonQuoteBooking && !canSubmitQuoteBooking}
             >
               Confirm booking
             </SubmitButton>

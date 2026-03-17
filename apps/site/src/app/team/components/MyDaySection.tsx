@@ -4,6 +4,7 @@ import { CopyButton } from "@/components/CopyButton";
 import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
+  convertAppointmentToJobAction,
   createQuoteAction,
   rescheduleAppointmentAction,
   startContactCallAction,
@@ -14,7 +15,10 @@ import {
   formatAppointmentLeadSource,
   formatAppointmentLoadSize,
   formatAppointmentPricing,
+  formatStoredContactSource,
+  parseStoredContactSourceValue,
   type AppointmentBookingDetails,
+  type AppointmentLeadSource,
 } from "../lib/booking-details";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFields";
@@ -56,8 +60,35 @@ function fmtTimeInputValue(startAtIso: string | null): string {
   }
 }
 
+function fmtDateTimeInputValue(startAtIso: string | null): string {
+  if (!startAtIso) return "";
+  const dt = new Date(startAtIso);
+  if (Number.isNaN(dt.getTime())) return "";
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
+function isQuoteOnlyAppointment(appointmentType: string | null | undefined) {
+  const normalized = (appointmentType ?? "").trim().toLowerCase();
+  return (
+    normalized === "in_person_quote" || normalized === "in_person_estimate"
+  );
+}
+
+function canReuseLeadSource(source: AppointmentLeadSource | null): boolean {
+  if (!source) return false;
+  if (source.type === "team_member") {
+    return Boolean(source.teamMemberId);
+  }
+  if (source.type === "referral") {
+    return Boolean(source.referralName);
+  }
+  return true;
+}
+
 interface AppointmentDto {
   id: string;
+  appointmentType: string | null;
   status: AppointmentStatus;
   startAt: string | null;
   durationMinutes: number | null;
@@ -73,6 +104,7 @@ interface AppointmentDto {
     name: string;
     email: string | null;
     phone: string | null;
+    source: string | null;
   };
   pipelineStage: string | null;
   quoteStatus: string | null;
@@ -141,10 +173,22 @@ export async function MyDaySection(): Promise<ReactElement> {
         <p className={TEAM_EMPTY_STATE}>No confirmed visits.</p>
       ) : (
         appts.map((a) => {
+          const isQuoteOnly = isQuoteOnlyAppointment(a.appointmentType);
+          const derivedSource: AppointmentLeadSource | null =
+            a.bookingDetails?.source ??
+            parseStoredContactSourceValue(a.contact.source);
+          const resolvedSource = canReuseLeadSource(derivedSource)
+            ? derivedSource
+            : null;
           const sourceSummary = formatAppointmentLeadSource(
             a.bookingDetails,
             teamMemberNameById,
           );
+          const fallbackSourceSummary = formatStoredContactSource(
+            a.contact.source,
+            teamMemberNameById,
+          );
+          const leadSourceSummary = sourceSummary ?? fallbackSourceSummary;
           const pricingSummary = formatAppointmentPricing(
             a.bookingDetails,
             a.quotedTotalCents,
@@ -193,6 +237,11 @@ export async function MyDaySection(): Promise<ReactElement> {
                     Pipeline: {labelForPipelineStage(a.pipelineStage)}
                   </span>
                 ) : null}
+                {isQuoteOnly ? (
+                  <span className="rounded-full bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-sky-700">
+                    In-person quote
+                  </span>
+                ) : null}
                 {fmtUsdCents(a.quotedTotalCents) ? (
                   <span className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
                     Quoted: {fmtUsdCents(a.quotedTotalCents)}
@@ -216,14 +265,14 @@ export async function MyDaySection(): Promise<ReactElement> {
                 ) : null}
               </div>
 
-              {sourceSummary || pricingSummary || loadSizeSummary ? (
+              {leadSourceSummary || pricingSummary || loadSizeSummary ? (
                 <div className="mt-3 grid gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                  {sourceSummary ? (
+                  {leadSourceSummary ? (
                     <div>
                       <span className="font-semibold text-slate-900">
                         Where from:
                       </span>{" "}
-                      {sourceSummary}
+                      {leadSourceSummary}
                     </div>
                   ) : null}
                   {pricingSummary ? (
@@ -246,101 +295,198 @@ export async function MyDaySection(): Promise<ReactElement> {
               ) : null}
 
               <div className="mt-2 flex flex-wrap gap-2">
-                <form
-                  action="/api/team/appointments/status"
-                  method="post"
-                  className="flex flex-wrap items-end gap-2"
-                >
-                  <input type="hidden" name="appointmentId" value={a.id} />
-                  <input type="hidden" name="status" value="completed" />
-                  <label className="flex flex-col gap-1">
-                    <span className="text-[11px] text-neutral-600">
-                      Amount collected
-                    </span>
-                    <input
-                      name="finalTotal"
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      required
-                      defaultValue={
-                        a.finalTotalCents !== null
-                          ? (a.finalTotalCents / 100).toFixed(2)
-                          : a.quotedTotalCents !== null
-                            ? (a.quotedTotalCents / 100).toFixed(2)
-                            : ""
-                      }
-                      placeholder="e.g. 350.00"
-                      className="w-40 rounded-md border border-neutral-300 px-2 py-1 text-xs"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-[11px] text-neutral-600">
-                      Card tips (optional)
-                    </span>
-                    <input
-                      name="cardTip"
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      placeholder="e.g. 20.00"
-                      className="w-32 rounded-md border border-neutral-300 px-2 py-1 text-xs"
-                    />
-                  </label>
-                  <div className="w-full text-[11px] text-neutral-500">
-                    Card tips are tracked separately and are not counted in
-                    revenue.
-                  </div>
-                  <details className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
-                    <summary className="cursor-pointer select-none font-medium">
-                      Commissions
+                {isQuoteOnly ? (
+                  <details className="rounded-md border border-emerald-200 bg-emerald-50/60 px-2 py-1">
+                    <summary className="cursor-pointer select-none text-xs font-semibold text-emerald-700">
+                      Converted
                     </summary>
-                    <div className="mt-2 flex flex-col gap-2">
-                      <div className="text-[11px] text-neutral-600">
-                        Sales commission is locked to the person selected in Who
-                        sold the job? when the appointment was booked.
-                      </div>
-                      <div className="text-[11px] text-neutral-600">
-                        Crew split (must total 100%)
-                      </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        {teamMembers.map((member) => (
-                          <label
-                            key={member.id}
-                            className="flex items-center gap-2 rounded-md border border-neutral-200 bg-white px-2 py-1"
-                          >
+                    <form
+                      action={convertAppointmentToJobAction}
+                      className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
+                    >
+                      <input type="hidden" name="appointmentId" value={a.id} />
+                      {resolvedSource ? (
+                        <>
+                          <input
+                            type="hidden"
+                            name="resolvedSourceType"
+                            value={resolvedSource.type}
+                          />
+                          {resolvedSource.teamMemberId ? (
                             <input
-                              type="checkbox"
-                              name="crewMemberId"
-                              value={member.id}
-                              className="h-4 w-4 rounded border-neutral-300"
+                              type="hidden"
+                              name="resolvedSourceTeamMemberId"
+                              value={resolvedSource.teamMemberId}
                             />
-                            <span className="flex-1 text-xs">
-                              {member.name}
+                          ) : null}
+                          {resolvedSource.referralName ? (
+                            <input
+                              type="hidden"
+                              name="resolvedSourceReferralName"
+                              value={resolvedSource.referralName}
+                            />
+                          ) : null}
+                          <div className="sm:col-span-2 rounded-md border border-emerald-200 bg-white px-3 py-2 text-[11px] text-emerald-800">
+                            Where from will stay as{" "}
+                            <span className="font-semibold">
+                              {leadSourceSummary}
                             </span>
-                            <input
-                              name={`crewSplitPercent_${member.id}`}
-                              defaultValue={
-                                member.defaultCrewSplitBps !== null
-                                  ? String(member.defaultCrewSplitBps / 100)
-                                  : ""
-                              }
-                              inputMode="decimal"
-                              placeholder="%"
-                              className="w-16 rounded-md border border-neutral-300 px-2 py-1 text-xs"
-                            />
-                          </label>
-                        ))}
+                            .
+                          </div>
+                        </>
+                      ) : (
+                        <div className="sm:col-span-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                          This quote is missing a lead source. Set it here so
+                          the converted job tracks correctly.
+                        </div>
+                      )}
+                      <label className="flex flex-col gap-1">
+                        <span>Who sold the job?</span>
+                        <select
+                          name="soldByMemberId"
+                          defaultValue={a.soldByMemberId ?? ""}
+                          required
+                          className="rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                        >
+                          <option value="">(Select seller)</option>
+                          {teamMembers.map((member) => (
+                            <option key={member.id} value={member.id}>
+                              {member.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span>Job date and time</span>
+                        <input
+                          type="datetime-local"
+                          name="startAt"
+                          required
+                          step={300}
+                          defaultValue={fmtDateTimeInputValue(a.startAt)}
+                          className="rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                        />
+                      </label>
+                      <div className="sm:col-span-2 text-[11px] text-neutral-600">
+                        Use the actual job time if you already did the job right
+                        after the quote.
                       </div>
-                    </div>
+                      <AppointmentBookingDetailsFields
+                        teamMembers={teamMembers}
+                        bookingDetails={a.bookingDetails}
+                        quotedTotalCents={a.quotedTotalCents}
+                        labelClassName="flex flex-col gap-1"
+                        fieldClassName="rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                        hideLeadSource={Boolean(resolvedSource)}
+                        fixedSource={resolvedSource}
+                      />
+                      <div className="sm:col-span-2 flex items-center justify-end">
+                        <SubmitButton
+                          className={teamButtonClass("primary", "sm")}
+                          pendingLabel="Saving..."
+                        >
+                          Save converted job
+                        </SubmitButton>
+                      </div>
+                    </form>
                   </details>
-                  <SubmitButton
-                    className={teamButtonClass("primary", "sm")}
-                    pendingLabel="Saving..."
+                ) : (
+                  <form
+                    action="/api/team/appointments/status"
+                    method="post"
+                    className="flex flex-wrap items-end gap-2"
                   >
-                    Mark complete
-                  </SubmitButton>
-                </form>
+                    <input type="hidden" name="appointmentId" value={a.id} />
+                    <input type="hidden" name="status" value="completed" />
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] text-neutral-600">
+                        Amount collected
+                      </span>
+                      <input
+                        name="finalTotal"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        required
+                        defaultValue={
+                          a.finalTotalCents !== null
+                            ? (a.finalTotalCents / 100).toFixed(2)
+                            : a.quotedTotalCents !== null
+                              ? (a.quotedTotalCents / 100).toFixed(2)
+                              : ""
+                        }
+                        placeholder="e.g. 350.00"
+                        className="w-40 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[11px] text-neutral-600">
+                        Card tips (optional)
+                      </span>
+                      <input
+                        name="cardTip"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        placeholder="e.g. 20.00"
+                        className="w-32 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                      />
+                    </label>
+                    <div className="w-full text-[11px] text-neutral-500">
+                      Card tips are tracked separately and are not counted in
+                      revenue.
+                    </div>
+                    <details className="rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
+                      <summary className="cursor-pointer select-none font-medium">
+                        Commissions
+                      </summary>
+                      <div className="mt-2 flex flex-col gap-2">
+                        <div className="text-[11px] text-neutral-600">
+                          Sales commission is locked to the person selected in
+                          Who sold the job? when the appointment was booked.
+                        </div>
+                        <div className="text-[11px] text-neutral-600">
+                          Crew split (must total 100%)
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {teamMembers.map((member) => (
+                            <label
+                              key={member.id}
+                              className="flex items-center gap-2 rounded-md border border-neutral-200 bg-white px-2 py-1"
+                            >
+                              <input
+                                type="checkbox"
+                                name="crewMemberId"
+                                value={member.id}
+                                className="h-4 w-4 rounded border-neutral-300"
+                              />
+                              <span className="flex-1 text-xs">
+                                {member.name}
+                              </span>
+                              <input
+                                name={`crewSplitPercent_${member.id}`}
+                                defaultValue={
+                                  member.defaultCrewSplitBps !== null
+                                    ? String(member.defaultCrewSplitBps / 100)
+                                    : ""
+                                }
+                                inputMode="decimal"
+                                placeholder="%"
+                                className="w-16 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </details>
+                    <SubmitButton
+                      className={teamButtonClass("primary", "sm")}
+                      pendingLabel="Saving..."
+                    >
+                      Mark complete
+                    </SubmitButton>
+                  </form>
+                )}
                 <form action="/api/team/appointments/status" method="post">
                   <input type="hidden" name="appointmentId" value={a.id} />
                   <input type="hidden" name="status" value="no_show" />
@@ -378,32 +524,34 @@ export async function MyDaySection(): Promise<ReactElement> {
                 </a>
               </div>
 
-              <details className="mt-3 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
-                <summary className="cursor-pointer text-sm font-medium text-neutral-700">
-                  Edit booking details
-                </summary>
-                <form
-                  action={updateAppointmentBookingDetailsAction}
-                  className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
-                >
-                  <input type="hidden" name="appointmentId" value={a.id} />
-                  <AppointmentBookingDetailsFields
-                    teamMembers={teamMembers}
-                    bookingDetails={a.bookingDetails}
-                    quotedTotalCents={a.quotedTotalCents}
-                    labelClassName="flex flex-col gap-1"
-                    fieldClassName="rounded-md border border-neutral-300 px-2 py-1 text-xs"
-                  />
-                  <div className="sm:col-span-2 flex items-center justify-end">
-                    <SubmitButton
-                      className={teamButtonClass("primary", "sm")}
-                      pendingLabel="Saving..."
-                    >
-                      Save booking details
-                    </SubmitButton>
-                  </div>
-                </form>
-              </details>
+              {!isQuoteOnly ? (
+                <details className="mt-3 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
+                  <summary className="cursor-pointer text-sm font-medium text-neutral-700">
+                    Edit booking details
+                  </summary>
+                  <form
+                    action={updateAppointmentBookingDetailsAction}
+                    className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
+                  >
+                    <input type="hidden" name="appointmentId" value={a.id} />
+                    <AppointmentBookingDetailsFields
+                      teamMembers={teamMembers}
+                      bookingDetails={a.bookingDetails}
+                      quotedTotalCents={a.quotedTotalCents}
+                      labelClassName="flex flex-col gap-1"
+                      fieldClassName="rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                    />
+                    <div className="sm:col-span-2 flex items-center justify-end">
+                      <SubmitButton
+                        className={teamButtonClass("primary", "sm")}
+                        pendingLabel="Saving..."
+                      >
+                        Save booking details
+                      </SubmitButton>
+                    </div>
+                  </form>
+                </details>
+              ) : null}
 
               <details className="mt-3 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-700">
                 <summary className="cursor-pointer text-sm font-medium text-neutral-700">

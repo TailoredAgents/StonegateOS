@@ -82,6 +82,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const baseQuery = db
     .select({
       id: appointments.id,
+      appointmentType: appointments.type,
       status: appointments.status,
       startAt: appointments.startAt,
       durationMinutes: appointments.durationMinutes,
@@ -99,6 +100,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactEmail: contacts.email,
       contactPhone: contacts.phone,
       contactPhoneE164: contacts.phoneE164,
+      contactSource: contacts.source,
       propertyId: properties.id,
       addressLine1: properties.addressLine1,
       city: properties.city,
@@ -313,6 +315,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     return {
       id: row.id,
+      appointmentType: row.appointmentType ?? null,
       status: row.status,
       startAt: row.startAt ? row.startAt.toISOString() : null,
       durationMinutes: row.durationMinutes,
@@ -330,6 +333,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         name: contactName,
         email: row.contactEmail ?? null,
         phone: row.contactPhoneE164 ?? row.contactPhone ?? null,
+        source: row.contactSource ?? null,
       },
       pipelineStage,
       quoteStatus,

@@ -23,6 +23,8 @@ export type AppointmentBookingDetails = {
   };
 };
 
+export type AppointmentLeadSource = AppointmentBookingDetails["source"];
+
 type LeadSourceInput = {
   type: LeadSourceType;
   teamMemberId?: string | null;
@@ -195,7 +197,7 @@ export function formatStoredContactSource(
   value: string | null | undefined,
   teamMemberNameById?: Map<string, string>,
 ): string | null {
-  const parsed = parseStoredContactSource(value);
+  const parsed = parseStoredContactSourceValue(value);
   if (!parsed) return null;
 
   switch (parsed.type) {
@@ -311,7 +313,7 @@ export function formatUsdCents(
   }
 }
 
-function parseStoredContactSource(
+export function parseStoredContactSourceValue(
   value: string | null | undefined,
 ): LeadSourceInput | null {
   const normalized = readText(value);

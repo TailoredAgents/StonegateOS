@@ -739,6 +739,11 @@ export async function bookAppointmentAction(formData: FormData) {
   }
 
   const contactIdValue = contactId.trim();
+  const appointmentTypeValue =
+    typeof appointmentType === "string" && appointmentType.trim().length > 0
+      ? appointmentType.trim()
+      : "job";
+  const isInPersonQuote = appointmentTypeValue === "in_person_quote";
 
   if (typeof startAt !== "string" || startAt.trim().length === 0) {
     jar.set({
@@ -750,26 +755,22 @@ export async function bookAppointmentAction(formData: FormData) {
     return;
   }
 
-  const assignedAssociateMemberId =
-    typeof assignedAssociateMemberIdRaw === "string" &&
-    assignedAssociateMemberIdRaw.trim().length > 0
-      ? assignedAssociateMemberIdRaw.trim()
-      : null;
   const currentAssignedAssociateMemberId =
     typeof currentAssignedAssociateMemberIdRaw === "string" &&
     currentAssignedAssociateMemberIdRaw.trim().length > 0
       ? currentAssignedAssociateMemberIdRaw.trim()
       : null;
+  const assignedAssociateMemberId =
+    typeof assignedAssociateMemberIdRaw === "string"
+      ? assignedAssociateMemberIdRaw.trim().length > 0
+        ? assignedAssociateMemberIdRaw.trim()
+        : null
+      : currentAssignedAssociateMemberId;
   const soldByMemberId =
     typeof soldByMemberIdRaw === "string" && soldByMemberIdRaw.trim().length > 0
       ? soldByMemberIdRaw.trim()
       : null;
-  const appointmentTypeValue =
-    typeof appointmentType === "string" && appointmentType.trim().length > 0
-      ? appointmentType.trim()
-      : "job";
-
-  if (appointmentTypeValue !== "in_person_quote" && !soldByMemberId) {
+  if (!isInPersonQuote && !soldByMemberId) {
     jar.set({
       name: "myst-flash-error",
       value: "Who sold the job is required to book a job.",
@@ -779,15 +780,84 @@ export async function bookAppointmentAction(formData: FormData) {
     return;
   }
 
-  const bookingDetailsResult = parseAppointmentBookingFormData(formData);
-  if (!bookingDetailsResult.ok) {
-    jar.set({
-      name: "myst-flash-error",
-      value: bookingDetailsResult.error,
-      path: "/",
-    });
-    revalidatePath("/team");
-    return;
+  let bookingDetailsResult:
+    | ReturnType<typeof parseAppointmentBookingFormData>
+    | { ok: true; bookingDetails: null; quotedTotalCents: null };
+
+  if (isInPersonQuote) {
+    if (typeof propertyId !== "string" || propertyId.trim().length === 0) {
+      jar.set({
+        name: "myst-flash-error",
+        value: "Address is required to book an in-person quote.",
+        path: "/",
+      });
+      revalidatePath("/team");
+      return;
+    }
+
+    const contactResponse = await callAdminApi(
+      `/api/admin/contacts?contactId=${encodeURIComponent(contactIdValue)}&limit=1`,
+    );
+    if (!contactResponse.ok) {
+      const message = await readErrorMessage(
+        contactResponse,
+        "Unable to verify contact details for in-person quote.",
+      );
+      jar.set({ name: "myst-flash-error", value: message, path: "/" });
+      revalidatePath("/team");
+      return;
+    }
+
+    const contactPayload = (await contactResponse.json().catch(() => null)) as {
+      contacts?: Array<{
+        firstName?: string | null;
+        lastName?: string | null;
+        phone?: string | null;
+        phoneE164?: string | null;
+      }>;
+    } | null;
+    const contactRecord = contactPayload?.contacts?.[0] ?? null;
+    const hasName = Boolean(
+      `${contactRecord?.firstName ?? ""} ${contactRecord?.lastName ?? ""}`.trim(),
+    );
+    const hasPhone = Boolean(
+      (contactRecord?.phoneE164 ?? contactRecord?.phone ?? "").trim(),
+    );
+    if (!hasName) {
+      jar.set({
+        name: "myst-flash-error",
+        value: "Name is required to book an in-person quote.",
+        path: "/",
+      });
+      revalidatePath("/team");
+      return;
+    }
+    if (!hasPhone) {
+      jar.set({
+        name: "myst-flash-error",
+        value: "Phone number is required to book an in-person quote.",
+        path: "/",
+      });
+      revalidatePath("/team");
+      return;
+    }
+
+    bookingDetailsResult = {
+      ok: true,
+      bookingDetails: null,
+      quotedTotalCents: null,
+    };
+  } else {
+    bookingDetailsResult = parseAppointmentBookingFormData(formData);
+    if (!bookingDetailsResult.ok) {
+      jar.set({
+        name: "myst-flash-error",
+        value: bookingDetailsResult.error,
+        path: "/",
+      });
+      revalidatePath("/team");
+      return;
+    }
   }
 
   const parsedDuration =
@@ -825,7 +895,9 @@ export async function bookAppointmentAction(formData: FormData) {
   if (bookingDetailsResult.quotedTotalCents !== null) {
     payload["quotedTotalCents"] = bookingDetailsResult.quotedTotalCents;
   }
-  payload["bookingDetails"] = bookingDetailsResult.bookingDetails;
+  if (bookingDetailsResult.bookingDetails) {
+    payload["bookingDetails"] = bookingDetailsResult.bookingDetails;
+  }
   if (soldByMemberId) {
     payload["soldByMemberId"] = soldByMemberId;
   }
@@ -950,6 +1022,119 @@ export async function updateAppointmentBookingDetailsAction(
   }
 
   jar.set({ name: "myst-flash", value: "Booking details updated", path: "/" });
+  revalidatePath("/team");
+}
+
+function withResolvedLeadSourceFields(formData: FormData): FormData {
+  const resolved = new FormData();
+  formData.forEach((value, key) => {
+    resolved.append(key, value);
+  });
+
+  const sourceType = formData.get("sourceType");
+  if (typeof sourceType === "string" && sourceType.trim().length > 0) {
+    return resolved;
+  }
+
+  const resolvedType = formData.get("resolvedSourceType");
+  if (typeof resolvedType !== "string" || resolvedType.trim().length === 0) {
+    return resolved;
+  }
+
+  resolved.set("sourceType", resolvedType.trim());
+
+  const resolvedTeamMemberId = formData.get("resolvedSourceTeamMemberId");
+  if (
+    typeof resolvedTeamMemberId === "string" &&
+    resolvedTeamMemberId.trim().length > 0
+  ) {
+    resolved.set("sourceTeamMemberId", resolvedTeamMemberId.trim());
+  }
+
+  const resolvedReferralName = formData.get("resolvedSourceReferralName");
+  if (
+    typeof resolvedReferralName === "string" &&
+    resolvedReferralName.trim().length > 0
+  ) {
+    resolved.set("sourceReferralName", resolvedReferralName.trim());
+  }
+
+  return resolved;
+}
+
+export async function convertAppointmentToJobAction(formData: FormData) {
+  const jar = await cookies();
+  const appointmentId = formData.get("appointmentId");
+  const startAt = formData.get("startAt");
+  const soldByMemberId = formData.get("soldByMemberId");
+
+  if (typeof appointmentId !== "string" || appointmentId.trim().length === 0) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Appointment ID missing",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (typeof startAt !== "string" || startAt.trim().length === 0) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Job date and time are required.",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (
+    typeof soldByMemberId !== "string" ||
+    soldByMemberId.trim().length === 0
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Who sold the job is required.",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const bookingDetailsResult = parseAppointmentBookingFormData(
+    withResolvedLeadSourceFields(formData),
+  );
+  if (!bookingDetailsResult.ok) {
+    jar.set({
+      name: "myst-flash-error",
+      value: bookingDetailsResult.error,
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(
+    `/api/appointments/${encodeURIComponent(appointmentId.trim())}/convert`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        startAt: startAt.trim(),
+        soldByMemberId: soldByMemberId.trim(),
+        quotedTotalCents: bookingDetailsResult.quotedTotalCents,
+        bookingDetails: bookingDetailsResult.bookingDetails,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to convert quote");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({ name: "myst-flash", value: "Quote converted to job", path: "/" });
   revalidatePath("/team");
 }
 

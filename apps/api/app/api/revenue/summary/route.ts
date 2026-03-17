@@ -35,10 +35,10 @@ async function computeWindow(
     .where(
       and(
         eq(appointments.status, "completed"),
-        isNotNull(appointments.completedAt),
+        isNotNull(appointments.startAt),
         isNotNull(appointments.finalTotalCents),
-        gte(appointments.completedAt, start),
-        lt(appointments.completedAt, end),
+        gte(appointments.startAt, start),
+        lt(appointments.startAt, end),
       ),
     );
 
