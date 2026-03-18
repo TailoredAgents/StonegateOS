@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import {
   getDb,
   appointments,
@@ -51,6 +51,12 @@ function parseStatusParam(param: string | null): StatusOption[] | null {
   return valid.length ? valid : null;
 }
 
+function parseDateParam(param: string | null): Date | null {
+  if (!param || param.trim().length === 0) return null;
+  const parsed = new Date(param);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -78,6 +84,12 @@ export async function GET(request: NextRequest): Promise<Response> {
     Number.isFinite(limitParsed) && limitParsed > 0
       ? Math.max(1, Math.min(200, Math.floor(limitParsed)))
       : null;
+  const startAtFrom = parseDateParam(
+    request.nextUrl.searchParams.get("startAtFrom"),
+  );
+  const startAtTo = parseDateParam(
+    request.nextUrl.searchParams.get("startAtTo"),
+  );
 
   const baseQuery = db
     .select({
@@ -128,6 +140,12 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   if (propertyId) {
     conditions.push(eq(appointments.propertyId, propertyId));
+  }
+  if (startAtFrom) {
+    conditions.push(gte(appointments.startAt, startAtFrom));
+  }
+  if (startAtTo) {
+    conditions.push(lt(appointments.startAt, startAtTo));
   }
 
   const filteredQuery =

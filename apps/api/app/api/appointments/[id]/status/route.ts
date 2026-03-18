@@ -2,15 +2,31 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { getDb, appointmentCrewMembers, appointments, leads, outboxEvents } from "@/db";
+import {
+  getDb,
+  appointmentCrewMembers,
+  appointments,
+  leads,
+  outboxEvents,
+} from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { resolveLockedCrewPayout } from "@/lib/locked-crew-payout";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
-import { getOrCreateCommissionSettings, recalculateAppointmentCommissions } from "@/lib/commissions";
+import {
+  getOrCreateCommissionSettings,
+  recalculateAppointmentCommissions,
+} from "@/lib/commissions";
 
 const StatusSchema = z.object({
-  status: z.enum(["requested", "confirmed", "completed", "no_show", "canceled"]),
+  status: z.enum([
+    "requested",
+    "confirmed",
+    "completed",
+    "no_show",
+    "canceled",
+  ]),
   crew: z.string().optional().nullable(),
   owner: z.string().optional().nullable(),
   marketingMemberId: z.string().uuid().optional().nullable(),
@@ -21,10 +37,10 @@ const StatusSchema = z.object({
     .array(
       z.object({
         memberId: z.string().uuid(),
-        splitBps: z.number().int().min(0).max(10000)
-      })
+        splitBps: z.number().int().min(0).max(10000),
+      }),
     )
-    .optional()
+    .optional(),
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -33,21 +49,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function extractPgCode(error: unknown): string | null {
   const direct = isRecord(error) ? error : null;
-  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  const directCode =
+    direct && typeof direct["code"] === "string" ? direct["code"] : null;
   if (directCode) return directCode;
-  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
-  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  const cause =
+    direct && isRecord(direct["cause"])
+      ? (direct["cause"] as Record<string, unknown>)
+      : null;
+  const causeCode =
+    cause && typeof cause["code"] === "string" ? cause["code"] : null;
   return causeCode;
 }
 
 export async function POST(
   request: NextRequest,
-  context: { params: Promise<{ id: string }> }
+  context: { params: Promise<{ id: string }> },
 ): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const permissionError = await requirePermission(request, "appointments.update");
+  const permissionError = await requirePermission(
+    request,
+    "appointments.update",
+  );
   if (permissionError) return permissionError;
 
   const { id: appointmentId } = await context.params;
@@ -60,7 +84,7 @@ export async function POST(
   if (!parsed.success) {
     return NextResponse.json(
       { error: "invalid_payload", message: parsed.error.flatten() },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -72,7 +96,23 @@ export async function POST(
   const finalTotalCentsInput = parsed.data.finalTotalCents;
   const cardTipCentsInput = parsed.data.cardTipCents;
   const finalTotalSameAsQuoted = parsed.data.finalTotalSameAsQuoted === true;
-  const crewMembers = parsed.data.crewMembers;
+  let crewMembers = parsed.data.crewMembers;
+  if (crewMembers !== undefined && crewMembers.length > 0) {
+    const resolvedCrewPayout = resolveLockedCrewPayout(
+      crewMembers.map((entry) => entry.memberId),
+    );
+    if (!resolvedCrewPayout.ok) {
+      return NextResponse.json(
+        {
+          error: "invalid_crew_combo",
+          message:
+            "No locked crew payout rule exists for that crew combination yet.",
+        },
+        { status: 400 },
+      );
+    }
+    crewMembers = resolvedCrewPayout.splits;
+  }
 
   const [existing] = await db
     .select({
@@ -81,7 +121,7 @@ export async function POST(
       calendarEventId: appointments.calendarEventId,
       quotedTotalCents: appointments.quotedTotalCents,
       finalTotalCents: appointments.finalTotalCents,
-      status: appointments.status
+      status: appointments.status,
     })
     .from(appointments)
     .where(eq(appointments.id, appointmentId))
@@ -100,16 +140,21 @@ export async function POST(
     }
   }
 
-  const becameCompleted = existing.status !== "completed" && status === "completed";
-  const leavingCompleted = existing.status === "completed" && status !== "completed";
+  const becameCompleted =
+    existing.status !== "completed" && status === "completed";
+  const leavingCompleted =
+    existing.status === "completed" && status !== "completed";
   const becameFinalTotalKnown =
     status === "completed" &&
     finalTotalCentsToSet !== undefined &&
     existing.finalTotalCents == null &&
     finalTotalCentsToSet != null;
 
-  const completedAtToSet =
-    leavingCompleted ? null : becameCompleted ? new Date() : undefined;
+  const completedAtToSet = leavingCompleted
+    ? null
+    : becameCompleted
+      ? new Date()
+      : undefined;
 
   let marketingToSet: string | null | undefined = undefined;
   if (becameCompleted && marketingMemberId === undefined) {
@@ -135,15 +180,20 @@ export async function POST(
   const updated = await db.transaction(async (tx) => {
     const baseSet: Record<string, unknown> = {
       status,
-      updatedAt: new Date()
+      updatedAt: new Date(),
     };
     if (crew !== undefined) baseSet["crew"] = crew ?? null;
     if (owner !== undefined) baseSet["owner"] = owner ?? null;
-    if (marketingMemberId !== undefined) baseSet["marketingMemberId"] = marketingMemberId ?? null;
-    if (marketingToSet !== undefined) baseSet["marketingMemberId"] = marketingToSet;
-    if (finalTotalCentsToSet !== undefined) baseSet["finalTotalCents"] = finalTotalCentsToSet;
-    if (cardTipCentsInput !== undefined) baseSet["cardTipCents"] = cardTipCentsInput;
-    if (completedAtToSet !== undefined) baseSet["completedAt"] = completedAtToSet;
+    if (marketingMemberId !== undefined)
+      baseSet["marketingMemberId"] = marketingMemberId ?? null;
+    if (marketingToSet !== undefined)
+      baseSet["marketingMemberId"] = marketingToSet;
+    if (finalTotalCentsToSet !== undefined)
+      baseSet["finalTotalCents"] = finalTotalCentsToSet;
+    if (cardTipCentsInput !== undefined)
+      baseSet["cardTipCents"] = cardTipCentsInput;
+    if (completedAtToSet !== undefined)
+      baseSet["completedAt"] = completedAtToSet;
 
     let row:
       | {
@@ -161,7 +211,7 @@ export async function POST(
         .returning({
           id: appointments.id,
           leadId: appointments.leadId,
-          calendarEventId: appointments.calendarEventId
+          calendarEventId: appointments.calendarEventId,
         });
       row = updatedRow;
     } catch (error) {
@@ -170,11 +220,12 @@ export async function POST(
 
       const fallbackSet: Record<string, unknown> = {
         status,
-        updatedAt: baseSet["updatedAt"]
+        updatedAt: baseSet["updatedAt"],
       };
       if (crew !== undefined) fallbackSet["crew"] = crew ?? null;
       if (owner !== undefined) fallbackSet["owner"] = owner ?? null;
-      if (finalTotalCentsToSet !== undefined) fallbackSet["finalTotalCents"] = finalTotalCentsToSet;
+      if (finalTotalCentsToSet !== undefined)
+        fallbackSet["finalTotalCents"] = finalTotalCentsToSet;
 
       const [updatedRow] = await tx
         .update(appointments)
@@ -183,7 +234,7 @@ export async function POST(
         .returning({
           id: appointments.id,
           leadId: appointments.leadId,
-          calendarEventId: appointments.calendarEventId
+          calendarEventId: appointments.calendarEventId,
         });
       row = updatedRow;
     }
@@ -193,15 +244,17 @@ export async function POST(
     }
 
     if (crewMembers !== undefined) {
-      await tx.delete(appointmentCrewMembers).where(eq(appointmentCrewMembers.appointmentId, appointmentId));
+      await tx
+        .delete(appointmentCrewMembers)
+        .where(eq(appointmentCrewMembers.appointmentId, appointmentId));
       if (crewMembers.length > 0) {
         await tx.insert(appointmentCrewMembers).values(
           crewMembers.map((entry) => ({
             appointmentId,
             memberId: entry.memberId,
             splitBps: entry.splitBps,
-            createdAt: new Date()
-          }))
+            createdAt: new Date(),
+          })),
         );
       }
     }
@@ -226,7 +279,10 @@ export async function POST(
   }
 
   if (updated.leadId && status === "confirmed") {
-    await db.update(leads).set({ status: "scheduled" }).where(eq(leads.id, updated.leadId));
+    await db
+      .update(leads)
+      .set({ status: "scheduled" })
+      .where(eq(leads.id, updated.leadId));
   }
 
   await db.insert(outboxEvents).values({
@@ -234,16 +290,19 @@ export async function POST(
     payload: {
       appointmentId: updated.id,
       leadId: updated.leadId,
-      status
-    }
+      status,
+    },
   });
 
-  if ((becameCompleted || becameFinalTotalKnown) && finalTotalCentsToSet != null) {
+  if (
+    (becameCompleted || becameFinalTotalKnown) &&
+    finalTotalCentsToSet != null
+  ) {
     await db.insert(outboxEvents).values({
       type: "review.request",
       payload: {
-        appointmentId: updated.id
-      }
+        appointmentId: updated.id,
+      },
     });
   }
 
@@ -255,11 +314,17 @@ export async function POST(
     meta: {
       status,
       leadId: updated.leadId ?? null,
-      ...(finalTotalCentsToSet !== undefined ? { finalTotalCents: finalTotalCentsToSet } : {}),
-      ...(cardTipCentsInput !== undefined ? { cardTipCents: cardTipCentsInput } : {}),
+      ...(finalTotalCentsToSet !== undefined
+        ? { finalTotalCents: finalTotalCentsToSet }
+        : {}),
+      ...(cardTipCentsInput !== undefined
+        ? { cardTipCents: cardTipCentsInput }
+        : {}),
       ...(marketingMemberId !== undefined ? { marketingMemberId } : {}),
-      ...(crewMembers !== undefined ? { crewMembersCount: crewMembers.length } : {})
-    }
+      ...(crewMembers !== undefined
+        ? { crewMembersCount: crewMembers.length }
+        : {}),
+    },
   });
 
   return NextResponse.json({ ok: true, appointmentId: updated.id, status });
