@@ -81,8 +81,8 @@ export function CrewPayoutSelector({ teamMembers }: Props): React.ReactElement {
 
       {selectedMembers.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-          Select who worked this job. If nobody is selected, no crew payout will
-          be created.
+          Select who worked this job. Mark complete is blocked until at least
+          one crew member is selected.
         </div>
       ) : resolvedCrewPayout.ok ? (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">

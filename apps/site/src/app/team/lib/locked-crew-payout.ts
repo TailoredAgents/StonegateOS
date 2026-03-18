@@ -19,7 +19,7 @@ export type LockedCrewPayoutResolution =
 const TEAM_MEMBER_IDS = {
   austin: "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
   devon: "b45988bb-7417-48c5-af6d-fcdf71088282",
-  jefferyHacker: "d52dafcd-c571-40ac-ac20-527e4031bc05",
+  jeffreyHacker: "d52dafcd-c571-40ac-ac20-527e4031bc05",
 } as const;
 
 type ExactCrewRule = {
@@ -30,11 +30,11 @@ type ExactCrewRule = {
 
 const EXACT_CREW_RULES: readonly ExactCrewRule[] = [
   {
-    key: "austin+jeffery",
-    memberIds: [TEAM_MEMBER_IDS.austin, TEAM_MEMBER_IDS.jefferyHacker],
+    key: "austin+jeffrey",
+    memberIds: [TEAM_MEMBER_IDS.austin, TEAM_MEMBER_IDS.jeffreyHacker],
     splitBpsByMemberId: {
       [TEAM_MEMBER_IDS.austin]: 3400,
-      [TEAM_MEMBER_IDS.jefferyHacker]: 6600,
+      [TEAM_MEMBER_IDS.jeffreyHacker]: 6600,
     },
   },
   {
@@ -46,16 +46,16 @@ const EXACT_CREW_RULES: readonly ExactCrewRule[] = [
     },
   },
   {
-    key: "austin+devon+jeffery",
+    key: "austin+devon+jeffrey",
     memberIds: [
       TEAM_MEMBER_IDS.austin,
       TEAM_MEMBER_IDS.devon,
-      TEAM_MEMBER_IDS.jefferyHacker,
+      TEAM_MEMBER_IDS.jeffreyHacker,
     ],
     splitBpsByMemberId: {
       [TEAM_MEMBER_IDS.austin]: 2700,
       [TEAM_MEMBER_IDS.devon]: 2300,
-      [TEAM_MEMBER_IDS.jefferyHacker]: 5000,
+      [TEAM_MEMBER_IDS.jeffreyHacker]: 5000,
     },
   },
 ] as const;

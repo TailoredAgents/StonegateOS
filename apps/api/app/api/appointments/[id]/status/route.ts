@@ -61,6 +61,19 @@ function extractPgCode(error: unknown): string | null {
   return causeCode;
 }
 
+async function getExistingCrewMembers(
+  db: ReturnType<typeof getDb>,
+  appointmentId: string,
+): Promise<Array<{ memberId: string; splitBps: number }>> {
+  return db
+    .select({
+      memberId: appointmentCrewMembers.memberId,
+      splitBps: appointmentCrewMembers.splitBps,
+    })
+    .from(appointmentCrewMembers)
+    .where(eq(appointmentCrewMembers.appointmentId, appointmentId));
+}
+
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
@@ -129,6 +142,25 @@ export async function POST(
 
   if (!existing) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+
+  if (status === "completed") {
+    const existingCrewMembers =
+      crewMembers === undefined
+        ? await getExistingCrewMembers(db, appointmentId)
+        : [];
+    const effectiveCrewMembers =
+      crewMembers !== undefined ? crewMembers : existingCrewMembers;
+
+    if (effectiveCrewMembers.length === 0) {
+      return NextResponse.json(
+        {
+          error: "crew_required",
+          message: "Select at least one crew member before marking complete.",
+        },
+        { status: 400 },
+      );
+    }
   }
 
   let finalTotalCentsToSet: number | null | undefined = undefined;

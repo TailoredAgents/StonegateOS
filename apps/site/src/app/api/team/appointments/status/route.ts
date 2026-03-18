@@ -88,22 +88,28 @@ export async function POST(request: NextRequest): Promise<Response> {
     const crewIds = formData
       .getAll("crewMemberId")
       .filter((value): value is string => typeof value === "string");
-    if (crewIds.length > 0) {
-      const resolvedCrewPayout = resolveLockedCrewPayout(crewIds);
-      if (!resolvedCrewPayout.ok) {
-        const response = NextResponse.redirect(redirectTo, 303);
-        response.cookies.set({
-          name: "myst-flash-error",
-          value:
-            "No locked crew payout rule exists for that crew combination yet.",
-          path: "/",
-        });
-        return response;
-      }
-      payload["crewMembers"] = resolvedCrewPayout.splits;
-    } else {
-      payload["crewMembers"] = [];
+    if (crewIds.length === 0) {
+      const response = NextResponse.redirect(redirectTo, 303);
+      response.cookies.set({
+        name: "myst-flash-error",
+        value: "Select at least one crew member before marking complete.",
+        path: "/",
+      });
+      return response;
     }
+
+    const resolvedCrewPayout = resolveLockedCrewPayout(crewIds);
+    if (!resolvedCrewPayout.ok) {
+      const response = NextResponse.redirect(redirectTo, 303);
+      response.cookies.set({
+        name: "myst-flash-error",
+        value:
+          "No locked crew payout rule exists for that crew combination yet.",
+        path: "/",
+      });
+      return response;
+    }
+    payload["crewMembers"] = resolvedCrewPayout.splits;
   }
 
   const apiResponse = await callAdminApi(

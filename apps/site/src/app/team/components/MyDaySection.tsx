@@ -705,7 +705,8 @@ function AppointmentCard({
                       sold the job? when the appointment was booked.
                     </div>
                     <div className="text-[11px] text-slate-600">
-                      Crew payout is locked by the selected crew combo.
+                      Crew payout is locked by the selected crew combo, and at
+                      least one crew member is required before completion.
                     </div>
                     <CrewPayoutSelector teamMembers={teamMembers} />
                   </div>
