@@ -10,8 +10,9 @@ import {
   payoutRunAdjustments,
   payoutRunLines,
   payoutRuns,
-  teamMembers
+  teamMembers,
 } from "@/db";
+import { savePayoutRunReportHtml } from "@/lib/payout-run-report";
 
 export type CommissionSettingsRow = {
   key: string;
@@ -28,7 +29,15 @@ export type CommissionSettingsRow = {
 const SETTINGS_KEY = "default";
 
 function asWeekday(value: number): 1 | 2 | 3 | 4 | 5 | 6 | 7 {
-  if (value === 1 || value === 2 || value === 3 || value === 4 || value === 5 || value === 6 || value === 7) {
+  if (
+    value === 1 ||
+    value === 2 ||
+    value === 3 ||
+    value === 4 ||
+    value === 5 ||
+    value === 6 ||
+    value === 7
+  ) {
     return value;
   }
   return 5;
@@ -42,7 +51,9 @@ export function percentFromBps(bps: number): number {
   return bps / 100;
 }
 
-export async function getOrCreateCommissionSettings(db: DatabaseClient): Promise<CommissionSettingsRow> {
+export async function getOrCreateCommissionSettings(
+  db: DatabaseClient,
+): Promise<CommissionSettingsRow> {
   const [existing] = await db
     .select({
       key: commissionSettings.key,
@@ -53,13 +64,14 @@ export async function getOrCreateCommissionSettings(db: DatabaseClient): Promise
       salesRateBps: commissionSettings.salesRateBps,
       marketingRateBps: commissionSettings.marketingRateBps,
       crewPoolRateBps: commissionSettings.crewPoolRateBps,
-      marketingMemberId: commissionSettings.marketingMemberId
+      marketingMemberId: commissionSettings.marketingMemberId,
     })
     .from(commissionSettings)
     .where(eq(commissionSettings.key, SETTINGS_KEY))
     .limit(1);
 
-  if (existing) return { ...existing, payoutWeekday: asWeekday(existing.payoutWeekday) };
+  if (existing)
+    return { ...existing, payoutWeekday: asWeekday(existing.payoutWeekday) };
 
   let defaultMarketingMemberId: string | null = null;
   try {
@@ -87,7 +99,7 @@ export async function getOrCreateCommissionSettings(db: DatabaseClient): Promise
       marketingMemberId: defaultMarketingMemberId,
       updatedBy: null,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
     })
     .onConflictDoNothing({ target: commissionSettings.key });
 
@@ -101,7 +113,7 @@ export async function getOrCreateCommissionSettings(db: DatabaseClient): Promise
       salesRateBps: commissionSettings.salesRateBps,
       marketingRateBps: commissionSettings.marketingRateBps,
       crewPoolRateBps: commissionSettings.crewPoolRateBps,
-      marketingMemberId: commissionSettings.marketingMemberId
+      marketingMemberId: commissionSettings.marketingMemberId,
     })
     .from(commissionSettings)
     .where(eq(commissionSettings.key, SETTINGS_KEY))
@@ -116,7 +128,10 @@ export async function getOrCreateCommissionSettings(db: DatabaseClient): Promise
 
 export function resolveCurrentPayoutPeriod(
   now: Date,
-  settings: Pick<CommissionSettingsRow, "timezone" | "payoutHour" | "payoutMinute">
+  settings: Pick<
+    CommissionSettingsRow,
+    "timezone" | "payoutHour" | "payoutMinute"
+  >,
 ) {
   const zoned = DateTime.fromJSDate(now).setZone(settings.timezone);
   const periodStart = zoned.startOf("week");
@@ -125,14 +140,14 @@ export function resolveCurrentPayoutPeriod(
     hour: settings.payoutHour,
     minute: settings.payoutMinute,
     second: 0,
-    millisecond: 0
+    millisecond: 0,
   });
 
   return {
     timezone: settings.timezone,
     periodStart: periodStart.toJSDate(),
     periodEnd: periodEnd.toJSDate(),
-    scheduledPayoutAt: scheduledPayoutAt.toJSDate()
+    scheduledPayoutAt: scheduledPayoutAt.toJSDate(),
   };
 }
 
@@ -150,14 +165,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function extractPgCode(error: unknown): string | null {
   const direct = isRecord(error) ? error : null;
-  const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
+  const directCode =
+    direct && typeof direct["code"] === "string" ? direct["code"] : null;
   if (directCode) return directCode;
-  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
-  const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
+  const cause =
+    direct && isRecord(direct["cause"])
+      ? (direct["cause"] as Record<string, unknown>)
+      : null;
+  const causeCode =
+    cause && typeof cause["code"] === "string" ? cause["code"] : null;
   return causeCode;
 }
 
-export async function recalculateAppointmentCommissions(db: DatabaseClient, appointmentId: string): Promise<void> {
+export async function recalculateAppointmentCommissions(
+  db: DatabaseClient,
+  appointmentId: string,
+): Promise<void> {
   let settings: CommissionSettingsRow;
   try {
     settings = await getOrCreateCommissionSettings(db);
@@ -188,7 +211,7 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
             soldByMemberId: appointments.soldByMemberId,
-            marketingMemberId: appointments.marketingMemberId
+            marketingMemberId: appointments.marketingMemberId,
           })
           .from(appointments)
           .where(eq(appointments.id, appointmentId))
@@ -204,7 +227,7 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
           .select({
             id: appointments.id,
             status: appointments.status,
-            finalTotalCents: appointments.finalTotalCents
+            finalTotalCents: appointments.finalTotalCents,
           })
           .from(appointments)
           .where(eq(appointments.id, appointmentId))
@@ -214,7 +237,7 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
           ? {
               ...fallback,
               soldByMemberId: null,
-              marketingMemberId: null
+              marketingMemberId: null,
             }
           : undefined;
       }
@@ -224,10 +247,14 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
       }
 
       const baseCents =
-        row.status === "completed" && typeof row.finalTotalCents === "number" ? row.finalTotalCents : null;
+        row.status === "completed" && typeof row.finalTotalCents === "number"
+          ? row.finalTotalCents
+          : null;
 
       try {
-        await tx.delete(appointmentCommissions).where(eq(appointmentCommissions.appointmentId, appointmentId));
+        await tx
+          .delete(appointmentCommissions)
+          .where(eq(appointmentCommissions.appointmentId, appointmentId));
       } catch (error) {
         const code = extractPgCode(error);
         if (code === "42P01" || code === "42703") {
@@ -240,7 +267,8 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
         return;
       }
 
-      const commissionRows: Array<typeof appointmentCommissions.$inferInsert> = [];
+      const commissionRows: Array<typeof appointmentCommissions.$inferInsert> =
+        [];
 
       const soldBy = row.soldByMemberId ?? null;
       if (soldBy) {
@@ -250,11 +278,12 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
           role: "sales",
           baseCents,
           amountCents: computeBpsAmount(baseCents, settings.salesRateBps),
-          meta: { rateBps: settings.salesRateBps }
+          meta: { rateBps: settings.salesRateBps },
         });
       }
 
-      const marketingMemberId = row.marketingMemberId ?? settings.marketingMemberId ?? null;
+      const marketingMemberId =
+        row.marketingMemberId ?? settings.marketingMemberId ?? null;
       if (marketingMemberId) {
         commissionRows.push({
           appointmentId,
@@ -262,7 +291,7 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
           role: "marketing",
           baseCents,
           amountCents: computeBpsAmount(baseCents, settings.marketingRateBps),
-          meta: { rateBps: settings.marketingRateBps }
+          meta: { rateBps: settings.marketingRateBps },
         });
       }
 
@@ -271,7 +300,7 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
         crew = await tx
           .select({
             memberId: appointmentCrewMembers.memberId,
-            splitBps: appointmentCrewMembers.splitBps
+            splitBps: appointmentCrewMembers.splitBps,
           })
           .from(appointmentCrewMembers)
           .where(eq(appointmentCrewMembers.appointmentId, appointmentId));
@@ -283,7 +312,10 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
         crew = [];
       }
 
-      const totalSplitBps = crew.reduce((sum, entry) => sum + (entry.splitBps ?? 0), 0);
+      const totalSplitBps = crew.reduce(
+        (sum, entry) => sum + (entry.splitBps ?? 0),
+        0,
+      );
       if (crew.length > 0 && totalSplitBps > 0) {
         const poolCents = computeBpsAmount(baseCents, settings.crewPoolRateBps);
         const allocations = crew.map((entry) => {
@@ -294,11 +326,14 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
             memberId: entry.memberId,
             splitBps: entry.splitBps,
             cents: quotient,
-            remainder
+            remainder,
           };
         });
 
-        let allocated = allocations.reduce((sum, entry) => sum + entry.cents, 0);
+        let allocated = allocations.reduce(
+          (sum, entry) => sum + entry.cents,
+          0,
+        );
         let remaining = poolCents - allocated;
         allocations.sort((a, b) => {
           if (b.remainder !== a.remainder) return b.remainder - a.remainder;
@@ -320,8 +355,8 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
             meta: {
               poolRateBps: settings.crewPoolRateBps,
               splitBps: entry.splitBps,
-              totalSplitBps
-            }
+              totalSplitBps,
+            },
           });
         }
       }
@@ -332,8 +367,8 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
             commissionRows.map((rowInsert) => ({
               ...rowInsert,
               createdAt: new Date(),
-              updatedAt: new Date()
-            }))
+              updatedAt: new Date(),
+            })),
           );
         } catch (error) {
           const code = extractPgCode(error);
@@ -352,17 +387,30 @@ export async function recalculateAppointmentCommissions(db: DatabaseClient, appo
   }
 }
 
-export async function createOrGetCurrentPayoutRun(db: DatabaseClient, input: { actorId?: string | null }): Promise<{ payoutRunId: string }> {
+export async function createOrGetCurrentPayoutRun(
+  db: DatabaseClient,
+  input: { actorId?: string | null },
+): Promise<{ payoutRunId: string }> {
   const settings = await getOrCreateCommissionSettings(db);
   const period = resolveCurrentPayoutPeriod(new Date(), settings);
 
   const [existing] = await db
-    .select({ id: payoutRuns.id })
+    .select({ id: payoutRuns.id, status: payoutRuns.status })
     .from(payoutRuns)
-    .where(and(eq(payoutRuns.periodStart, period.periodStart), eq(payoutRuns.periodEnd, period.periodEnd)))
+    .where(
+      and(
+        eq(payoutRuns.periodStart, period.periodStart),
+        eq(payoutRuns.periodEnd, period.periodEnd),
+      ),
+    )
     .limit(1);
 
-  if (existing?.id) return { payoutRunId: existing.id };
+  if (existing?.id) {
+    if (existing.status === "draft") {
+      await savePayoutRunReportHtml(db, existing.id);
+    }
+    return { payoutRunId: existing.id };
+  }
 
   const [created] = await db
     .insert(payoutRuns)
@@ -374,22 +422,26 @@ export async function createOrGetCurrentPayoutRun(db: DatabaseClient, input: { a
       status: "draft",
       createdBy: input.actorId ?? null,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
     })
     .returning({ id: payoutRuns.id });
 
   if (!created?.id) throw new Error("payout_run_create_failed");
+  await savePayoutRunReportHtml(db, created.id);
   return { payoutRunId: created.id };
 }
 
-export async function lockPayoutRun(db: DatabaseClient, input: { payoutRunId: string; actorId?: string | null }): Promise<void> {
+export async function lockPayoutRun(
+  db: DatabaseClient,
+  input: { payoutRunId: string; actorId?: string | null },
+): Promise<void> {
   const [run] = await db
     .select({
       id: payoutRuns.id,
       status: payoutRuns.status,
       timezone: payoutRuns.timezone,
       periodStart: payoutRuns.periodStart,
-      periodEnd: payoutRuns.periodEnd
+      periodEnd: payoutRuns.periodEnd,
     })
     .from(payoutRuns)
     .where(eq(payoutRuns.id, input.payoutRunId))
@@ -399,29 +451,38 @@ export async function lockPayoutRun(db: DatabaseClient, input: { payoutRunId: st
   if (run.status !== "draft") return;
 
   await db.transaction(async (tx) => {
-    await tx.delete(payoutRunLines).where(eq(payoutRunLines.payoutRunId, input.payoutRunId));
+    await tx
+      .delete(payoutRunLines)
+      .where(eq(payoutRunLines.payoutRunId, input.payoutRunId));
 
     const commissionRows = await tx
       .select({
         memberId: appointmentCommissions.memberId,
         role: appointmentCommissions.role,
-        amountCents: sql<number>`sum(${appointmentCommissions.amountCents})`.mapWith(Number)
+        amountCents:
+          sql<number>`sum(${appointmentCommissions.amountCents})`.mapWith(
+            Number,
+          ),
       })
       .from(appointmentCommissions)
-      .innerJoin(appointments, eq(appointmentCommissions.appointmentId, appointments.id))
+      .innerJoin(
+        appointments,
+        eq(appointmentCommissions.appointmentId, appointments.id),
+      )
       .where(
         and(
           gte(appointments.completedAt, run.periodStart),
           lt(appointments.completedAt, run.periodEnd),
-          eq(appointments.status, "completed")
-        )
+          eq(appointments.status, "completed"),
+        ),
       )
       .groupBy(appointmentCommissions.memberId, appointmentCommissions.role);
 
     const adjustmentRows = await tx
       .select({
         memberId: payoutRunAdjustments.memberId,
-        amountCents: sql<number>`sum(${payoutRunAdjustments.amountCents})`.mapWith(Number)
+        amountCents:
+          sql<number>`sum(${payoutRunAdjustments.amountCents})`.mapWith(Number),
       })
       .from(payoutRunAdjustments)
       .where(eq(payoutRunAdjustments.payoutRunId, input.payoutRunId))
@@ -429,11 +490,16 @@ export async function lockPayoutRun(db: DatabaseClient, input: { payoutRunId: st
 
     const adjustmentMap = new Map<string, number>();
     for (const row of adjustmentRows) {
-      if (row.memberId) adjustmentMap.set(row.memberId, Number(row.amountCents ?? 0));
+      if (row.memberId)
+        adjustmentMap.set(row.memberId, Number(row.amountCents ?? 0));
     }
 
     const memberIds = Array.from(
-      new Set(commissionRows.map((row) => row.memberId).filter((id): id is string => typeof id === "string"))
+      new Set(
+        commissionRows
+          .map((row) => row.memberId)
+          .filter((id): id is string => typeof id === "string"),
+      ),
     );
     const members = memberIds.length
       ? await tx
@@ -443,12 +509,22 @@ export async function lockPayoutRun(db: DatabaseClient, input: { payoutRunId: st
       : [];
     const memberSet = new Set(members.map((m) => m.id));
 
-    type Totals = { sales: number; marketing: number; crew: number; adjustments: number };
+    type Totals = {
+      sales: number;
+      marketing: number;
+      crew: number;
+      adjustments: number;
+    };
     const totalsByMember = new Map<string, Totals>();
     for (const row of commissionRows) {
       const memberId = row.memberId;
       if (!memberId || !memberSet.has(memberId)) continue;
-      const totals = totalsByMember.get(memberId) ?? { sales: 0, marketing: 0, crew: 0, adjustments: 0 };
+      const totals = totalsByMember.get(memberId) ?? {
+        sales: 0,
+        marketing: 0,
+        crew: 0,
+        adjustments: 0,
+      };
       const cents = Number(row.amountCents ?? 0);
       if (row.role === "sales") totals.sales += cents;
       if (row.role === "marketing") totals.marketing += cents;
@@ -457,14 +533,20 @@ export async function lockPayoutRun(db: DatabaseClient, input: { payoutRunId: st
     }
 
     for (const [memberId, adjustment] of adjustmentMap.entries()) {
-      const totals = totalsByMember.get(memberId) ?? { sales: 0, marketing: 0, crew: 0, adjustments: 0 };
+      const totals = totalsByMember.get(memberId) ?? {
+        sales: 0,
+        marketing: 0,
+        crew: 0,
+        adjustments: 0,
+      };
       totals.adjustments += adjustment;
       totalsByMember.set(memberId, totals);
     }
 
     const lines: Array<typeof payoutRunLines.$inferInsert> = [];
     for (const [memberId, totals] of totalsByMember.entries()) {
-      const totalCents = totals.sales + totals.marketing + totals.crew + totals.adjustments;
+      const totalCents =
+        totals.sales + totals.marketing + totals.crew + totals.adjustments;
       lines.push({
         payoutRunId: input.payoutRunId,
         memberId,
@@ -472,12 +554,14 @@ export async function lockPayoutRun(db: DatabaseClient, input: { payoutRunId: st
         marketingCents: totals.marketing,
         crewCents: totals.crew,
         adjustmentsCents: totals.adjustments,
-        totalCents
+        totalCents,
       });
     }
 
     if (lines.length > 0) {
-      await tx.insert(payoutRunLines).values(lines.map((line) => ({ ...line, createdAt: new Date() })));
+      await tx
+        .insert(payoutRunLines)
+        .values(lines.map((line) => ({ ...line, createdAt: new Date() })));
     }
 
     await tx
@@ -485,13 +569,18 @@ export async function lockPayoutRun(db: DatabaseClient, input: { payoutRunId: st
       .set({
         status: "locked",
         lockedAt: new Date(),
-        updatedAt: new Date()
+        updatedAt: new Date(),
       })
       .where(eq(payoutRuns.id, input.payoutRunId));
   });
+
+  await savePayoutRunReportHtml(db, input.payoutRunId);
 }
 
-export async function markPayoutRunPaid(db: DatabaseClient, payoutRunId: string): Promise<void> {
+export async function markPayoutRunPaid(
+  db: DatabaseClient,
+  payoutRunId: string,
+): Promise<void> {
   const now = new Date();
 
   await db.transaction(async (tx) => {
@@ -500,7 +589,7 @@ export async function markPayoutRunPaid(db: DatabaseClient, payoutRunId: string)
         id: payoutRuns.id,
         periodStart: payoutRuns.periodStart,
         periodEnd: payoutRuns.periodEnd,
-        scheduledPayoutAt: payoutRuns.scheduledPayoutAt
+        scheduledPayoutAt: payoutRuns.scheduledPayoutAt,
       })
       .from(payoutRuns)
       .where(eq(payoutRuns.id, payoutRunId))
@@ -520,7 +609,9 @@ export async function markPayoutRunPaid(db: DatabaseClient, payoutRunId: string)
     const [existingExpense] = await tx
       .select({ id: expenses.id })
       .from(expenses)
-      .where(and(eq(expenses.source, "payout_run"), eq(expenses.memo, expenseMemo)))
+      .where(
+        and(eq(expenses.source, "payout_run"), eq(expenses.memo, expenseMemo)),
+      )
       .limit(1);
 
     if (existingExpense?.id) {
@@ -529,7 +620,9 @@ export async function markPayoutRunPaid(db: DatabaseClient, payoutRunId: string)
 
     const [totals] = await tx
       .select({
-        totalCents: sql<number>`sum(${payoutRunLines.totalCents})`.mapWith(Number)
+        totalCents: sql<number>`sum(${payoutRunLines.totalCents})`.mapWith(
+          Number,
+        ),
       })
       .from(payoutRunLines)
       .where(eq(payoutRunLines.payoutRunId, payoutRunId))
@@ -549,7 +642,7 @@ export async function markPayoutRunPaid(db: DatabaseClient, payoutRunId: string)
       coverageStartAt: run.periodStart,
       coverageEndAt: run.periodEnd,
       createdAt: now,
-      updatedAt: now
+      updatedAt: now,
     });
   });
 }

@@ -1623,6 +1623,10 @@ export const payoutRuns = pgTable(
       .$onUpdate(() => new Date()),
     lockedAt: timestamp("locked_at", { withTimezone: true }),
     paidAt: timestamp("paid_at", { withTimezone: true }),
+    reportHtml: text("report_html"),
+    reportGeneratedAt: timestamp("report_generated_at", {
+      withTimezone: true,
+    }),
   },
   (table) => ({
     periodIdx: index("payout_runs_period_idx").on(

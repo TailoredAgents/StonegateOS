@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { desc, eq, sql } from "drizzle-orm";
 import { getDb, payoutRunLines, payoutRuns } from "@/db";
 import { getAuditActorFromRequest } from "@/lib/audit";
+import { calculatePayoutRunLiveTotalCents } from "@/lib/payout-run-report";
 import { requirePermission } from "@/lib/permissions";
 import { createOrGetCurrentPayoutRun } from "@/lib/commissions";
 import { isAdminRequest } from "../../../web/admin";
@@ -17,7 +18,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const db = getDb();
   const { searchParams } = request.nextUrl;
   const limitRaw = searchParams.get("limit");
-  const limit = limitRaw ? Math.min(Math.max(Number(limitRaw) || 10, 1), 50) : 10;
+  const limit = limitRaw
+    ? Math.min(Math.max(Number(limitRaw) || 10, 1), 50)
+    : 10;
 
   const runs = await db
     .select({
@@ -29,7 +32,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       status: payoutRuns.status,
       createdAt: payoutRuns.createdAt,
       lockedAt: payoutRuns.lockedAt,
-      paidAt: payoutRuns.paidAt
+      paidAt: payoutRuns.paidAt,
     })
     .from(payoutRuns)
     .orderBy(desc(payoutRuns.createdAt))
@@ -38,7 +41,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const totals = await db
     .select({
       payoutRunId: payoutRunLines.payoutRunId,
-      totalCents: sql<number>`sum(${payoutRunLines.totalCents})`.mapWith(Number)
+      totalCents: sql<number>`sum(${payoutRunLines.totalCents})`.mapWith(
+        Number,
+      ),
     })
     .from(payoutRunLines)
     .groupBy(payoutRunLines.payoutRunId);
@@ -48,20 +53,35 @@ export async function GET(request: NextRequest): Promise<Response> {
     totalsMap.set(row.payoutRunId, Number(row.totalCents ?? 0));
   }
 
+  const payoutRunsPayload = await Promise.all(
+    runs.map(async (run) => {
+      const totalCents =
+        run.status === "draft"
+          ? await calculatePayoutRunLiveTotalCents(db, {
+              id: run.id,
+              periodStart: run.periodStart,
+              periodEnd: run.periodEnd,
+            })
+          : (totalsMap.get(run.id) ?? 0);
+
+      return {
+        id: run.id,
+        timezone: run.timezone,
+        periodStart: run.periodStart.toISOString(),
+        periodEnd: run.periodEnd.toISOString(),
+        scheduledPayoutAt: run.scheduledPayoutAt.toISOString(),
+        status: run.status,
+        createdAt: run.createdAt.toISOString(),
+        lockedAt: run.lockedAt ? run.lockedAt.toISOString() : null,
+        paidAt: run.paidAt ? run.paidAt.toISOString() : null,
+        totalCents,
+      };
+    }),
+  );
+
   return NextResponse.json({
     ok: true,
-    payoutRuns: runs.map((run) => ({
-      id: run.id,
-      timezone: run.timezone,
-      periodStart: run.periodStart.toISOString(),
-      periodEnd: run.periodEnd.toISOString(),
-      scheduledPayoutAt: run.scheduledPayoutAt.toISOString(),
-      status: run.status,
-      createdAt: run.createdAt.toISOString(),
-      lockedAt: run.lockedAt ? run.lockedAt.toISOString() : null,
-      paidAt: run.paidAt ? run.paidAt.toISOString() : null,
-      totalCents: totalsMap.get(run.id) ?? 0
-    }))
+    payoutRuns: payoutRunsPayload,
   });
 }
 
@@ -74,7 +94,8 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const db = getDb();
   const actor = getAuditActorFromRequest(request);
-  const { payoutRunId } = await createOrGetCurrentPayoutRun(db, { actorId: actor.id ?? null });
+  const { payoutRunId } = await createOrGetCurrentPayoutRun(db, {
+    actorId: actor.id ?? null,
+  });
   return NextResponse.json({ ok: true, payoutRunId });
 }
-
