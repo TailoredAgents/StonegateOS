@@ -53,6 +53,22 @@ type PayoutRunsPayload = {
   payoutRuns: PayoutRun[];
 };
 
+type CrewPoolOverrideDay = {
+  id: string;
+  localDate: string;
+  timezone: string;
+  crewPoolRateBps: number;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type CrewPoolOverrideDaysPayload = {
+  ok: true;
+  timezone: string;
+  overrides: CrewPoolOverrideDay[];
+};
+
 function fmtMoney(cents: number, currency: string) {
   try {
     return new Intl.NumberFormat("en-US", {
@@ -80,17 +96,32 @@ function fmtWhen(iso: string, timezone: string): string {
   }).format(d);
 }
 
+function fmtLocalDate(localDate: string, timezone: string): string {
+  const d = new Date(`${localDate}T12:00:00Z`);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(d);
+}
+
 export async function CommissionsSection(): Promise<React.ReactElement> {
   let commissionSettings: CommissionSettings | null = null;
   let commissionError: string | null = null;
   let payoutRuns: PayoutRun[] = [];
   let members: TeamMemberLite[] = [];
+  let crewPoolOverrideDays: CrewPoolOverrideDay[] = [];
+  let overrideDaysTimeZone = "America/New_York";
+  let overrideError: string | null = null;
 
   try {
-    const [settingsRes, runsRes, membersRes] = await Promise.all([
+    const [settingsRes, runsRes, membersRes, overridesRes] = await Promise.all([
       callAdminApi("/api/admin/commissions/settings"),
       callAdminApi("/api/admin/commissions/payout-runs?limit=10"),
       callAdminApi("/api/admin/team/members"),
+      callAdminApi("/api/admin/commissions/crew-pool-overrides"),
     ]);
 
     if (settingsRes.ok) {
@@ -111,8 +142,18 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         .filter((m) => m.active)
         .map((m) => ({ id: m.id, name: m.name, active: m.active }));
     }
+
+    if (overridesRes.ok) {
+      const payload =
+        (await overridesRes.json()) as CrewPoolOverrideDaysPayload;
+      crewPoolOverrideDays = payload.overrides ?? [];
+      overrideDaysTimeZone = payload.timezone ?? overrideDaysTimeZone;
+    } else {
+      overrideError = `Labor override days unavailable (HTTP ${overridesRes.status})`;
+    }
   } catch {
     commissionError = commissionError ?? "Commission settings unavailable.";
+    overrideError = overrideError ?? "Labor override days unavailable.";
   }
 
   return (
@@ -311,6 +352,113 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
             Commission settings not available yet.
           </p>
         )}
+      </div>
+
+      <div className={TEAM_CARD_PADDED}>
+        <h3 className="text-lg font-semibold text-slate-900">30% labor days</h3>
+        <p className="mt-1 text-sm text-slate-600">
+          Mark a date as a labor override day. This applies a different crew
+          pool only when Austin, Devon, and Jeffrey are the selected crew, and
+          draft payouts recalculate automatically when you save it.
+        </p>
+
+        <form
+          action="/api/team/commissions/crew-pool-overrides"
+          method="post"
+          className="mt-4 grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700 sm:grid-cols-3"
+        >
+          <input type="hidden" name="action" value="save" />
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-slate-600">Date</span>
+            <input
+              type="date"
+              name="localDate"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+              required
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-slate-600">
+              Crew pool %
+            </span>
+            <input
+              name="crewPoolRatePercent"
+              defaultValue="30"
+              inputMode="decimal"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+              required
+            />
+          </label>
+          <label className="flex flex-col gap-1 sm:col-span-3">
+            <span className="text-xs font-medium text-slate-600">
+              Note (optional)
+            </span>
+            <input
+              name="note"
+              placeholder="Example: Devon labor day with Austin + Jeffrey"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+            />
+          </label>
+          <div className="sm:col-span-3">
+            <SubmitButton
+              className={teamButtonClass("secondary")}
+              pendingLabel="Saving..."
+            >
+              Save labor override day
+            </SubmitButton>
+          </div>
+        </form>
+
+        {overrideError ? (
+          <p className="mt-3 text-sm text-amber-700">{overrideError}</p>
+        ) : null}
+
+        <div className="mt-4 space-y-2">
+          {crewPoolOverrideDays.length === 0 ? (
+            <p className="text-sm text-slate-600">
+              No labor override days saved yet.
+            </p>
+          ) : (
+            crewPoolOverrideDays.map((override) => (
+              <div
+                key={override.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
+              >
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-900">
+                    {fmtLocalDate(override.localDate, overrideDaysTimeZone)}
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    Crew pool {fmtPercent(override.crewPoolRateBps)} for Austin
+                    + Devon + Jeffrey jobs
+                  </div>
+                  {override.note ? (
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {override.note}
+                    </div>
+                  ) : null}
+                </div>
+                <form
+                  action="/api/team/commissions/crew-pool-overrides"
+                  method="post"
+                >
+                  <input type="hidden" name="action" value="delete" />
+                  <input
+                    type="hidden"
+                    name="localDate"
+                    value={override.localDate}
+                  />
+                  <SubmitButton
+                    className={teamButtonClass("secondary", "sm")}
+                    pendingLabel="Deleting..."
+                  >
+                    Delete
+                  </SubmitButton>
+                </form>
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </section>
   );

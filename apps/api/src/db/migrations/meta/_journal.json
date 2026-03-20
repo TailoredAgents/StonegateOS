@@ -281,6 +281,13 @@
       "when": 1773270000000,
       "tag": "0039_payout_run_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1773356400000,
+      "tag": "0040_commission_crew_pool_override_days",
+      "breakpoints": true
     }
   ]
 }

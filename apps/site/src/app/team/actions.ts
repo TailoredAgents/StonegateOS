@@ -1138,6 +1138,64 @@ export async function convertAppointmentToJobAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function scheduleQuoteFollowupAction(formData: FormData) {
+  const jar = await cookies();
+  const appointmentId = formData.get("appointmentId");
+  const dueAt = formData.get("dueAt");
+  const note = formData.get("note");
+
+  if (typeof appointmentId !== "string" || appointmentId.trim().length === 0) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Appointment ID missing",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (typeof dueAt !== "string" || dueAt.trim().length === 0) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Follow-up date and time are required.",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(
+    `/api/appointments/${encodeURIComponent(appointmentId.trim())}/quote-follow-up`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        dueAt: dueAt.trim(),
+        note:
+          typeof note === "string" && note.trim().length > 0
+            ? note.trim()
+            : null,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const message = await readErrorMessage(
+      response,
+      "Unable to schedule quote follow-up",
+    );
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({
+    name: "myst-flash",
+    value: "Quote follow-up scheduled",
+    path: "/",
+  });
+  revalidatePath("/team");
+}
+
 async function readErrorMessage(
   response: Response,
   fallback: string,

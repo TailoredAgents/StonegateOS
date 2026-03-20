@@ -1,6 +1,16 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, gte, inArray, lt } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  isNotNull,
+  lt,
+} from "drizzle-orm";
 import {
   getDb,
   appointments,
@@ -14,6 +24,10 @@ import {
   quotes,
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
+import {
+  extractQuoteFollowUpAppointmentId,
+  extractQuoteFollowUpComment,
+} from "@/lib/quote-followups";
 import { isAdminRequest } from "../web/admin";
 
 const STATUS_OPTIONS = [
@@ -113,6 +127,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactPhone: contacts.phone,
       contactPhoneE164: contacts.phoneE164,
       contactSource: contacts.source,
+      contactSalespersonMemberId: contacts.salespersonMemberId,
       propertyId: properties.id,
       addressLine1: properties.addressLine1,
       city: properties.city,
@@ -174,6 +189,18 @@ export async function GET(request: NextRequest): Promise<Response> {
     string,
     { id: string; body: string; createdAt: string }[]
   >();
+  const quoteFollowUpMap = new Map<
+    string,
+    {
+      id: string;
+      title: string;
+      dueAt: string;
+      assignedTo: string | null;
+      comment: string | null;
+      createdAt: string;
+      updatedAt: string;
+    }
+  >();
   const attachmentsMap = new Map<
     string,
     {
@@ -220,6 +247,45 @@ export async function GET(request: NextRequest): Promise<Response> {
 
     for (const noteList of notesMap.values()) {
       noteList.sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
+    }
+  }
+
+  if (contactIds.length > 0) {
+    const openReminderRows = await db
+      .select({
+        id: crmTasks.id,
+        title: crmTasks.title,
+        dueAt: crmTasks.dueAt,
+        assignedTo: crmTasks.assignedTo,
+        notes: crmTasks.notes,
+        createdAt: crmTasks.createdAt,
+        updatedAt: crmTasks.updatedAt,
+      })
+      .from(crmTasks)
+      .where(
+        and(
+          inArray(crmTasks.contactId, contactIds),
+          eq(crmTasks.status, "open"),
+          isNotNull(crmTasks.dueAt),
+          isNotNull(crmTasks.notes),
+          ilike(crmTasks.notes, "%kind=quote_follow_up%"),
+        ),
+      )
+      .orderBy(asc(crmTasks.dueAt), desc(crmTasks.createdAt));
+
+    for (const row of openReminderRows) {
+      const appointmentId = extractQuoteFollowUpAppointmentId(row.notes);
+      if (!appointmentId || !row.dueAt) continue;
+      if (quoteFollowUpMap.has(appointmentId)) continue;
+      quoteFollowUpMap.set(appointmentId, {
+        id: row.id,
+        title: row.title,
+        dueAt: row.dueAt.toISOString(),
+        assignedTo: row.assignedTo ?? null,
+        comment: extractQuoteFollowUpComment(row.notes),
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      });
     }
   }
 
@@ -352,9 +418,11 @@ export async function GET(request: NextRequest): Promise<Response> {
         email: row.contactEmail ?? null,
         phone: row.contactPhoneE164 ?? row.contactPhone ?? null,
         source: row.contactSource ?? null,
+        assignedAssociateMemberId: row.contactSalespersonMemberId ?? null,
       },
       pipelineStage,
       quoteStatus,
+      quoteFollowUp: quoteFollowUpMap.get(row.id) ?? null,
       property: {
         id: row.propertyId ?? "unknown",
         addressLine1: row.addressLine1 ?? "Undisclosed",

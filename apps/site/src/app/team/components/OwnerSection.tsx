@@ -2,6 +2,11 @@ import React from "react";
 import { OwnerAssistClient } from "./OwnerAssistClient";
 import { callAdminApi } from "../lib/api";
 import {
+  formatAppointmentPricing,
+  formatUsdCents,
+  type AppointmentBookingDetails,
+} from "../lib/booking-details";
+import {
   TEAM_CARD_PADDED,
   TEAM_SECTION_SUBTITLE,
   TEAM_SECTION_TITLE,
@@ -13,12 +18,33 @@ type RevenueWindow = {
   count: number;
 };
 
+type RevenueWeekJob = {
+  appointmentId: string;
+  startAt: string;
+  completedAt: string | null;
+  contactName: string;
+  addressLine1: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  quotedTotalCents: number | null;
+  finalTotalCents: number;
+  bookingDetails: AppointmentBookingDetails | null;
+};
+
 type RevenuePayload = {
   ok: true;
   currency: string;
   timezone: string;
   windows: {
-    weekToDate: RevenueWindow & { startsAt: string };
+    weekToDate: RevenueWindow & {
+      startsAt: string;
+      jobs: RevenueWeekJob[];
+    };
+    samePaceLastWeek: RevenueWindow & {
+      startsAt: string;
+      endsAt: string;
+    };
     last30Days: RevenueWindow;
     monthToDate: RevenueWindow;
     yearToDate: RevenueWindow;
@@ -52,6 +78,7 @@ type ExpensesSummaryPayload = {
   ok: true;
   currency: string;
   windows: {
+    weekToDate: ExpenseSummaryWindow;
     last30Days: ExpenseSummaryWindow;
     monthToDate: ExpenseSummaryWindow;
     yearToDate: ExpenseSummaryWindow;
@@ -104,9 +131,98 @@ function fmtWindowStart(iso: string, timezone: string): string {
   }).format(d);
 }
 
+function fmtWhen(iso: string, timezone: string): string {
+  const d = new Date(iso);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+}
+
 function fmtPercent(value: number): string {
   if (!Number.isFinite(value)) return "0%";
   return `${value.toFixed(0)}%`;
+}
+
+function fmtSignedMoney(cents: number, currency: string): string {
+  const absolute = fmtMoney(Math.abs(cents), currency);
+  if (cents > 0) return `+${absolute}`;
+  if (cents < 0) return `-${absolute}`;
+  return absolute;
+}
+
+function calcPercentChange(current: number, previous: number): number | null {
+  if (previous === 0) return null;
+  return ((current - previous) / previous) * 100;
+}
+
+function formatJobAddress(job: RevenueWeekJob): string | null {
+  const value = [job.addressLine1, job.city, job.state, job.postalCode]
+    .map((part) => (part ?? "").trim())
+    .filter((part) => part.length > 0)
+    .join(", ");
+  return value.length > 0 ? value : null;
+}
+
+function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
+  let missingPricingCount = 0;
+  let pricingMismatchCount = 0;
+
+  for (const job of jobs) {
+    const pricing = job.bookingDetails?.pricing;
+    if (!pricing) {
+      missingPricingCount += 1;
+      continue;
+    }
+
+    const collected = job.finalTotalCents;
+    const exact = job.quotedTotalCents;
+    const rangeMin = pricing.rangeMinCents ?? null;
+    const rangeMax = pricing.rangeMaxCents ?? null;
+
+    if (pricing.mode === "exact") {
+      if (exact == null) {
+        missingPricingCount += 1;
+      } else if (exact !== collected) {
+        pricingMismatchCount += 1;
+      }
+      continue;
+    }
+
+    if (pricing.mode === "range") {
+      if (rangeMin == null || rangeMax == null) {
+        missingPricingCount += 1;
+      } else if (collected < rangeMin || collected > rangeMax) {
+        pricingMismatchCount += 1;
+      }
+      continue;
+    }
+
+    const hasExact = exact != null;
+    const hasRange = rangeMin != null && rangeMax != null;
+    if (!hasExact && !hasRange) {
+      missingPricingCount += 1;
+      continue;
+    }
+
+    if (hasExact && exact !== collected) {
+      pricingMismatchCount += 1;
+      continue;
+    }
+
+    if (hasRange && (collected < rangeMin! || collected > rangeMax!)) {
+      pricingMismatchCount += 1;
+    }
+  }
+
+  return {
+    missingPricingCount,
+    pricingMismatchCount,
+  };
 }
 
 export async function OwnerSection(): Promise<React.ReactElement> {
@@ -167,16 +283,24 @@ export async function OwnerSection(): Promise<React.ReactElement> {
     commissionError = "Commissions unavailable.";
   }
 
-  function fmtWhen(iso: string, timezone: string): string {
-    const d = new Date(iso);
-    return new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(d);
-  }
+  const weekJobInsights = revenue?.ok
+    ? analyzeWeekJobs(revenue.windows.weekToDate.jobs)
+    : { missingPricingCount: 0, pricingMismatchCount: 0 };
+  const weekRevenue = revenue?.ok ? revenue.windows.weekToDate.totalCents : 0;
+  const samePaceLastWeekRevenue = revenue?.ok
+    ? revenue.windows.samePaceLastWeek.totalCents
+    : 0;
+  const weekRevenueDelta = weekRevenue - samePaceLastWeekRevenue;
+  const weekRevenueDeltaPercent = revenue?.ok
+    ? calcPercentChange(weekRevenue, samePaceLastWeekRevenue)
+    : null;
+  const weekExpenses = expensesSummary?.ok
+    ? expensesSummary.windows.weekToDate.totalCents
+    : 0;
+  const weekPayroll = commissionSummary?.ok
+    ? commissionSummary.totalsCents.total
+    : 0;
+  const weekNetAfterPayroll = weekRevenue - weekExpenses - weekPayroll;
 
   return (
     <section className="space-y-4">
@@ -185,7 +309,133 @@ export async function OwnerSection(): Promise<React.ReactElement> {
         <p className={TEAM_SECTION_SUBTITLE}>Revenue, expenses, and tools.</p>
       </header>
 
-      <OwnerAssistClient />
+      <div className="grid gap-4 xl:grid-cols-[1.1fr,1.9fr]">
+        <div className={TEAM_CARD_PADDED}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">
+                Needs attention
+              </h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Weekly issues and payout items that need a quick look.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-2 text-sm">
+            {revenue?.ok ? (
+              <>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-amber-900">
+                  <div className="font-semibold">
+                    {weekJobInsights.missingPricingCount} jobs missing recorded
+                    quote/range
+                  </div>
+                  <div className="mt-1 text-xs text-amber-700">
+                    These jobs were completed this week but do not have clean
+                    quote/range data for comparison.
+                  </div>
+                </div>
+                <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-3 text-sky-900">
+                  <div className="font-semibold">
+                    {weekJobInsights.pricingMismatchCount} jobs collected
+                    outside the recorded quote/range
+                  </div>
+                  <div className="mt-1 text-xs text-sky-700">
+                    Good for spotting discounting, upsells, or pricing drift.
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            {commissionSummary?.ok ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-slate-900">
+                <div className="font-semibold">
+                  Payroll currently owed:{" "}
+                  {fmtMoney(commissionSummary.totalsCents.total, "USD")}
+                </div>
+                <div className="mt-1 text-xs text-slate-600">
+                  Card tips waiting with payouts:{" "}
+                  {fmtMoney(commissionSummary.cardTipsCents, "USD")}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className={TEAM_CARD_PADDED}>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">
+                Weekly cash flow
+              </h3>
+              <p className="mt-1 text-sm text-slate-600">
+                What came in, what is logged out, and what is still owed this
+                week.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                Collected
+              </div>
+              <div className="mt-2 text-xl font-semibold text-emerald-950">
+                {fmtMoney(weekRevenue, "USD")}
+              </div>
+              {revenue?.ok ? (
+                <div className="mt-1 text-xs text-emerald-800">
+                  {fmtSignedMoney(weekRevenueDelta, "USD")} vs same pace last
+                  week
+                  {weekRevenueDeltaPercent !== null
+                    ? ` (${fmtPercent(weekRevenueDeltaPercent)})`
+                    : ""}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Expenses logged
+              </div>
+              <div className="mt-2 text-xl font-semibold text-slate-900">
+                {fmtMoney(weekExpenses, "USD")}
+              </div>
+              <div className="mt-1 text-xs text-slate-600">
+                {expensesSummary?.ok
+                  ? `${expensesSummary.windows.weekToDate.count} expenses this week`
+                  : "Waiting on expense data"}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                Payroll owed
+              </div>
+              <div className="mt-2 text-xl font-semibold text-amber-950">
+                {fmtMoney(weekPayroll, "USD")}
+              </div>
+              <div className="mt-1 text-xs text-amber-800">
+                Current week payout before tips
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Net after payout
+              </div>
+              <div
+                className={`mt-2 text-xl font-semibold ${weekNetAfterPayroll >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+              >
+                {fmtMoney(weekNetAfterPayroll, "USD")}
+              </div>
+              <div className="mt-1 text-xs text-slate-600">
+                Collected minus logged expenses and payroll
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className={TEAM_CARD_PADDED}>
         <div className="flex items-center justify-between">
@@ -203,7 +453,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
           ) : revenue?.ok ? (
             <ul className="space-y-2">
               <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <div>
+                <div className="min-w-0 flex-1">
                   <div className="font-semibold text-slate-900">
                     Week to date
                   </div>
@@ -225,6 +475,100 @@ export async function OwnerSection(): Promise<React.ReactElement> {
                   )}
                 </div>
               </li>
+              <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <div>
+                  <div className="font-semibold text-slate-900">
+                    Same pace last week
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    {revenue.windows.samePaceLastWeek.count} jobs
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {fmtWindowStart(
+                      revenue.windows.samePaceLastWeek.startsAt,
+                      revenue.timezone,
+                    )}{" "}
+                    through the same point in the week
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-semibold text-slate-900">
+                    {fmtMoney(
+                      revenue.windows.samePaceLastWeek.totalCents,
+                      revenue.currency,
+                    )}
+                  </div>
+                  <div
+                    className={`text-xs ${weekRevenueDelta >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+                  >
+                    {fmtSignedMoney(weekRevenueDelta, revenue.currency)}
+                  </div>
+                </div>
+              </li>
+              {revenue.windows.weekToDate.jobs.length ? (
+                <li className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Completed jobs this week
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    {revenue.windows.weekToDate.jobs.map((job) => {
+                      const pricingSummary =
+                        formatAppointmentPricing(
+                          job.bookingDetails,
+                          job.quotedTotalCents,
+                        ) ?? "Not recorded";
+                      const addressSummary = formatJobAddress(job);
+                      return (
+                        <div
+                          key={job.appointmentId}
+                          className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="font-semibold text-slate-900">
+                                {job.contactName}
+                              </div>
+                              <div className="text-xs text-slate-600">
+                                {fmtWhen(job.startAt, revenue.timezone)}
+                              </div>
+                              {addressSummary ? (
+                                <div className="truncate text-[11px] text-slate-500">
+                                  {addressSummary}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="text-right text-sm font-semibold text-slate-900">
+                              {fmtMoney(job.finalTotalCents, revenue.currency)}
+                            </div>
+                          </div>
+                          <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                              <div className="font-semibold text-slate-500">
+                                Quote / Range
+                              </div>
+                              <div className="mt-1 text-slate-900">
+                                {pricingSummary}
+                              </div>
+                            </div>
+                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                              <div className="font-semibold text-slate-500">
+                                Collected
+                              </div>
+                              <div className="mt-1 text-slate-900">
+                                {formatUsdCents(job.finalTotalCents) ??
+                                  fmtMoney(
+                                    job.finalTotalCents,
+                                    revenue.currency,
+                                  )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </li>
+              ) : null}
               <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                 <div>
                   <div className="font-semibold text-slate-900">
@@ -543,6 +887,8 @@ export async function OwnerSection(): Promise<React.ReactElement> {
           </p>
         )}
       </div>
+
+      <OwnerAssistClient />
     </section>
   );
 }

@@ -5,6 +5,7 @@ import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
   convertAppointmentToJobAction,
   rescheduleAppointmentAction,
+  scheduleQuoteFollowupAction,
   startContactCallAction,
   updateAppointmentBookingDetailsAction,
 } from "../actions";
@@ -103,6 +104,20 @@ function fmtAppointmentSlot(startAtIso: string | null): string {
   }).format(dt);
 }
 
+function fmtFollowUpSlot(startAtIso: string | null): string {
+  if (!startAtIso) return "Not scheduled";
+  const dt = new Date(startAtIso);
+  if (Number.isNaN(dt.getTime())) return "Not scheduled";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(dt);
+}
+
 function isQuoteOnlyAppointment(appointmentType: string | null | undefined) {
   const normalized = (appointmentType ?? "").trim().toLowerCase();
   return (
@@ -188,6 +203,32 @@ function getTeamDayRange(date: Date): { startIso: string; endIso: string } {
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 }
 
+function defaultQuoteFollowUpInputValue(
+  appointmentStartAtIso: string | null,
+  currentDueAtIso: string | null,
+): string {
+  if (currentDueAtIso) {
+    return fmtDateTimeInputValue(currentDueAtIso);
+  }
+
+  const baseDate = appointmentStartAtIso
+    ? new Date(appointmentStartAtIso)
+    : new Date();
+  const validBaseDate = Number.isNaN(baseDate.getTime())
+    ? new Date()
+    : baseDate;
+  const { year, month, day } = getTeamDayParts(validBaseDate);
+  const nextLocalDay = new Date(Date.UTC(year, month - 1, day + 1));
+  const followUpAt = makeUtcDateForTeamTime(
+    nextLocalDay.getUTCFullYear(),
+    nextLocalDay.getUTCMonth() + 1,
+    nextLocalDay.getUTCDate(),
+    9,
+    0,
+  );
+  return fmtDateTimeInputValue(followUpAt.toISOString());
+}
+
 function formatMoneySummary(appointment: AppointmentDto): string | null {
   const quoted = fmtUsdCents(appointment.quotedTotalCents);
   const final = fmtUsdCents(appointment.finalTotalCents);
@@ -234,6 +275,7 @@ interface AppointmentDto {
     email: string | null;
     phone: string | null;
     source: string | null;
+    assignedAssociateMemberId: string | null;
   };
   pipelineStage: string | null;
   quoteStatus: string | null;
@@ -245,6 +287,15 @@ interface AppointmentDto {
     postalCode: string;
   };
   notes: Array<{ id: string; body: string; createdAt: string }>;
+  quoteFollowUp: {
+    id: string;
+    title: string;
+    dueAt: string;
+    assignedTo: string | null;
+    comment: string | null;
+    createdAt: string;
+    updatedAt: string;
+  } | null;
 }
 
 type TeamMemberDto = {
@@ -392,6 +443,23 @@ function AppointmentCard({
   const notesLabel = a.notes.length
     ? `${a.notes.length} ${a.notes.length === 1 ? "note" : "notes"}`
     : "Notes";
+  const quoteFollowUpAssigneeName = a.quoteFollowUp?.assignedTo
+    ? (teamMemberNameById.get(a.quoteFollowUp.assignedTo) ?? "Assigned rep")
+    : a.contact.assignedAssociateMemberId
+      ? (teamMemberNameById.get(a.contact.assignedAssociateMemberId) ??
+        "Assigned rep")
+      : null;
+  const quoteFollowUpSummary = a.quoteFollowUp
+    ? `${fmtFollowUpSlot(a.quoteFollowUp.dueAt)}${
+        quoteFollowUpAssigneeName ? ` with ${quoteFollowUpAssigneeName}` : ""
+      }`
+    : "Not scheduled";
+  const now = new Date();
+  const quoteVisitHasPassed = item.isQuoteOnly
+    ? Boolean(item.startDate && item.startDate.getTime() <= now.getTime())
+    : false;
+  const showFollowUpPanel =
+    item.isQuoteOnly && (quoteVisitHasPassed || Boolean(a.quoteFollowUp));
 
   return (
     <article className={`rounded-3xl border p-4 shadow-sm ${cardClassName}`}>
@@ -421,6 +489,16 @@ function AppointmentCard({
         {a.quoteStatus ? (
           <span className="rounded-full bg-white px-3 py-1 text-slate-700">
             Quote: {a.quoteStatus}
+          </span>
+        ) : null}
+        {item.isQuoteOnly && a.quoteFollowUp ? (
+          <span className="rounded-full bg-white px-3 py-1 text-slate-700">
+            Follow-up: {fmtFollowUpSlot(a.quoteFollowUp.dueAt)}
+          </span>
+        ) : null}
+        {item.isQuoteOnly && quoteVisitHasPassed && !a.quoteFollowUp ? (
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-700">
+            No follow-up set
           </span>
         ) : null}
       </div>
@@ -535,115 +613,198 @@ function AppointmentCard({
             muted={!item.pricingSummary}
           />
         ) : null}
-        <SummaryTile
-          label="Sold by"
-          value={sellerName}
-          muted={!a.soldByMemberId}
-        />
+        {item.isQuoteOnly ? (
+          <SummaryTile
+            label="Follow-up"
+            value={quoteFollowUpSummary}
+            muted={!a.quoteFollowUp}
+          />
+        ) : (
+          <SummaryTile
+            label="Sold by"
+            value={sellerName}
+            muted={!a.soldByMemberId}
+          />
+        )}
       </div>
 
       {!isCompleted ? (
         <div className="mt-4 space-y-3">
           {item.isQuoteOnly ? (
-            <details className="group rounded-2xl border border-sky-200 bg-white p-3">
-              <summary className={summaryButtonClass("primary")}>
-                Convert to job
-              </summary>
-              <form
-                action={convertAppointmentToJobAction}
-                className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
-              >
-                <input type="hidden" name="appointmentId" value={a.id} />
-                {reusableSource ? (
-                  <>
-                    <input
-                      type="hidden"
-                      name="resolvedSourceType"
-                      value={reusableSource.type}
-                    />
-                    {reusableSource.teamMemberId ? (
+            <>
+              <details className="group rounded-2xl border border-sky-200 bg-white p-3">
+                <summary className={summaryButtonClass("primary")}>
+                  Convert to job
+                </summary>
+                <form
+                  action={convertAppointmentToJobAction}
+                  className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
+                >
+                  <input type="hidden" name="appointmentId" value={a.id} />
+                  {reusableSource ? (
+                    <>
                       <input
                         type="hidden"
-                        name="resolvedSourceTeamMemberId"
-                        value={reusableSource.teamMemberId}
+                        name="resolvedSourceType"
+                        value={reusableSource.type}
                       />
-                    ) : null}
-                    {reusableSource.referralName ? (
-                      <input
-                        type="hidden"
-                        name="resolvedSourceReferralName"
-                        value={reusableSource.referralName}
-                      />
-                    ) : null}
-                    <div className="sm:col-span-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
-                      Where from will stay as{" "}
-                      <span className="font-semibold">
-                        {item.leadSourceSummary}
-                      </span>
-                      .
+                      {reusableSource.teamMemberId ? (
+                        <input
+                          type="hidden"
+                          name="resolvedSourceTeamMemberId"
+                          value={reusableSource.teamMemberId}
+                        />
+                      ) : null}
+                      {reusableSource.referralName ? (
+                        <input
+                          type="hidden"
+                          name="resolvedSourceReferralName"
+                          value={reusableSource.referralName}
+                        />
+                      ) : null}
+                      <div className="sm:col-span-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
+                        Where from will stay as{" "}
+                        <span className="font-semibold">
+                          {item.leadSourceSummary}
+                        </span>
+                        .
+                      </div>
+                    </>
+                  ) : (
+                    <div className="sm:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                      This quote is missing a lead source. Set it here so the
+                      converted job tracks correctly.
                     </div>
-                  </>
-                ) : (
-                  <div className="sm:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-                    This quote is missing a lead source. Set it here so the
-                    converted job tracks correctly.
+                  )}
+
+                  <label className="flex flex-col gap-1">
+                    <span>Who sold the job?</span>
+                    <select
+                      name="soldByMemberId"
+                      defaultValue={a.soldByMemberId ?? ""}
+                      required
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    >
+                      <option value="">(Select seller)</option>
+                      {teamMembers.map((member) => (
+                        <option key={member.id} value={member.id}>
+                          {member.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Job date and time</span>
+                    <input
+                      type="datetime-local"
+                      name="startAt"
+                      required
+                      step={300}
+                      defaultValue={fmtDateTimeInputValue(a.startAt)}
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    />
+                  </label>
+
+                  <div className="sm:col-span-2 text-[11px] text-slate-600">
+                    Use the actual job time if you already did the job right
+                    after the quote.
                   </div>
-                )}
 
-                <label className="flex flex-col gap-1">
-                  <span>Who sold the job?</span>
-                  <select
-                    name="soldByMemberId"
-                    defaultValue={a.soldByMemberId ?? ""}
-                    required
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  >
-                    <option value="">(Select seller)</option>
-                    {teamMembers.map((member) => (
-                      <option key={member.id} value={member.id}>
-                        {member.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="flex flex-col gap-1">
-                  <span>Job date and time</span>
-                  <input
-                    type="datetime-local"
-                    name="startAt"
-                    required
-                    step={300}
-                    defaultValue={fmtDateTimeInputValue(a.startAt)}
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                  <AppointmentBookingDetailsFields
+                    teamMembers={teamMembers}
+                    bookingDetails={a.bookingDetails}
+                    quotedTotalCents={a.quotedTotalCents}
+                    labelClassName="flex flex-col gap-1"
+                    fieldClassName="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    hideLeadSource={Boolean(reusableSource)}
+                    fixedSource={reusableSource}
                   />
-                </label>
 
-                <div className="sm:col-span-2 text-[11px] text-slate-600">
-                  Use the actual job time if you already did the job right after
-                  the quote.
-                </div>
+                  <div className="sm:col-span-2 flex items-center justify-end">
+                    <SubmitButton
+                      className={teamButtonClass("primary", "sm")}
+                      pendingLabel="Saving..."
+                    >
+                      Save converted job
+                    </SubmitButton>
+                  </div>
+                </form>
+              </details>
 
-                <AppointmentBookingDetailsFields
-                  teamMembers={teamMembers}
-                  bookingDetails={a.bookingDetails}
-                  quotedTotalCents={a.quotedTotalCents}
-                  labelClassName="flex flex-col gap-1"
-                  fieldClassName="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  hideLeadSource={Boolean(reusableSource)}
-                  fixedSource={reusableSource}
-                />
-
-                <div className="sm:col-span-2 flex items-center justify-end">
-                  <SubmitButton
-                    className={teamButtonClass("primary", "sm")}
-                    pendingLabel="Saving..."
+              {showFollowUpPanel ? (
+                <details className="group rounded-2xl border border-slate-200 bg-white p-3">
+                  <summary className={summaryButtonClass("secondary")}>
+                    {a.quoteFollowUp
+                      ? "Reschedule follow-up"
+                      : "Schedule follow-up"}
+                  </summary>
+                  <form
+                    action={scheduleQuoteFollowupAction}
+                    className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
                   >
-                    Save converted job
-                  </SubmitButton>
-                </div>
-              </form>
-            </details>
+                    <input type="hidden" name="appointmentId" value={a.id} />
+
+                    <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                      {a.quoteFollowUp ? (
+                        <>
+                          Current reminder:{" "}
+                          <span className="font-semibold">
+                            {quoteFollowUpSummary}
+                          </span>
+                          . Saving here replaces that reminder.
+                        </>
+                      ) : (
+                        <>
+                          Creates one follow-up reminder in Sales HQ for{" "}
+                          <span className="font-semibold">
+                            {quoteFollowUpAssigneeName ?? "the assigned rep"}
+                          </span>
+                          .
+                        </>
+                      )}
+                    </div>
+
+                    <label className="flex flex-col gap-1">
+                      <span>Follow-up date and time</span>
+                      <input
+                        type="datetime-local"
+                        name="dueAt"
+                        required
+                        step={300}
+                        defaultValue={defaultQuoteFollowUpInputValue(
+                          a.startAt,
+                          a.quoteFollowUp?.dueAt ?? null,
+                        )}
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1">
+                      <span>Notes (optional)</span>
+                      <textarea
+                        name="note"
+                        rows={3}
+                        defaultValue={a.quoteFollowUp?.comment ?? ""}
+                        placeholder="What should we remember before reaching back out?"
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+
+                    <div className="sm:col-span-2 flex items-center justify-end">
+                      <SubmitButton
+                        className={teamButtonClass("primary", "sm")}
+                        pendingLabel="Saving..."
+                      >
+                        {a.quoteFollowUp
+                          ? "Save follow-up"
+                          : "Schedule follow-up"}
+                      </SubmitButton>
+                    </div>
+                  </form>
+                </details>
+              ) : null}
+            </>
           ) : (
             <details className="group rounded-2xl border border-emerald-200 bg-white p-3">
               <summary className={summaryButtonClass("primary")}>
@@ -916,6 +1077,13 @@ function buildAttentionReasons(
   now: Date,
 ): string[] {
   const reasons: string[] = [];
+  const quoteFollowUpDate = appointment.quoteFollowUp?.dueAt
+    ? new Date(appointment.quoteFollowUp.dueAt)
+    : null;
+  const validQuoteFollowUpDate =
+    quoteFollowUpDate && !Number.isNaN(quoteFollowUpDate.getTime())
+      ? quoteFollowUpDate
+      : null;
 
   if (!appointment.contact.phone?.trim()) {
     reasons.push("Missing phone");
@@ -927,8 +1095,14 @@ function buildAttentionReasons(
 
   if (!startDate) {
     reasons.push("Missing time");
-  } else if (startDate.getTime() < now.getTime()) {
+  } else if (!isQuoteOnly && startDate.getTime() < now.getTime()) {
     reasons.push("Past due");
+  } else if (isQuoteOnly && startDate.getTime() < now.getTime()) {
+    if (!validQuoteFollowUpDate) {
+      reasons.push("Missing follow-up");
+    } else if (validQuoteFollowUpDate.getTime() < now.getTime()) {
+      reasons.push("Follow-up overdue");
+    }
   }
 
   if (!isQuoteOnly) {
@@ -969,7 +1143,6 @@ function toAppointmentCardItem(
     appointment.quotedTotalCents,
   );
   const loadSizeSummary = formatAppointmentLoadSize(appointment.bookingDetails);
-
   return {
     appointment,
     startDate: validStartDate,

@@ -1543,6 +1543,35 @@ export const commissionSettings = pgTable("commission_settings", {
     .$onUpdate(() => new Date()),
 });
 
+export const commissionCrewPoolOverrideDays = pgTable(
+  "commission_crew_pool_override_days",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    localDate: text("local_date").notNull(),
+    timezone: text("timezone").default("America/New_York").notNull(),
+    crewPoolRateBps: integer("crew_pool_rate_bps").notNull(),
+    note: text("note"),
+    createdBy: uuid("created_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    localDateUniqueIdx: uniqueIndex(
+      "commission_crew_pool_override_days_local_date_unique",
+    ).on(table.localDate),
+    localDateIdx: index("commission_crew_pool_override_days_local_date_idx").on(
+      table.localDate,
+    ),
+  }),
+);
+
 export const appointmentCrewMembers = pgTable(
   "appointment_crew_members",
   {

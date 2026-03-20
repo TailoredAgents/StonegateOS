@@ -5,6 +5,7 @@ import {
   appointmentCommissions,
   appointmentCrewMembers,
   appointments,
+  commissionCrewPoolOverrideDays,
   commissionSettings,
   expenses,
   payoutRunAdjustments,
@@ -27,6 +28,11 @@ export type CommissionSettingsRow = {
 };
 
 const SETTINGS_KEY = "default";
+const THIRTY_PERCENT_DAY_CREW_MEMBER_IDS = [
+  "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
+  "b45988bb-7417-48c5-af6d-fcdf71088282",
+  "d52dafcd-c571-40ac-ac20-527e4031bc05",
+] as const;
 
 function asWeekday(value: number): 1 | 2 | 3 | 4 | 5 | 6 | 7 {
   if (
@@ -177,6 +183,83 @@ function extractPgCode(error: unknown): string | null {
   return causeCode;
 }
 
+function appointmentUsesThirtyPercentDayRule(memberIds: string[]): boolean {
+  const selected = new Set(
+    memberIds
+      .map((memberId) => memberId.trim())
+      .filter((memberId) => memberId.length > 0),
+  );
+  return THIRTY_PERCENT_DAY_CREW_MEMBER_IDS.every((memberId) =>
+    selected.has(memberId),
+  );
+}
+
+async function getEffectiveCrewPoolRateBps(
+  tx: Pick<DatabaseClient, "select">,
+  input: {
+    timezone: string;
+    defaultCrewPoolRateBps: number;
+    startAt: Date | null;
+    crewMemberIds: string[];
+  },
+): Promise<{ crewPoolRateBps: number; overrideLocalDate: string | null }> {
+  if (
+    !input.startAt ||
+    !appointmentUsesThirtyPercentDayRule(input.crewMemberIds)
+  ) {
+    return {
+      crewPoolRateBps: input.defaultCrewPoolRateBps,
+      overrideLocalDate: null,
+    };
+  }
+
+  const localDate = DateTime.fromJSDate(input.startAt, {
+    zone: input.timezone,
+  }).toISODate();
+  if (!localDate) {
+    return {
+      crewPoolRateBps: input.defaultCrewPoolRateBps,
+      overrideLocalDate: null,
+    };
+  }
+
+  try {
+    const [override] = await tx
+      .select({
+        crewPoolRateBps: commissionCrewPoolOverrideDays.crewPoolRateBps,
+      })
+      .from(commissionCrewPoolOverrideDays)
+      .where(eq(commissionCrewPoolOverrideDays.localDate, localDate))
+      .limit(1);
+
+    return {
+      crewPoolRateBps:
+        override?.crewPoolRateBps ?? input.defaultCrewPoolRateBps,
+      overrideLocalDate: override ? localDate : null,
+    };
+  } catch (error) {
+    const code = extractPgCode(error);
+    if (code === "42P01" || code === "42703") {
+      return {
+        crewPoolRateBps: input.defaultCrewPoolRateBps,
+        overrideLocalDate: null,
+      };
+    }
+    throw error;
+  }
+}
+
+async function refreshDraftPayoutReports(db: DatabaseClient): Promise<void> {
+  const draftRuns = await db
+    .select({ id: payoutRuns.id })
+    .from(payoutRuns)
+    .where(eq(payoutRuns.status, "draft"));
+
+  for (const run of draftRuns) {
+    await savePayoutRunReportHtml(db, run.id);
+  }
+}
+
 export async function recalculateAppointmentCommissions(
   db: DatabaseClient,
   appointmentId: string,
@@ -199,6 +282,7 @@ export async function recalculateAppointmentCommissions(
             id: string;
             status: string | null;
             finalTotalCents: number | null;
+            startAt: Date | null;
             soldByMemberId: string | null;
             marketingMemberId: string | null;
           }
@@ -210,6 +294,7 @@ export async function recalculateAppointmentCommissions(
             id: appointments.id,
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
+            startAt: appointments.startAt,
             soldByMemberId: appointments.soldByMemberId,
             marketingMemberId: appointments.marketingMemberId,
           })
@@ -228,6 +313,7 @@ export async function recalculateAppointmentCommissions(
             id: appointments.id,
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
+            startAt: appointments.startAt,
           })
           .from(appointments)
           .where(eq(appointments.id, appointmentId))
@@ -236,6 +322,7 @@ export async function recalculateAppointmentCommissions(
         row = fallback
           ? {
               ...fallback,
+              startAt: fallback.startAt,
               soldByMemberId: null,
               marketingMemberId: null,
             }
@@ -317,7 +404,16 @@ export async function recalculateAppointmentCommissions(
         0,
       );
       if (crew.length > 0 && totalSplitBps > 0) {
-        const poolCents = computeBpsAmount(baseCents, settings.crewPoolRateBps);
+        const effectiveCrewPool = await getEffectiveCrewPoolRateBps(tx, {
+          timezone: settings.timezone,
+          defaultCrewPoolRateBps: settings.crewPoolRateBps,
+          startAt: row.startAt ?? null,
+          crewMemberIds: crew.map((entry) => entry.memberId),
+        });
+        const poolCents = computeBpsAmount(
+          baseCents,
+          effectiveCrewPool.crewPoolRateBps,
+        );
         const allocations = crew.map((entry) => {
           const numerator = poolCents * entry.splitBps;
           const quotient = Math.floor(numerator / totalSplitBps);
@@ -353,9 +449,12 @@ export async function recalculateAppointmentCommissions(
             baseCents,
             amountCents: entry.cents,
             meta: {
-              poolRateBps: settings.crewPoolRateBps,
+              poolRateBps: effectiveCrewPool.crewPoolRateBps,
               splitBps: entry.splitBps,
               totalSplitBps,
+              ...(effectiveCrewPool.overrideLocalDate
+                ? { poolOverrideLocalDate: effectiveCrewPool.overrideLocalDate }
+                : {}),
             },
           });
         }
@@ -407,7 +506,7 @@ export async function createOrGetCurrentPayoutRun(
 
   if (existing?.id) {
     if (existing.status === "draft") {
-      await savePayoutRunReportHtml(db, existing.id);
+      await refreshDraftPayoutReports(db);
     }
     return { payoutRunId: existing.id };
   }
@@ -427,7 +526,7 @@ export async function createOrGetCurrentPayoutRun(
     .returning({ id: payoutRuns.id });
 
   if (!created?.id) throw new Error("payout_run_create_failed");
-  await savePayoutRunReportHtml(db, created.id);
+  await refreshDraftPayoutReports(db);
   return { payoutRunId: created.id };
 }
 
@@ -575,6 +674,7 @@ export async function lockPayoutRun(
   });
 
   await savePayoutRunReportHtml(db, input.payoutRunId);
+  await refreshDraftPayoutReports(db);
 }
 
 export async function markPayoutRunPaid(
@@ -645,4 +745,68 @@ export async function markPayoutRunPaid(
       updatedAt: now,
     });
   });
+}
+
+export async function recalculateCrewPoolOverrideDay(
+  db: DatabaseClient,
+  input: { localDate: string },
+): Promise<void> {
+  const settings = await getOrCreateCommissionSettings(db);
+  const start = DateTime.fromISO(input.localDate, {
+    zone: settings.timezone,
+  }).startOf("day");
+  if (!start.isValid) {
+    throw new Error("invalid_local_date");
+  }
+  const end = start.plus({ days: 1 });
+
+  const rows = await db
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.status, "completed"),
+        gte(appointments.startAt, start.toJSDate()),
+        lt(appointments.startAt, end.toJSDate()),
+      ),
+    );
+
+  for (const row of rows) {
+    await recalculateAppointmentCommissions(db, row.id);
+  }
+
+  await refreshDraftPayoutReports(db);
+}
+
+export async function ensureCrewPoolOverrideDayEditable(
+  db: DatabaseClient,
+  input: { localDate: string },
+): Promise<void> {
+  const settings = await getOrCreateCommissionSettings(db);
+  const start = DateTime.fromISO(input.localDate, {
+    zone: settings.timezone,
+  }).startOf("day");
+  if (!start.isValid) {
+    throw new Error("invalid_local_date");
+  }
+
+  const periodStart = start.startOf("week");
+  const periodEnd = periodStart.plus({ weeks: 1 });
+
+  const [existingRun] = await db
+    .select({
+      status: payoutRuns.status,
+    })
+    .from(payoutRuns)
+    .where(
+      and(
+        eq(payoutRuns.periodStart, periodStart.toJSDate()),
+        eq(payoutRuns.periodEnd, periodEnd.toJSDate()),
+      ),
+    )
+    .limit(1);
+
+  if (existingRun && existingRun.status !== "draft") {
+    throw new Error("payout_period_locked");
+  }
 }

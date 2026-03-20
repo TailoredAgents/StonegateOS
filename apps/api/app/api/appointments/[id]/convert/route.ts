@@ -2,11 +2,12 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq, ilike, inArray, isNotNull } from "drizzle-orm";
 import {
   appointments,
   contacts,
   crmPipeline,
+  crmTasks,
   getDb,
   leads,
   outboxEvents,
@@ -24,6 +25,7 @@ import {
 } from "@/lib/calendar-events";
 import { requirePermission } from "@/lib/permissions";
 import { getBusinessHoursPolicy } from "@/lib/policy";
+import { extractQuoteFollowUpAppointmentId } from "@/lib/quote-followups";
 import { isAdminRequest } from "../../../web/admin";
 import { buildRescheduleUrl } from "../../../web/scheduling";
 
@@ -222,6 +224,37 @@ export async function POST(
           },
         },
       });
+    }
+
+    if (existing.contactId) {
+      const openQuoteFollowUps = await tx
+        .select({
+          id: crmTasks.id,
+          notes: crmTasks.notes,
+        })
+        .from(crmTasks)
+        .where(
+          and(
+            eq(crmTasks.contactId, existing.contactId),
+            eq(crmTasks.status, "open"),
+            isNotNull(crmTasks.notes),
+            ilike(crmTasks.notes, "%kind=quote_follow_up%"),
+          ),
+        );
+
+      const matchingTaskIds = openQuoteFollowUps
+        .filter(
+          (task) =>
+            extractQuoteFollowUpAppointmentId(task.notes) === appointmentId,
+        )
+        .map((task) => task.id);
+
+      if (matchingTaskIds.length > 0) {
+        await tx
+          .update(crmTasks)
+          .set({ status: "completed", updatedAt: now })
+          .where(inArray(crmTasks.id, matchingTaskIds));
+      }
     }
 
     return appointment;
