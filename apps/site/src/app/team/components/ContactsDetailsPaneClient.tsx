@@ -24,6 +24,11 @@ import {
   updatePropertyAction,
 } from "../actions";
 import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFields";
+import {
+  APPOINTMENT_BOOKING_SELECTION_OPTIONS,
+  resolveBookingSelection,
+  type AppointmentBookingSelection,
+} from "../lib/booking-details";
 
 type Props = {
   contact: ContactSummary;
@@ -106,9 +111,8 @@ export function ContactsDetailsPaneClient({
     () => contact.salespersonMemberId ?? null,
   );
   const [showBookingForm, setShowBookingForm] = React.useState(false);
-  const [bookingAppointmentType, setBookingAppointmentType] = React.useState<
-    "job" | "in_person_quote"
-  >("job");
+  const [bookingAppointmentType, setBookingAppointmentType] =
+    React.useState<AppointmentBookingSelection>("junk_removal");
   const [addingProperty, setAddingProperty] = React.useState(false);
   const [editingPropertyId, setEditingPropertyId] = React.useState<
     string | null
@@ -120,7 +124,7 @@ export function ContactsDetailsPaneClient({
 
   React.useEffect(() => {
     setShowBookingForm(false);
-    setBookingAppointmentType("job");
+    setBookingAppointmentType("junk_removal");
     setAddingProperty(false);
     setEditingPropertyId(null);
     setStage(contact.pipeline?.stage ?? "new");
@@ -522,22 +526,23 @@ export function ContactsDetailsPaneClient({
             </div>
             <label className="flex flex-col gap-1">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Appointment type
+                What are we booking?
               </span>
               <select
                 name="appointmentType"
                 value={bookingAppointmentType}
                 onChange={(event) =>
                   setBookingAppointmentType(
-                    event.target.value === "in_person_quote"
-                      ? "in_person_quote"
-                      : "job",
+                    resolveBookingSelection(event.target.value),
                   )
                 }
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
               >
-                <option value="job">Job (junk removal)</option>
-                <option value="in_person_quote">In-person quote only</option>
+                {APPOINTMENT_BOOKING_SELECTION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </label>
 
@@ -662,6 +667,7 @@ export function ContactsDetailsPaneClient({
                 </p>
                 <AppointmentBookingDetailsFields
                   teamMembers={teamMembers}
+                  serviceType={bookingAppointmentType}
                   labelClassName="flex flex-col gap-1"
                   fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                 />

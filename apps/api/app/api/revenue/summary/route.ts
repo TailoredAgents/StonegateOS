@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { and, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { contacts, getDb, appointments, properties } from "@/db";
+import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
 
@@ -113,7 +114,7 @@ async function computeWeekToDateJobs(
       postalCode: row.postalCode ?? null,
       quotedTotalCents: row.quotedTotalCents ?? null,
       finalTotalCents: row.finalTotalCents ?? 0,
-      bookingDetails: row.bookingDetails ?? null,
+      bookingDetails: parseAppointmentBookingDetails(row.bookingDetails),
     };
   });
 }
@@ -153,6 +154,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const [
     weekToDate,
     samePaceLastWeek,
+    fullLastWeek,
     weekToDateJobs,
     last30Days,
     monthToDate,
@@ -160,6 +162,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   ] = await Promise.all([
     computeWindow(db, weekStart, now),
     computeWindow(db, previousWeekStart, previousWeekEnd),
+    computeWindow(db, previousWeekStart, weekStart),
     computeWeekToDateJobs(db, weekStart, now),
     computeWindow(db, last30Start, now),
     computeWindow(db, monthStart, now),
@@ -180,6 +183,11 @@ export async function GET(request: NextRequest): Promise<Response> {
         ...samePaceLastWeek,
         startsAt: previousWeekStart.toISOString(),
         endsAt: previousWeekEnd.toISOString(),
+      },
+      fullLastWeek: {
+        ...fullLastWeek,
+        startsAt: previousWeekStart.toISOString(),
+        endsAt: weekStart.toISOString(),
       },
       last30Days,
       monthToDate,

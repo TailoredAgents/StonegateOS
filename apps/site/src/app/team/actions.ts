@@ -8,6 +8,7 @@ import {
   buildStoredContactSource,
   parseAppointmentBookingFormData,
   parseLeadSourceFormData,
+  resolveBookingSelection,
 } from "./lib/booking-details";
 
 const TEAM_ACTOR_ID_COOKIE = "myst-team-actor-id";
@@ -739,11 +740,11 @@ export async function bookAppointmentAction(formData: FormData) {
   }
 
   const contactIdValue = contactId.trim();
-  const appointmentTypeValue =
-    typeof appointmentType === "string" && appointmentType.trim().length > 0
-      ? appointmentType.trim()
-      : "job";
-  const isInPersonQuote = appointmentTypeValue === "in_person_quote";
+  const bookingSelection = resolveBookingSelection(
+    typeof appointmentType === "string" ? appointmentType.trim() : "",
+  );
+  const isInPersonQuote = bookingSelection === "in_person_quote";
+  const appointmentTypeValue = isInPersonQuote ? "in_person_quote" : "job";
 
   if (typeof startAt !== "string" || startAt.trim().length === 0) {
     jar.set({
@@ -871,7 +872,9 @@ export async function bookAppointmentAction(formData: FormData) {
           .split(",")
           .map((value) => value.trim())
           .filter((value) => value.length > 0)
-      : [];
+      : !isInPersonQuote
+        ? [bookingSelection]
+        : [];
 
   const payload: Record<string, unknown> = {
     contactId: contactIdValue,

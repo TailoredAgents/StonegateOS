@@ -36,6 +36,11 @@ import type {
   PropertySummary,
 } from "./contacts.types";
 import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFields";
+import {
+  APPOINTMENT_BOOKING_SELECTION_OPTIONS,
+  resolveBookingSelection,
+  type AppointmentBookingSelection,
+} from "../lib/booking-details";
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "N/A";
@@ -103,9 +108,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   const [assigneeSaving, setAssigneeSaving] = useState(false);
   const [assigneeError, setAssigneeError] = useState<string | null>(null);
   const [showBookingForm, setShowBookingForm] = useState(false);
-  const [bookingAppointmentType, setBookingAppointmentType] = useState<
-    "job" | "in_person_quote"
-  >("job");
+  const [bookingAppointmentType, setBookingAppointmentType] =
+    useState<AppointmentBookingSelection>("junk_removal");
   const [addingProperty, setAddingProperty] = useState(false);
   const [editingPropertyId, setEditingPropertyId] = useState<string | null>(
     null,
@@ -144,7 +148,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
       contactIdRef.current = contact.id;
       setAssigneeSaving(false);
       setAssigneeError(null);
-      setBookingAppointmentType("job");
+      setBookingAppointmentType("junk_removal");
       setShowNoteForm(false);
       setNoteDraft("");
       setNoteError(null);
@@ -1001,21 +1005,22 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                 Scheduling
               </div>
               <label className="flex flex-col gap-1">
-                <span>Appointment type</span>
+                <span>What are we booking?</span>
                 <select
                   name="appointmentType"
                   value={bookingAppointmentType}
                   onChange={(event) =>
                     setBookingAppointmentType(
-                      event.target.value === "in_person_quote"
-                        ? "in_person_quote"
-                        : "job",
+                      resolveBookingSelection(event.target.value),
                     )
                   }
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2"
                 >
-                  <option value="job">Job (junk removal)</option>
-                  <option value="in_person_quote">In-person quote only</option>
+                  {APPOINTMENT_BOOKING_SELECTION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </label>
               <label className="flex flex-col gap-1">
@@ -1121,6 +1126,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   </p>
                   <AppointmentBookingDetailsFields
                     teamMembers={teamMembers}
+                    serviceType={bookingAppointmentType}
                     labelClassName="flex flex-col gap-1"
                     fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2"
                   />
@@ -1128,14 +1134,6 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                     Range-only jobs stay out of exact revenue projections until
                     an exact collected total or exact quote is saved.
                   </div>
-                  <label className="flex flex-col gap-1 sm:col-span-2">
-                    <span>Services (optional)</span>
-                    <input
-                      name="services"
-                      placeholder="e.g. junk_removal_primary"
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-                    />
-                  </label>
                   <label className="flex flex-col gap-1 sm:col-span-2">
                     <span>Appointment notes (optional)</span>
                     <textarea

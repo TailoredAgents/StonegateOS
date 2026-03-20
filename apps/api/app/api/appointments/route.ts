@@ -24,6 +24,7 @@ import {
   quotes,
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
+import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
 import {
   extractQuoteFollowUpAppointmentId,
   extractQuoteFollowUpComment,
@@ -386,6 +387,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const appointmentsDto = baseRows.map((row) => {
+    const bookingDetails = parseAppointmentBookingDetails(row.bookingDetails);
     const contactName =
       row.contactFirstName && row.contactLastName
         ? `${row.contactFirstName} ${row.contactLastName}`
@@ -409,7 +411,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       leadId: row.leadId,
       quotedTotalCents: row.quotedTotalCents ?? null,
       finalTotalCents: row.finalTotalCents ?? null,
-      bookingDetails: row.bookingDetails ?? null,
+      bookingDetails,
       soldByMemberId: row.soldByMemberId ?? null,
       services: row.servicesRequested ?? [],
       contact: {

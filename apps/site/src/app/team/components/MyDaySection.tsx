@@ -12,8 +12,9 @@ import {
 import { callAdminApi } from "../lib/api";
 import {
   formatAppointmentLeadSource,
-  formatAppointmentLoadSize,
+  formatAppointmentJobDetails,
   formatAppointmentPricing,
+  formatAppointmentServiceType,
   formatStoredContactSource,
   parseStoredContactSourceValue,
   type AppointmentBookingDetails,
@@ -308,9 +309,10 @@ type AppointmentCardItem = {
   startDate: Date | null;
   startDayKey: string;
   isQuoteOnly: boolean;
+  serviceLabel: string | null;
   leadSourceSummary: string | null;
   pricingSummary: string | null;
-  loadSizeSummary: string | null;
+  jobDetailsSummary: string | null;
   attentionReasons: string[];
 };
 
@@ -414,7 +416,9 @@ function AppointmentCard({
       ? "Set when converted"
       : "Not set";
   const moneySummary = formatMoneySummary(a);
-  const serviceSummary = summarizeServiceLabels(a.services ?? []);
+  const serviceSummary = item.isQuoteOnly
+    ? (item.serviceLabel ?? "In-person quote")
+    : (item.serviceLabel ?? summarizeServiceLabels(a.services ?? []));
   const addressText = [
     a.property.addressLine1,
     a.property.city,
@@ -471,7 +475,7 @@ function AppointmentCard({
               : "bg-emerald-100 text-emerald-700"
           }`}
         >
-          {item.isQuoteOnly ? "In-person quote" : "Junk removal job"}
+          {item.isQuoteOnly ? "In-person quote" : serviceSummary}
         </span>
         <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
           {isCompleted ? "Done today" : fmtAppointmentSlot(a.startAt)}
@@ -601,9 +605,9 @@ function AppointmentCard({
         />
         {!item.isQuoteOnly ? (
           <SummaryTile
-            label="Load size"
-            value={item.loadSizeSummary ?? "Not set"}
-            muted={!item.loadSizeSummary}
+            label="Job details"
+            value={item.jobDetailsSummary ?? "Not set"}
+            muted={!item.jobDetailsSummary}
           />
         ) : null}
         {!item.isQuoteOnly ? (
@@ -715,6 +719,7 @@ function AppointmentCard({
                     teamMembers={teamMembers}
                     bookingDetails={a.bookingDetails}
                     quotedTotalCents={a.quotedTotalCents}
+                    allowServiceTypeSelection
                     labelClassName="flex flex-col gap-1"
                     fieldClassName="rounded-xl border border-slate-200 px-3 py-2 text-sm"
                     hideLeadSource={Boolean(reusableSource)}
@@ -979,6 +984,7 @@ function AppointmentCard({
                       teamMembers={teamMembers}
                       bookingDetails={a.bookingDetails}
                       quotedTotalCents={a.quotedTotalCents}
+                      allowServiceTypeSelection
                       labelClassName="flex flex-col gap-1"
                       fieldClassName="rounded-xl border border-slate-200 px-3 py-2 text-sm"
                     />
@@ -1070,9 +1076,10 @@ function AppointmentCard({
 function buildAttentionReasons(
   appointment: AppointmentDto,
   isQuoteOnly: boolean,
+  serviceLabel: string | null,
   leadSourceSummary: string | null,
   pricingSummary: string | null,
-  loadSizeSummary: string | null,
+  jobDetailsSummary: string | null,
   startDate: Date | null,
   now: Date,
 ): string[] {
@@ -1115,8 +1122,12 @@ function buildAttentionReasons(
     if (!pricingSummary) {
       reasons.push("Missing pricing");
     }
-    if (!loadSizeSummary) {
-      reasons.push("Missing load size");
+    if (!jobDetailsSummary) {
+      reasons.push(
+        serviceLabel === "Junk removal"
+          ? "Missing load size"
+          : "Missing job details",
+      );
     }
   }
 
@@ -1138,27 +1149,32 @@ function toAppointmentCardItem(
       teamMemberNameById,
     ) ??
     formatStoredContactSource(appointment.contact.source, teamMemberNameById);
+  const serviceLabel = formatAppointmentServiceType(appointment.bookingDetails);
   const pricingSummary = formatAppointmentPricing(
     appointment.bookingDetails,
     appointment.quotedTotalCents,
   );
-  const loadSizeSummary = formatAppointmentLoadSize(appointment.bookingDetails);
+  const jobDetailsSummary = formatAppointmentJobDetails(
+    appointment.bookingDetails,
+  );
   return {
     appointment,
     startDate: validStartDate,
     startDayKey: validStartDate ? formatDayKey(validStartDate) : "",
     isQuoteOnly,
+    serviceLabel,
     leadSourceSummary,
     pricingSummary,
-    loadSizeSummary,
+    jobDetailsSummary,
     attentionReasons:
       appointment.status === "confirmed"
         ? buildAttentionReasons(
             appointment,
             isQuoteOnly,
+            serviceLabel,
             leadSourceSummary,
             pricingSummary,
-            loadSizeSummary,
+            jobDetailsSummary,
             validStartDate,
             now,
           )

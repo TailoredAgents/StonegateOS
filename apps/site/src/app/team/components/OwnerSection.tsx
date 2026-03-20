@@ -45,6 +45,10 @@ type RevenuePayload = {
       startsAt: string;
       endsAt: string;
     };
+    fullLastWeek: RevenueWindow & {
+      startsAt: string;
+      endsAt: string;
+    };
     last30Days: RevenueWindow;
     monthToDate: RevenueWindow;
     yearToDate: RevenueWindow;
@@ -129,6 +133,17 @@ function fmtWindowStart(iso: string, timezone: string): string {
     day: "numeric",
     year: "numeric",
   }).format(d);
+}
+
+function fmtWindowEndExclusive(iso: string, timezone: string): string {
+  const d = new Date(iso);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(d.getTime() - 1));
 }
 
 function fmtWhen(iso: string, timezone: string): string {
@@ -289,6 +304,9 @@ export async function OwnerSection(): Promise<React.ReactElement> {
   const weekRevenue = revenue?.ok ? revenue.windows.weekToDate.totalCents : 0;
   const samePaceLastWeekRevenue = revenue?.ok
     ? revenue.windows.samePaceLastWeek.totalCents
+    : 0;
+  const fullLastWeekRevenue = revenue?.ok
+    ? revenue.windows.fullLastWeek.totalCents
     : 0;
   const weekRevenueDelta = weekRevenue - samePaceLastWeekRevenue;
   const weekRevenueDeltaPercent = revenue?.ok
@@ -502,6 +520,32 @@ export async function OwnerSection(): Promise<React.ReactElement> {
                     className={`text-xs ${weekRevenueDelta >= 0 ? "text-emerald-700" : "text-rose-700"}`}
                   >
                     {fmtSignedMoney(weekRevenueDelta, revenue.currency)}
+                  </div>
+                </div>
+              </li>
+              <li className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div>
+                  <div className="font-semibold text-slate-900">
+                    Full last week
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    {revenue.windows.fullLastWeek.count} jobs
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {fmtWindowStart(
+                      revenue.windows.fullLastWeek.startsAt,
+                      revenue.timezone,
+                    )}{" "}
+                    through{" "}
+                    {fmtWindowEndExclusive(
+                      revenue.windows.fullLastWeek.endsAt,
+                      revenue.timezone,
+                    )}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-semibold text-slate-900">
+                    {fmtMoney(fullLastWeekRevenue, revenue.currency)}
                   </div>
                 </div>
               </li>

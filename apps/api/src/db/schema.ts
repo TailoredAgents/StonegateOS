@@ -51,12 +51,30 @@ export type AppointmentLeadSourceType =
   | "team_member"
   | "referral";
 export type AppointmentPriceMode = "range" | "exact" | "both";
+export type AppointmentServiceType =
+  | "junk_removal"
+  | "land_clearing"
+  | "demolition"
+  | "rental_dumpster";
 export type AppointmentLoadSizeKind =
   | "quarter_to_half"
   | "half_to_three_quarters"
   | "three_quarters_to_full"
   | "custom";
+export type AppointmentLandClearingAccessDifficulty =
+  | "easy"
+  | "moderate"
+  | "hard";
+export type AppointmentDemolitionType =
+  | "shed"
+  | "deck"
+  | "fence"
+  | "interior"
+  | "concrete"
+  | "other";
+export type AppointmentDumpsterSizeKind = "10_yard" | "15_yard" | "20_yard";
 export type AppointmentBookingDetails = {
+  serviceType: AppointmentServiceType;
   source: {
     type: AppointmentLeadSourceType;
     teamMemberId?: string | null;
@@ -67,10 +85,25 @@ export type AppointmentBookingDetails = {
     rangeMinCents?: number | null;
     rangeMaxCents?: number | null;
   };
-  loadSize: {
+  loadSize?: {
     kind: AppointmentLoadSizeKind;
     customLoads?: number | null;
-  };
+  } | null;
+  landClearing?: {
+    areaScope: string;
+    accessDifficulty: AppointmentLandClearingAccessDifficulty;
+    haulAway: boolean;
+  } | null;
+  demolition?: {
+    demoType: AppointmentDemolitionType;
+    scopeSize: string;
+    haulAway: boolean;
+  } | null;
+  rentalDumpster?: {
+    dumpsterSize: AppointmentDumpsterSizeKind;
+    pickupDate: string;
+    placementLocation: string;
+  } | null;
 };
 export const commissionRoleEnum = pgEnum("commission_role", [
   "sales",
