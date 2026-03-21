@@ -293,6 +293,15 @@ export function ContactsDetailsPaneClient({
   const isInPersonQuoteBooking = bookingAppointmentType === "in_person_quote";
   const canSubmitQuoteBooking =
     hasBookingName && hasBookingPhone && hasBookingProperty;
+  const quoteBookingBlockers = [
+    !hasBookingName ? "contact name" : null,
+    !hasBookingPhone ? "phone number" : null,
+    !hasBookingProperty ? "saved address" : null,
+  ].filter((value): value is string => value !== null);
+  const quoteBookingBlockedMessage =
+    isInPersonQuoteBooking && quoteBookingBlockers.length > 0
+      ? `Add ${quoteBookingBlockers.join(", ")} before booking an in-person quote.`
+      : null;
 
   return (
     <div className="space-y-4">
@@ -710,6 +719,11 @@ export function ContactsDetailsPaneClient({
             <span className="text-[11px] text-slate-500">
               Calendar sync runs via the outbox worker.
             </span>
+            {quoteBookingBlockedMessage ? (
+              <span className="text-[11px] font-medium text-rose-600">
+                {quoteBookingBlockedMessage}
+              </span>
+            ) : null}
           </div>
         </form>
       ) : null}

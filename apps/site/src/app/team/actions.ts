@@ -712,268 +712,281 @@ export async function createContactAction(formData: FormData) {
 
 export async function bookAppointmentAction(formData: FormData) {
   const jar = await cookies();
+  try {
+    const contactId = formData.get("contactId");
+    const propertyId = formData.get("propertyId");
+    const appointmentType = formData.get("appointmentType");
+    const assignedAssociateMemberIdRaw = formData.get(
+      "assignedAssociateMemberId",
+    );
+    const currentAssignedAssociateMemberIdRaw = formData.get(
+      "currentAssignedAssociateMemberId",
+    );
+    const soldByMemberIdRaw = formData.get("soldByMemberId");
+    const startAt = formData.get("startAt");
+    const durationMinutes = formData.get("durationMinutes");
+    const travelBufferMinutes = formData.get("travelBufferMinutes");
+    const servicesRaw = formData.get("services");
+    const notesRaw = formData.get("notes");
 
-  const contactId = formData.get("contactId");
-  const propertyId = formData.get("propertyId");
-  const appointmentType = formData.get("appointmentType");
-  const assignedAssociateMemberIdRaw = formData.get(
-    "assignedAssociateMemberId",
-  );
-  const currentAssignedAssociateMemberIdRaw = formData.get(
-    "currentAssignedAssociateMemberId",
-  );
-  const soldByMemberIdRaw = formData.get("soldByMemberId");
-  const startAt = formData.get("startAt");
-  const durationMinutes = formData.get("durationMinutes");
-  const travelBufferMinutes = formData.get("travelBufferMinutes");
-  const servicesRaw = formData.get("services");
-  const notesRaw = formData.get("notes");
-
-  if (typeof contactId !== "string" || contactId.trim().length === 0) {
-    jar.set({
-      name: "myst-flash-error",
-      value: "Contact ID missing",
-      path: "/",
-    });
-    revalidatePath("/team");
-    return;
-  }
-
-  const contactIdValue = contactId.trim();
-  const bookingSelection = resolveBookingSelection(
-    typeof appointmentType === "string" ? appointmentType.trim() : "",
-  );
-  const isInPersonQuote = bookingSelection === "in_person_quote";
-  const appointmentTypeValue = isInPersonQuote ? "in_person_quote" : "job";
-
-  if (typeof startAt !== "string" || startAt.trim().length === 0) {
-    jar.set({
-      name: "myst-flash-error",
-      value: "Start time is required",
-      path: "/",
-    });
-    revalidatePath("/team");
-    return;
-  }
-
-  const currentAssignedAssociateMemberId =
-    typeof currentAssignedAssociateMemberIdRaw === "string" &&
-    currentAssignedAssociateMemberIdRaw.trim().length > 0
-      ? currentAssignedAssociateMemberIdRaw.trim()
-      : null;
-  const assignedAssociateMemberId =
-    typeof assignedAssociateMemberIdRaw === "string"
-      ? assignedAssociateMemberIdRaw.trim().length > 0
-        ? assignedAssociateMemberIdRaw.trim()
-        : null
-      : currentAssignedAssociateMemberId;
-  const soldByMemberId =
-    typeof soldByMemberIdRaw === "string" && soldByMemberIdRaw.trim().length > 0
-      ? soldByMemberIdRaw.trim()
-      : null;
-  if (!isInPersonQuote && !soldByMemberId) {
-    jar.set({
-      name: "myst-flash-error",
-      value: "Who sold the job is required to book a job.",
-      path: "/",
-    });
-    revalidatePath("/team");
-    return;
-  }
-
-  let bookingDetailsResult:
-    | ReturnType<typeof parseAppointmentBookingFormData>
-    | { ok: true; bookingDetails: null; quotedTotalCents: null };
-
-  if (isInPersonQuote) {
-    if (typeof propertyId !== "string" || propertyId.trim().length === 0) {
+    if (typeof contactId !== "string" || contactId.trim().length === 0) {
       jar.set({
         name: "myst-flash-error",
-        value: "Address is required to book an in-person quote.",
+        value: "Contact ID missing",
         path: "/",
       });
       revalidatePath("/team");
       return;
     }
 
-    const contactResponse = await callAdminApi(
-      `/api/admin/contacts?contactId=${encodeURIComponent(contactIdValue)}&limit=1`,
+    const contactIdValue = contactId.trim();
+    const bookingSelection = resolveBookingSelection(
+      typeof appointmentType === "string" ? appointmentType.trim() : "",
     );
-    if (!contactResponse.ok) {
-      const message = await readErrorMessage(
-        contactResponse,
-        "Unable to verify contact details for in-person quote.",
+    const isInPersonQuote = bookingSelection === "in_person_quote";
+    const appointmentTypeValue = isInPersonQuote ? "in_person_quote" : "job";
+
+    if (typeof startAt !== "string" || startAt.trim().length === 0) {
+      jar.set({
+        name: "myst-flash-error",
+        value: "Start time is required",
+        path: "/",
+      });
+      revalidatePath("/team");
+      return;
+    }
+
+    const currentAssignedAssociateMemberId =
+      typeof currentAssignedAssociateMemberIdRaw === "string" &&
+      currentAssignedAssociateMemberIdRaw.trim().length > 0
+        ? currentAssignedAssociateMemberIdRaw.trim()
+        : null;
+    const assignedAssociateMemberId =
+      typeof assignedAssociateMemberIdRaw === "string"
+        ? assignedAssociateMemberIdRaw.trim().length > 0
+          ? assignedAssociateMemberIdRaw.trim()
+          : null
+        : currentAssignedAssociateMemberId;
+    const soldByMemberId =
+      typeof soldByMemberIdRaw === "string" &&
+      soldByMemberIdRaw.trim().length > 0
+        ? soldByMemberIdRaw.trim()
+        : null;
+    if (!isInPersonQuote && !soldByMemberId) {
+      jar.set({
+        name: "myst-flash-error",
+        value: "Who sold the job is required to book a job.",
+        path: "/",
+      });
+      revalidatePath("/team");
+      return;
+    }
+
+    let bookingDetailsResult:
+      | ReturnType<typeof parseAppointmentBookingFormData>
+      | { ok: true; bookingDetails: null; quotedTotalCents: null };
+
+    if (isInPersonQuote) {
+      if (typeof propertyId !== "string" || propertyId.trim().length === 0) {
+        jar.set({
+          name: "myst-flash-error",
+          value: "Address is required to book an in-person quote.",
+          path: "/",
+        });
+        revalidatePath("/team");
+        return;
+      }
+
+      const contactResponse = await callAdminApi(
+        `/api/admin/contacts?contactId=${encodeURIComponent(contactIdValue)}&limit=1`,
       );
-      jar.set({ name: "myst-flash-error", value: message, path: "/" });
-      revalidatePath("/team");
-      return;
-    }
-
-    const contactPayload = (await contactResponse.json().catch(() => null)) as {
-      contacts?: Array<{
-        firstName?: string | null;
-        lastName?: string | null;
-        phone?: string | null;
-        phoneE164?: string | null;
-      }>;
-    } | null;
-    const contactRecord = contactPayload?.contacts?.[0] ?? null;
-    const hasName = Boolean(
-      `${contactRecord?.firstName ?? ""} ${contactRecord?.lastName ?? ""}`.trim(),
-    );
-    const hasPhone = Boolean(
-      (contactRecord?.phoneE164 ?? contactRecord?.phone ?? "").trim(),
-    );
-    if (!hasName) {
-      jar.set({
-        name: "myst-flash-error",
-        value: "Name is required to book an in-person quote.",
-        path: "/",
-      });
-      revalidatePath("/team");
-      return;
-    }
-    if (!hasPhone) {
-      jar.set({
-        name: "myst-flash-error",
-        value: "Phone number is required to book an in-person quote.",
-        path: "/",
-      });
-      revalidatePath("/team");
-      return;
-    }
-
-    bookingDetailsResult = {
-      ok: true,
-      bookingDetails: null,
-      quotedTotalCents: null,
-    };
-  } else {
-    bookingDetailsResult = parseAppointmentBookingFormData(formData);
-    if (!bookingDetailsResult.ok) {
-      jar.set({
-        name: "myst-flash-error",
-        value: bookingDetailsResult.error,
-        path: "/",
-      });
-      revalidatePath("/team");
-      return;
-    }
-  }
-
-  const parsedDuration =
-    typeof durationMinutes === "string" ? Number(durationMinutes) : NaN;
-  const parsedTravel =
-    typeof travelBufferMinutes === "string" ? Number(travelBufferMinutes) : NaN;
-
-  const services =
-    typeof servicesRaw === "string" && servicesRaw.trim().length > 0
-      ? servicesRaw
-          .split(",")
-          .map((value) => value.trim())
-          .filter((value) => value.length > 0)
-      : !isInPersonQuote
-        ? [bookingSelection]
-        : [];
-
-  const payload: Record<string, unknown> = {
-    contactId: contactIdValue,
-    startAt: startAt.trim(),
-    durationMinutes:
-      Number.isFinite(parsedDuration) && parsedDuration > 0
-        ? parsedDuration
-        : 60,
-    travelBufferMinutes:
-      Number.isFinite(parsedTravel) && parsedTravel >= 0 ? parsedTravel : 30,
-    services,
-  };
-
-  payload["appointmentType"] = appointmentTypeValue;
-  if (typeof propertyId === "string" && propertyId.trim().length > 0) {
-    payload["propertyId"] = propertyId.trim();
-  }
-  if (typeof notesRaw === "string" && notesRaw.trim().length > 0) {
-    payload["notes"] = notesRaw.trim();
-  }
-  if (bookingDetailsResult.quotedTotalCents !== null) {
-    payload["quotedTotalCents"] = bookingDetailsResult.quotedTotalCents;
-  }
-  if (bookingDetailsResult.bookingDetails) {
-    payload["bookingDetails"] = bookingDetailsResult.bookingDetails;
-  }
-  if (soldByMemberId) {
-    payload["soldByMemberId"] = soldByMemberId;
-  }
-
-  const assigneeChanged =
-    assignedAssociateMemberId !== currentAssignedAssociateMemberId;
-  let assigneeUpdated = false;
-
-  if (assigneeChanged) {
-    const assigneeResponse = await callAdminApi(
-      `/api/admin/contacts/${encodeURIComponent(contactIdValue)}`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          salespersonMemberId: assignedAssociateMemberId,
-        }),
-      },
-    );
-
-    if (!assigneeResponse.ok) {
-      const message = await readErrorMessage(
-        assigneeResponse,
-        "Unable to update assigned associate",
-      );
-      jar.set({ name: "myst-flash-error", value: message, path: "/" });
-      revalidatePath("/team");
-      return;
-    }
-
-    assigneeUpdated = true;
-  }
-
-  const response = await callAdminApi("/api/admin/booking/book", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    let rollbackFailed = false;
-    if (assigneeUpdated) {
-      try {
-        const rollbackResponse = await callAdminApi(
-          `/api/admin/contacts/${encodeURIComponent(contactIdValue)}`,
-          {
-            method: "PATCH",
-            body: JSON.stringify({
-              salespersonMemberId: currentAssignedAssociateMemberId,
-            }),
-          },
+      if (!contactResponse.ok) {
+        const message = await readErrorMessage(
+          contactResponse,
+          "Unable to verify contact details for in-person quote.",
         );
-        rollbackFailed = !rollbackResponse.ok;
-      } catch {
-        rollbackFailed = true;
+        jar.set({ name: "myst-flash-error", value: message, path: "/" });
+        revalidatePath("/team");
+        return;
+      }
+
+      const contactPayload = (await contactResponse.json().catch(() =>
+        null,
+      )) as {
+        contacts?: Array<{
+          firstName?: string | null;
+          lastName?: string | null;
+          phone?: string | null;
+          phoneE164?: string | null;
+        }>;
+      } | null;
+      const contactRecord = contactPayload?.contacts?.[0] ?? null;
+      const hasName = Boolean(
+        `${contactRecord?.firstName ?? ""} ${contactRecord?.lastName ?? ""}`.trim(),
+      );
+      const hasPhone = Boolean(
+        (contactRecord?.phoneE164 ?? contactRecord?.phone ?? "").trim(),
+      );
+      if (!hasName) {
+        jar.set({
+          name: "myst-flash-error",
+          value: "Name is required to book an in-person quote.",
+          path: "/",
+        });
+        revalidatePath("/team");
+        return;
+      }
+      if (!hasPhone) {
+        jar.set({
+          name: "myst-flash-error",
+          value: "Phone number is required to book an in-person quote.",
+          path: "/",
+        });
+        revalidatePath("/team");
+        return;
+      }
+
+      bookingDetailsResult = {
+        ok: true,
+        bookingDetails: null,
+        quotedTotalCents: null,
+      };
+    } else {
+      bookingDetailsResult = parseAppointmentBookingFormData(formData);
+      if (!bookingDetailsResult.ok) {
+        jar.set({
+          name: "myst-flash-error",
+          value: bookingDetailsResult.error,
+          path: "/",
+        });
+        revalidatePath("/team");
+        return;
       }
     }
 
-    const message = await readErrorMessage(
-      response,
-      "Unable to book appointment",
-    );
+    const parsedDuration =
+      typeof durationMinutes === "string" ? Number(durationMinutes) : NaN;
+    const parsedTravel =
+      typeof travelBufferMinutes === "string"
+        ? Number(travelBufferMinutes)
+        : NaN;
+
+    const services =
+      typeof servicesRaw === "string" && servicesRaw.trim().length > 0
+        ? servicesRaw
+            .split(",")
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0)
+        : !isInPersonQuote
+          ? [bookingSelection]
+          : [];
+
+    const payload: Record<string, unknown> = {
+      contactId: contactIdValue,
+      startAt: startAt.trim(),
+      durationMinutes:
+        Number.isFinite(parsedDuration) && parsedDuration > 0
+          ? parsedDuration
+          : 60,
+      travelBufferMinutes:
+        Number.isFinite(parsedTravel) && parsedTravel >= 0 ? parsedTravel : 30,
+      services,
+    };
+
+    payload["appointmentType"] = appointmentTypeValue;
+    if (typeof propertyId === "string" && propertyId.trim().length > 0) {
+      payload["propertyId"] = propertyId.trim();
+    }
+    if (typeof notesRaw === "string" && notesRaw.trim().length > 0) {
+      payload["notes"] = notesRaw.trim();
+    }
+    if (bookingDetailsResult.quotedTotalCents !== null) {
+      payload["quotedTotalCents"] = bookingDetailsResult.quotedTotalCents;
+    }
+    if (bookingDetailsResult.bookingDetails) {
+      payload["bookingDetails"] = bookingDetailsResult.bookingDetails;
+    }
+    if (soldByMemberId) {
+      payload["soldByMemberId"] = soldByMemberId;
+    }
+
+    const assigneeChanged =
+      assignedAssociateMemberId !== currentAssignedAssociateMemberId;
+    let assigneeUpdated = false;
+
+    if (assigneeChanged) {
+      const assigneeResponse = await callAdminApi(
+        `/api/admin/contacts/${encodeURIComponent(contactIdValue)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            salespersonMemberId: assignedAssociateMemberId,
+          }),
+        },
+      );
+
+      if (!assigneeResponse.ok) {
+        const message = await readErrorMessage(
+          assigneeResponse,
+          "Unable to update assigned associate",
+        );
+        jar.set({ name: "myst-flash-error", value: message, path: "/" });
+        revalidatePath("/team");
+        return;
+      }
+
+      assigneeUpdated = true;
+    }
+
+    const response = await callAdminApi("/api/admin/booking/book", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      let rollbackFailed = false;
+      if (assigneeUpdated) {
+        try {
+          const rollbackResponse = await callAdminApi(
+            `/api/admin/contacts/${encodeURIComponent(contactIdValue)}`,
+            {
+              method: "PATCH",
+              body: JSON.stringify({
+                salespersonMemberId: currentAssignedAssociateMemberId,
+              }),
+            },
+          );
+          rollbackFailed = !rollbackResponse.ok;
+        } catch {
+          rollbackFailed = true;
+        }
+      }
+
+      const message = await readErrorMessage(
+        response,
+        "Unable to book appointment",
+      );
+      jar.set({
+        name: "myst-flash-error",
+        value: rollbackFailed
+          ? `${message} Assigned associate may need to be reset.`
+          : message,
+        path: "/",
+      });
+      revalidatePath("/team");
+      return;
+    }
+
+    jar.set({ name: "myst-flash", value: "Appointment booked", path: "/" });
+    revalidatePath("/team");
+  } catch (error) {
     jar.set({
       name: "myst-flash-error",
-      value: rollbackFailed
-        ? `${message} Assigned associate may need to be reset.`
-        : message,
+      value: formatActionError(error, "Unable to book appointment"),
       path: "/",
     });
     revalidatePath("/team");
-    return;
   }
-
-  jar.set({ name: "myst-flash", value: "Appointment booked", path: "/" });
-  revalidatePath("/team");
 }
 
 export async function updateAppointmentBookingDetailsAction(
@@ -1215,6 +1228,23 @@ async function readErrorMessage(
   } catch {
     // ignore
   }
+  return fallback;
+}
+
+function formatActionError(error: unknown, fallback: string): string {
+  if (
+    error &&
+    typeof error === "object" &&
+    "name" in error &&
+    error.name === "AbortError"
+  ) {
+    return "Booking request timed out. Please retry.";
+  }
+
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
   return fallback;
 }
 
