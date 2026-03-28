@@ -33,8 +33,10 @@ const EXACT_CREW_RULES: readonly ExactCrewRule[] = [
     key: "austin+jeffrey",
     memberIds: [TEAM_MEMBER_IDS.austin, TEAM_MEMBER_IDS.jeffreyHacker],
     splitBpsByMemberId: {
-      [TEAM_MEMBER_IDS.austin]: 3400,
-      [TEAM_MEMBER_IDS.jeffreyHacker]: 6600,
+      // Exact 1:2 weights so Austin + Jeffrey demo jobs land on a true
+      // one-third / two-thirds split without basis-point rounding drift.
+      [TEAM_MEMBER_IDS.austin]: 1,
+      [TEAM_MEMBER_IDS.jeffreyHacker]: 2,
     },
   },
   {
@@ -83,7 +85,7 @@ const EXACT_CREW_RULES_BY_KEY = new Map(
 
 function isValidSplitTotal(splits: LockedCrewPayoutSplit[]): boolean {
   if (splits.some((entry) => entry.splitBps <= 0)) return false;
-  return splits.reduce((sum, entry) => sum + entry.splitBps, 0) === 10000;
+  return splits.reduce((sum, entry) => sum + entry.splitBps, 0) > 0;
 }
 
 export function resolveLockedCrewPayout(

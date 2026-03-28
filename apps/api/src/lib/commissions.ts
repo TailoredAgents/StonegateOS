@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { DatabaseClient } from "@/db";
 import {
   appointmentCommissions,
@@ -8,6 +8,7 @@ import {
   commissionCrewPoolOverrideDays,
   commissionSettings,
   expenses,
+  leads,
   payoutRunAdjustments,
   payoutRunLines,
   payoutRuns,
@@ -28,6 +29,7 @@ export type CommissionSettingsRow = {
 };
 
 const SETTINGS_KEY = "default";
+export const DEMO_CREW_POOL_RATE_BPS = 3000;
 const THIRTY_PERCENT_DAY_CREW_MEMBER_IDS = [
   "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
   "b45988bb-7417-48c5-af6d-fcdf71088282",
@@ -175,12 +177,28 @@ function extractPgCode(error: unknown): string | null {
     direct && typeof direct["code"] === "string" ? direct["code"] : null;
   if (directCode) return directCode;
   const cause =
-    direct && isRecord(direct["cause"])
-      ? (direct["cause"] as Record<string, unknown>)
-      : null;
+    direct && isRecord(direct["cause"]) ? direct["cause"] : null;
   const causeCode =
     cause && typeof cause["code"] === "string" ? cause["code"] : null;
   return causeCode;
+}
+
+export function isDemoServicesRequested(
+  servicesRequested: string[] | null | undefined,
+): boolean {
+  if (!Array.isArray(servicesRequested) || servicesRequested.length === 0) {
+    return false;
+  }
+
+  return servicesRequested.some((service) => {
+    if (typeof service !== "string") return false;
+    const normalized = service.trim().toLowerCase();
+    return (
+      normalized === "demo-hauloff" ||
+      normalized.startsWith("demo_") ||
+      normalized.startsWith("demo-")
+    );
+  });
 }
 
 function appointmentUsesThirtyPercentDayRule(memberIds: string[]): boolean {
@@ -194,6 +212,51 @@ function appointmentUsesThirtyPercentDayRule(memberIds: string[]): boolean {
   );
 }
 
+export function allocateCrewPoolCents(
+  poolCents: number,
+  crew: Array<{ memberId: string; splitBps: number }>,
+): Array<{
+  memberId: string;
+  splitBps: number;
+  cents: number;
+  remainder: number;
+}> {
+  const totalSplitBps = crew.reduce(
+    (sum, entry) => sum + Math.max(0, entry.splitBps ?? 0),
+    0,
+  );
+
+  if (poolCents <= 0 || totalSplitBps <= 0 || crew.length === 0) {
+    return [];
+  }
+
+  const allocations = crew.map((entry) => {
+    const numerator = poolCents * entry.splitBps;
+    const quotient = Math.floor(numerator / totalSplitBps);
+    const remainder = numerator % totalSplitBps;
+    return {
+      memberId: entry.memberId,
+      splitBps: entry.splitBps,
+      cents: quotient,
+      remainder,
+    };
+  });
+
+  const allocated = allocations.reduce((sum, entry) => sum + entry.cents, 0);
+  let remaining = poolCents - allocated;
+  allocations.sort((a, b) => {
+    if (b.remainder !== a.remainder) return b.remainder - a.remainder;
+    return a.memberId.localeCompare(b.memberId);
+  });
+
+  for (let i = 0; i < allocations.length && remaining > 0; i += 1) {
+    allocations[i]!.cents += 1;
+    remaining -= 1;
+  }
+
+  return allocations;
+}
+
 async function getEffectiveCrewPoolRateBps(
   tx: Pick<DatabaseClient, "select">,
   input: {
@@ -201,8 +264,21 @@ async function getEffectiveCrewPoolRateBps(
     defaultCrewPoolRateBps: number;
     startAt: Date | null;
     crewMemberIds: string[];
+    servicesRequested: string[];
   },
-): Promise<{ crewPoolRateBps: number; overrideLocalDate: string | null }> {
+): Promise<{
+  crewPoolRateBps: number;
+  overrideLocalDate: string | null;
+  source: "default" | "demo" | "override_day";
+}> {
+  if (isDemoServicesRequested(input.servicesRequested)) {
+    return {
+      crewPoolRateBps: DEMO_CREW_POOL_RATE_BPS,
+      overrideLocalDate: null,
+      source: "demo",
+    };
+  }
+
   if (
     !input.startAt ||
     !appointmentUsesThirtyPercentDayRule(input.crewMemberIds)
@@ -210,6 +286,7 @@ async function getEffectiveCrewPoolRateBps(
     return {
       crewPoolRateBps: input.defaultCrewPoolRateBps,
       overrideLocalDate: null,
+      source: "default",
     };
   }
 
@@ -220,6 +297,7 @@ async function getEffectiveCrewPoolRateBps(
     return {
       crewPoolRateBps: input.defaultCrewPoolRateBps,
       overrideLocalDate: null,
+      source: "default",
     };
   }
 
@@ -236,6 +314,7 @@ async function getEffectiveCrewPoolRateBps(
       crewPoolRateBps:
         override?.crewPoolRateBps ?? input.defaultCrewPoolRateBps,
       overrideLocalDate: override ? localDate : null,
+      source: override ? "override_day" : "default",
     };
   } catch (error) {
     const code = extractPgCode(error);
@@ -243,6 +322,7 @@ async function getEffectiveCrewPoolRateBps(
       return {
         crewPoolRateBps: input.defaultCrewPoolRateBps,
         overrideLocalDate: null,
+        source: "default",
       };
     }
     throw error;
@@ -283,6 +363,7 @@ export async function recalculateAppointmentCommissions(
             status: string | null;
             finalTotalCents: number | null;
             startAt: Date | null;
+            leadId: string | null;
             soldByMemberId: string | null;
             marketingMemberId: string | null;
           }
@@ -295,6 +376,7 @@ export async function recalculateAppointmentCommissions(
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
             startAt: appointments.startAt,
+            leadId: appointments.leadId,
             soldByMemberId: appointments.soldByMemberId,
             marketingMemberId: appointments.marketingMemberId,
           })
@@ -314,6 +396,7 @@ export async function recalculateAppointmentCommissions(
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
             startAt: appointments.startAt,
+            leadId: appointments.leadId,
           })
           .from(appointments)
           .where(eq(appointments.id, appointmentId))
@@ -323,6 +406,7 @@ export async function recalculateAppointmentCommissions(
           ? {
               ...fallback,
               startAt: fallback.startAt,
+              leadId: fallback.leadId,
               soldByMemberId: null,
               marketingMemberId: null,
             }
@@ -352,6 +436,27 @@ export async function recalculateAppointmentCommissions(
 
       if (baseCents === null) {
         return;
+      }
+
+      let servicesRequested: string[] = [];
+      if (row.leadId) {
+        try {
+          const [lead] = await tx
+            .select({
+              servicesRequested: leads.servicesRequested,
+            })
+            .from(leads)
+            .where(eq(leads.id, row.leadId))
+            .limit(1);
+          servicesRequested = Array.isArray(lead?.servicesRequested)
+            ? lead.servicesRequested
+            : [];
+        } catch (error) {
+          const code = extractPgCode(error);
+          if (code !== "42P01" && code !== "42703") {
+            throw error;
+          }
+        }
       }
 
       const commissionRows: Array<typeof appointmentCommissions.$inferInsert> =
@@ -409,37 +514,13 @@ export async function recalculateAppointmentCommissions(
           defaultCrewPoolRateBps: settings.crewPoolRateBps,
           startAt: row.startAt ?? null,
           crewMemberIds: crew.map((entry) => entry.memberId),
+          servicesRequested,
         });
         const poolCents = computeBpsAmount(
           baseCents,
           effectiveCrewPool.crewPoolRateBps,
         );
-        const allocations = crew.map((entry) => {
-          const numerator = poolCents * entry.splitBps;
-          const quotient = Math.floor(numerator / totalSplitBps);
-          const remainder = numerator % totalSplitBps;
-          return {
-            memberId: entry.memberId,
-            splitBps: entry.splitBps,
-            cents: quotient,
-            remainder,
-          };
-        });
-
-        let allocated = allocations.reduce(
-          (sum, entry) => sum + entry.cents,
-          0,
-        );
-        let remaining = poolCents - allocated;
-        allocations.sort((a, b) => {
-          if (b.remainder !== a.remainder) return b.remainder - a.remainder;
-          return a.memberId.localeCompare(b.memberId);
-        });
-
-        for (let i = 0; i < allocations.length && remaining > 0; i += 1) {
-          allocations[i]!.cents += 1;
-          remaining -= 1;
-        }
+        const allocations = allocateCrewPoolCents(poolCents, crew);
 
         for (const entry of allocations) {
           commissionRows.push({
@@ -452,6 +533,7 @@ export async function recalculateAppointmentCommissions(
               poolRateBps: effectiveCrewPool.crewPoolRateBps,
               splitBps: entry.splitBps,
               totalSplitBps,
+              poolSource: effectiveCrewPool.source,
               ...(effectiveCrewPool.overrideLocalDate
                 ? { poolOverrideLocalDate: effectiveCrewPool.overrideLocalDate }
                 : {}),

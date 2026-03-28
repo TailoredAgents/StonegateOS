@@ -34,6 +34,12 @@ export function CrewPayoutSelector({ teamMembers }: Props): React.ReactElement {
     selectedSet.has(member.id),
   );
   const resolvedCrewPayout = resolveLockedCrewPayout(selectedMemberIds);
+  const resolvedTotalSplitBps = resolvedCrewPayout.ok
+    ? resolvedCrewPayout.splits.reduce(
+        (sum, entry) => sum + (entry.splitBps ?? 0),
+        0,
+      )
+    : 0;
   const splitByMemberId = new Map(
     resolvedCrewPayout.ok
       ? resolvedCrewPayout.splits.map((entry) => [
@@ -99,6 +105,7 @@ export function CrewPayoutSelector({ teamMembers }: Props): React.ReactElement {
                 <div className="text-xs text-emerald-700">
                   {formatLockedCrewSplitPercent(
                     splitByMemberId.get(member.id) ?? 0,
+                    resolvedTotalSplitBps,
                   )}
                 </div>
               </div>
