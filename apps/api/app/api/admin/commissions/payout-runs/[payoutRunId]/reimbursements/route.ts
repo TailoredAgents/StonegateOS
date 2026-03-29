@@ -14,6 +14,7 @@ import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../web/admin";
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10MB
+type SelectDb = Pick<ReturnType<typeof getDb>, "select">;
 
 const CreateReimbursementSchema = z.object({
   memberId: z.string().uuid(),
@@ -45,7 +46,7 @@ function readFiniteNumber(value: unknown): number | null {
 }
 
 async function ensureDraftPayoutRun(
-  db: ReturnType<typeof getDb>,
+  db: SelectDb,
   payoutRunId: string,
 ): Promise<void> {
   const [run] = await db
@@ -206,7 +207,7 @@ export async function POST(
   let expenseId: string | null = null;
   try {
     await db.transaction(async (tx) => {
-      await ensureDraftPayoutRun(tx as ReturnType<typeof getDb>, payoutRunId);
+      await ensureDraftPayoutRun(tx, payoutRunId);
 
       const now = new Date();
       const [createdExpense] = await tx
@@ -312,7 +313,7 @@ export async function DELETE(
   let deletedNote: string | null = null;
   try {
     await db.transaction(async (tx) => {
-      await ensureDraftPayoutRun(tx as ReturnType<typeof getDb>, payoutRunId);
+      await ensureDraftPayoutRun(tx, payoutRunId);
 
       const [adjustment] = await tx
         .select({
