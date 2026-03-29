@@ -4,6 +4,7 @@ import {
   appointmentCommissions,
   appointments,
   contacts,
+  expenses,
   payoutRunAdjustments,
   payoutRuns,
   properties,
@@ -30,6 +31,7 @@ type CommissionDetailRow = {
   role: "sales" | "marketing" | "crew";
   amountCents: number;
   baseCents: number;
+  meta: Record<string, unknown> | null;
   appointmentId: string;
   scheduledAt: Date | null;
   completedAt: Date | null;
@@ -43,11 +45,20 @@ type CommissionDetailRow = {
 };
 
 type AdjustmentDetailRow = {
+  id: string;
   memberId: string | null;
   memberName: string | null;
+  kind: string;
   amountCents: number;
   note: string | null;
   createdAt: Date;
+  expenseId: string | null;
+  expensePaidAt: Date | null;
+  expenseCategory: string | null;
+  expenseVendor: string | null;
+  expenseMemo: string | null;
+  expenseReceiptFilename: string | null;
+  expenseReceiptContentType: string | null;
 };
 
 type PayoutRunMemberSummary = {
@@ -57,10 +68,12 @@ type PayoutRunMemberSummary = {
   salesCents: number;
   marketingCents: number;
   crewCents: number;
-  adjustmentsCents: number;
+  reimbursementsCents: number;
+  otherAdjustmentsCents: number;
   totalCents: number;
   commissionDetails: CommissionDetailRow[];
-  adjustmentDetails: AdjustmentDetailRow[];
+  reimbursementDetails: AdjustmentDetailRow[];
+  otherAdjustmentDetails: AdjustmentDetailRow[];
 };
 
 export type PayoutRunReportData = {
@@ -132,6 +145,83 @@ function formatRoleLabel(role: CommissionDetailRow["role"]): string {
   if (role === "sales") return "Sales";
   if (role === "marketing") return "Marketing";
   return "Crew";
+}
+
+function readMetaNumber(
+  meta: Record<string, unknown> | null,
+  key: string,
+): number | null {
+  const value = meta?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function fmtPercent(value: number): string {
+  return `${Number(value.toFixed(2)).toString()}%`;
+}
+
+function fmtPercentFromBps(bps: number): string {
+  return fmtPercent(bps / 100);
+}
+
+function formatSplitLabel(splitBps: number, totalSplitBps: number): string {
+  if (totalSplitBps <= 0) return "split unavailable";
+  const splitPercent = (splitBps / totalSplitBps) * 100;
+  if (totalSplitBps <= 10) {
+    return `${splitBps}/${totalSplitBps} (${fmtPercent(splitPercent)})`;
+  }
+  return fmtPercent(splitPercent);
+}
+
+function formatCrewPoolSource(source: string | null): string {
+  if (source === "demo") return "demo pool";
+  if (source === "override_day") return "override-day pool";
+  return "crew pool";
+}
+
+export function describeCommissionMath(detail: Pick<CommissionDetailRow, "role" | "meta">): {
+  mathLabel: string;
+  effectivePercentLabel: string;
+} {
+  const meta = detail.meta;
+  if (detail.role === "sales" || detail.role === "marketing") {
+    const rateBps = readMetaNumber(meta, "rateBps");
+    if (rateBps === null) {
+      return {
+        mathLabel: "Rate unavailable",
+        effectivePercentLabel: "Unknown",
+      };
+    }
+    return {
+      mathLabel: `${fmtPercentFromBps(rateBps)} of base`,
+      effectivePercentLabel: fmtPercentFromBps(rateBps),
+    };
+  }
+
+  const poolRateBps = readMetaNumber(meta, "poolRateBps");
+  const splitBps = readMetaNumber(meta, "splitBps");
+  const totalSplitBps = readMetaNumber(meta, "totalSplitBps");
+  const poolSource =
+    typeof meta?.["poolSource"] === "string" ? meta["poolSource"] : null;
+
+  if (
+    poolRateBps === null ||
+    splitBps === null ||
+    totalSplitBps === null ||
+    totalSplitBps <= 0
+  ) {
+    return {
+      mathLabel: "Crew split unavailable",
+      effectivePercentLabel: "Unknown",
+    };
+  }
+
+  const effectivePercent = (poolRateBps * splitBps) / totalSplitBps / 100;
+  return {
+    mathLabel: `${fmtPercentFromBps(poolRateBps)} ${formatCrewPoolSource(
+      poolSource,
+    )} x ${formatSplitLabel(splitBps, totalSplitBps)} split`,
+    effectivePercentLabel: fmtPercent(effectivePercent),
+  };
 }
 
 function toMemberKey(
@@ -223,6 +313,7 @@ export async function buildPayoutRunReportData(
         role: appointmentCommissions.role,
         amountCents: appointmentCommissions.amountCents,
         baseCents: appointmentCommissions.baseCents,
+        meta: appointmentCommissions.meta,
         appointmentId: appointments.id,
         scheduledAt: appointments.startAt,
         completedAt: appointments.completedAt,
@@ -260,14 +351,24 @@ export async function buildPayoutRunReportData(
       ),
     db
       .select({
+        id: payoutRunAdjustments.id,
         memberId: payoutRunAdjustments.memberId,
         memberName: teamMembers.name,
+        kind: payoutRunAdjustments.kind,
         amountCents: payoutRunAdjustments.amountCents,
         note: payoutRunAdjustments.note,
         createdAt: payoutRunAdjustments.createdAt,
+        expenseId: expenses.id,
+        expensePaidAt: expenses.paidAt,
+        expenseCategory: expenses.category,
+        expenseVendor: expenses.vendor,
+        expenseMemo: expenses.memo,
+        expenseReceiptFilename: expenses.receiptFilename,
+        expenseReceiptContentType: expenses.receiptContentType,
       })
       .from(payoutRunAdjustments)
       .leftJoin(teamMembers, eq(payoutRunAdjustments.memberId, teamMembers.id))
+      .leftJoin(expenses, eq(payoutRunAdjustments.expenseId, expenses.id))
       .where(eq(payoutRunAdjustments.payoutRunId, payoutRunId))
       .orderBy(asc(teamMembers.name), asc(payoutRunAdjustments.createdAt)),
   ]);
@@ -285,10 +386,12 @@ export async function buildPayoutRunReportData(
       salesCents: 0,
       marketingCents: 0,
       crewCents: 0,
-      adjustmentsCents: 0,
+      reimbursementsCents: 0,
+      otherAdjustmentsCents: 0,
       totalCents: 0,
       commissionDetails: [],
-      adjustmentDetails: [],
+      reimbursementDetails: [],
+      otherAdjustmentDetails: [],
     };
 
     const amountCents = Number(row.amountCents ?? 0);
@@ -300,6 +403,7 @@ export async function buildPayoutRunReportData(
       ...row,
       amountCents,
       baseCents: Number(row.baseCents ?? 0),
+      meta: row.meta ?? null,
       collectedCents:
         typeof row.collectedCents === "number" ? row.collectedCents : null,
     });
@@ -317,19 +421,27 @@ export async function buildPayoutRunReportData(
       salesCents: 0,
       marketingCents: 0,
       crewCents: 0,
-      adjustmentsCents: 0,
+      reimbursementsCents: 0,
+      otherAdjustmentsCents: 0,
       totalCents: 0,
       commissionDetails: [],
-      adjustmentDetails: [],
+      reimbursementDetails: [],
+      otherAdjustmentDetails: [],
     };
 
     const amountCents = Number(row.amountCents ?? 0);
-    summary.adjustmentsCents += amountCents;
-    summary.totalCents += amountCents;
-    summary.adjustmentDetails.push({
+    const detail = {
       ...row,
       amountCents,
-    });
+    };
+    if (row.kind === "reimbursement") {
+      summary.reimbursementsCents += amountCents;
+      summary.reimbursementDetails.push(detail);
+    } else {
+      summary.otherAdjustmentsCents += amountCents;
+      summary.otherAdjustmentDetails.push(detail);
+    }
+    summary.totalCents += amountCents;
     summariesByMember.set(memberKey, summary);
   }
 
@@ -360,7 +472,8 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
           <td>${escapeHtml(fmtMoney(summary.salesCents))}</td>
           <td>${escapeHtml(fmtMoney(summary.marketingCents))}</td>
           <td>${escapeHtml(fmtMoney(summary.crewCents))}</td>
-          <td>${escapeHtml(fmtMoney(summary.adjustmentsCents))}</td>
+          <td>${escapeHtml(fmtMoney(summary.reimbursementsCents))}</td>
+          <td>${escapeHtml(fmtMoney(summary.otherAdjustmentsCents))}</td>
           <td><strong>${escapeHtml(fmtMoney(summary.totalCents))}</strong></td>
         </tr>`,
     )
@@ -369,8 +482,9 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
   const memberSections = report.memberSummaries
     .map((summary) => {
       const commissionRows = summary.commissionDetails
-        .map(
-          (detail) => `
+        .map((detail) => {
+          const math = describeCommissionMath(detail);
+          return `
             <tr>
               <td>${escapeHtml(fmtWhen(detail.completedAt, report.run.timezone))}</td>
               <td>${escapeHtml(
@@ -389,12 +503,35 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
               )}</td>
               <td>${escapeHtml(formatRoleLabel(detail.role))}</td>
               <td>${escapeHtml(fmtMoney(detail.baseCents))}</td>
+              <td>${escapeHtml(math.mathLabel)}</td>
+              <td>${escapeHtml(math.effectivePercentLabel)}</td>
+              <td>${escapeHtml(fmtMoney(detail.amountCents))}</td>
+            </tr>`;
+        })
+        .join("");
+
+      const reimbursementRows = summary.reimbursementDetails
+        .map(
+          (detail) => `
+            <tr>
+              <td>${escapeHtml(
+                fmtWhen(
+                  detail.expensePaidAt ?? detail.createdAt,
+                  report.run.timezone,
+                ),
+              )}</td>
+              <td>${escapeHtml(
+                detail.note?.trim() ||
+                  detail.expenseMemo?.trim() ||
+                  "Reimbursement",
+              )}</td>
+              <td>${escapeHtml(detail.expenseVendor?.trim() || "No vendor")}</td>
               <td>${escapeHtml(fmtMoney(detail.amountCents))}</td>
             </tr>`,
         )
         .join("");
 
-      const adjustmentRows = summary.adjustmentDetails
+      const otherAdjustmentRows = summary.otherAdjustmentDetails
         .map(
           (detail) => `
             <tr>
@@ -413,7 +550,8 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
             <span>Sales ${escapeHtml(fmtMoney(summary.salesCents))}</span>
             <span>Marketing ${escapeHtml(fmtMoney(summary.marketingCents))}</span>
             <span>Crew ${escapeHtml(fmtMoney(summary.crewCents))}</span>
-            <span>Adjustments ${escapeHtml(fmtMoney(summary.adjustmentsCents))}</span>
+            <span>Reimbursements ${escapeHtml(fmtMoney(summary.reimbursementsCents))}</span>
+            <span>Other adjustments ${escapeHtml(fmtMoney(summary.otherAdjustmentsCents))}</span>
           </div>
           ${
             summary.commissionDetails.length > 0
@@ -425,6 +563,8 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
                       <th>Job</th>
                       <th>Role</th>
                       <th>Base</th>
+                      <th>Math</th>
+                      <th>Effective %</th>
                       <th>Commission</th>
                     </tr>
                   </thead>
@@ -433,9 +573,27 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
               : `<p class="muted">No job-based commission rows for this member in this run.</p>`
           }
           ${
-            summary.adjustmentDetails.length > 0
+            summary.reimbursementDetails.length > 0
               ? `<div class="adjustment-block">
-                  <h3>Adjustments</h3>
+                  <h3>Reimbursements</h3>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Purchased</th>
+                        <th>What</th>
+                        <th>Vendor</th>
+                        <th>Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>${reimbursementRows}</tbody>
+                  </table>
+                </div>`
+              : ""
+          }
+          ${
+            summary.otherAdjustmentDetails.length > 0
+              ? `<div class="adjustment-block">
+                  <h3>Other adjustments</h3>
                   <table>
                     <thead>
                       <tr>
@@ -444,7 +602,7 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
                         <th>Amount</th>
                       </tr>
                     </thead>
-                    <tbody>${adjustmentRows}</tbody>
+                    <tbody>${otherAdjustmentRows}</tbody>
                   </table>
                 </div>`
               : ""
@@ -630,7 +788,8 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
                     <th>Sales</th>
                     <th>Marketing</th>
                     <th>Crew</th>
-                    <th>Adjustments</th>
+                    <th>Reimbursements</th>
+                    <th>Other adjustments</th>
                     <th>Total owed</th>
                   </tr>
                 </thead>

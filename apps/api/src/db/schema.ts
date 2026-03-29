@@ -1738,8 +1738,12 @@ export const payoutRunAdjustments = pgTable(
     memberId: uuid("member_id").references(() => teamMembers.id, {
       onDelete: "set null",
     }),
+    kind: text("kind").default("manual").notNull(),
     amountCents: integer("amount_cents").notNull(),
     note: text("note"),
+    expenseId: uuid("expense_id").references(() => expenses.id, {
+      onDelete: "set null",
+    }),
     createdBy: uuid("created_by").references(() => teamMembers.id, {
       onDelete: "set null",
     }),
@@ -1749,6 +1753,7 @@ export const payoutRunAdjustments = pgTable(
   },
   (table) => ({
     runIdx: index("payout_run_adjustments_run_idx").on(table.payoutRunId),
+    expenseIdx: index("payout_run_adjustments_expense_idx").on(table.expenseId),
   }),
 );
 

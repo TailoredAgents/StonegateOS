@@ -843,11 +843,24 @@ export async function markPayoutRunPaid(
       .where(eq(payoutRunLines.payoutRunId, payoutRunId))
       .limit(1);
 
+    const [reimbursementTotals] = await tx
+      .select({
+        totalCents:
+          sql<number>`sum(case when ${payoutRunAdjustments.kind} = 'reimbursement' then ${payoutRunAdjustments.amountCents} else 0 end)`.mapWith(
+            Number,
+          ),
+      })
+      .from(payoutRunAdjustments)
+      .where(eq(payoutRunAdjustments.payoutRunId, payoutRunId))
+      .limit(1);
+
     const totalCents = Number(totals?.totalCents ?? 0);
-    if (totalCents <= 0) return;
+    const reimbursementCents = Number(reimbursementTotals?.totalCents ?? 0);
+    const payrollExpenseCents = totalCents - reimbursementCents;
+    if (payrollExpenseCents <= 0) return;
 
     await tx.insert(expenses).values({
-      amount: totalCents,
+      amount: payrollExpenseCents,
       currency: "USD",
       category: "Commissions",
       vendor: "Payouts",

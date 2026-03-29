@@ -1,7 +1,13 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { getDb, payoutRunLines, payoutRuns, teamMembers } from "@/db";
+import { eq, sql } from "drizzle-orm";
+import {
+  getDb,
+  payoutRunAdjustments,
+  payoutRunLines,
+  payoutRuns,
+  teamMembers,
+} from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../../web/admin";
 
@@ -60,12 +66,35 @@ export async function GET(
     .leftJoin(teamMembers, eq(payoutRunLines.memberId, teamMembers.id))
     .where(eq(payoutRunLines.payoutRunId, payoutRunId));
 
+  const adjustmentBreakdown = await db
+    .select({
+      memberId: payoutRunAdjustments.memberId,
+      reimbursementCents:
+        sql<number>`sum(case when ${payoutRunAdjustments.kind} = 'reimbursement' then ${payoutRunAdjustments.amountCents} else 0 end)`.mapWith(
+          Number,
+        ),
+    })
+    .from(payoutRunAdjustments)
+    .where(eq(payoutRunAdjustments.payoutRunId, payoutRunId))
+    .groupBy(payoutRunAdjustments.memberId);
+
+  const reimbursementByMemberId = new Map<string, number>();
+  for (const row of adjustmentBreakdown) {
+    if (row.memberId) {
+      reimbursementByMemberId.set(
+        row.memberId,
+        Number(row.reimbursementCents ?? 0),
+      );
+    }
+  }
+
   const header = [
     "Member",
     "Sales",
     "Marketing",
     "Crew",
-    "Adjustments",
+    "Reimbursements",
+    "Other Adjustments",
     "Total",
     "Period Start",
     "Period End",
@@ -77,12 +106,17 @@ export async function GET(
     .sort((a, b) => (a.memberName ?? "").localeCompare(b.memberName ?? ""))
     .map((line) => {
       const member = line.memberName ?? line.memberId ?? "Unknown";
+      const reimbursementCents = line.memberId
+        ? reimbursementByMemberId.get(line.memberId) ?? 0
+        : 0;
+      const otherAdjustmentsCents = line.adjustmentsCents - reimbursementCents;
       return [
         csvEscape(member),
         fmtMoney(line.salesCents),
         fmtMoney(line.marketingCents),
         fmtMoney(line.crewCents),
-        fmtMoney(line.adjustmentsCents),
+        fmtMoney(reimbursementCents),
+        fmtMoney(otherAdjustmentsCents),
         fmtMoney(line.totalCents),
         run.periodStart.toISOString(),
         run.periodEnd.toISOString(),
@@ -104,4 +138,3 @@ export async function GET(
     }
   });
 }
-
