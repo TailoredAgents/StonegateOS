@@ -201,6 +201,28 @@ export function isDemoServicesRequested(
   });
 }
 
+export function isDemoBookingDetails(bookingDetails: unknown): boolean {
+  if (!isRecord(bookingDetails)) {
+    return false;
+  }
+
+  const serviceType = bookingDetails["serviceType"];
+  return (
+    typeof serviceType === "string" &&
+    serviceType.trim().toLowerCase() === "demolition"
+  );
+}
+
+export function isDemoCommissionJob(input: {
+  servicesRequested?: string[] | null;
+  bookingDetails?: unknown;
+}): boolean {
+  return (
+    isDemoServicesRequested(input.servicesRequested) ||
+    isDemoBookingDetails(input.bookingDetails)
+  );
+}
+
 function appointmentUsesThirtyPercentDayRule(memberIds: string[]): boolean {
   const selected = new Set(
     memberIds
@@ -265,13 +287,19 @@ async function getEffectiveCrewPoolRateBps(
     startAt: Date | null;
     crewMemberIds: string[];
     servicesRequested: string[];
+    bookingDetails: unknown;
   },
 ): Promise<{
   crewPoolRateBps: number;
   overrideLocalDate: string | null;
   source: "default" | "demo" | "override_day";
 }> {
-  if (isDemoServicesRequested(input.servicesRequested)) {
+  if (
+    isDemoCommissionJob({
+      servicesRequested: input.servicesRequested,
+      bookingDetails: input.bookingDetails,
+    })
+  ) {
     return {
       crewPoolRateBps: DEMO_CREW_POOL_RATE_BPS,
       overrideLocalDate: null,
@@ -363,6 +391,7 @@ export async function recalculateAppointmentCommissions(
             status: string | null;
             finalTotalCents: number | null;
             startAt: Date | null;
+            bookingDetails: unknown;
             leadId: string | null;
             soldByMemberId: string | null;
             marketingMemberId: string | null;
@@ -376,6 +405,7 @@ export async function recalculateAppointmentCommissions(
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
             startAt: appointments.startAt,
+            bookingDetails: appointments.bookingDetails,
             leadId: appointments.leadId,
             soldByMemberId: appointments.soldByMemberId,
             marketingMemberId: appointments.marketingMemberId,
@@ -396,6 +426,7 @@ export async function recalculateAppointmentCommissions(
             status: appointments.status,
             finalTotalCents: appointments.finalTotalCents,
             startAt: appointments.startAt,
+            bookingDetails: appointments.bookingDetails,
             leadId: appointments.leadId,
           })
           .from(appointments)
@@ -406,6 +437,7 @@ export async function recalculateAppointmentCommissions(
           ? {
               ...fallback,
               startAt: fallback.startAt,
+              bookingDetails: fallback.bookingDetails,
               leadId: fallback.leadId,
               soldByMemberId: null,
               marketingMemberId: null,
@@ -515,6 +547,7 @@ export async function recalculateAppointmentCommissions(
           startAt: row.startAt ?? null,
           crewMemberIds: crew.map((entry) => entry.memberId),
           servicesRequested,
+          bookingDetails: row.bookingDetails,
         });
         const poolCents = computeBpsAmount(
           baseCents,

@@ -1,6 +1,8 @@
 import {
   DEMO_CREW_POOL_RATE_BPS,
   allocateCrewPoolCents,
+  isDemoBookingDetails,
+  isDemoCommissionJob,
   isDemoServicesRequested,
 } from "@/lib/commissions";
 import { resolveLockedCrewPayout } from "@/lib/locked-crew-payout";
@@ -13,6 +15,33 @@ describe("commission rules", () => {
     expect(isDemoServicesRequested(["demo_kitchen"])).toBe(true);
     expect(isDemoServicesRequested(["demolition"])).toBe(false);
     expect(isDemoServicesRequested(["junk_removal"])).toBe(false);
+  });
+
+  it("treats demolition booking details as demo crew jobs", () => {
+    expect(
+      isDemoBookingDetails({
+        serviceType: "demolition",
+        demolition: { demoType: "fence", scopeSize: "12x16", haulAway: true },
+      }),
+    ).toBe(true);
+    expect(
+      isDemoCommissionJob({
+        servicesRequested: [],
+        bookingDetails: {
+          serviceType: "demolition",
+          demolition: {
+            demoType: "fence",
+            scopeSize: "12x16",
+            haulAway: true,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isDemoBookingDetails({
+        serviceType: "junk_removal",
+      }),
+    ).toBe(false);
   });
 
   it("pays Austin and Jeffrey at an exact one-third/two-thirds split", () => {
