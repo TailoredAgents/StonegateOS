@@ -296,6 +296,32 @@ function isMeaningfulName(value: string): boolean {
   return true;
 }
 
+function normalizeDisplayNameParts(firstName: string | null | undefined, lastName: string | null | undefined): string {
+  return [firstName ?? "", lastName ?? ""]
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function shouldRefreshDmContactName(contact: ContactMatch, senderName: string | null | undefined): boolean {
+  if (!senderName || !isMeaningfulName(senderName)) return false;
+
+  const resolved = resolveContactName(senderName);
+  const nextName = normalizeDisplayNameParts(resolved.firstName, resolved.lastName);
+  if (!nextName) return false;
+
+  const currentName = normalizeDisplayNameParts(contact.firstName, contact.lastName);
+  if (currentName === nextName) return false;
+
+  const isUnknownName = contact.firstName === "Unknown" && contact.lastName === "Contact";
+  const isMessengerPlaceholder = contact.firstName === "Messenger" && /^\d+$/.test(contact.lastName.trim());
+  if (isUnknownName || isMessengerPlaceholder) return true;
+
+  // For DM-only contacts without richer identifiers, keep the CRM aligned to the Facebook profile name.
+  return !contact.email && !contact.phone && !contact.phoneE164;
+}
+
 async function findContactByExternalAddress(
   db: DbExecutor,
   channel: InboundChannel,
@@ -324,6 +350,34 @@ async function findContactByExternalAddress(
       )
     )
     .orderBy(desc(conversationThreads.updatedAt), desc(conversationThreads.createdAt))
+    .limit(1);
+
+  return row ?? null;
+}
+
+async function findContactByDmMessageAddress(db: DbExecutor, externalAddress: string): Promise<ContactMatch | null> {
+  if (!externalAddress.trim()) return null;
+
+  const [row] = await db
+    .select({
+      id: contacts.id,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      email: contacts.email,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164
+    })
+    .from(conversationMessages)
+    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .innerJoin(contacts, eq(conversationThreads.contactId, contacts.id))
+    .where(
+      and(
+        eq(conversationThreads.channel, "dm"),
+        eq(conversationMessages.direction, "inbound"),
+        eq(conversationMessages.fromAddress, externalAddress)
+      )
+    )
+    .orderBy(desc(conversationMessages.receivedAt), desc(conversationMessages.createdAt))
     .limit(1);
 
   return row ?? null;
@@ -662,6 +716,9 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
     } else {
       if (channel === "dm") {
         contact = await findContactByExternalAddress(tx, channel, resolvedFromAddress);
+        if (!contact) {
+          contact = await findContactByDmMessageAddress(tx, resolvedFromAddress);
+        }
       }
 
       const normalizedContactEmail =
@@ -720,11 +777,13 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
         const updates: Partial<Pick<typeof contacts.$inferInsert, "firstName" | "lastName" | "email" | "phone" | "phoneE164">> =
           {};
 
-        const nameCandidate = extractedName ?? senderName;
+        const nameCandidate = channel === "dm" ? senderName ?? extractedName : extractedName ?? senderName;
         if (nameCandidate && isMeaningfulName(nameCandidate)) {
-          const isUnknownName = contact.firstName === "Unknown" && contact.lastName === "Contact";
-          const isMessengerPlaceholder = contact.firstName === "Messenger" && /^\d+$/.test(contact.lastName.trim());
-          if (isUnknownName || isMessengerPlaceholder) {
+          const shouldRefreshName =
+            channel === "dm"
+              ? shouldRefreshDmContactName(contact, senderName ?? nameCandidate)
+              : contact.firstName === "Unknown" && contact.lastName === "Contact";
+          if (shouldRefreshName) {
             const name = resolveContactName(nameCandidate);
             updates.firstName = name.firstName;
             updates.lastName = name.lastName;
