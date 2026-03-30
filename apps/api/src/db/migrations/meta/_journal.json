@@ -295,6 +295,13 @@
       "when": 1774665600000,
       "tag": "0041_payout_run_reimbursements",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1774860000000,
+      "tag": "0042_sales_agent_memories",
+      "breakpoints": true
     }
   ]
 }

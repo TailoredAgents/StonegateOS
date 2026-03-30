@@ -17,6 +17,7 @@ export type JarvisReadToolName =
   | "crm.contact.snapshot"
   | "crm.contact.instant_quote_photos"
   | "crm.contact.omni_facts"
+  | "crm.contact.sales_agent_memory"
   | "inbox.threads.list"
   | "inbox.thread.messages"
   | "inbox.contact.transcript"
@@ -362,6 +363,56 @@ function toolSummaryLines(result: JarvisReadToolResult): string[] {
     return lines;
   }
 
+  if (result.tool === "crm.contact.sales_agent_memory") {
+    const memory = isRecord(data["memory"]) ? (data["memory"] as Record<string, unknown>) : null;
+    const liveContext = isRecord(data["liveContext"]) ? (data["liveContext"] as Record<string, unknown>) : null;
+    if (!memory) return [];
+
+    const summary = typeof memory["summary"] === "string" ? (memory["summary"] as string) : "";
+    const customerIntent = typeof memory["customerIntent"] === "string" ? (memory["customerIntent"] as string) : "";
+    const channelPreference =
+      typeof memory["channelPreference"] === "string" ? (memory["channelPreference"] as string) : "";
+    const bookingReadiness =
+      typeof memory["bookingReadiness"] === "string" ? (memory["bookingReadiness"] as string) : "";
+    const quoteConfidence =
+      typeof memory["quoteConfidence"] === "string" ? (memory["quoteConfidence"] as string) : "";
+    const missingFields = Array.isArray(memory["missingFields"]) ? (memory["missingFields"] as unknown[]) : [];
+    const objections = Array.isArray(memory["objections"]) ? (memory["objections"] as unknown[]) : [];
+    const nextAppointment =
+      liveContext && isRecord(liveContext["nextAppointment"])
+        ? (liveContext["nextAppointment"] as Record<string, unknown>)
+        : null;
+    const nextAppointmentType =
+      nextAppointment && typeof nextAppointment["type"] === "string"
+        ? (nextAppointment["type"] as string)
+        : "";
+
+    const lines: string[] = [];
+    if (summary) lines.push(`Sales agent memory: ${truncateText(summary, 280)}`);
+    if (customerIntent || channelPreference || bookingReadiness || quoteConfidence) {
+      lines.push(
+        [
+          customerIntent ? `intent ${customerIntent}` : null,
+          channelPreference ? `prefers ${channelPreference}` : null,
+          bookingReadiness ? `booking ${bookingReadiness}` : null,
+          quoteConfidence ? `quote confidence ${quoteConfidence}` : null,
+        ]
+          .filter(Boolean)
+          .join(" - "),
+      );
+    }
+    if (nextAppointmentType) lines.push(`Next appointment type: ${nextAppointmentType}`);
+    const missing = missingFields
+      .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      .slice(0, 5);
+    if (missing.length) lines.push(`Missing: ${missing.join(", ")}`);
+    const objectionList = objections
+      .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      .slice(0, 5);
+    if (objectionList.length) lines.push(`Objections: ${objectionList.join(", ")}`);
+    return lines;
+  }
+
   return [];
 }
 
@@ -541,6 +592,17 @@ export async function runJarvisReadTool(ctx: AdminContext, call: JarvisReadToolC
       const res = await adminFetchJson(ctx, {
         path: `/api/admin/contacts/${encodeURIComponent(contactId)}/omni`,
         query: { ...(includeQuotePrice ? { includeQuotePrice } : {}) }
+      });
+      if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
+      return toolOk(tool, res.data);
+    }
+    case "crm.contact.sales_agent_memory": {
+      const contactId = asString(args["contactId"]);
+      if (!contactId) return toolError(tool, 400, "missing_contact_id");
+      const includeQuotePrice = args["includeQuotePrice"] === true ? "1" : null;
+      const res = await adminFetchJson(ctx, {
+        path: `/api/admin/contacts/${encodeURIComponent(contactId)}/sales-agent-memory`,
+        query: { ...(includeQuotePrice ? { includeQuotePrice } : {}) },
       });
       if (!res.ok) return toolUnavailable(tool, res.status, res.error, res.data);
       return toolOk(tool, res.data);
