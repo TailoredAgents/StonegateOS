@@ -197,11 +197,13 @@ function parseLeadFormFilter(): Set<string> | null {
 }
 
 function resolveFacebookToken(): { systemUserToken: string | null; pageAccessToken: string | null } {
-  const pageAccessToken =
-    process.env["FB_PAGE_ACCESS_TOKEN"] ??
-    process.env["FB_MESSENGER_ACCESS_TOKEN"] ??
-    null;
+  // Keep webhook token resolution aligned with the outbound Messenger send path:
+  // `FB_PAGE_ACCESS_TOKEN` is an explicit page token, while the other Facebook
+  // env vars are treated as system/business tokens that can be exchanged for a
+  // page access token via `/{pageId}?fields=access_token`.
+  const pageAccessToken = process.env["FB_PAGE_ACCESS_TOKEN"] ?? null;
   const systemUserToken =
+    process.env["FB_MESSENGER_ACCESS_TOKEN"] ??
     process.env["FB_MARKETING_ACCESS_TOKEN"] ??
     process.env["FB_LEADGEN_ACCESS_TOKEN"] ??
     null;
