@@ -72,6 +72,12 @@ import { MetaGraphApiError, syncMetaAdsInsightsDaily } from "@/lib/meta-ads-insi
 import { GoogleAdsApiError, syncGoogleAdsInsightsDaily } from "@/lib/google-ads-insights";
 import { runGoogleAdsAnalystReport } from "@/lib/google-ads-analyst";
 import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
+import {
+  fetchFacebookLeadgenDetails,
+  fetchFacebookSenderName,
+  recordLeadFromFacebook
+} from "@/lib/facebook-webhooks";
+import { recordInboundMessage } from "@/lib/inbox";
 
 type OutboxEventRecord = typeof outboxEvents.$inferSelect;
 
@@ -2332,6 +2338,124 @@ async function scheduleAppointmentReminders(
 
 async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcome> {
   switch (event.type) {
+    case "facebook.dm.inbound": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const senderId = readStringValue(payload?.["senderId"]);
+      if (!senderId) {
+        console.warn("[outbox] facebook.dm.inbound.missing_sender", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const pageId = readStringValue(payload?.["pageId"]);
+      const recipientId = readStringValue(payload?.["recipientId"]);
+      const body = readStringValue(payload?.["body"]) ?? "";
+      const providerMessageId = readStringValue(payload?.["providerMessageId"]);
+      const timestampValue = readStringValue(payload?.["timestamp"]);
+      const receivedAt = timestampValue ? new Date(timestampValue) : undefined;
+      const mediaUrls = Array.isArray(payload?.["mediaUrls"])
+        ? payload?.["mediaUrls"].filter((url): url is string => typeof url === "string" && url.trim().length > 0)
+        : [];
+      const senderName = await fetchFacebookSenderName(pageId, senderId);
+
+      await recordInboundMessage({
+        channel: "dm",
+        body,
+        subject: null,
+        fromAddress: senderId,
+        toAddress: recipientId,
+        provider: "facebook",
+        providerMessageId,
+        mediaUrls,
+        receivedAt: receivedAt && !Number.isNaN(receivedAt.getTime()) ? receivedAt : undefined,
+        senderName: senderName ?? null,
+        metadata: {
+          source: "facebook",
+          pageId,
+          senderId,
+          recipientId
+        }
+      });
+
+      return { status: "processed" };
+    }
+
+    case "facebook.dm.postback": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const senderId = readStringValue(payload?.["senderId"]);
+      if (!senderId) {
+        console.warn("[outbox] facebook.dm.postback.missing_sender", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const pageId = readStringValue(payload?.["pageId"]);
+      const recipientId = readStringValue(payload?.["recipientId"]);
+      const timestampValue = readStringValue(payload?.["timestamp"]);
+      const receivedAt = timestampValue ? new Date(timestampValue) : undefined;
+      const postbackPayload = readStringValue(payload?.["payload"]);
+      const title = readStringValue(payload?.["title"]);
+      const referral =
+        payload?.["referral"] && isRecord(payload["referral"]) ? payload["referral"] : null;
+      const senderName = await fetchFacebookSenderName(pageId, senderId);
+      const body = postbackPayload
+        ? `Postback: ${postbackPayload}`
+        : title
+          ? `Postback: ${title}`
+          : "Postback received";
+
+      await recordInboundMessage({
+        channel: "dm",
+        body,
+        subject: null,
+        fromAddress: senderId,
+        toAddress: recipientId,
+        provider: "facebook",
+        providerMessageId: null,
+        receivedAt: receivedAt && !Number.isNaN(receivedAt.getTime()) ? receivedAt : undefined,
+        senderName: senderName ?? null,
+        metadata: {
+          source: "facebook",
+          type: "postback",
+          pageId,
+          senderId,
+          recipientId,
+          payload: postbackPayload,
+          title,
+          referral
+        }
+      });
+
+      return { status: "processed" };
+    }
+
+    case "facebook.leadgen.created": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const leadgenId = readStringValue(payload?.["leadgenId"]);
+      if (!leadgenId) {
+        console.warn("[outbox] facebook.leadgen.created.missing_leadgen", { id: event.id });
+        return { status: "skipped" };
+      }
+
+      const pageId = readStringValue(payload?.["pageId"]);
+      const formId = readStringValue(payload?.["formId"]);
+      const details = await fetchFacebookLeadgenDetails(leadgenId, { pageId });
+      const result = await recordLeadFromFacebook({
+        leadgenId,
+        formId,
+        pageId,
+        details
+      });
+
+      if (!result.duplicate) {
+        console.info("[outbox] facebook.leadgen.recorded", {
+          leadId: result.leadId,
+          leadgenId,
+          formId
+        });
+      }
+
+      return { status: "processed" };
+    }
+
     case "estimate.requested": {
       const payload = isRecord(event.payload) ? event.payload : null;
       const appointmentIdValue = payload?.["appointmentId"];
@@ -4569,7 +4693,9 @@ export async function processOutboxBatch(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const attempt = (event.attempts ?? 0) + 1;
-      const canRetry = event.type === "message.send" && attempt < MAX_MESSAGE_SEND_ATTEMPTS;
+      const canRetry =
+        (event.type === "message.send" && attempt < MAX_MESSAGE_SEND_ATTEMPTS) ||
+        (event.type.startsWith("facebook.") && attempt < 5);
       outcome = canRetry ? { status: "retry", error: message } : { status: "processed", error: message };
       console.warn("[outbox] handler_error", { id: event.id, type: event.type, error: message });
     }
