@@ -16,7 +16,7 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
 import { buildSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
-import { buildSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
+import { buildSalesAgentNextAction, getSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 
 type ReplyChannel = "sms" | "email" | "dm";
 
@@ -518,6 +518,20 @@ export async function POST(
         body: latestAiDraftMessage.body,
       },
     });
+  }
+
+  if (thread.contactId && latestInboundMessage) {
+    const existingNextAction = await getSalesAgentNextAction(db, thread.contactId);
+    if (
+      existingNextAction?.status === "dismissed" &&
+      existingNextAction.updatedAt.getTime() >= latestInboundMessage.createdAt.getTime()
+    ) {
+      return NextResponse.json({
+        ok: true,
+        skipped: "dismissed",
+        channel: replyChannel,
+      });
+    }
   }
 
   const contactName = [thread.contactFirstName, thread.contactLastName].filter(Boolean).join(" ").trim();

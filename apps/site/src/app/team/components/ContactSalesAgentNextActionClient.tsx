@@ -6,6 +6,7 @@ import { teamButtonClass } from "./team-ui";
 type NextActionPayload = {
   ok?: boolean;
   nextAction?: {
+    id?: string | null;
     actionType?: string | null;
     channel?: string | null;
     status?: string | null;
@@ -16,6 +17,17 @@ type NextActionPayload = {
     facts?: string[] | null;
     dueAt?: string | null;
     updatedAt?: string | null;
+  } | null;
+  liveContext?: {
+    latestLead?: {
+      id?: string | null;
+    } | null;
+    automation?: Array<{
+      channel?: string | null;
+      paused?: boolean;
+      dnc?: boolean;
+      humanTakeover?: boolean;
+    }> | null;
   } | null;
   error?: string;
 };
@@ -49,6 +61,7 @@ export function ContactSalesAgentNextActionClient({ contactId }: Props): React.R
   const [payload, setPayload] = React.useState<NextActionPayload | null>(null);
   const [status, setStatus] = React.useState<"idle" | "loading" | "error">("loading");
   const [refreshing, setRefreshing] = React.useState(false);
+  const [actionPending, setActionPending] = React.useState<string | null>(null);
 
   const requestUrl = `/api/team/contacts/sales-agent-next-action?contactId=${encodeURIComponent(contactId)}&includeQuotePrice=1`;
 
@@ -102,10 +115,44 @@ export function ContactSalesAgentNextActionClient({ contactId }: Props): React.R
   const nextAction = payload?.nextAction ?? null;
   const dueAt = formatTimestamp(nextAction?.dueAt);
   const updatedAt = formatTimestamp(nextAction?.updatedAt);
+  const automationState =
+    (payload?.liveContext?.automation ?? []).find((row) => row?.channel === nextAction?.channel) ?? null;
+  const leadId = payload?.liveContext?.latestLead?.id ?? null;
+  const canControlAutomation = Boolean(leadId && nextAction?.channel);
+  const isDismissed = nextAction?.status === "dismissed";
+  const isPaused = automationState?.paused === true;
+  const isHumanTakeover = automationState?.humanTakeover === true;
   const facts =
     Array.isArray(nextAction?.facts)
       ? nextAction.facts.filter((item) => typeof item === "string" && item.trim().length > 0)
       : [];
+
+  const runControl = React.useCallback(
+    async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
+      setActionPending(action);
+      try {
+        const response = await fetch(requestUrl, {
+          method: "PATCH",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action,
+            channel: nextAction?.channel ?? null,
+          }),
+        });
+        const data = (await response.json().catch(() => null)) as NextActionPayload | null;
+        if (!response.ok || !data?.ok) {
+          throw new Error(typeof data?.error === "string" ? data.error : "Unable to update controls.");
+        }
+        setPayload(data);
+        setStatus("idle");
+      } catch {
+        setStatus("error");
+      } finally {
+        setActionPending(null);
+      }
+    },
+    [requestUrl, nextAction?.channel],
+  );
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -136,6 +183,55 @@ export function ContactSalesAgentNextActionClient({ contactId }: Props): React.R
                 {nextAction.summary}
               </div>
             ) : null}
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={teamButtonClass("secondary", "sm")}
+                onClick={() => void runControl("dismiss")}
+                disabled={actionPending !== null || isDismissed}
+              >
+                {actionPending === "dismiss" ? "Dismissing..." : isDismissed ? "Dismissed" : "Dismiss"}
+              </button>
+              <button
+                type="button"
+                className={teamButtonClass("secondary", "sm")}
+                onClick={() => void runControl("pause")}
+                disabled={actionPending !== null || !canControlAutomation || isPaused}
+              >
+                {actionPending === "pause" ? "Pausing..." : isPaused ? "Paused" : "Pause"}
+              </button>
+              <button
+                type="button"
+                className={teamButtonClass("secondary", "sm")}
+                onClick={() => void runControl("human_takeover")}
+                disabled={actionPending !== null || !canControlAutomation || isHumanTakeover}
+              >
+                {actionPending === "human_takeover"
+                  ? "Setting..."
+                  : isHumanTakeover
+                    ? "Human takeover"
+                    : "Human takeover"}
+              </button>
+              <button
+                type="button"
+                className={teamButtonClass("secondary", "sm")}
+                onClick={() => void runControl("resume")}
+                disabled={actionPending !== null || !canControlAutomation || (!isPaused && !isHumanTakeover)}
+              >
+                {actionPending === "resume" ? "Resuming..." : "Resume"}
+              </button>
+            </div>
+
+            {(isPaused || isHumanTakeover || automationState?.dnc) && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                {automationState?.dnc
+                  ? "Automation is effectively blocked because this lead is DNC."
+                  : isHumanTakeover
+                    ? "Human takeover is active on the planner channel."
+                    : "Automation is paused on the planner channel."}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>

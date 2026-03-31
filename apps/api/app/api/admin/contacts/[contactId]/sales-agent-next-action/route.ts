@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getDb } from "@/db";
+import { eq, getTableColumns } from "drizzle-orm";
+import { getDb, salesAgentNextActions } from "@/db";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import {
   buildSalesAgentNextAction,
@@ -13,7 +14,9 @@ import {
   upsertSalesAgentMemory,
   type SalesAgentMemoryRecord,
 } from "@/lib/sales-agent-memory";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
+import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
 type RouteContext = {
   params: Promise<{ contactId?: string }>;
@@ -57,6 +60,8 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "automation.read");
+  if (permissionError) return permissionError;
 
   const { contactId } = await context.params;
   const contactIdTrimmed = typeof contactId === "string" ? contactId.trim() : "";
@@ -99,5 +104,61 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     ok: true,
     nextAction,
     liveContext,
+  });
+}
+
+export async function PATCH(request: NextRequest, context: RouteContext): Promise<Response> {
+  if (!isAdminRequest(request)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const permissionError = await requirePermission(request, "automation.write");
+  if (permissionError) return permissionError;
+
+  const { contactId } = await context.params;
+  const contactIdTrimmed = typeof contactId === "string" ? contactId.trim() : "";
+  if (!contactIdTrimmed || !isUuid(contactIdTrimmed)) {
+    return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
+  }
+
+  const payload = (await request.json().catch(() => null)) as { status?: string } | null;
+  const nextStatus = typeof payload?.status === "string" ? payload.status.trim() : "";
+  if (!nextStatus) {
+    return NextResponse.json({ error: "status_required" }, { status: 400 });
+  }
+  if (!["open", "scheduled", "blocked", "dismissed"].includes(nextStatus)) {
+    return NextResponse.json({ error: "invalid_status" }, { status: 400 });
+  }
+
+  const db = getDb();
+  const now = new Date();
+  const [updated] = await db
+    .update(salesAgentNextActions)
+    .set({
+      status: nextStatus,
+      updatedAt: now,
+    })
+    .where(eq(salesAgentNextActions.contactId, contactIdTrimmed))
+    .returning({
+      ...getTableColumns(salesAgentNextActions),
+    });
+
+  if (!updated) {
+    return NextResponse.json({ error: "next_action_not_found" }, { status: 404 });
+  }
+
+  await recordAuditEvent({
+    actor: getAuditActorFromRequest(request),
+    action: "sales_agent.next_action.update",
+    entityType: "sales_agent_next_action",
+    entityId: updated.id,
+    meta: {
+      contactId: contactIdTrimmed,
+      status: nextStatus,
+    },
+  });
+
+  return NextResponse.json({
+    ok: true,
+    nextAction: updated,
   });
 }
