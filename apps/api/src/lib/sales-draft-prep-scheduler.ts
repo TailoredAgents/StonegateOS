@@ -1,4 +1,5 @@
 import { getDb } from "@/db";
+import { recordAuditEvent } from "@/lib/audit";
 import { getSalesAutopilotPolicy } from "@/lib/policy";
 
 type TeamDirectoryPayload = {
@@ -10,6 +11,7 @@ type SalesQueuePayload = {
   ok?: boolean;
   items?: Array<{
     id?: string;
+    contact?: { id?: string | null; name?: string | null } | null;
     draftPreparationEligible?: boolean;
     draft?: {
       ready?: boolean | null;
@@ -203,11 +205,26 @@ export async function prepareDueSalesQueueDrafts(input?: {
       .slice(0, maxDraftsPerMember);
 
     for (const candidate of candidates) {
+      const contactId =
+        typeof candidate.contact?.id === "string" && candidate.contact.id.trim().length > 0
+          ? candidate.contact.id.trim()
+          : null;
+      const actionType =
+        typeof candidate.nextAction?.actionType === "string" && candidate.nextAction.actionType.trim().length > 0
+          ? candidate.nextAction.actionType.trim()
+          : null;
       const draftTarget = candidate.draftTarget;
       const threadId = typeof draftTarget?.threadId === "string" ? draftTarget.threadId.trim() : "";
       const channel = typeof draftTarget?.channel === "string" ? draftTarget.channel.trim() : "";
       if (!threadId || !channel) {
         skipped += 1;
+        await recordAuditEvent({
+          actor: { type: "worker", label: "sales-draft-prep" },
+          action: "sales.agent.autosend.skipped",
+          entityType: "conversation_thread",
+          entityId: threadId || candidate.id || "unknown",
+          meta: { contactId, channel: channel || null, actionType, reason: "missing_draft_target" },
+        });
         continue;
       }
       const suggestResult = await fetchJson<SuggestPayload>(
@@ -219,16 +236,56 @@ export async function prepareDueSalesQueueDrafts(input?: {
       );
       if (!suggestResult.ok) {
         skipped += 1;
+        await recordAuditEvent({
+          actor: { type: "worker", label: "sales-draft-prep" },
+          action: "sales.agent.draft.skipped",
+          entityType: "conversation_thread",
+          entityId: threadId,
+          meta: { contactId, channel, actionType, reason: suggestResult.error },
+        });
         continue;
       }
       if (suggestResult.data.created === true) {
         prepared += 1;
+        await recordAuditEvent({
+          actor: { type: "worker", label: "sales-draft-prep" },
+          action: "sales.agent.draft.prepared",
+          entityType: "conversation_thread",
+          entityId: threadId,
+          meta: {
+            contactId,
+            channel,
+            actionType,
+            messageId: suggestResult.data.messageId ?? null,
+            queueItemId: candidate.id ?? null,
+          },
+        });
         continue;
       }
       if (suggestResult.data.reused === true) {
         reused += 1;
+        await recordAuditEvent({
+          actor: { type: "worker", label: "sales-draft-prep" },
+          action: "sales.agent.draft.reused",
+          entityType: "conversation_thread",
+          entityId: threadId,
+          meta: {
+            contactId,
+            channel,
+            actionType,
+            messageId: suggestResult.data.messageId ?? candidate.draft?.messageId ?? null,
+            queueItemId: candidate.id ?? null,
+          },
+        });
       } else {
         skipped += 1;
+        await recordAuditEvent({
+          actor: { type: "worker", label: "sales-draft-prep" },
+          action: "sales.agent.draft.skipped",
+          entityType: "conversation_thread",
+          entityId: threadId,
+          meta: { contactId, channel, actionType, reason: suggestResult.data.skipped ?? "no_draft_change" },
+        });
         continue;
       }
 
@@ -249,6 +306,24 @@ export async function prepareDueSalesQueueDrafts(input?: {
         isPlannerActionDue(candidate.nextAction ?? null, now);
 
       if (!canAutoSend) {
+        if (autoSendEnabled && candidate?.draft?.ready === true) {
+          const reason = !allowedAutoSendChannels.has(channel)
+            ? "channel_not_allowed"
+            : !allowedAutoSendActions.has(candidate.nextAction?.actionType ?? "")
+              ? "action_not_allowed"
+              : !draftIsOldEnough
+                ? "draft_too_fresh"
+                : !isPlannerActionDue(candidate.nextAction ?? null, now)
+                  ? "not_due"
+                  : "autosend_not_allowed";
+          await recordAuditEvent({
+            actor: { type: "worker", label: "sales-draft-prep" },
+            action: "sales.agent.autosend.skipped",
+            entityType: "conversation_thread",
+            entityId: threadId,
+            meta: { contactId, channel, actionType, messageId: messageId || null, reason },
+          });
+        }
         continue;
       }
 
@@ -258,8 +333,23 @@ export async function prepareDueSalesQueueDrafts(input?: {
       );
       if (retryResult.ok && retryResult.data.ok === true) {
         autosent += 1;
+        await recordAuditEvent({
+          actor: { type: "worker", label: "sales-draft-prep" },
+          action: "sales.agent.autosend.queued",
+          entityType: "conversation_message",
+          entityId: messageId,
+          meta: { contactId, threadId, channel, actionType },
+        });
       } else {
         skipped += 1;
+        const retryError = retryResult.ok ? "retry_not_acknowledged" : retryResult.error;
+        await recordAuditEvent({
+          actor: { type: "worker", label: "sales-draft-prep" },
+          action: "sales.agent.autosend.skipped",
+          entityType: "conversation_message",
+          entityId: messageId || threadId,
+          meta: { contactId, threadId, channel, actionType, reason: retryError },
+        });
       }
     }
   }

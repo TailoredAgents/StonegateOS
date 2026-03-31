@@ -15,12 +15,18 @@ const DEFAULT_ACTIONS = [
   "call.started",
   "message.received",
   "message.queued",
+  "message.retry",
   "sales.escalation.call.started",
   "sales.escalation.call.connected",
   "sales.touch.manual",
   "sales.disposition.set",
   "sales.autopilot.draft_created",
   "sales.autopilot.autosend",
+  "sales.agent.draft.prepared",
+  "sales.agent.draft.reused",
+  "sales.agent.draft.skipped",
+  "sales.agent.autosend.queued",
+  "sales.agent.autosend.skipped",
   "inbox.alert.sent",
   "inbox.alert.failed",
   "crm.reminder.created",
@@ -129,4 +135,3 @@ export async function GET(request: NextRequest): Promise<Response> {
     events
   });
 }
-

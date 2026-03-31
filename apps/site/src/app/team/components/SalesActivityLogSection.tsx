@@ -26,7 +26,14 @@ type ActivityRow = {
   whenLocal: string;
   ago: string;
   actor: string;
-  type: "Outbound call" | "Inbound message" | "Outbound message" | "Autopilot draft" | "Reminder" | "Other";
+  type:
+    | "Outbound call"
+    | "Inbound message"
+    | "Outbound message"
+    | "Agent draft"
+    | "Agent autosend"
+    | "Reminder"
+    | "Other";
   channel: string | null;
   contactId: string | null;
   leadId: string | null;
@@ -58,7 +65,7 @@ function formatLocal(iso: string): string {
     month: "short",
     day: "numeric",
     hour: "numeric",
-    minute: "2-digit"
+    minute: "2-digit",
   }).format(value);
 }
 
@@ -88,6 +95,8 @@ function buildRow(event: ActivityEvent): ActivityRow {
 
   const to = getMetaString(event.meta, "to");
   const from = getMetaString(event.meta, "from");
+  const reason = getMetaString(event.meta, "reason");
+  const actionType = getMetaString(event.meta, "actionType");
 
   if (event.action === "call.started" || event.action.startsWith("sales.escalation.call.")) {
     const target = to ?? "unknown number";
@@ -106,7 +115,7 @@ function buildRow(event: ActivityEvent): ActivityRow {
           ? `Connected (press 1) to ${target}`
           : event.action === "sales.escalation.call.started"
             ? `Auto call started to ${target}`
-            : `Call started to ${target}`
+            : `Call started to ${target}`,
     };
   }
 
@@ -125,29 +134,74 @@ function buildRow(event: ActivityEvent): ActivityRow {
       channel: channelLabel,
       contactId,
       leadId,
-      summary: numberLabel ? `${directionLabel} (${channelLabel}) to or from ${numberLabel}` : `${directionLabel} (${channelLabel})`
+      summary: numberLabel
+        ? `${directionLabel} (${channelLabel}) to or from ${numberLabel}`
+        : `${directionLabel} (${channelLabel})`,
     };
   }
 
-  if (event.action.startsWith("sales.autopilot.")) {
+  if (event.action.startsWith("sales.autopilot.") || event.action.startsWith("sales.agent.draft.")) {
+    const summary =
+      event.action === "sales.autopilot.draft_created"
+        ? "Autopilot draft created"
+        : event.action === "sales.agent.draft.prepared"
+          ? actionType
+            ? `Planner draft prepared for ${actionType}`
+            : "Planner draft prepared"
+          : event.action === "sales.agent.draft.reused"
+            ? actionType
+              ? `Planner draft reused for ${actionType}`
+              : "Planner draft reused"
+            : event.action === "sales.agent.draft.skipped"
+              ? reason
+                ? `Planner draft skipped: ${reason}`
+                : "Planner draft skipped"
+              : event.action;
     return {
       id: event.id,
       whenIso: event.createdAt,
       whenLocal,
       ago,
       actor,
-      type: "Autopilot draft",
+      type: "Agent draft",
       channel: channel ?? null,
       contactId,
       leadId,
-      summary: event.action === "sales.autopilot.draft_created" ? "Draft created" : event.action
+      summary,
+    };
+  }
+
+  if (event.action === "message.retry" || event.action.startsWith("sales.agent.autosend.")) {
+    const summary =
+      event.action === "sales.agent.autosend.queued"
+        ? actionType
+          ? `Planner autosend queued for ${actionType}`
+          : "Planner autosend queued"
+        : event.action === "sales.agent.autosend.skipped"
+          ? reason
+            ? `Planner autosend skipped: ${reason}`
+            : "Planner autosend skipped"
+          : "Queued send";
+    return {
+      id: event.id,
+      whenIso: event.createdAt,
+      whenLocal,
+      ago,
+      actor,
+      type: "Agent autosend",
+      channel: channel ?? null,
+      contactId,
+      leadId,
+      summary,
     };
   }
 
   if (event.action.startsWith("crm.reminder.")) {
     const taskId = getMetaString(event.meta, "taskId");
     const recipient = to ?? getMetaString(event.meta, "recipient");
-    const detail = [taskId ? `task ${taskId}` : null, recipient ? `to ${recipient}` : null].filter(Boolean).join(" • ");
+    const detail = [taskId ? `task ${taskId}` : null, recipient ? `to ${recipient}` : null]
+      .filter(Boolean)
+      .join(" | ");
     return {
       id: event.id,
       whenIso: event.createdAt,
@@ -158,7 +212,7 @@ function buildRow(event: ActivityEvent): ActivityRow {
       channel: "sms",
       contactId,
       leadId,
-      summary: detail ? `${event.action} • ${detail}` : event.action
+      summary: detail ? `${event.action} | ${detail}` : event.action,
     };
   }
 
@@ -172,7 +226,7 @@ function buildRow(event: ActivityEvent): ActivityRow {
     channel: channel ?? null,
     contactId,
     leadId,
-    summary: event.action
+    summary: event.action,
   };
 }
 
@@ -182,7 +236,7 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
 
   const [activityRes, membersRes] = await Promise.all([
     callAdminApi(`/api/admin/sales/activity?${qs.toString()}`),
-    callAdminApi("/api/admin/team/members")
+    callAdminApi("/api/admin/team/members"),
   ]);
 
   if (!activityRes.ok) {
@@ -207,11 +261,12 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
       if (row.type === "Outbound call") acc.outboundCalls += 1;
       if (row.type === "Outbound message") acc.outboundMessages += 1;
       if (row.type === "Inbound message") acc.inboundMessages += 1;
-      if (row.type === "Autopilot draft") acc.autopilotDrafts += 1;
+      if (row.type === "Agent draft") acc.agentDrafts += 1;
+      if (row.type === "Agent autosend") acc.agentAutosends += 1;
       if (row.type === "Reminder") acc.reminders += 1;
       return acc;
     },
-    { outboundCalls: 0, outboundMessages: 0, inboundMessages: 0, autopilotDrafts: 0, reminders: 0 }
+    { outboundCalls: 0, outboundMessages: 0, inboundMessages: 0, agentDrafts: 0, agentAutosends: 0, reminders: 0 },
   );
 
   const grouped = rows.reduce<Record<string, ActivityRow[]>>((acc, row) => {
@@ -230,7 +285,7 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Sales Activity Log</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Readable feed of when calls and messages happened, plus reminders and autopilot activity.
+              Readable feed of when calls and messages happened, plus reminders and agent activity.
             </p>
             {selectedLabel ? (
               <p className="mt-2 text-xs text-slate-500">
@@ -268,7 +323,7 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
         </div>
       </header>
 
-      <div className="grid gap-3 sm:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-6">
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Outbound calls</p>
           <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.outboundCalls}</p>
@@ -282,8 +337,12 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
           <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.inboundMessages}</p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Autopilot drafts</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.autopilotDrafts}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Agent drafts</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.agentDrafts}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Agent autosends</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900">{summary.agentAutosends}</p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Reminders</p>
@@ -306,7 +365,7 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
                 if (row.type === "Inbound message") acc.inbound += 1;
                 return acc;
               },
-              { calls: 0, outbound: 0, inbound: 0 }
+              { calls: 0, outbound: 0, inbound: 0 },
             );
 
             return (
@@ -343,7 +402,7 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
                               {row.type}
                             </span>
                           </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">{row.channel ?? "—"}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">{row.channel ?? "-"}</td>
                           <td className="whitespace-nowrap px-4 py-3 text-xs">
                             {row.contactId ? (
                               <a
@@ -353,7 +412,7 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
                                 Open
                               </a>
                             ) : (
-                              <span className="text-slate-400">—</span>
+                              <span className="text-slate-400">-</span>
                             )}
                           </td>
                           <td className="px-4 py-3">
@@ -373,4 +432,3 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
     </section>
   );
 }
-
