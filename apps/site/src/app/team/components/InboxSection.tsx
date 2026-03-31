@@ -265,6 +265,29 @@ function isDraftMessage(meta: Record<string, unknown> | null | undefined): boole
   return meta["draft"] === true;
 }
 
+function readMetaString(meta: Record<string, unknown> | null | undefined, key: string): string | null {
+  if (!meta) return null;
+  const value = meta[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readMetaStringArray(meta: Record<string, unknown> | null | undefined, key: string): string[] {
+  if (!meta) return [];
+  const value = meta[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function formatMetaLabel(value: string | null): string | null {
+  if (!value) return null;
+  return value
+    .split("_")
+    .filter((part) => part.trim().length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function getAllowedStates(currentState: string | null | undefined): string[] {
   if (!currentState) return [...THREAD_STATES];
   const index = THREAD_STATES.indexOf(currentState);
@@ -1147,6 +1170,22 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     const autoReply = isAutoReply(message.metadata ?? null);
                     const autoReplyDelayMs = readMetaNumber(message.metadata ?? null, "autoReplyDelayMs");
                     const isDraft = isDraftMessage(message.metadata ?? null);
+                    const isAiSuggested = message.metadata?.["aiSuggested"] === true;
+                    const aiPlanIntent = formatMetaLabel(readMetaString(message.metadata ?? null, "aiPlanIntent"));
+                    const aiPlanNextAction = formatMetaLabel(
+                      readMetaString(message.metadata ?? null, "aiPlanNextAction"),
+                    );
+                    const aiBookingReadiness = formatMetaLabel(
+                      readMetaString(message.metadata ?? null, "aiBookingReadiness"),
+                    );
+                    const aiQuoteConfidence = formatMetaLabel(
+                      readMetaString(message.metadata ?? null, "aiQuoteConfidence"),
+                    );
+                    const aiChannelPreference = formatMetaLabel(
+                      readMetaString(message.metadata ?? null, "aiChannelPreference"),
+                    );
+                    const aiPlanQuestions = readMetaStringArray(message.metadata ?? null, "aiPlanQuestions");
+                    const aiMemorySummary = readMetaString(message.metadata ?? null, "aiMemorySummary");
                     const statusLabel = isDraft ? "draft" : message.deliveryStatus;
                     const hasMedia = Array.isArray(message.mediaUrls) && message.mediaUrls.length > 0;
                     const trimmedBody = typeof message.body === "string" ? message.body.trim() : "";
@@ -1192,6 +1231,28 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                           {message.subject ? (
                             <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
                               {message.subject}
+                            </div>
+                          ) : null}
+                          {isDraft && isAiSuggested ? (
+                            <div className="mb-3 rounded-xl border border-primary-200 bg-white/70 px-3 py-2 text-[11px] text-slate-600">
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                {aiPlanIntent ? <span><span className="font-semibold text-slate-700">Goal:</span> {aiPlanIntent}</span> : null}
+                                {aiPlanNextAction ? <span><span className="font-semibold text-slate-700">Trying to:</span> {aiPlanNextAction}</span> : null}
+                                {aiBookingReadiness ? <span><span className="font-semibold text-slate-700">Booking:</span> {aiBookingReadiness}</span> : null}
+                                {aiQuoteConfidence ? <span><span className="font-semibold text-slate-700">Confidence:</span> {aiQuoteConfidence}</span> : null}
+                                {aiChannelPreference ? <span><span className="font-semibold text-slate-700">Best channel:</span> {aiChannelPreference}</span> : null}
+                              </div>
+                              {aiPlanQuestions.length > 0 ? (
+                                <div className="mt-2">
+                                  <span className="font-semibold text-slate-700">Question focus:</span>{" "}
+                                  {aiPlanQuestions.join(" ")}
+                                </div>
+                              ) : null}
+                              {aiMemorySummary ? (
+                                <div className="mt-2 text-slate-500">
+                                  {aiMemorySummary}
+                                </div>
+                              ) : null}
                             </div>
                           ) : null}
                           {showBody ? <p className="whitespace-pre-wrap break-words">{message.body}</p> : null}

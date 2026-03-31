@@ -692,6 +692,16 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           draft: true,
           aiSuggested: true,
           aiModel: suggestionResult.modelUsed,
+          aiPlanIntent: plan?.intent ?? undefined,
+          aiPlanTone: plan?.tone ?? undefined,
+          aiPlanFacts: plan?.facts ?? undefined,
+          aiPlanQuestions: plan?.questions ?? undefined,
+          aiPlanNextAction: plan?.next_action ?? undefined,
+          aiPlanConstraints: plan?.constraints ?? undefined,
+          aiMemorySummary: salesAgentMemory?.summary ?? undefined,
+          aiBookingReadiness: salesAgentMemory?.bookingReadiness ?? undefined,
+          aiQuoteConfidence: salesAgentMemory?.quoteConfidence ?? undefined,
+          aiChannelPreference: salesAgentMemory?.channelPreference ?? undefined,
           outOfArea: inGeorgia === false || outsideUsualArea === true ? true : undefined
         },
         createdAt: now
