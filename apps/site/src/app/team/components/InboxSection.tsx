@@ -16,6 +16,7 @@ import {
   retryFailedMessageAction,
   sendDraftMessageAction,
   sendThreadMessageAction,
+  suggestThreadReplyAction,
   deleteMessageAction,
   updateThreadAction,
   startContactCallAction,
@@ -287,6 +288,14 @@ function formatMetaLabel(value: string | null): string | null {
     .filter((part) => part.trim().length > 0)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function truncateText(value: string | null | undefined, max: number): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
 function getAllowedStates(currentState: string | null | undefined): string[] {
@@ -574,6 +583,30 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
     activeChannelThreadId ?? (activeThread?.id && activeThread.channel === requestedChannel ? activeThread.id : null);
   const selectedThread = selectedThreadId
     ? timelineThreads.find((t) => t.id === selectedThreadId) ?? (activeThread?.id === selectedThreadId ? activeThread : null)
+    : null;
+  const currentThreadAiDraft =
+    selectedThreadId
+      ? [...activeThreadMessages]
+          .reverse()
+          .find(
+            (message) =>
+              message.threadId === selectedThreadId &&
+              message.direction === "outbound" &&
+              isDraftMessage(message.metadata ?? null) &&
+              message.metadata?.["aiSuggested"] === true,
+          ) ?? null
+      : null;
+  const currentThreadAiDraftPlanner = currentThreadAiDraft
+    ? {
+        actionType: formatMetaLabel(readMetaString(currentThreadAiDraft.metadata ?? null, "aiPlannerActionType")),
+        summary: readMetaString(currentThreadAiDraft.metadata ?? null, "aiPlannerSummary"),
+        reason: readMetaString(currentThreadAiDraft.metadata ?? null, "aiPlannerReason"),
+        priority: formatMetaLabel(readMetaString(currentThreadAiDraft.metadata ?? null, "aiPlannerPriority")),
+        confidence: formatMetaLabel(readMetaString(currentThreadAiDraft.metadata ?? null, "aiPlannerConfidence")),
+        bookingReadiness: formatMetaLabel(readMetaString(currentThreadAiDraft.metadata ?? null, "aiBookingReadiness")),
+        quoteConfidence: formatMetaLabel(readMetaString(currentThreadAiDraft.metadata ?? null, "aiQuoteConfidence")),
+        memorySummary: truncateText(readMetaString(currentThreadAiDraft.metadata ?? null, "aiMemorySummary"), 180),
+      }
     : null;
 
   const selectedThreadState = (selectedThread as { state?: string | null } | null)?.state ?? "new";
@@ -1186,6 +1219,87 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     latestOutboundAt={latestOutboundAt}
                     latestAiDraftAt={latestAiDraftAt}
                   />
+                ) : null}
+                {selectedThreadId && activeContactId ? (
+                  <div className="rounded-2xl border border-primary-200 bg-primary-50/60 p-4 text-sm text-slate-700">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-primary-800">Agent</div>
+                          <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-primary-800">
+                            {currentThreadAiDraft ? "Ready to review" : "Watching this thread"}
+                          </div>
+                          {currentThreadAiDraftPlanner?.actionType ? (
+                            <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                              {currentThreadAiDraftPlanner.actionType}
+                            </div>
+                          ) : null}
+                          {currentThreadAiDraftPlanner?.priority ? (
+                            <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                              {currentThreadAiDraftPlanner.priority}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 text-sm font-semibold text-slate-900">
+                          {currentThreadAiDraft
+                            ? "The agent already prepared the next reply for this thread."
+                            : "The agent will draft here automatically when this thread needs the next move."}
+                        </div>
+                        {currentThreadAiDraftPlanner?.summary ? (
+                          <div className="mt-2 text-sm text-slate-700">{currentThreadAiDraftPlanner.summary}</div>
+                        ) : null}
+                        {currentThreadAiDraftPlanner?.reason ? (
+                          <div className="mt-2 text-xs text-slate-600">
+                            <span className="font-semibold text-slate-700">Why now:</span> {currentThreadAiDraftPlanner.reason}
+                          </div>
+                        ) : null}
+                        {currentThreadAiDraft ? (
+                          <div className="mt-3 rounded-xl border border-white/80 bg-white/80 px-3 py-2 text-xs text-slate-700">
+                            <div className="font-semibold text-slate-800">Current draft</div>
+                            <div className="mt-1 whitespace-pre-wrap break-words">
+                              {truncateText(currentThreadAiDraft.body, 280) ?? "Draft ready"}
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                              <span>Updated {formatTimestamp(currentThreadAiDraft.createdAt)}</span>
+                              {currentThreadAiDraftPlanner?.bookingReadiness ? <span>Booking: {currentThreadAiDraftPlanner.bookingReadiness}</span> : null}
+                              {currentThreadAiDraftPlanner?.quoteConfidence ? <span>Quote confidence: {currentThreadAiDraftPlanner.quoteConfidence}</span> : null}
+                              {currentThreadAiDraftPlanner?.confidence ? <span>Planner confidence: {currentThreadAiDraftPlanner.confidence}</span> : null}
+                            </div>
+                            {currentThreadAiDraftPlanner?.memorySummary ? (
+                              <div className="mt-2 text-[11px] text-slate-500">{currentThreadAiDraftPlanner.memorySummary}</div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        {currentThreadAiDraft ? (
+                          <form action={sendDraftMessageAction}>
+                            <input type="hidden" name="messageId" value={currentThreadAiDraft.id} />
+                            <input type="hidden" name="threadId" value={selectedThreadId} />
+                            <input type="hidden" name="contactId" value={activeContactId} />
+                            <input type="hidden" name="channel" value={requestedChannel} />
+                            <SubmitButton
+                              className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-primary-700"
+                              pendingLabel="Sending..."
+                            >
+                              Approve and send
+                            </SubmitButton>
+                          </form>
+                        ) : null}
+                        <form action={suggestThreadReplyAction}>
+                          <input type="hidden" name="threadId" value={selectedThreadId} />
+                          <input type="hidden" name="contactId" value={activeContactId} />
+                          <input type="hidden" name="channel" value={requestedChannel} />
+                          <SubmitButton
+                            className={teamButtonClass(currentThreadAiDraft ? "secondary" : "primary", "sm")}
+                            pendingLabel={currentThreadAiDraft ? "Refreshing..." : "Drafting..."}
+                          >
+                            {currentThreadAiDraft ? "Refresh draft" : "Create draft"}
+                          </SubmitButton>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
                 ) : null}
                 {timelineMessages.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-sm text-slate-500">
