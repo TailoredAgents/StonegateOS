@@ -125,6 +125,16 @@ type TimelineResponse = {
   messages: MessageDetail[];
 };
 
+type NextActionSummaryResponse = {
+  ok?: boolean;
+  executionState?: {
+    code?: string | null;
+    label?: string | null;
+    detail?: string | null;
+    tone?: "good" | "warn" | "bad" | "neutral" | null;
+  } | null;
+};
+
 type ProviderHealth = {
   provider: "sms" | "email" | "calendar";
   status: "healthy" | "degraded" | "unknown";
@@ -608,14 +618,45 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         memorySummary: truncateText(readMetaString(currentThreadAiDraft.metadata ?? null, "aiMemorySummary"), 180),
       }
     : null;
-  const agentPrimaryTitle = currentThreadAiDraft
-    ? "Next move: approve and send"
-    : "Next move: prepare the reply";
-  const agentPrimaryDescription = currentThreadAiDraft
-    ? "The agent has already written the next reply. Review it here and send from this card."
-    : "No draft is ready yet. Let the agent prepare the next reply for this thread.";
-  const agentPrimaryButtonLabel = currentThreadAiDraft ? "Approve and send" : "Prepare next reply";
-  const agentSecondaryButtonLabel = currentThreadAiDraft ? "Refresh draft" : null;
+  let nextActionSummary: NextActionSummaryResponse | null = null;
+  if (activeContactId) {
+    try {
+      const res = await callAdminApi(
+        `/api/admin/contacts/${encodeURIComponent(activeContactId)}/sales-agent-next-action?includeQuotePrice=1`,
+      );
+      if (res.ok) {
+        nextActionSummary = (await res.json().catch(() => null)) as NextActionSummaryResponse | null;
+      }
+    } catch {
+      nextActionSummary = null;
+    }
+  }
+
+  const agentExecutionState = nextActionSummary?.executionState ?? null;
+  const agentExecutionCode = agentExecutionState?.code ?? null;
+  const agentAutoSendDue = agentExecutionCode === "autosend_due" && Boolean(currentThreadAiDraft);
+  const agentDraftPending = agentExecutionCode === "draft_pending" && !currentThreadAiDraft;
+  const agentPrimaryTitle = agentAutoSendDue
+    ? "Next move: send now or let autosend handle it"
+    : currentThreadAiDraft
+      ? "Next move: approve and send"
+      : agentDraftPending
+        ? "Next move: prepare the reply"
+        : "Next move: prepare the reply";
+  const agentPrimaryDescription = agentAutoSendDue
+    ? "This follow-up is already due and eligible for autosend. Send it now if you want to move first, or leave it alone and let the worker handle it."
+    : currentThreadAiDraft
+      ? "The agent has already written the next reply. Review it here and send from this card."
+      : agentDraftPending
+        ? "The planner says this thread should get a draft now. Prepare it here without digging through the rest of the inbox."
+        : "No draft is ready yet. Let the agent prepare the next reply for this thread.";
+  const agentPrimaryButtonLabel = agentAutoSendDue
+    ? "Send now"
+    : currentThreadAiDraft
+      ? "Approve and send"
+      : "Prepare next reply";
+  const agentSecondaryButtonLabel = currentThreadAiDraft && !agentAutoSendDue ? "Refresh draft" : null;
+  const agentPassiveChoiceLabel = agentAutoSendDue ? "Let autosend handle it" : null;
 
   const selectedThreadState = (selectedThread as { state?: string | null } | null)?.state ?? "new";
   const allowedStates = selectedThread ? getAllowedStates(selectedThreadState) : [...THREAD_STATES];
@@ -1263,6 +1304,11 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                         <div className="mt-3">
                           <ContactSalesAgentNextActionClient contactId={activeContactId} compact />
                         </div>
+                        {agentPassiveChoiceLabel && agentExecutionState?.detail ? (
+                          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                            <span className="font-semibold">{agentPassiveChoiceLabel}.</span> {agentExecutionState.detail}
+                          </div>
+                        ) : null}
                         {currentThreadAiDraft ? (
                           <div className="mt-3 rounded-xl border border-white/80 bg-white/80 px-3 py-2 text-xs text-slate-700">
                             <div className="font-semibold text-slate-800">Current draft</div>
