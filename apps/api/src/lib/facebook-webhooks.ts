@@ -105,6 +105,11 @@ function resolveFacebookToken(): { systemUserToken: string | null; pageAccessTok
   };
 }
 
+function readConfiguredFacebookPageId(): string | null {
+  const value = process.env["FB_PAGE_ID"];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
 export async function fetchFacebookPageAccessToken(pageId: string, systemUserToken: string): Promise<string | null> {
   const cached = pageTokenCache.get(pageId);
   if (cached && Date.now() - cached.fetchedAt < PAGE_TOKEN_CACHE_TTL_MS) {
@@ -135,20 +140,22 @@ export async function fetchFacebookPageAccessToken(pageId: string, systemUserTok
 }
 
 export async function resolveFacebookPageAccessToken(pageId: string | null): Promise<string | null> {
+  const resolvedPageId = pageId?.trim() || readConfiguredFacebookPageId();
   const { systemUserToken, pageAccessToken } = resolveFacebookToken();
   if (pageAccessToken) {
     return pageAccessToken;
   }
-  if (!pageId || !systemUserToken) {
+  if (!resolvedPageId || !systemUserToken) {
     return systemUserToken ?? null;
   }
-  return await fetchFacebookPageAccessToken(pageId, systemUserToken);
+  return await fetchFacebookPageAccessToken(resolvedPageId, systemUserToken);
 }
 
 export async function fetchFacebookSenderName(pageId: string | null, senderId: string | null): Promise<string | null> {
   if (!senderId) return null;
+  const resolvedPageId = pageId?.trim() || readConfiguredFacebookPageId();
 
-  const accessToken = await resolveFacebookPageAccessToken(pageId);
+  const accessToken = await resolveFacebookPageAccessToken(resolvedPageId);
   if (!accessToken) return null;
 
   const url = new URL(`https://graph.facebook.com/v24.0/${senderId}`);
@@ -159,7 +166,12 @@ export async function fetchFacebookSenderName(pageId: string | null, senderId: s
     const response = await fetch(url.toString(), { method: "GET" });
     const text = await response.text();
     if (!response.ok) {
-      console.warn("[facebook] sender_lookup_failed", { status: response.status, body: text });
+      console.warn("[facebook] sender_lookup_failed", {
+        status: response.status,
+        pageId: resolvedPageId,
+        senderId,
+        body: text
+      });
       return null;
     }
     const data = JSON.parse(text) as { name?: string; first_name?: string; last_name?: string };
@@ -170,7 +182,7 @@ export async function fetchFacebookSenderName(pageId: string | null, senderId: s
     const combined = `${first} ${last}`.trim();
     return combined.length ? combined : null;
   } catch (error) {
-    console.warn("[facebook] sender_lookup_error", { error: String(error) });
+    console.warn("[facebook] sender_lookup_error", { pageId: resolvedPageId, senderId, error: String(error) });
     return null;
   }
 }
