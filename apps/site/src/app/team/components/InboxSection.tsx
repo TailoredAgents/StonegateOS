@@ -25,6 +25,7 @@ import {
 import { ContactNameEditorClient } from "./ContactNameEditorClient";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
+import { ContactSalesAgentMemoryClient } from "./ContactSalesAgentMemoryClient";
 
 type ThreadSummary = {
   id: string;
@@ -1382,6 +1383,8 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                 <InboxContactRemindersClient contactId={activeContactId} initialReminders={contactReminders} />
 
                 <InboxContactNotesClient contactId={activeContactId} initialNotes={contactNotes} />
+
+                <ContactSalesAgentMemoryClient contactId={activeContactId} />
 
                 <div className="space-y-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Channels</div>

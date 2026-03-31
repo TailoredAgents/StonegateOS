@@ -13,7 +13,9 @@ import { requirePermission } from "@/lib/permissions";
 import { getBusinessHoursPolicy, getCompanyProfilePolicy, getConversationPersonaPolicy, getServiceAreaPolicy, getTemplatesPolicy, isGeorgiaPostalCode, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
+import { buildSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
 
 type ReplyChannel = "sms" | "email" | "dm";
 
@@ -481,6 +483,20 @@ export async function POST(
     threadPostalCode: threadContext.propertyPostalCode ?? null,
     includeQuotePrice: didCustomerAskAboutPrice(messages)
   });
+  const leadContext = threadContext.contactId
+    ? await loadOmniLeadContext(db, {
+        contactId: threadContext.contactId,
+        includeQuotePrice: didCustomerAskAboutPrice(messages),
+      })
+    : null;
+  const salesAgentMemory =
+    threadContext.contactId && leadContext
+      ? await upsertSalesAgentMemory(db, {
+          contactId: threadContext.contactId,
+          leadId: leadContext.latestLead?.id ?? null,
+          memory: buildSalesAgentMemory(leadContext),
+        })
+      : null;
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, {
     inboundChannel: replyChannel,
@@ -499,6 +515,8 @@ export async function POST(
  ${persona.systemPrompt}
  Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
  Never mention price or dollar amounts unless the customer explicitly asks about price/quote/cost/estimate.
+ Treat sales agent memory facts as current CRM truth unless the latest transcript clearly overrides them.
+ Do not ask for info already present in the sales agent memory or omni context.
 
  Business hours policy timezone: ${businessHours.timezone}
  Company notes: We can message any time, and we typically schedule jobs during business hours.
@@ -518,6 +536,19 @@ export async function POST(
     `Channel: ${replyChannel}`,
     `Thread state: ${threadContext.state}`,
     `Customer name: ${threadContext.contactName ?? "Unknown"}`,
+    salesAgentMemory?.summary ? `Sales agent memory: ${salesAgentMemory.summary}` : null,
+    salesAgentMemory?.customerIntent ? `Memory intent: ${salesAgentMemory.customerIntent}` : null,
+    salesAgentMemory?.channelPreference ? `Preferred channel: ${salesAgentMemory.channelPreference}` : null,
+    salesAgentMemory?.bookingReadiness ? `Booking readiness: ${salesAgentMemory.bookingReadiness}` : null,
+    salesAgentMemory?.quoteConfidence ? `Quote confidence: ${salesAgentMemory.quoteConfidence}` : null,
+    Array.isArray(salesAgentMemory?.objections) && salesAgentMemory.objections.length
+      ? `Known objections: ${salesAgentMemory.objections.join(", ")}`
+      : null,
+    Array.isArray(salesAgentMemory?.missingFields) && salesAgentMemory.missingFields.length
+      ? `Memory missing fields: ${salesAgentMemory.missingFields.join(", ")}`
+      : null,
+    salesAgentMemory?.lastPromisedNextStep ? `Last promised next step: ${salesAgentMemory.lastPromisedNextStep}` : null,
+    salesAgentMemory?.lastHumanSummary ? `Last human summary: ${salesAgentMemory.lastHumanSummary}` : null,
     omni.pipelineStage ? `Pipeline stage: ${omni.pipelineStage}` : null,
     omni.pipelineNotes ? `CRM notes:\n${omni.pipelineNotes}` : null,
     omni.latestLead

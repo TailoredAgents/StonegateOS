@@ -13,6 +13,7 @@ import { ContactNameEditorClient } from "./ContactNameEditorClient";
 import { ContactPhoneEditorClient } from "./ContactPhoneEditorClient";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
+import { ContactSalesAgentMemoryClient } from "./ContactSalesAgentMemoryClient";
 import { SubmitButton } from "@/components/SubmitButton";
 import {
   addPropertyAction,
@@ -797,6 +798,8 @@ export function ContactsDetailsPaneClient({
           Last activity: {formatDateTime(contact.lastActivityAt)}
         </div>
       </div>
+
+      <ContactSalesAgentMemoryClient contactId={contact.id} />
 
       <div className="rounded-2xl border border-slate-200 bg-white p-3">
         <div className="flex items-center justify-between gap-3">
