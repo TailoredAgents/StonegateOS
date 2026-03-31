@@ -608,6 +608,14 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         memorySummary: truncateText(readMetaString(currentThreadAiDraft.metadata ?? null, "aiMemorySummary"), 180),
       }
     : null;
+  const agentPrimaryTitle = currentThreadAiDraft
+    ? "Next move: approve and send"
+    : "Next move: prepare the reply";
+  const agentPrimaryDescription = currentThreadAiDraft
+    ? "The agent has already written the next reply. Review it here and send from this card."
+    : "No draft is ready yet. Let the agent prepare the next reply for this thread.";
+  const agentPrimaryButtonLabel = currentThreadAiDraft ? "Approve and send" : "Prepare next reply";
+  const agentSecondaryButtonLabel = currentThreadAiDraft ? "Refresh draft" : null;
 
   const selectedThreadState = (selectedThread as { state?: string | null } | null)?.state ?? "new";
   const allowedStates = selectedThread ? getAllowedStates(selectedThreadState) : [...THREAD_STATES];
@@ -1241,10 +1249,9 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                           ) : null}
                         </div>
                         <div className="mt-2 text-sm font-semibold text-slate-900">
-                          {currentThreadAiDraft
-                            ? "The agent already prepared the next reply for this thread."
-                            : "The agent will draft here automatically when this thread needs the next move."}
+                          {agentPrimaryTitle}
                         </div>
+                        <div className="mt-1 text-sm text-slate-700">{agentPrimaryDescription}</div>
                         {currentThreadAiDraftPlanner?.summary ? (
                           <div className="mt-2 text-sm text-slate-700">{currentThreadAiDraftPlanner.summary}</div>
                         ) : null}
@@ -1285,21 +1292,35 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                               className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-primary-700"
                               pendingLabel="Sending..."
                             >
-                              Approve and send
+                              {agentPrimaryButtonLabel}
+                            </SubmitButton>
+                          </form>
+                        ) : (
+                          <form action={suggestThreadReplyAction}>
+                            <input type="hidden" name="threadId" value={selectedThreadId} />
+                            <input type="hidden" name="contactId" value={activeContactId} />
+                            <input type="hidden" name="channel" value={requestedChannel} />
+                            <SubmitButton
+                              className={teamButtonClass("primary", "sm")}
+                              pendingLabel="Drafting..."
+                            >
+                              {agentPrimaryButtonLabel}
+                            </SubmitButton>
+                          </form>
+                        )}
+                        {agentSecondaryButtonLabel ? (
+                          <form action={suggestThreadReplyAction}>
+                            <input type="hidden" name="threadId" value={selectedThreadId} />
+                            <input type="hidden" name="contactId" value={activeContactId} />
+                            <input type="hidden" name="channel" value={requestedChannel} />
+                            <SubmitButton
+                              className={teamButtonClass("secondary", "sm")}
+                              pendingLabel="Refreshing..."
+                            >
+                              {agentSecondaryButtonLabel}
                             </SubmitButton>
                           </form>
                         ) : null}
-                        <form action={suggestThreadReplyAction}>
-                          <input type="hidden" name="threadId" value={selectedThreadId} />
-                          <input type="hidden" name="contactId" value={activeContactId} />
-                          <input type="hidden" name="channel" value={requestedChannel} />
-                          <SubmitButton
-                            className={teamButtonClass(currentThreadAiDraft ? "secondary" : "primary", "sm")}
-                            pendingLabel={currentThreadAiDraft ? "Refreshing..." : "Drafting..."}
-                          >
-                            {currentThreadAiDraft ? "Refresh draft" : "Create draft"}
-                          </SubmitButton>
-                        </form>
                       </div>
                     </div>
                   </div>
@@ -1345,6 +1366,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     const hasMedia = Array.isArray(message.mediaUrls) && message.mediaUrls.length > 0;
                     const trimmedBody = typeof message.body === "string" ? message.body.trim() : "";
                     const showBody = trimmedBody.length > 0 && !(hasMedia && trimmedBody === "Media message");
+                    const managedByAgentCard =
+                      currentThreadAiDraft?.id === message.id &&
+                      isDraft &&
+                      isAiSuggested;
                     return (
                       <div key={message.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                         <div
@@ -1433,7 +1458,11 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                               {formatTimestamp(message.createdAt)} - {statusLabel}
                             </span>
                           </div>
-                          {isOutbound && isDraft ? (
+                          {managedByAgentCard ? (
+                            <div className="mt-3 text-right text-[11px] font-medium text-slate-500">
+                              Use the Agent card above to send or refresh this draft.
+                            </div>
+                          ) : isOutbound && isDraft ? (
                             <div className="mt-3 flex justify-end">
                               <form action={sendDraftMessageAction}>
                                 <input type="hidden" name="messageId" value={message.id} />
