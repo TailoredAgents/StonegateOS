@@ -65,6 +65,15 @@ function draftReadinessScore(item: {
   return actionPriorityScore(item.nextAction?.priority);
 }
 
+function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
+  return (
+    actionType === "reply_now" ||
+    actionType === "follow_up_quote" ||
+    actionType === "collect_missing_info" ||
+    actionType === "handle_price_objection"
+  );
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -462,6 +471,13 @@ export async function GET(request: NextRequest): Promise<Response> {
       }
     | null
   >();
+  const threadByContactId = new Map<
+    string,
+    {
+      any: { threadId: string; channel: string } | null;
+      byChannel: Map<string, { threadId: string; channel: string }>;
+    }
+  >();
 
   await Promise.all(
     contactIds.map(async (contactId) => {
@@ -541,6 +557,39 @@ export async function GET(request: NextRequest): Promise<Response> {
   );
 
   if (contactIds.length > 0) {
+    const threadRows = await db
+      .select({
+        contactId: conversationThreads.contactId,
+        threadId: conversationThreads.id,
+        channel: conversationThreads.channel,
+        lastMessageAt: conversationThreads.lastMessageAt,
+        updatedAt: conversationThreads.updatedAt,
+      })
+      .from(conversationThreads)
+      .where(inArray(conversationThreads.contactId, contactIds))
+      .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
+      .limit(1000);
+
+    for (const row of threadRows) {
+      if (!row.contactId) continue;
+      const current =
+        threadByContactId.get(row.contactId) ??
+        { any: null, byChannel: new Map<string, { threadId: string; channel: string }>() };
+      if (!current.any) {
+        current.any = {
+          threadId: row.threadId,
+          channel: row.channel,
+        };
+      }
+      if (!current.byChannel.has(row.channel)) {
+        current.byChannel.set(row.channel, {
+          threadId: row.threadId,
+          channel: row.channel,
+        });
+      }
+      threadByContactId.set(row.contactId, current);
+    }
+
     const draftRows = await db
       .select({
         contactId: conversationThreads.contactId,
@@ -577,11 +626,33 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const enrichedItems = items
-    .map((item) => ({
-      ...item,
-      nextAction: rebuiltNextActionMap.get(item.contact.id) ?? null,
-      draft: draftByContactId.get(item.contact.id) ?? null,
-    }))
+    .map((item) => {
+      const nextAction = rebuiltNextActionMap.get(item.contact.id) ?? null;
+      const draft = draftByContactId.get(item.contact.id) ?? null;
+      const threadInfo = threadByContactId.get(item.contact.id) ?? null;
+      const draftTarget =
+        (nextAction?.channel ? threadInfo?.byChannel.get(nextAction.channel) ?? null : null) ??
+        threadInfo?.any ??
+        null;
+      const draftPreparationEligible = Boolean(
+        !draft?.ready &&
+          draftTarget?.threadId &&
+          isSafeDraftPreparationAction(nextAction?.actionType ?? null),
+      );
+
+      return {
+        ...item,
+        nextAction,
+        draft,
+        draftTarget: draftTarget
+          ? {
+              threadId: draftTarget.threadId,
+              channel: draftTarget.channel,
+            }
+          : null,
+        draftPreparationEligible,
+      };
+    })
     .sort((a, b) => {
       const priorityDiff = draftReadinessScore(a) - draftReadinessScore(b);
       if (priorityDiff !== 0) return priorityDiff;

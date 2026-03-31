@@ -196,6 +196,7 @@ export function SalesHqClient({
 
   const [actionError, setActionError] = React.useState<string | null>(null);
   const [actionBusy, setActionBusy] = React.useState(false);
+  const draftPrepKeyRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     if (selectedKindParam === "follow_up" || selectedKindParam === "speed_to_lead") {
@@ -394,12 +395,61 @@ export function SalesHqClient({
     () => activeList.filter((item) => item.draft?.ready),
     [activeList],
   );
+  const activeDraftPrepCandidates = React.useMemo(
+    () =>
+      activeList.filter(
+        (item) =>
+          item.draftPreparationEligible === true &&
+          item.draftTarget?.threadId &&
+          item.draftTarget?.channel,
+      ),
+    [activeList],
+  );
 
   function openNextReadyDraft() {
     const item = activeReadyDraftItems[0] ?? null;
     if (!item) return;
     window.location.assign(buildInboxHrefForQueue(item));
   }
+
+  React.useEffect(() => {
+    if (activeDraftPrepCandidates.length === 0) return;
+    const prepKey = activeDraftPrepCandidates
+      .slice(0, 3)
+      .map((item) => `${item.id}:${item.draftTarget?.threadId ?? ""}:${item.draft?.messageId ?? ""}`)
+      .join("|");
+    if (!prepKey || draftPrepKeyRef.current === prepKey) return;
+    draftPrepKeyRef.current = prepKey;
+
+    void (async () => {
+      let createdAny = false;
+      for (const item of activeDraftPrepCandidates.slice(0, 3)) {
+        const threadId = item.draftTarget?.threadId;
+        const channel = item.draftTarget?.channel;
+        if (!threadId || !channel) continue;
+        try {
+          const response = await fetch(`/api/team/inbox/threads/${encodeURIComponent(threadId)}/suggest`, {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ auto: true, channel }),
+          });
+          const payload = (await response.json().catch(() => null)) as { ok?: boolean; created?: boolean } | null;
+          if (response.ok && payload?.ok && payload.created === true) {
+            createdAny = true;
+          }
+        } catch {
+          // ignore background draft prep failures
+        }
+      }
+
+      if (createdAny) {
+        router.refresh();
+      }
+    })();
+  }, [activeDraftPrepCandidates, router]);
 
   return (
     <section className={TEAM_CARD_PADDED}>
@@ -483,6 +533,9 @@ export function SalesHqClient({
           <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-600">
             <span>
               {activeReadyDraftItems.length} ready draft{activeReadyDraftItems.length === 1 ? "" : "s"} in this queue.
+              {activeDraftPrepCandidates.length > 0
+                ? ` Preparing ${Math.min(activeDraftPrepCandidates.length, 3)} more in the background.`
+                : ""}
             </span>
             <button
               type="button"

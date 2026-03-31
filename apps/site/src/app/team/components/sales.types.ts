@@ -63,6 +63,11 @@ export type QueuePayload = {
       createdAt: string;
       ready: true;
     } | null;
+    draftTarget?: {
+      threadId: string;
+      channel: string;
+    } | null;
+    draftPreparationEligible?: boolean;
   }>;
 };
 
