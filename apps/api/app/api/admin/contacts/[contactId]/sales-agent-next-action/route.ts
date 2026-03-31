@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { eq, getTableColumns } from "drizzle-orm";
-import { getDb, salesAgentNextActions } from "@/db";
+import { conversationMessages, conversationThreads, getDb, salesAgentNextActions } from "@/db";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import {
   buildSalesAgentNextAction,
@@ -17,6 +17,8 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { getSalesAutopilotPolicy } from "@/lib/policy";
+import { and, desc, inArray, sql } from "drizzle-orm";
 
 type RouteContext = {
   params: Promise<{ contactId?: string }>;
@@ -54,6 +56,33 @@ function toMemoryRecord(memory: {
     missingFields: memory.missingFields,
     factsJson: memory.factsJson ?? {},
   };
+}
+
+function parseIso(value: string | null | undefined): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
+  return (
+    actionType === "reply_now" ||
+    actionType === "follow_up_quote" ||
+    actionType === "collect_missing_info" ||
+    actionType === "handle_price_objection"
+  );
+}
+
+function isSafePlannerAutosendAction(actionType: string | null | undefined): boolean {
+  return typeof actionType === "string" && actionType.trim().length > 0;
+}
+
+function isPlannerActionDue(value: { dueAt?: string | Date | null } | null | undefined, now: Date): boolean {
+  if (!value) return false;
+  const dueAt =
+    value.dueAt instanceof Date ? value.dueAt : parseIso(typeof value.dueAt === "string" ? value.dueAt : null);
+  if (!dueAt) return true;
+  return dueAt.getTime() <= now.getTime();
 }
 
 export async function GET(request: NextRequest, context: RouteContext): Promise<Response> {
@@ -100,10 +129,129 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     });
   }
 
+  const autopilotPolicy = await getSalesAutopilotPolicy(db);
+  const now = new Date();
+  const latestDraftRows = await db
+    .select({
+      id: conversationMessages.id,
+      threadId: conversationMessages.threadId,
+      channel: conversationMessages.channel,
+      createdAt: conversationMessages.createdAt,
+    })
+    .from(conversationMessages)
+    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .where(
+      and(
+        eq(conversationThreads.contactId, contactIdTrimmed),
+        eq(conversationMessages.direction, "outbound"),
+        sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') = 'true'`,
+        sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`
+      ),
+    )
+    .orderBy(desc(conversationMessages.createdAt))
+    .limit(1);
+  const latestDraft = latestDraftRows[0] ?? null;
+  const automationState =
+    (liveContext.automation ?? []).find((row) => row?.channel === (nextAction?.channel ?? latestDraft?.channel ?? null)) ?? null;
+  const draftCreatedAt = latestDraft?.createdAt instanceof Date ? latestDraft.createdAt : null;
+  const draftIsOldEnough =
+    draftCreatedAt instanceof Date &&
+    now.getTime() - draftCreatedAt.getTime() >= Math.max(60_000, autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000);
+  const autosendChannelAllowed = nextAction?.channel
+    ? autopilotPolicy.plannerAutoSendChannels.includes(nextAction.channel)
+    : false;
+  const autosendActionAllowed = nextAction?.actionType
+    ? autopilotPolicy.plannerAutoSendActions.includes(nextAction.actionType)
+    : false;
+  const autosendEligible = Boolean(
+    autopilotPolicy.plannerAutoSendEnabled &&
+      latestDraft &&
+      draftIsOldEnough &&
+      autosendChannelAllowed &&
+      autosendActionAllowed &&
+      isSafePlannerAutosendAction(nextAction?.actionType ?? null) &&
+      isPlannerActionDue(nextAction, now)
+  );
+  const executionState = automationState?.dnc
+    ? {
+        code: "blocked",
+        label: "Blocked",
+        detail: "Do not contact is active for this lead.",
+        tone: "bad" as const,
+      }
+    : automationState?.humanTakeover
+      ? {
+          code: "human_takeover",
+          label: "Human takeover",
+          detail: "Automation is paused until a human hands this lead back.",
+          tone: "warn" as const,
+        }
+      : automationState?.paused
+        ? {
+            code: "paused",
+            label: "Paused",
+            detail: "Automation is paused on the current planner channel.",
+            tone: "warn" as const,
+          }
+        : autosendEligible
+          ? {
+              code: "autosend_due",
+              label: "Due for autosend",
+              detail: "The worker can send this follow-up automatically.",
+              tone: "good" as const,
+            }
+          : latestDraft
+            ? {
+                code: "draft_ready",
+                label: "Ready to send",
+                detail: autopilotPolicy.plannerAutoSendEnabled && !draftIsOldEnough
+                  ? "Draft is ready and still aging before autosend."
+                  : "Draft is ready for review and send.",
+                tone: "neutral" as const,
+              }
+            : nextAction?.actionType === "wait_for_appointment"
+              ? {
+                  code: "waiting_for_appointment",
+                  label: "Waiting on appointment",
+                  detail: "This lead already has an upcoming appointment.",
+                  tone: "good" as const,
+                }
+              : nextAction?.actionType === "do_not_contact"
+                ? {
+                    code: "blocked",
+                    label: "Blocked",
+                    detail: "Do not contact is active for this lead.",
+                    tone: "bad" as const,
+                  }
+                : nextAction?.actionType && isSafeDraftPreparationAction(nextAction.actionType)
+                  ? {
+                      code: "draft_pending",
+                      label: "Draft pending",
+                      detail: "The agent should prepare the next draft automatically.",
+                      tone: "neutral" as const,
+                    }
+                  : nextAction?.summary
+                    ? {
+                        code: "awaiting_action",
+                        label: "Awaiting action",
+                        detail: nextAction.summary,
+                        tone: nextAction.priority === "urgent" ? ("bad" as const) : ("neutral" as const),
+                      }
+                    : null;
+
   return NextResponse.json({
     ok: true,
     nextAction,
     liveContext,
+    executionState,
+    latestDraft: latestDraft
+      ? {
+          id: latestDraft.id,
+          threadId: latestDraft.threadId,
+          channel: latestDraft.channel,
+          createdAt: latestDraft.createdAt.toISOString(),
+        }
+      : null,
   });
 }
 

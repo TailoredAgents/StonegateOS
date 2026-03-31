@@ -18,6 +18,12 @@ type NextActionPayload = {
     dueAt?: string | null;
     updatedAt?: string | null;
   } | null;
+  executionState?: {
+    code?: string | null;
+    label?: string | null;
+    detail?: string | null;
+    tone?: "good" | "warn" | "bad" | "neutral" | null;
+  } | null;
   liveContext?: {
     latestLead?: {
       id?: string | null;
@@ -34,6 +40,7 @@ type NextActionPayload = {
 
 type Props = {
   contactId: string;
+  compact?: boolean;
 };
 
 function formatLabel(value: string | null | undefined): string {
@@ -57,7 +64,14 @@ function formatTimestamp(value: string | null | undefined): string | null {
   }).format(parsed);
 }
 
-export function ContactSalesAgentNextActionClient({ contactId }: Props): React.ReactElement {
+function toneClasses(value: "good" | "warn" | "bad" | "neutral" | null | undefined): string {
+  if (value === "good") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (value === "warn") return "border-amber-200 bg-amber-50 text-amber-800";
+  if (value === "bad") return "border-rose-200 bg-rose-50 text-rose-700";
+  return "border-slate-200 bg-slate-50 text-slate-700";
+}
+
+export function ContactSalesAgentNextActionClient({ contactId, compact = false }: Props): React.ReactElement {
   const [payload, setPayload] = React.useState<NextActionPayload | null>(null);
   const [status, setStatus] = React.useState<"idle" | "loading" | "error">("loading");
   const [refreshing, setRefreshing] = React.useState(false);
@@ -126,6 +140,7 @@ export function ContactSalesAgentNextActionClient({ contactId }: Props): React.R
     Array.isArray(nextAction?.facts)
       ? nextAction.facts.filter((item) => typeof item === "string" && item.trim().length > 0)
       : [];
+  const executionState = payload?.executionState ?? null;
 
   const runControl = React.useCallback(
     async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
@@ -154,6 +169,27 @@ export function ContactSalesAgentNextActionClient({ contactId }: Props): React.R
     [requestUrl, nextAction?.channel],
   );
 
+  if (compact) {
+    return (
+      <div className={`rounded-2xl border p-3 text-xs ${toneClasses(executionState?.tone)}`}>
+        {status === "loading" ? (
+          <div>Loading agent state...</div>
+        ) : status === "error" ? (
+          <div>Unable to load agent state.</div>
+        ) : executionState?.label ? (
+          <>
+            <div className="font-semibold uppercase tracking-wide">{executionState.label}</div>
+            {executionState.detail ? <div className="mt-1 text-[11px] opacity-90">{executionState.detail}</div> : null}
+          </>
+        ) : nextAction?.summary ? (
+          <div>{nextAction.summary}</div>
+        ) : (
+          <div>No agent state yet.</div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
       <div className="flex items-start justify-between gap-3">
@@ -178,6 +214,13 @@ export function ContactSalesAgentNextActionClient({ contactId }: Props): React.R
           <div className="text-rose-600">Unable to load next action.</div>
         ) : nextAction ? (
           <>
+            {executionState?.label ? (
+              <div className={`rounded-xl border px-3 py-2 text-[11px] ${toneClasses(executionState.tone)}`}>
+                <div className="font-semibold uppercase tracking-wide">{executionState.label}</div>
+                {executionState.detail ? <div className="mt-1 normal-case tracking-normal">{executionState.detail}</div> : null}
+              </div>
+            ) : null}
+
             {nextAction.summary ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
                 {nextAction.summary}

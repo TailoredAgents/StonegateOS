@@ -10,6 +10,18 @@ type NextActionProxyPayload = {
   nextAction?: {
     channel?: string | null;
   } | null;
+  executionState?: {
+    code?: string | null;
+    label?: string | null;
+    detail?: string | null;
+    tone?: "good" | "warn" | "bad" | "neutral" | null;
+  } | null;
+  latestDraft?: {
+    id?: string | null;
+    threadId?: string | null;
+    channel?: string | null;
+    createdAt?: string | null;
+  } | null;
   liveContext?: {
     latestLead?: {
       id?: string | null;
@@ -53,16 +65,24 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const includeQuotePrice = url.searchParams.get("includeQuotePrice") === "1";
-  const upstream = await callAdminApi(
-    `/api/admin/contacts/${encodeURIComponent(contactId)}/sales-agent-next-action/rebuild${includeQuotePrice ? "?includeQuotePrice=1" : ""}`,
+  const upstreamPath =
+    `/api/admin/contacts/${encodeURIComponent(contactId)}/sales-agent-next-action/rebuild${includeQuotePrice ? "?includeQuotePrice=1" : ""}`;
+  const upstream = await callAdminApi(upstreamPath, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!upstream.ok) {
+    const body = await upstream.json().catch(() => null);
+    return NextResponse.json(body ?? { ok: false, error: "upstream_error" }, { status: upstream.status });
+  }
+  const refreshRes = await callAdminApi(
+    `/api/admin/contacts/${encodeURIComponent(contactId)}/sales-agent-next-action${includeQuotePrice ? "?includeQuotePrice=1" : ""}`,
     {
-      method: "POST",
       headers: { Accept: "application/json" },
     },
   );
-
-  const body = await upstream.json().catch(() => null);
-  return NextResponse.json(body ?? { ok: false, error: "upstream_error" }, { status: upstream.status });
+  const refreshBody = await refreshRes.json().catch(() => null);
+  return NextResponse.json(refreshBody ?? { ok: false, error: "upstream_error" }, { status: refreshRes.status });
 }
 
 export async function PATCH(request: Request): Promise<Response> {
@@ -105,16 +125,26 @@ export async function PATCH(request: Request): Promise<Response> {
         headers: { Accept: "application/json" },
       },
     );
-    const body = await upstream.json().catch(() => null);
-    return NextResponse.json(
-      body
-        ? {
-            ...body,
-            liveContext: currentBody.liveContext ?? null,
-          }
-        : { ok: false, error: "upstream_error" },
-      { status: upstream.status },
+    if (!upstream.ok) {
+      const body = await upstream.json().catch(() => null);
+      return NextResponse.json(
+        body
+          ? {
+              ...body,
+              liveContext: currentBody.liveContext ?? null,
+            }
+          : { ok: false, error: "upstream_error" },
+        { status: upstream.status },
+      );
+    }
+    const refreshRes = await callAdminApi(
+      `/api/admin/contacts/${encodeURIComponent(contactId)}/sales-agent-next-action`,
+      {
+        headers: { Accept: "application/json" },
+      },
     );
+    const refreshBody = await refreshRes.json().catch(() => null);
+    return NextResponse.json(refreshBody ?? { ok: false, error: "upstream_error" }, { status: refreshRes.status });
   }
 
   const includeQuotePrice = url.searchParams.get("includeQuotePrice") === "1";
@@ -214,9 +244,22 @@ export async function PATCH(request: Request): Promise<Response> {
       headers: { Accept: "application/json" },
     },
   );
-  const rebuildBody = await rebuildRes.json().catch(() => null);
+  if (!rebuildRes.ok) {
+    const rebuildBody = await rebuildRes.json().catch(() => null);
+    return NextResponse.json(
+      rebuildBody ?? { ok: false, error: "upstream_error" },
+      { status: rebuildRes.status },
+    );
+  }
+  const refreshRes = await callAdminApi(
+    `/api/admin/contacts/${encodeURIComponent(contactId)}/sales-agent-next-action${includeQuotePrice ? "?includeQuotePrice=1" : ""}`,
+    {
+      headers: { Accept: "application/json" },
+    },
+  );
+  const refreshBody = await refreshRes.json().catch(() => null);
   return NextResponse.json(
-    rebuildBody ?? { ok: false, error: "upstream_error" },
-    { status: rebuildRes.status },
+    refreshBody ?? { ok: false, error: "upstream_error" },
+    { status: refreshRes.status },
   );
 }

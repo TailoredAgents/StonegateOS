@@ -1253,6 +1253,9 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                             <span className="font-semibold text-slate-700">Why now:</span> {currentThreadAiDraftPlanner.reason}
                           </div>
                         ) : null}
+                        <div className="mt-3">
+                          <ContactSalesAgentNextActionClient contactId={activeContactId} compact />
+                        </div>
                         {currentThreadAiDraft ? (
                           <div className="mt-3 rounded-xl border border-white/80 bg-white/80 px-3 py-2 text-xs text-slate-700">
                             <div className="font-semibold text-slate-800">Current draft</div>
