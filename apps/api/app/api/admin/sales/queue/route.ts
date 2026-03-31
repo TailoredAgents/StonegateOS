@@ -74,6 +74,58 @@ function isSafeDraftPreparationAction(actionType: string | null | undefined): bo
   );
 }
 
+const AGENT_ACTIVITY_ACTIONS = [
+  "sales.agent.draft.prepared",
+  "sales.agent.draft.reused",
+  "sales.agent.draft.skipped",
+  "sales.agent.autosend.queued",
+  "sales.agent.autosend.skipped",
+] as const;
+
+function getMetaString(meta: Record<string, unknown> | null | undefined, key: string): string | null {
+  const value = meta?.[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function summarizeAgentActivity(row: {
+  action: string;
+  meta: Record<string, unknown> | null;
+}): { kind: "draft" | "autosend"; summary: string; channel: string | null } {
+  const actionType = getMetaString(row.meta, "actionType");
+  const reason = getMetaString(row.meta, "reason");
+  const channel = getMetaString(row.meta, "channel");
+  if (row.action.startsWith("sales.agent.autosend.")) {
+    return {
+      kind: "autosend",
+      channel,
+      summary:
+        row.action === "sales.agent.autosend.queued"
+          ? actionType
+            ? `Autosend queued for ${actionType}`
+            : "Autosend queued"
+          : reason
+            ? `Autosend skipped: ${reason}`
+            : "Autosend skipped",
+    };
+  }
+  return {
+    kind: "draft",
+    channel,
+    summary:
+      row.action === "sales.agent.draft.prepared"
+        ? actionType
+          ? `Draft prepared for ${actionType}`
+          : "Draft prepared"
+        : row.action === "sales.agent.draft.reused"
+          ? actionType
+            ? `Draft reused for ${actionType}`
+            : "Draft reused"
+          : reason
+            ? `Draft skipped: ${reason}`
+            : "Draft skipped",
+  };
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -471,6 +523,17 @@ export async function GET(request: NextRequest): Promise<Response> {
       }
     | null
   >();
+  const agentActivityByContactId = new Map<
+    string,
+    | {
+        action: string;
+        kind: "draft" | "autosend";
+        summary: string;
+        channel: string | null;
+        createdAt: string;
+      }
+    | null
+  >();
   const threadByContactId = new Map<
     string,
     {
@@ -623,12 +686,51 @@ export async function GET(request: NextRequest): Promise<Response> {
         ready: true,
       });
     }
+
+    const auditRows = await db
+      .select({
+        action: auditLogs.action,
+        entityType: auditLogs.entityType,
+        entityId: auditLogs.entityId,
+        meta: auditLogs.meta,
+        createdAt: auditLogs.createdAt,
+      })
+      .from(auditLogs)
+      .where(
+        and(
+          inArray(auditLogs.action, [...AGENT_ACTIVITY_ACTIONS]),
+          gte(auditLogs.createdAt, new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)),
+        ),
+      )
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(2000);
+
+    const contactIdSet = new Set(contactIds);
+    for (const row of auditRows) {
+      const meta = (row.meta as Record<string, unknown> | null) ?? null;
+      const metaContactId = getMetaString(meta, "contactId");
+      const contactId =
+        metaContactId ??
+        (row.entityType === "contact" && typeof row.entityId === "string" && row.entityId.trim().length > 0
+          ? row.entityId.trim()
+          : null);
+      if (!contactId || !contactIdSet.has(contactId) || agentActivityByContactId.has(contactId)) continue;
+      const activity = summarizeAgentActivity({ action: row.action, meta });
+      agentActivityByContactId.set(contactId, {
+        action: row.action,
+        kind: activity.kind,
+        summary: activity.summary,
+        channel: activity.channel,
+        createdAt: row.createdAt.toISOString(),
+      });
+    }
   }
 
   const enrichedItems = items
     .map((item) => {
       const nextAction = rebuiltNextActionMap.get(item.contact.id) ?? null;
       const draft = draftByContactId.get(item.contact.id) ?? null;
+      const lastAgentActivity = agentActivityByContactId.get(item.contact.id) ?? null;
       const threadInfo = threadByContactId.get(item.contact.id) ?? null;
       const draftTarget =
         (nextAction?.channel ? threadInfo?.byChannel.get(nextAction.channel) ?? null : null) ??
@@ -651,6 +753,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             }
           : null,
         draftPreparationEligible,
+        lastAgentActivity,
       };
     })
     .sort((a, b) => {

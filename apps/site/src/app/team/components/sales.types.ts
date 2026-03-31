@@ -68,6 +68,13 @@ export type QueuePayload = {
       channel: string;
     } | null;
     draftPreparationEligible?: boolean;
+    lastAgentActivity?: {
+      action: string;
+      kind: "draft" | "autosend";
+      summary: string;
+      channel: string | null;
+      createdAt: string;
+    } | null;
   }>;
 };
 

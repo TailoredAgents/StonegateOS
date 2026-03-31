@@ -140,6 +140,13 @@ function nextActionTone(value: string | null | undefined): "good" | "warn" | "ba
   }
 }
 
+function agentActivityTone(value: string | null | undefined): "good" | "warn" | "bad" | "neutral" {
+  if (!value) return "neutral";
+  if (value.endsWith(".prepared") || value.endsWith(".reused") || value.endsWith(".queued")) return "good";
+  if (value.endsWith(".skipped")) return "warn";
+  return "neutral";
+}
+
 function buildInboxHrefForQueue(item: QueueItem): string {
   const params = new URLSearchParams();
   params.set("tab", "inbox");
@@ -575,6 +582,12 @@ export function SalesHqClient({
                           {item.nextAction?.summary ? (
                             <div className="mt-2 line-clamp-2 text-xs text-slate-600">{item.nextAction.summary}</div>
                           ) : null}
+                          {item.lastAgentActivity?.summary ? (
+                            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                              <span className="font-medium text-slate-700">Agent:</span> {item.lastAgentActivity.summary}
+                              <span className="ml-1 text-slate-500">• {formatTimestamp(item.lastAgentActivity.createdAt)}</span>
+                            </div>
+                          ) : null}
                           {item.draft?.bodyPreview ? (
                             <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] text-emerald-800">
                               Draft ready: {item.draft.bodyPreview}
@@ -590,6 +603,11 @@ export function SalesHqClient({
                           {item.nextAction?.priority ? (
                             <Pill tone={nextActionTone(item.nextAction.priority)}>
                               {formatActionLabel(item.nextAction.actionType)}
+                            </Pill>
+                          ) : null}
+                          {item.lastAgentActivity?.action ? (
+                            <Pill tone={agentActivityTone(item.lastAgentActivity.action)}>
+                              {item.lastAgentActivity.kind === "autosend" ? "Autosend" : "Draft activity"}
                             </Pill>
                           ) : null}
                           {item.draft?.ready ? <Pill tone="good">Draft ready</Pill> : null}
@@ -671,6 +689,24 @@ export function SalesHqClient({
                   <div className="mt-2 whitespace-pre-wrap">{selectedItem.draft.bodyPreview}</div>
                   <div className="mt-3 text-[11px] text-emerald-700">
                     Last generated {formatTimestamp(selectedItem.draft.createdAt)}
+                  </div>
+                </div>
+              ) : null}
+
+              {selectedItem.lastAgentActivity?.summary ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Latest agent activity</div>
+                    <Pill tone={agentActivityTone(selectedItem.lastAgentActivity.action)}>
+                      {selectedItem.lastAgentActivity.kind === "autosend" ? "Autosend" : "Draft activity"}
+                    </Pill>
+                    {selectedItem.lastAgentActivity.channel ? (
+                      <Pill tone="neutral">{selectedItem.lastAgentActivity.channel}</Pill>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 font-medium text-slate-900">{selectedItem.lastAgentActivity.summary}</div>
+                  <div className="mt-2 text-[11px] text-slate-500">
+                    {formatTimestamp(selectedItem.lastAgentActivity.createdAt)}
                   </div>
                 </div>
               ) : null}
