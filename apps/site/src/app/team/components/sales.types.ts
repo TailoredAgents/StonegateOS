@@ -81,6 +81,11 @@ export type QueuePayload = {
       detail: string | null;
       tone: "good" | "warn" | "bad" | "neutral";
     } | null;
+    autopilot?: {
+      mode: "off" | "partial" | "full";
+      channelMode: "off" | "partial" | "full";
+      liveReplyAllowed: boolean;
+    } | null;
   }>;
 };
 

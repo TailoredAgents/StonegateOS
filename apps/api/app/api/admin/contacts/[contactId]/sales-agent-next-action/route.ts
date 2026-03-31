@@ -17,7 +17,12 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
-import { getSalesAutopilotPolicy, isSalesPlannerAutosendAllowed } from "@/lib/policy";
+import {
+  getSalesAutopilotChannelMode,
+  getSalesAutopilotPolicy,
+  isSalesAutopilotLiveReplyEnabled,
+  isSalesPlannerAutosendAllowed,
+} from "@/lib/policy";
 import { and, desc, inArray, sql } from "drizzle-orm";
 
 type RouteContext = {
@@ -153,6 +158,9 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   const latestDraft = latestDraftRows[0] ?? null;
   const automationState =
     (liveContext.automation ?? []).find((row) => row?.channel === (nextAction?.channel ?? latestDraft?.channel ?? null)) ?? null;
+  const effectiveChannel = nextAction?.channel ?? latestDraft?.channel ?? null;
+  const channelMode = getSalesAutopilotChannelMode(autopilotPolicy, effectiveChannel);
+  const liveReplyAllowed = isSalesAutopilotLiveReplyEnabled(autopilotPolicy, effectiveChannel);
   const draftCreatedAt = latestDraft?.createdAt instanceof Date ? latestDraft.createdAt : null;
   const draftIsOldEnough =
     draftCreatedAt instanceof Date &&
@@ -184,11 +192,18 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
         }
       : automationState?.paused
         ? {
-            code: "paused",
-            label: "Paused",
-            detail: "Automation is paused on the current planner channel.",
-            tone: "warn" as const,
-          }
+        code: "paused",
+        label: "Paused",
+        detail: "Automation is paused on the current planner channel.",
+        tone: "warn" as const,
+      }
+        : channelMode === "off"
+          ? {
+              code: "mode_off",
+              label: "Off mode",
+              detail: "This channel is in Off mode. The agent can draft and plan, but it will not send automatically.",
+              tone: "neutral" as const,
+            }
         : autosendEligible
           ? {
               code: "autosend_due",
@@ -200,9 +215,13 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
             ? {
                 code: "draft_ready",
                 label: "Ready to send",
-                detail: autopilotPolicy.plannerAutoSendEnabled && autopilotPolicy.mode !== "off" && !draftIsOldEnough
-                  ? "Draft is ready and still aging before autosend."
-                  : "Draft is ready for review and send.",
+                detail: channelMode === "partial"
+                  ? "Draft is ready for human review. Partial mode keeps live replies approval-only."
+                  : autopilotPolicy.plannerAutoSendEnabled && autopilotPolicy.mode !== "off" && !draftIsOldEnough
+                    ? "Draft is ready and still aging before autosend."
+                    : liveReplyAllowed
+                      ? "Draft is ready for review and send."
+                      : "Draft is ready for review.",
                 tone: "neutral" as const,
               }
             : nextAction?.actionType === "wait_for_appointment"
@@ -223,7 +242,9 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
                   ? {
                       code: "draft_pending",
                       label: "Draft pending",
-                      detail: "The agent should prepare the next draft automatically.",
+                      detail: channelMode === "partial"
+                        ? "The agent should prepare the next draft. Partial mode keeps live replies approval-only."
+                        : "The agent should prepare the next draft automatically.",
                       tone: "neutral" as const,
                     }
                   : nextAction?.summary
@@ -240,6 +261,13 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     nextAction,
     liveContext,
     executionState,
+    autopilot: {
+      mode: autopilotPolicy.mode,
+      channelMode,
+      channel: effectiveChannel,
+      plannerAutoSendEnabled: autopilotPolicy.plannerAutoSendEnabled,
+      liveReplyAllowed,
+    },
     latestDraft: latestDraft
       ? {
           id: latestDraft.id,

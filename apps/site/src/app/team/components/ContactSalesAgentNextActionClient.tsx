@@ -24,6 +24,13 @@ type NextActionPayload = {
     detail?: string | null;
     tone?: "good" | "warn" | "bad" | "neutral" | null;
   } | null;
+  autopilot?: {
+    mode?: "off" | "partial" | "full" | null;
+    channelMode?: "off" | "partial" | "full" | null;
+    channel?: string | null;
+    plannerAutoSendEnabled?: boolean;
+    liveReplyAllowed?: boolean;
+  } | null;
   liveContext?: {
     latestLead?: {
       id?: string | null;
@@ -141,6 +148,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
       ? nextAction.facts.filter((item) => typeof item === "string" && item.trim().length > 0)
       : [];
   const executionState = payload?.executionState ?? null;
+  const autopilot = payload?.autopilot ?? null;
 
   const runControl = React.useCallback(
     async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
@@ -278,6 +286,14 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
 
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
+                <div className="font-semibold text-slate-700">Global mode</div>
+                <div>{formatLabel(autopilot?.mode)}</div>
+              </div>
+              <div>
+                <div className="font-semibold text-slate-700">Channel mode</div>
+                <div>{formatLabel(autopilot?.channelMode)}</div>
+              </div>
+              <div>
                 <div className="font-semibold text-slate-700">Action</div>
                 <div>{formatLabel(nextAction.actionType)}</div>
               </div>
@@ -301,6 +317,16 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                 <div className="font-semibold text-slate-700">Due</div>
                 <div>{dueAt ?? "No due time"}</div>
               </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+              {autopilot?.channelMode === "off"
+                ? "Off mode: the agent can draft, but nothing on this channel should send automatically."
+                : autopilot?.channelMode === "partial"
+                  ? "Partial mode: scheduled follow-ups may automate when allowed, but live conversation replies stay approval-only."
+                  : autopilot?.channelMode === "full"
+                    ? "Full mode: this channel is allowed to run live autopilot where supported."
+                    : "Autopilot mode not available."}
             </div>
 
             {nextAction.reason ? (

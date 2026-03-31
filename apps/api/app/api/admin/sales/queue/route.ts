@@ -19,8 +19,10 @@ import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 import {
   getSalesAutopilotPolicy,
+  getSalesAutopilotChannelMode,
   getServiceAreaPolicy,
   isPostalCodeAllowed,
+  isSalesAutopilotLiveReplyEnabled,
   isSalesPlannerAutosendAllowed,
   normalizePostalCode,
 } from "@/lib/policy";
@@ -770,8 +772,11 @@ export async function GET(request: NextRequest): Promise<Response> {
       const draftIsOldEnough =
         draftCreatedAt instanceof Date && now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
       const plannerDue = isPlannerActionDue(nextAction, now);
+      const effectiveChannel = draftTarget?.channel ?? draft?.channel ?? nextAction?.channel ?? null;
+      const channelMode = getSalesAutopilotChannelMode(autopilotPolicy, effectiveChannel);
+      const liveReplyAllowed = isSalesAutopilotLiveReplyEnabled(autopilotPolicy, effectiveChannel);
       const autosendPolicyAllowed = isSalesPlannerAutosendAllowed(autopilotPolicy, {
-        channel: draftTarget?.channel ?? draft?.channel ?? null,
+        channel: effectiveChannel,
         actionType: nextAction?.actionType ?? null,
       });
       const autosendEligible = Boolean(
@@ -792,7 +797,14 @@ export async function GET(request: NextRequest): Promise<Response> {
             : !draftIsOldEnough
               ? "Draft aging"
               : null;
-      const agentState = autosendEligible
+      const agentState = channelMode === "off"
+        ? {
+            code: "mode_off",
+            label: "Off mode",
+            detail: "This channel is drafts only. No automatic sending.",
+            tone: "neutral" as const,
+          }
+        : autosendEligible
         ? {
             code: "autosend_due",
             label: "Due for autosend",
@@ -856,6 +868,11 @@ export async function GET(request: NextRequest): Promise<Response> {
         draftPreparationEligible,
         lastAgentActivity,
         agentState,
+        autopilot: {
+          mode: autopilotPolicy.mode,
+          channelMode,
+          liveReplyAllowed,
+        },
       };
     })
     .sort((a, b) => {

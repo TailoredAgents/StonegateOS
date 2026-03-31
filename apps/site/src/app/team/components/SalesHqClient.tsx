@@ -147,6 +147,13 @@ function agentActivityTone(value: string | null | undefined): "good" | "warn" | 
   return "neutral";
 }
 
+function autopilotModeTone(value: string | null | undefined): "good" | "warn" | "bad" | "neutral" {
+  if (value === "full") return "good";
+  if (value === "partial") return "warn";
+  if (value === "off") return "neutral";
+  return "neutral";
+}
+
 function buildInboxHrefForQueue(item: QueueItem): string {
   const params = new URLSearchParams();
   params.set("tab", "inbox");
@@ -613,6 +620,11 @@ export function SalesHqClient({
                           {item.agentState?.label ? (
                             <Pill tone={item.agentState.tone}>{item.agentState.label}</Pill>
                           ) : null}
+                          {item.autopilot?.channelMode ? (
+                            <Pill tone={autopilotModeTone(item.autopilot.channelMode)}>
+                              {formatActionLabel(item.autopilot.channelMode)} mode
+                            </Pill>
+                          ) : null}
                           {item.lastAgentActivity?.action ? (
                             <Pill tone={agentActivityTone(item.lastAgentActivity.action)}>
                               {item.lastAgentActivity.kind === "autosend" ? "Autosend" : "Draft activity"}
@@ -658,6 +670,11 @@ export function SalesHqClient({
                     ) : null}
                     {selectedItem.agentState?.label ? (
                       <Pill tone={selectedItem.agentState.tone}>{selectedItem.agentState.label}</Pill>
+                    ) : null}
+                    {selectedItem.autopilot?.channelMode ? (
+                      <Pill tone={autopilotModeTone(selectedItem.autopilot.channelMode)}>
+                        {formatActionLabel(selectedItem.autopilot.channelMode)} mode
+                      </Pill>
                     ) : null}
                     {selectedItem.draft?.ready ? <Pill tone="good">Draft ready</Pill> : null}
                   </div>
@@ -727,8 +744,22 @@ export function SalesHqClient({
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Agent state</div>
                     <Pill tone={selectedItem.agentState.tone}>{selectedItem.agentState.label}</Pill>
+                    {selectedItem.autopilot?.channelMode ? (
+                      <Pill tone={autopilotModeTone(selectedItem.autopilot.channelMode)}>
+                        {formatActionLabel(selectedItem.autopilot.channelMode)} mode
+                      </Pill>
+                    ) : null}
                   </div>
                   <div className="mt-2">{selectedItem.agentState.detail}</div>
+                  {selectedItem.autopilot?.channelMode ? (
+                    <div className="mt-2 text-[11px] text-slate-500">
+                      {selectedItem.autopilot.channelMode === "off"
+                        ? "Off mode means drafts only for this channel."
+                        : selectedItem.autopilot.channelMode === "partial"
+                          ? "Partial mode means follow-ups can automate, but live replies still wait for approval."
+                          : "Full mode allows live autopilot behavior on this channel."}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
