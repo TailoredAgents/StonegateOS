@@ -140,6 +140,16 @@ function nextActionTone(value: string | null | undefined): "good" | "warn" | "ba
   }
 }
 
+function buildInboxHrefForQueue(item: QueueItem): string {
+  const params = new URLSearchParams();
+  params.set("tab", "inbox");
+  params.set("contactId", item.contact.id);
+  if (item.draft?.threadId) params.set("threadId", item.draft.threadId);
+  if (item.draft?.channel) params.set("channel", item.draft.channel);
+  else if (item.nextAction?.channel) params.set("channel", item.nextAction.channel);
+  return `/team?${params.toString()}`;
+}
+
 function isSystemTask(reminder: ContactReminderSummary): boolean {
   const title = reminder.title?.toLowerCase() ?? "";
   if (title.startsWith("auto:")) return true;
@@ -489,6 +499,11 @@ export function SalesHqClient({
                           {item.nextAction?.summary ? (
                             <div className="mt-2 line-clamp-2 text-xs text-slate-600">{item.nextAction.summary}</div>
                           ) : null}
+                          {item.draft?.bodyPreview ? (
+                            <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] text-emerald-800">
+                              Draft ready: {item.draft.bodyPreview}
+                            </div>
+                          ) : null}
                         </div>
                         <div className="flex flex-col items-end gap-2">
                           {item.minutesUntilDue !== null ? (
@@ -501,6 +516,7 @@ export function SalesHqClient({
                               {formatActionLabel(item.nextAction.actionType)}
                             </Pill>
                           ) : null}
+                          {item.draft?.ready ? <Pill tone="good">Draft ready</Pill> : null}
                           {item.contact.serviceAreaStatus === "potentially_out_of_area" ? (
                             <Pill tone="warn">Check ZIP</Pill>
                           ) : null}
@@ -538,6 +554,7 @@ export function SalesHqClient({
                         {formatActionLabel(selectedItem.nextAction.actionType)}
                       </Pill>
                     ) : null}
+                    {selectedItem.draft?.ready ? <Pill tone="good">Draft ready</Pill> : null}
                   </div>
                   <div className="mt-1 text-sm text-slate-600">{selectedItem.contact.phone ?? "Phone not on file yet"}</div>
                   {selectedItem.dueAt ? (
@@ -563,14 +580,24 @@ export function SalesHqClient({
                   >
                     Call
                   </button>
-                  <a className={teamButtonClass("secondary", "sm")} href={`/team?tab=inbox&contactId=${encodeURIComponent(selectedItem.contact.id)}`}>
-                    Message
+                  <a className={teamButtonClass(selectedItem.draft?.ready ? "primary" : "secondary", "sm")} href={buildInboxHrefForQueue(selectedItem)}>
+                    {selectedItem.draft?.ready ? "Open draft" : "Message"}
                   </a>
                   <a className={teamButtonClass("secondary", "sm")} href={`/team?tab=contacts&contactId=${encodeURIComponent(selectedItem.contact.id)}`}>
                     Open contact
                   </a>
                 </div>
               </div>
+
+              {selectedItem.draft?.bodyPreview ? (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Ready draft</div>
+                  <div className="mt-2 whitespace-pre-wrap">{selectedItem.draft.bodyPreview}</div>
+                  <div className="mt-3 text-[11px] text-emerald-700">
+                    Last generated {formatTimestamp(selectedItem.draft.createdAt)}
+                  </div>
+                </div>
+              ) : null}
 
               <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Task</div>

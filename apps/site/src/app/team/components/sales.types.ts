@@ -55,6 +55,14 @@ export type QueuePayload = {
       summary: string | null;
       dueAt: string | null;
     } | null;
+    draft?: {
+      threadId: string;
+      channel: string;
+      messageId: string;
+      bodyPreview: string | null;
+      createdAt: string;
+      ready: true;
+    } | null;
   }>;
 };
 
