@@ -636,6 +636,44 @@ export const salesAgentMemories = pgTable(
   }),
 );
 
+export const salesAgentNextActions = pgTable(
+  "sales_agent_next_actions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    leadId: uuid("lead_id").references(() => leads.id, {
+      onDelete: "set null",
+    }),
+    actionType: text("action_type").notNull(),
+    channel: text("channel"),
+    status: text("status").default("open").notNull(),
+    priority: text("priority").default("normal").notNull(),
+    confidence: text("confidence").default("medium").notNull(),
+    summary: text("summary"),
+    reason: text("reason"),
+    facts: text("facts").array().notNull().default([]),
+    dueAt: timestamp("due_at", { withTimezone: true }),
+    source: text("source").default("rules_v1").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    contactIdx: uniqueIndex("sales_agent_next_actions_contact_key").on(
+      table.contactId,
+    ),
+    leadIdx: index("sales_agent_next_actions_lead_idx").on(table.leadId),
+    dueIdx: index("sales_agent_next_actions_due_idx").on(table.dueAt),
+    statusIdx: index("sales_agent_next_actions_status_idx").on(table.status),
+  }),
+);
+
 export const conversationThreads = pgTable(
   "conversation_threads",
   {
@@ -1918,6 +1956,10 @@ export const contactRelations = relations(contacts, ({ many, one }) => ({
   appointments: many(appointments),
   tasks: many(crmTasks),
   salesAgentMemories: many(salesAgentMemories),
+  salesAgentNextAction: one(salesAgentNextActions, {
+    fields: [contacts.id],
+    references: [salesAgentNextActions.contactId],
+  }),
   pipeline: one(crmPipeline, {
     fields: [contacts.id],
     references: [crmPipeline.contactId],
@@ -1933,6 +1975,20 @@ export const salesAgentMemoryRelations = relations(
     }),
     lead: one(leads, {
       fields: [salesAgentMemories.leadId],
+      references: [leads.id],
+    }),
+  }),
+);
+
+export const salesAgentNextActionRelations = relations(
+  salesAgentNextActions,
+  ({ one }) => ({
+    contact: one(contacts, {
+      fields: [salesAgentNextActions.contactId],
+      references: [contacts.id],
+    }),
+    lead: one(leads, {
+      fields: [salesAgentNextActions.leadId],
       references: [leads.id],
     }),
   }),

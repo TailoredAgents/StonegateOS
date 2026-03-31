@@ -7,6 +7,7 @@ import { TEAM_CARD, TEAM_CARD_PADDED, TEAM_EMPTY_STATE, teamButtonClass } from "
 import type { ContactReminderSummary, ContactSummary } from "./contacts.types";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
+import { ContactSalesAgentNextActionClient } from "./ContactSalesAgentNextActionClient";
 import type { CallCoachingPayload, QueuePayload, ScorecardPayload, TeamMemberPayload } from "./sales.types";
 
 type Props = {
@@ -571,6 +572,11 @@ export function SalesHqClient({
               </div>
 
               <div className="grid gap-4 lg:grid-cols-2">
+                <div className="space-y-2 lg:col-span-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Agent</div>
+                  <ContactSalesAgentNextActionClient contactId={selectedItem.contact.id} />
+                </div>
+
                 <div className="space-y-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Reminders</div>
                   {contactLoading ? (

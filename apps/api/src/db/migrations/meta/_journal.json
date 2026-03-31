@@ -302,6 +302,13 @@
       "when": 1774860000000,
       "tag": "0042_sales_agent_memories",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1774939200000,
+      "tag": "0043_sales_agent_next_actions",
+      "breakpoints": true
     }
   ]
 }
