@@ -16,6 +16,7 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
 import { buildSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
+import { buildSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 
 type ReplyChannel = "sms" | "email" | "dm";
 
@@ -344,6 +345,27 @@ function buildTranscript(messages: MessageContext[]): string {
   return lines.join("\n");
 }
 
+function buildPlannerInstruction(actionType: string | null | undefined): string | null {
+  switch (actionType) {
+    case "reply_now":
+      return "Reply promptly, keep momentum, and answer the latest inbound directly.";
+    case "call_now":
+      return "Write a short reply that supports an immediate phone follow up and confirms availability to talk now.";
+    case "follow_up_quote":
+      return "Nudge the customer toward booking by reinforcing the quote, reducing hesitation, and asking for the booking decision.";
+    case "collect_missing_info":
+      return "Ask for only one missing detail, and make it obvious why that one detail unlocks the next step.";
+    case "handle_price_objection":
+      return "Address price resistance calmly, reinforce value, and try to keep the lead alive without sounding defensive.";
+    case "wait_for_appointment":
+      return "Do not re-qualify the lead. Only support the scheduled appointment and keep the message light.";
+    case "human_follow_up":
+      return "Keep the reply minimal and safe. Do not make new promises beyond acknowledged context.";
+    default:
+      return null;
+  }
+}
+
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ threadId: string }> }
@@ -541,12 +563,24 @@ export async function POST(
         includeQuotePrice: didCustomerAskAboutPrice(messages),
       })
     : null;
+  const builtSalesAgentMemory = leadContext ? buildSalesAgentMemory(leadContext) : null;
   const salesAgentMemory =
-    threadContext.contactId && leadContext
+    threadContext.contactId && leadContext && builtSalesAgentMemory
       ? await upsertSalesAgentMemory(db, {
           contactId: threadContext.contactId,
           leadId: leadContext.latestLead?.id ?? null,
-          memory: buildSalesAgentMemory(leadContext),
+          memory: builtSalesAgentMemory,
+        })
+      : null;
+  const salesAgentNextAction =
+    threadContext.contactId && leadContext && builtSalesAgentMemory
+      ? await upsertSalesAgentNextAction(db, {
+          contactId: threadContext.contactId,
+          leadId: leadContext.latestLead?.id ?? null,
+          action: buildSalesAgentNextAction({
+            context: leadContext,
+            memory: builtSalesAgentMemory,
+          }),
         })
       : null;
 
@@ -569,6 +603,7 @@ export async function POST(
  Never mention price or dollar amounts unless the customer explicitly asks about price/quote/cost/estimate.
  Treat sales agent memory facts as current CRM truth unless the latest transcript clearly overrides them.
  Do not ask for info already present in the sales agent memory or omni context.
+ Follow the planner recommendation unless the latest inbound message clearly makes it outdated.
 
  Business hours policy timezone: ${businessHours.timezone}
  Company notes: We can message any time, and we typically schedule jobs during business hours.
@@ -601,6 +636,16 @@ export async function POST(
       : null,
     salesAgentMemory?.lastPromisedNextStep ? `Last promised next step: ${salesAgentMemory.lastPromisedNextStep}` : null,
     salesAgentMemory?.lastHumanSummary ? `Last human summary: ${salesAgentMemory.lastHumanSummary}` : null,
+    salesAgentNextAction?.actionType ? `Planner action type: ${salesAgentNextAction.actionType}` : null,
+    salesAgentNextAction?.summary ? `Planner summary: ${salesAgentNextAction.summary}` : null,
+    salesAgentNextAction?.reason ? `Planner reason: ${salesAgentNextAction.reason}` : null,
+    salesAgentNextAction?.priority ? `Planner priority: ${salesAgentNextAction.priority}` : null,
+    salesAgentNextAction?.confidence ? `Planner confidence: ${salesAgentNextAction.confidence}` : null,
+    salesAgentNextAction?.channel ? `Planner channel: ${salesAgentNextAction.channel}` : null,
+    Array.isArray(salesAgentNextAction?.facts) && salesAgentNextAction.facts.length
+      ? `Planner facts: ${salesAgentNextAction.facts.join(" | ")}`
+      : null,
+    buildPlannerInstruction(salesAgentNextAction?.actionType),
     omni.pipelineStage ? `Pipeline stage: ${omni.pipelineStage}` : null,
     omni.pipelineNotes ? `CRM notes:\n${omni.pipelineNotes}` : null,
     omni.latestLead
@@ -765,6 +810,11 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           aiBookingReadiness: salesAgentMemory?.bookingReadiness ?? undefined,
           aiQuoteConfidence: salesAgentMemory?.quoteConfidence ?? undefined,
           aiChannelPreference: salesAgentMemory?.channelPreference ?? undefined,
+          aiPlannerActionType: salesAgentNextAction?.actionType ?? undefined,
+          aiPlannerSummary: salesAgentNextAction?.summary ?? undefined,
+          aiPlannerReason: salesAgentNextAction?.reason ?? undefined,
+          aiPlannerPriority: salesAgentNextAction?.priority ?? undefined,
+          aiPlannerConfidence: salesAgentNextAction?.confidence ?? undefined,
           outOfArea: inGeorgia === false || outsideUsualArea === true ? true : undefined
         },
         createdAt: now

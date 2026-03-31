@@ -1202,6 +1202,11 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     const aiPlanNextAction = formatMetaLabel(
                       readMetaString(message.metadata ?? null, "aiPlanNextAction"),
                     );
+                    const aiPlannerActionType = formatMetaLabel(
+                      readMetaString(message.metadata ?? null, "aiPlannerActionType"),
+                    );
+                    const aiPlannerSummary = readMetaString(message.metadata ?? null, "aiPlannerSummary");
+                    const aiPlannerReason = readMetaString(message.metadata ?? null, "aiPlannerReason");
                     const aiBookingReadiness = formatMetaLabel(
                       readMetaString(message.metadata ?? null, "aiBookingReadiness"),
                     );
@@ -1210,6 +1215,12 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     );
                     const aiChannelPreference = formatMetaLabel(
                       readMetaString(message.metadata ?? null, "aiChannelPreference"),
+                    );
+                    const aiPlannerPriority = formatMetaLabel(
+                      readMetaString(message.metadata ?? null, "aiPlannerPriority"),
+                    );
+                    const aiPlannerConfidence = formatMetaLabel(
+                      readMetaString(message.metadata ?? null, "aiPlannerConfidence"),
                     );
                     const aiPlanQuestions = readMetaStringArray(message.metadata ?? null, "aiPlanQuestions");
                     const aiMemorySummary = readMetaString(message.metadata ?? null, "aiMemorySummary");
@@ -1263,12 +1274,27 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                           {isDraft && isAiSuggested ? (
                             <div className="mb-3 rounded-xl border border-primary-200 bg-white/70 px-3 py-2 text-[11px] text-slate-600">
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                {aiPlannerActionType ? <span><span className="font-semibold text-slate-700">Planner:</span> {aiPlannerActionType}</span> : null}
                                 {aiPlanIntent ? <span><span className="font-semibold text-slate-700">Goal:</span> {aiPlanIntent}</span> : null}
                                 {aiPlanNextAction ? <span><span className="font-semibold text-slate-700">Trying to:</span> {aiPlanNextAction}</span> : null}
                                 {aiBookingReadiness ? <span><span className="font-semibold text-slate-700">Booking:</span> {aiBookingReadiness}</span> : null}
                                 {aiQuoteConfidence ? <span><span className="font-semibold text-slate-700">Confidence:</span> {aiQuoteConfidence}</span> : null}
                                 {aiChannelPreference ? <span><span className="font-semibold text-slate-700">Best channel:</span> {aiChannelPreference}</span> : null}
+                                {aiPlannerPriority ? <span><span className="font-semibold text-slate-700">Priority:</span> {aiPlannerPriority}</span> : null}
+                                {aiPlannerConfidence ? <span><span className="font-semibold text-slate-700">Planner confidence:</span> {aiPlannerConfidence}</span> : null}
                               </div>
+                              {aiPlannerSummary ? (
+                                <div className="mt-2">
+                                  <span className="font-semibold text-slate-700">Planner summary:</span>{" "}
+                                  {aiPlannerSummary}
+                                </div>
+                              ) : null}
+                              {aiPlannerReason ? (
+                                <div className="mt-2">
+                                  <span className="font-semibold text-slate-700">Why now:</span>{" "}
+                                  {aiPlannerReason}
+                                </div>
+                              ) : null}
                               {aiPlanQuestions.length > 0 ? (
                                 <div className="mt-2">
                                   <span className="font-semibold text-slate-700">Question focus:</span>{" "}
