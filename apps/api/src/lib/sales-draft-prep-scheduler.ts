@@ -1,6 +1,6 @@
 import { getDb } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
-import { getSalesAutopilotPolicy } from "@/lib/policy";
+import { getSalesAutopilotPolicy, isSalesPlannerAutosendAllowed } from "@/lib/policy";
 
 type TeamDirectoryPayload = {
   ok?: boolean;
@@ -125,28 +125,7 @@ export async function prepareDueSalesQueueDrafts(input?: {
     : 3;
   const autopilotPolicy = await getSalesAutopilotPolicy(getDb());
   const autoSendOverride = readEnvString("SALES_AGENT_AUTOSEND_ENABLED");
-  const autoSendEnabled =
-    autoSendOverride === "1"
-      ? true
-      : autoSendOverride === "0"
-        ? false
-        : autopilotPolicy.plannerAutoSendEnabled;
-  const allowedAutoSendChannels = new Set(
-    (Array.isArray(autopilotPolicy.plannerAutoSendChannels)
-      ? autopilotPolicy.plannerAutoSendChannels
-      : []
-    )
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0),
-  );
-  const allowedAutoSendActions = new Set(
-    (Array.isArray(autopilotPolicy.plannerAutoSendActions)
-      ? autopilotPolicy.plannerAutoSendActions
-      : []
-    )
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0),
-  );
+  const overrideAutoSendEnabled = autoSendOverride === "1" ? true : autoSendOverride === "0" ? false : null;
   const autoSendMinDraftAgeMs = Math.max(
     60_000,
     Number.parseInt(readEnvString("SALES_AGENT_AUTOSEND_MIN_DRAFT_AGE_MS") ?? "", 10) ||
@@ -188,11 +167,12 @@ export async function prepareDueSalesQueueDrafts(input?: {
           draftCreatedAt instanceof Date &&
           now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
         const autoSendEligible =
-          autoSendEnabled &&
+          (overrideAutoSendEnabled ?? isSalesPlannerAutosendAllowed(autopilotPolicy, {
+            channel,
+            actionType: item?.nextAction?.actionType ?? null,
+          })) &&
           item?.draft?.ready === true &&
           draftIsOldEnough &&
-          allowedAutoSendChannels.has(channel) &&
-          allowedAutoSendActions.has(item?.nextAction?.actionType ?? "") &&
           isSafePlannerAutosendAction(item?.nextAction?.actionType ?? null) &&
           isPlannerActionDue(item?.nextAction ?? null, now);
 
@@ -297,21 +277,24 @@ export async function prepareDueSalesQueueDrafts(input?: {
       const draftIsOldEnough =
         draftCreatedAt instanceof Date && now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
       const canAutoSend =
-        autoSendEnabled &&
+        (overrideAutoSendEnabled ?? isSalesPlannerAutosendAllowed(autopilotPolicy, {
+          channel,
+          actionType: candidate.nextAction?.actionType ?? null,
+        })) &&
         messageId.length > 0 &&
         draftIsOldEnough &&
-        allowedAutoSendChannels.has(channel) &&
-        allowedAutoSendActions.has(candidate.nextAction?.actionType ?? "") &&
         isSafePlannerAutosendAction(candidate.nextAction?.actionType ?? null) &&
         isPlannerActionDue(candidate.nextAction ?? null, now);
 
       if (!canAutoSend) {
-        if (autoSendEnabled && candidate?.draft?.ready === true) {
-          const reason = !allowedAutoSendChannels.has(channel)
-            ? "channel_not_allowed"
-            : !allowedAutoSendActions.has(candidate.nextAction?.actionType ?? "")
-              ? "action_not_allowed"
-              : !draftIsOldEnough
+        if ((overrideAutoSendEnabled ?? true) && candidate?.draft?.ready === true) {
+          const policyAllowsAutosend = isSalesPlannerAutosendAllowed(autopilotPolicy, {
+            channel,
+            actionType: candidate.nextAction?.actionType ?? null,
+          });
+          const reason = !policyAllowsAutosend && overrideAutoSendEnabled !== true
+            ? "mode_or_policy_blocked"
+                : !draftIsOldEnough
                 ? "draft_too_fresh"
                 : !isPlannerActionDue(candidate.nextAction ?? null, now)
                   ? "not_due"

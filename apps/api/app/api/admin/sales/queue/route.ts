@@ -17,7 +17,13 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
-import { getSalesAutopilotPolicy, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import {
+  getSalesAutopilotPolicy,
+  getServiceAreaPolicy,
+  isPostalCodeAllowed,
+  isSalesPlannerAutosendAllowed,
+  normalizePostalCode,
+} from "@/lib/policy";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { buildSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 import { buildSalesAgentMemory, getSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
@@ -159,18 +165,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const memberId = url.searchParams.get("memberId")?.trim() || config.defaultAssigneeMemberId;
 
   const now = new Date();
-  const autoSendEnabled = autopilotPolicy.plannerAutoSendEnabled;
   const autoSendMinDraftAgeMs = Math.max(60_000, autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000);
-  const allowedAutoSendChannels = new Set(
-    (Array.isArray(autopilotPolicy.plannerAutoSendChannels) ? autopilotPolicy.plannerAutoSendChannels : [])
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0),
-  );
-  const allowedAutoSendActions = new Set(
-    (Array.isArray(autopilotPolicy.plannerAutoSendActions) ? autopilotPolicy.plannerAutoSendActions : [])
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0),
-  );
   const trackingStartAt =
     config.trackingStartAt && Number.isFinite(Date.parse(config.trackingStartAt)) ? new Date(config.trackingStartAt) : null;
   const effectiveSince = trackingStartAt && trackingStartAt.getTime() < now.getTime() ? trackingStartAt : null;
@@ -775,30 +770,28 @@ export async function GET(request: NextRequest): Promise<Response> {
       const draftIsOldEnough =
         draftCreatedAt instanceof Date && now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
       const plannerDue = isPlannerActionDue(nextAction, now);
-      const autosendActionAllowed = allowedAutoSendActions.has(nextAction?.actionType ?? "");
-      const autosendChannelAllowed = allowedAutoSendChannels.has(draftTarget?.channel ?? draft?.channel ?? "");
+      const autosendPolicyAllowed = isSalesPlannerAutosendAllowed(autopilotPolicy, {
+        channel: draftTarget?.channel ?? draft?.channel ?? null,
+        actionType: nextAction?.actionType ?? null,
+      });
       const autosendEligible = Boolean(
-        autoSendEnabled &&
+        autosendPolicyAllowed &&
           draft?.ready &&
           draftIsOldEnough &&
           plannerDue &&
-          autosendActionAllowed &&
-          autosendChannelAllowed &&
           isSafePlannerAutosendAction(nextAction?.actionType ?? null),
       );
       const autosendBlockedReason = !draft?.ready
         ? null
-        : !autoSendEnabled
+        : !autopilotPolicy.plannerAutoSendEnabled || autopilotPolicy.mode === "off"
           ? "Autosend disabled"
+          : !autosendPolicyAllowed
+            ? "Mode or policy blocked"
           : !plannerDue
             ? "Waiting for due time"
-            : !autosendActionAllowed
-              ? "Action not allowed"
-              : !autosendChannelAllowed
-                ? "Channel not allowed"
-                : !draftIsOldEnough
-                  ? "Draft aging"
-                  : null;
+            : !draftIsOldEnough
+              ? "Draft aging"
+              : null;
       const agentState = autosendEligible
         ? {
             code: "autosend_due",

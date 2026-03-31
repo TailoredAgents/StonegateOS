@@ -15,6 +15,8 @@ type AutomationChannel = {
 };
 
 type SalesAutopilotPolicy = {
+  mode: "off" | "partial" | "full";
+  channelModes: Record<"sms" | "email" | "dm", "off" | "partial" | "full">;
   enabled: boolean;
   autoSendAfterMinutes: number;
   activityWindowMinutes: number;
@@ -41,6 +43,12 @@ const SALES_AGENT_AUTOSEND_ACTIONS = [
   { value: "reply_now", label: "Immediate reply" },
 ] as const;
 
+const AUTOPILOT_MODE_OPTIONS = [
+  { value: "off", label: "Off" },
+  { value: "partial", label: "Partial" },
+  { value: "full", label: "Full" },
+] as const;
+
 export async function AutomationSection(): Promise<React.ReactElement> {
   const response = await callAdminApi("/api/admin/automation");
   if (!response.ok) {
@@ -60,19 +68,17 @@ export async function AutomationSection(): Promise<React.ReactElement> {
     throw new Error("Missing Sales Autopilot policy");
   }
 
-  const legacyDisabled = autopilot.enabled;
-
   return (
     <section className="space-y-6">
       <header className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <h2 className="text-xl font-semibold text-slate-900">Messaging Automation</h2>
         <p className="mt-1 text-sm text-slate-600">
-          Sales Autopilot controls Inbox drafting and optional auto-send. Legacy modes only apply when Autopilot is off.
+          Sales Autopilot controls drafts, follow-up automation, and eventually live-reply autonomy. Use Off, Partial, and Full to decide how much the system is allowed to do.
         </p>
         <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-700">
-          <span className="font-semibold">Sales Autopilot:</span>{" "}
-          <span className={autopilot.enabled ? "text-emerald-700" : "text-slate-700"}>
-            {autopilot.enabled ? "ON (legacy modes disabled)" : "OFF (legacy modes active)"}
+          <span className="font-semibold">Current mode:</span>{" "}
+          <span className={autopilot.mode === "off" ? "text-slate-700" : autopilot.mode === "partial" ? "text-amber-700" : "text-emerald-700"}>
+            {autopilot.mode === "off" ? "Off" : autopilot.mode === "partial" ? "Partial" : "Full"}
           </span>
         </div>
       </header>
@@ -81,18 +87,49 @@ export async function AutomationSection(): Promise<React.ReactElement> {
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
           <h3 className="text-base font-semibold text-slate-900">Sales Autopilot</h3>
           <p className="text-xs text-slate-500">
-            Drafts replies immediately. Auto-sends after inactivity based on these settings. Messenger is draft-first and only auto-sends after a second real message.
+            Off means drafts and planning only. Partial means safe follow-ups can send automatically, but live replies still wait on you. Full is the future fully autonomous mode for channels you trust.
           </p>
           <form action={updateSalesAutopilotPolicyAction} className="mt-4 space-y-4 text-xs text-slate-600">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                name="autopilot_enabled"
-                defaultChecked={autopilot.enabled}
-                className="h-4 w-4 rounded border-slate-300"
-              />
-              Enabled
+            <label className="flex max-w-xs flex-col gap-1">
+              <span>Global mode</span>
+              <select
+                name="mode"
+                defaultValue={autopilot.mode}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="off">Off</option>
+                <option value="partial">Partial</option>
+                <option value="full">Full</option>
+              </select>
             </label>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+              <div className="space-y-1">
+                <h4 className="text-sm font-semibold text-slate-900">Channel mode overrides</h4>
+                <p className="text-xs text-slate-500">
+                  Set SMS, Messenger, and email independently. Off means drafts only. Partial means safe follow-ups only. Full allows live autopilot behavior on that channel.
+                </p>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                {(["sms", "dm", "email"] as const).map((channel) => (
+                  <label key={channel} className="flex flex-col gap-1">
+                    <span>{channel === "dm" ? "Messenger" : channel.toUpperCase()}</span>
+                    <select
+                      name={`channelMode_${channel}`}
+                      defaultValue={autopilot.channelModes[channel]}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                    >
+                      {AUTOPILOT_MODE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
@@ -167,7 +204,7 @@ export async function AutomationSection(): Promise<React.ReactElement> {
               <div className="space-y-1">
                 <h4 className="text-sm font-semibold text-slate-900">Planner follow-up auto-send</h4>
                 <p className="text-xs text-slate-500">
-                  Controls the newer Sales HQ and Inbox planner drafts. Leave this off until you trust the follow-up behavior.
+                  Controls the newer Sales HQ and Inbox planner drafts. This matters in Partial and Full modes. Off mode still drafts, but nothing sends automatically.
                 </p>
               </div>
 
@@ -240,11 +277,29 @@ export async function AutomationSection(): Promise<React.ReactElement> {
         </div>
 
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <h3 className="text-base font-semibold text-slate-900">Mode guide</h3>
+          <p className="text-xs text-slate-500">
+            Use this to decide how much authority the system should have while you build trust.
+          </p>
+          <div className="mt-4 space-y-3 text-xs text-slate-600">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <span className="font-semibold text-slate-900">Off:</span> drafts, planning, and recommendations only. No automatic sending.
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <span className="font-semibold text-slate-900">Partial:</span> the system can send approved follow-up types automatically, but new live replies still wait on you.
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <span className="font-semibold text-slate-900">Full:</span> the system is allowed to run live channel autopilot where supported and trusted.
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
           <h3 className="text-base font-semibold text-slate-900">
-            Channel autonomy <span className="text-xs font-medium text-slate-500">(legacy)</span>
+            Legacy channel autonomy <span className="text-xs font-medium text-slate-500">(older system)</span>
           </h3>
           <p className="text-xs text-slate-500">
-            Draft = AI writes but waits. Assist = auto replies, human books. Auto = full automation.
+            These older channel settings still exist behind the scenes. Keep them for compatibility while the newer Sales Autopilot modes take over.
           </p>
           <div className="mt-4 space-y-3">
             {channels.map((channel) => (
@@ -256,7 +311,6 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                 <select
                   name="mode"
                   defaultValue={channel.mode}
-                  disabled={legacyDisabled}
                   className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-700"
                 >
                   <option value="draft">Draft</option>
@@ -264,7 +318,6 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                   <option value="auto">Auto</option>
                 </select>
                 <SubmitButton
-                  disabled={legacyDisabled}
                   className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
                   pendingLabel="Saving..."
                 >
@@ -278,11 +331,6 @@ export async function AutomationSection(): Promise<React.ReactElement> {
               </form>
             ))}
           </div>
-          {legacyDisabled ? (
-            <p className="mt-4 text-xs text-slate-500">
-              Legacy modes are disabled because Sales Autopilot is enabled.
-            </p>
-          ) : null}
         </div>
 
         <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">

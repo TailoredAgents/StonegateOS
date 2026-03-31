@@ -17,7 +17,7 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
-import { getSalesAutopilotPolicy } from "@/lib/policy";
+import { getSalesAutopilotPolicy, isSalesPlannerAutosendAllowed } from "@/lib/policy";
 import { and, desc, inArray, sql } from "drizzle-orm";
 
 type RouteContext = {
@@ -157,18 +157,14 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   const draftIsOldEnough =
     draftCreatedAt instanceof Date &&
     now.getTime() - draftCreatedAt.getTime() >= Math.max(60_000, autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000);
-  const autosendChannelAllowed = nextAction?.channel
-    ? autopilotPolicy.plannerAutoSendChannels.includes(nextAction.channel)
-    : false;
-  const autosendActionAllowed = nextAction?.actionType
-    ? autopilotPolicy.plannerAutoSendActions.includes(nextAction.actionType)
-    : false;
+  const autosendPolicyAllowed = isSalesPlannerAutosendAllowed(autopilotPolicy, {
+    channel: nextAction?.channel ?? latestDraft?.channel ?? null,
+    actionType: nextAction?.actionType ?? null,
+  });
   const autosendEligible = Boolean(
-    autopilotPolicy.plannerAutoSendEnabled &&
+    autosendPolicyAllowed &&
       latestDraft &&
       draftIsOldEnough &&
-      autosendChannelAllowed &&
-      autosendActionAllowed &&
       isSafePlannerAutosendAction(nextAction?.actionType ?? null) &&
       isPlannerActionDue(nextAction, now)
   );
@@ -204,7 +200,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
             ? {
                 code: "draft_ready",
                 label: "Ready to send",
-                detail: autopilotPolicy.plannerAutoSendEnabled && !draftIsOldEnough
+                detail: autopilotPolicy.plannerAutoSendEnabled && autopilotPolicy.mode !== "off" && !draftIsOldEnough
                   ? "Draft is ready and still aging before autosend."
                   : "Draft is ready for review and send.",
                 tone: "neutral" as const,

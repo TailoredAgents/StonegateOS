@@ -45,6 +45,7 @@ const AUTOSEND_ACTIONS = new Set([
   "collect_missing_info",
   "handle_price_objection",
 ]);
+const AUTOPILOT_MODES = new Set(["off", "partial", "full"]);
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -76,6 +77,29 @@ export async function PATCH(request: NextRequest): Promise<Response> {
     const raw = payload["enabled"];
     if (typeof raw === "boolean") next["enabled"] = raw;
     else if (typeof raw === "string") next["enabled"] = raw === "true" || raw === "on";
+  }
+
+  const mode =
+    typeof payload["mode"] === "string" && AUTOPILOT_MODES.has(payload["mode"].trim())
+      ? payload["mode"].trim()
+      : null;
+  if (mode) {
+    next["mode"] = mode;
+    next["enabled"] = mode !== "off";
+  }
+
+  if (isRecord(payload["channelModes"])) {
+    const raw = payload["channelModes"] as Record<string, unknown>;
+    const channelModes: Record<string, string> = {};
+    for (const channel of ["sms", "email", "dm"]) {
+      const value = typeof raw[channel] === "string" ? raw[channel].trim() : "";
+      if (AUTOPILOT_MODES.has(value)) {
+        channelModes[channel] = value;
+      }
+    }
+    if (Object.keys(channelModes).length > 0) {
+      next["channelModes"] = channelModes;
+    }
   }
 
   const autoSendAfterMinutes = clampInt(payload["autoSendAfterMinutes"], { min: 15, max: 120 });

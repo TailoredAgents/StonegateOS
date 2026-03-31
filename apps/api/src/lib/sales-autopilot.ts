@@ -22,6 +22,7 @@ import {
   getConversationPersonaPolicy,
   getSalesAutopilotPolicy,
   getServiceAreaPolicy,
+  isSalesAutopilotLiveReplyEnabled,
   getTemplatesPolicy,
   isGeorgiaPostalCode,
   isPostalCodeAllowed,
@@ -499,9 +500,6 @@ async function resolveReplyAddress(db: DatabaseClient, input: { threadId: string
 export async function handleInboundSalesAutopilot(messageId: string): Promise<OutboxOutcome> {
   const db = getDb();
   const policy = await getSalesAutopilotPolicy(db);
-  if (!policy.enabled) {
-    return { status: "skipped" };
-  }
 
   const config = getOpenAIConfig();
   if (!config) {
@@ -562,6 +560,9 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
 
   const replyChannel = inbound.threadChannel as ReplyChannel;
   if (replyChannel !== "sms" && replyChannel !== "email" && replyChannel !== "dm") {
+    return { status: "skipped" };
+  }
+  if (!isSalesAutopilotLiveReplyEnabled(policy, replyChannel)) {
     return { status: "skipped" };
   }
 
@@ -1012,7 +1013,8 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
   const isAutoFirstTouch = meta?.["autoFirstTouch"] === true;
 
   const policy = await getSalesAutopilotPolicy(db);
-  if (!policy.enabled && !isAutoFirstTouch) {
+  const liveAutosendAllowed = isAutoFirstTouch ? policy.mode === "full" : isSalesAutopilotLiveReplyEnabled(policy, row.channel);
+  if (!liveAutosendAllowed) {
     return { status: "processed" };
   }
 

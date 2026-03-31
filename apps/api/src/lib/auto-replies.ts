@@ -608,6 +608,16 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
   }
 
   const salesAutopilot = await getSalesAutopilotPolicy(db);
+  if (salesAutopilot.mode === "off") {
+    await recordAuditEvent({
+      actor: { type: "ai", label: "auto-reply" },
+      action: "auto_reply.skipped",
+      entityType: "conversation_message",
+      entityId: row.messageId,
+      meta: { reason: "sales_autopilot_mode_off", inboundChannel }
+    });
+    return { status: "processed" };
+  }
   if (salesAutopilot.enabled) {
     await recordAuditEvent({
       actor: { type: "ai", label: "auto-reply" },

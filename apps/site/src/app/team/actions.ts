@@ -2927,7 +2927,8 @@ export async function updateAutomationModeAction(formData: FormData) {
 export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const jar = await cookies();
 
-  const enabled = formData.get("autopilot_enabled") === "on";
+  const mode =
+    typeof formData.get("mode") === "string" ? String(formData.get("mode")).trim() : "";
   const plannerAutoSendEnabled = formData.get("plannerAutoSendEnabled") === "on";
   const autoSendAfterMinutes = formData.get("autoSendAfterMinutes");
   const activityWindowMinutes = formData.get("activityWindowMinutes");
@@ -2948,11 +2949,21 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     .getAll("plannerAutoSendActions")
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .map((value) => value.trim());
+  const channelModes = {
+    sms: typeof formData.get("channelMode_sms") === "string" ? String(formData.get("channelMode_sms")).trim() : "",
+    email:
+      typeof formData.get("channelMode_email") === "string" ? String(formData.get("channelMode_email")).trim() : "",
+    dm: typeof formData.get("channelMode_dm") === "string" ? String(formData.get("channelMode_dm")).trim() : "",
+  };
 
-  const payload: Record<string, unknown> = { enabled, plannerAutoSendEnabled };
+  const payload: Record<string, unknown> = { plannerAutoSendEnabled };
+  if (mode === "off" || mode === "partial" || mode === "full") {
+    payload["mode"] = mode;
+  }
+  payload["channelModes"] = channelModes;
 
   for (const [key, value] of [
-    ["autoSendAfterMinutes", autoSendAfterMinutes],
+      ["autoSendAfterMinutes", autoSendAfterMinutes],
     ["activityWindowMinutes", activityWindowMinutes],
     ["retryDelayMinutes", retryDelayMinutes],
     ["dmSmsFallbackAfterMinutes", dmSmsFallbackAfterMinutes],

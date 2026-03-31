@@ -95,7 +95,12 @@ export type FollowUpSequencePolicy = {
   stepsMinutes: number[];
 };
 
+export type SalesAutopilotMode = "off" | "partial" | "full";
+export type SalesAutopilotChannel = "sms" | "email" | "dm";
+
 export type SalesAutopilotPolicy = {
+  mode: SalesAutopilotMode;
+  channelModes: Record<SalesAutopilotChannel, SalesAutopilotMode>;
   enabled: boolean;
   autoSendAfterMinutes: number;
   activityWindowMinutes: number;
@@ -180,6 +185,12 @@ export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
 };
 
 export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
+  mode: "full",
+  channelModes: {
+    sms: "full",
+    email: "full",
+    dm: "full"
+  },
   enabled: true,
   autoSendAfterMinutes: 15,
   activityWindowMinutes: 15,
@@ -1099,6 +1110,23 @@ function coerceStringArray(value: unknown, fallback: string[]): string[] {
   return normalized.length > 0 ? [...new Set(normalized)] : fallback;
 }
 
+function coerceSalesAutopilotMode(value: unknown, fallback: SalesAutopilotMode): SalesAutopilotMode {
+  return value === "off" || value === "partial" || value === "full" ? value : fallback;
+}
+
+function coerceSalesAutopilotChannelModes(
+  value: unknown,
+  fallbackMode: SalesAutopilotMode,
+  fallback: Record<SalesAutopilotChannel, SalesAutopilotMode>,
+): Record<SalesAutopilotChannel, SalesAutopilotMode> {
+  const source = isRecord(value) ? value : {};
+  return {
+    sms: coerceSalesAutopilotMode(source["sms"], fallback.sms ?? fallbackMode),
+    email: coerceSalesAutopilotMode(source["email"], fallback.email ?? fallbackMode),
+    dm: coerceSalesAutopilotMode(source["dm"], fallback.dm ?? fallbackMode),
+  };
+}
+
 export async function getConversationPersonaPolicy(db: DbExecutor = getDb()): Promise<ConversationPersonaPolicy> {
   const stored = await getPolicySetting(db, "conversation_persona");
   if (!stored) {
@@ -1150,8 +1178,21 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
     return DEFAULT_SALES_AUTOPILOT_POLICY;
   }
 
+  const mode = coerceSalesAutopilotMode(
+    stored["mode"],
+    stored["enabled"] === false ? "off" : DEFAULT_SALES_AUTOPILOT_POLICY.mode,
+  );
+  const channelModes = coerceSalesAutopilotChannelModes(
+    stored["channelModes"],
+    mode,
+    DEFAULT_SALES_AUTOPILOT_POLICY.channelModes,
+  );
+  const enabled = mode !== "off";
+
   return {
-    enabled: stored["enabled"] !== false,
+    mode,
+    channelModes,
+    enabled,
     autoSendAfterMinutes: coerceInt(stored["autoSendAfterMinutes"], DEFAULT_SALES_AUTOPILOT_POLICY.autoSendAfterMinutes, {
       min: 15,
       max: 120
@@ -1194,6 +1235,37 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
       DEFAULT_SALES_AUTOPILOT_POLICY.plannerAutoSendActions
     )
   };
+}
+
+export function getSalesAutopilotChannelMode(
+  policy: SalesAutopilotPolicy,
+  channel: string | null | undefined,
+): SalesAutopilotMode {
+  if (channel === "sms" || channel === "email" || channel === "dm") {
+    return policy.channelModes[channel] ?? policy.mode;
+  }
+  return policy.mode;
+}
+
+export function isSalesAutopilotLiveReplyEnabled(
+  policy: SalesAutopilotPolicy,
+  channel: string | null | undefined,
+): boolean {
+  return policy.mode === "full" && getSalesAutopilotChannelMode(policy, channel) === "full";
+}
+
+export function isSalesPlannerAutosendAllowed(
+  policy: SalesAutopilotPolicy,
+  input: { channel?: string | null; actionType?: string | null },
+): boolean {
+  if (!policy.plannerAutoSendEnabled) return false;
+  const channelMode = getSalesAutopilotChannelMode(policy, input.channel);
+  if (channelMode === "off") return false;
+  const channel = typeof input.channel === "string" ? input.channel.trim() : "";
+  if (!channel || !policy.plannerAutoSendChannels.includes(channel)) return false;
+  const actionType = typeof input.actionType === "string" ? input.actionType.trim() : "";
+  if (!actionType || !policy.plannerAutoSendActions.includes(actionType)) return false;
+  return true;
 }
 
 export async function getInboxAlertsPolicy(db: DbExecutor = getDb()): Promise<InboxAlertsPolicy> {
