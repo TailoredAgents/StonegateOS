@@ -54,7 +54,7 @@ async function runGoogleAdsAnalystQueueOnce() {
 async function runSalesDraftPrepOnce() {
   const { prepareDueSalesQueueDrafts } = await import("../apps/api/src/lib/sales-draft-prep-scheduler");
   const result = await prepareDueSalesQueueDrafts();
-  if (result.prepared > 0 || result.reused > 0 || result.error) {
+  if (result.prepared > 0 || result.reused > 0 || result.autosent > 0 || result.error) {
     console.log(JSON.stringify({ ok: !result.error, salesDraftPrep: result }, null, 2));
   }
 }

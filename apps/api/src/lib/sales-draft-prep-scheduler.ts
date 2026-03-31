@@ -8,16 +8,30 @@ type SalesQueuePayload = {
   items?: Array<{
     id?: string;
     draftPreparationEligible?: boolean;
-    draft?: { ready?: boolean | null } | null;
+    draft?: {
+      ready?: boolean | null;
+      messageId?: string | null;
+      createdAt?: string | null;
+    } | null;
     draftTarget?: { threadId?: string; channel?: string } | null;
+    nextAction?: {
+      actionType?: string | null;
+      dueAt?: string | null;
+      status?: string | null;
+    } | null;
   }>;
 };
 
 type SuggestPayload = {
   ok?: boolean;
   created?: boolean;
+  messageId?: string;
   skipped?: string;
   reused?: boolean;
+};
+
+type RetryPayload = {
+  ok?: boolean;
 };
 
 function readEnvString(key: string): string | null {
@@ -44,6 +58,24 @@ function buildApiUrl(path: string): string | null {
   const base = readEnvString("API_BASE_URL") ?? readEnvString("NEXT_PUBLIC_API_BASE_URL");
   if (!base) return null;
   return `${base.replace(/\/$/, "")}${path}`;
+}
+
+function parseIsoDate(value: string | null | undefined): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isSafePlannerAutosendAction(actionType: string | null | undefined): boolean {
+  return actionType === "follow_up_quote" || actionType === "collect_missing_info";
+}
+
+function isPlannerActionDue(value: { dueAt?: string | null; status?: string | null } | null | undefined, now: Date): boolean {
+  if (!value) return false;
+  if (value.status === "dismissed" || value.status === "blocked") return false;
+  const dueAt = parseIsoDate(value.dueAt ?? null);
+  if (!dueAt) return true;
+  return dueAt.getTime() <= now.getTime();
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<{ ok: true; data: T } | { ok: false; status?: number; error: string }> {
@@ -77,6 +109,7 @@ export async function prepareDueSalesQueueDrafts(input?: {
 }): Promise<{
   prepared: number;
   reused: number;
+  autosent: number;
   skipped: number;
   membersScanned: number;
   error?: string | null;
@@ -85,10 +118,15 @@ export async function prepareDueSalesQueueDrafts(input?: {
   const maxDraftsPerMember = Number.isFinite(input?.maxDraftsPerMember)
     ? Math.max(1, Math.floor(input!.maxDraftsPerMember!))
     : 3;
+  const autoSendEnabled = readEnvString("SALES_AGENT_AUTOSEND_ENABLED") === "1";
+  const autoSendMinDraftAgeMs = Math.max(
+    60_000,
+    Number.parseInt(readEnvString("SALES_AGENT_AUTOSEND_MIN_DRAFT_AGE_MS") ?? "", 10) || 10 * 60_000,
+  );
 
   const directoryResult = await fetchJson<TeamDirectoryPayload>("/api/admin/team/directory");
   if (!directoryResult.ok) {
-    return { prepared: 0, reused: 0, skipped: 0, membersScanned: 0, error: directoryResult.error };
+    return { prepared: 0, reused: 0, autosent: 0, skipped: 0, membersScanned: 0, error: directoryResult.error };
   }
 
   const members = Array.isArray(directoryResult.data.members)
@@ -100,7 +138,9 @@ export async function prepareDueSalesQueueDrafts(input?: {
 
   let prepared = 0;
   let reused = 0;
+  let autosent = 0;
   let skipped = 0;
+  const now = new Date();
 
   for (const memberId of members) {
     const queueResult = await fetchJson<SalesQueuePayload>(
@@ -109,15 +149,28 @@ export async function prepareDueSalesQueueDrafts(input?: {
     if (!queueResult.ok) continue;
 
     const candidates = (Array.isArray(queueResult.data.items) ? queueResult.data.items : [])
-      .filter(
-        (item) =>
+      .filter((item) => {
+        const threadId = typeof item?.draftTarget?.threadId === "string" ? item.draftTarget.threadId.trim() : "";
+        const channel = typeof item?.draftTarget?.channel === "string" ? item.draftTarget.channel.trim() : "";
+        if (!threadId || !channel) return false;
+
+        const draftCreatedAt = parseIsoDate(item?.draft?.createdAt ?? null);
+        const draftIsOldEnough =
+          draftCreatedAt instanceof Date &&
+          now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
+        const autoSendEligible =
+          autoSendEnabled &&
+          item?.draft?.ready === true &&
+          draftIsOldEnough &&
+          isSafePlannerAutosendAction(item?.nextAction?.actionType ?? null) &&
+          isPlannerActionDue(item?.nextAction ?? null, now);
+
+        const prepEligible =
           item?.draftPreparationEligible === true &&
-          item.draft?.ready !== true &&
-          typeof item.draftTarget?.threadId === "string" &&
-          item.draftTarget.threadId.trim().length > 0 &&
-          typeof item.draftTarget?.channel === "string" &&
-          item.draftTarget.channel.trim().length > 0,
-      )
+          item.draft?.ready !== true;
+
+        return prepEligible || autoSendEligible;
+      })
       .slice(0, maxDraftsPerMember);
 
     for (const candidate of candidates) {
@@ -141,8 +194,39 @@ export async function prepareDueSalesQueueDrafts(input?: {
       }
       if (suggestResult.data.created === true) {
         prepared += 1;
-      } else if (suggestResult.data.reused === true) {
+        continue;
+      }
+      if (suggestResult.data.reused === true) {
         reused += 1;
+      } else {
+        skipped += 1;
+        continue;
+      }
+
+      const messageId =
+        typeof suggestResult.data.messageId === "string" && suggestResult.data.messageId.trim().length > 0
+          ? suggestResult.data.messageId.trim()
+          : "";
+      const draftCreatedAt = parseIsoDate(candidate.draft?.createdAt ?? null);
+      const draftIsOldEnough =
+        draftCreatedAt instanceof Date && now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
+      const canAutoSend =
+        autoSendEnabled &&
+        messageId.length > 0 &&
+        draftIsOldEnough &&
+        isSafePlannerAutosendAction(candidate.nextAction?.actionType ?? null) &&
+        isPlannerActionDue(candidate.nextAction ?? null, now);
+
+      if (!canAutoSend) {
+        continue;
+      }
+
+      const retryResult = await fetchJson<RetryPayload>(
+        `/api/admin/inbox/messages/${encodeURIComponent(messageId)}/retry`,
+        { method: "POST" },
+      );
+      if (retryResult.ok && retryResult.data.ok === true) {
+        autosent += 1;
       } else {
         skipped += 1;
       }
@@ -152,6 +236,7 @@ export async function prepareDueSalesQueueDrafts(input?: {
   return {
     prepared,
     reused,
+    autosent,
     skipped,
     membersScanned: members.length,
     error: null,
