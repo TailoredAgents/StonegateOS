@@ -390,6 +390,16 @@ export function SalesHqClient({
   const trackingLabel = trackingStartAt ? `Tracking since: ${formatTimestamp(trackingStartAt)}` : null;
 
   const activeList = activeQueue === "follow_up" ? followupItems : speedItems;
+  const activeReadyDraftItems = React.useMemo(
+    () => activeList.filter((item) => item.draft?.ready),
+    [activeList],
+  );
+
+  function openNextReadyDraft() {
+    const item = activeReadyDraftItems[0] ?? null;
+    if (!item) return;
+    window.location.assign(buildInboxHrefForQueue(item));
+  }
 
   return (
     <section className={TEAM_CARD_PADDED}>
@@ -469,6 +479,19 @@ export function SalesHqClient({
             {activeQueue === "speed_to_lead"
               ? "Requires a call attempt within 5 minutes when a phone exists."
               : "On-time = completed by due time + 10 minutes."}
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-600">
+            <span>
+              {activeReadyDraftItems.length} ready draft{activeReadyDraftItems.length === 1 ? "" : "s"} in this queue.
+            </span>
+            <button
+              type="button"
+              className={teamButtonClass(activeReadyDraftItems.length > 0 ? "primary" : "secondary", "sm")}
+              onClick={openNextReadyDraft}
+              disabled={activeReadyDraftItems.length === 0}
+            >
+              Open next ready draft
+            </button>
           </div>
 
           <div className="mt-4 space-y-2">
