@@ -122,6 +122,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         )
     })
     .from(conversationMessages)
+    .where(sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`)
     .groupBy(conversationMessages.threadId)
     .as("activityLatest");
 
