@@ -116,6 +116,30 @@ function formatTimestamp(value: string | null): string {
   }).format(parsed);
 }
 
+function formatActionLabel(value: string | null | undefined): string {
+  if (!value) return "Unknown";
+  return value
+    .split("_")
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : ""))
+    .join(" ")
+    .trim();
+}
+
+function nextActionTone(value: string | null | undefined): "good" | "warn" | "bad" | "neutral" {
+  switch (value) {
+    case "urgent":
+      return "bad";
+    case "high":
+      return "warn";
+    case "normal":
+      return "neutral";
+    case "low":
+      return "good";
+    default:
+      return "neutral";
+  }
+}
+
 function isSystemTask(reminder: ContactReminderSummary): boolean {
   const title = reminder.title?.toLowerCase() ?? "";
   if (title.startsWith("auto:")) return true;
@@ -462,6 +486,9 @@ export function SalesHqClient({
                           <div className="truncate text-sm font-semibold text-slate-900">{item.contact.name}</div>
                           <div className="mt-0.5 truncate text-xs text-slate-600">{phoneLabel}</div>
                           <div className="mt-2 text-xs text-slate-500">{item.title}</div>
+                          {item.nextAction?.summary ? (
+                            <div className="mt-2 line-clamp-2 text-xs text-slate-600">{item.nextAction.summary}</div>
+                          ) : null}
                         </div>
                         <div className="flex flex-col items-end gap-2">
                           {item.minutesUntilDue !== null ? (
@@ -469,6 +496,11 @@ export function SalesHqClient({
                           ) : (
                             <Pill tone="neutral">unscheduled</Pill>
                           )}
+                          {item.nextAction?.priority ? (
+                            <Pill tone={nextActionTone(item.nextAction.priority)}>
+                              {formatActionLabel(item.nextAction.actionType)}
+                            </Pill>
+                          ) : null}
                           {item.contact.serviceAreaStatus === "potentially_out_of_area" ? (
                             <Pill tone="warn">Check ZIP</Pill>
                           ) : null}
@@ -500,6 +532,11 @@ export function SalesHqClient({
                     <div className="text-lg font-semibold text-slate-900">{selectedItem.contact.name}</div>
                     {selectedItem.contact.serviceAreaStatus === "potentially_out_of_area" ? (
                       <Pill tone="warn">Potentially out of area</Pill>
+                    ) : null}
+                    {selectedItem.nextAction?.actionType ? (
+                      <Pill tone={nextActionTone(selectedItem.nextAction.priority)}>
+                        {formatActionLabel(selectedItem.nextAction.actionType)}
+                      </Pill>
                     ) : null}
                   </div>
                   <div className="mt-1 text-sm text-slate-600">{selectedItem.contact.phone ?? "Phone not on file yet"}</div>

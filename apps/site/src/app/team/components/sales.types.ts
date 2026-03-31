@@ -47,6 +47,14 @@ export type QueuePayload = {
     overdue: boolean;
     minutesUntilDue: number | null;
     kind: "speed_to_lead" | "follow_up";
+    nextAction?: {
+      actionType: string;
+      channel: string | null;
+      priority: string;
+      confidence: string;
+      summary: string | null;
+      dueAt: string | null;
+    } | null;
   }>;
 };
 
@@ -75,4 +83,3 @@ export type CallCoachingPayload = {
     secondary: { rubric: "inbound" | "outbound"; scoreOverall: number; wins: string[]; improvements: string[] } | null;
   }>;
 };
-

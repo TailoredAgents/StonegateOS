@@ -11,12 +11,16 @@ import {
   crmPipeline,
   crmTasks,
   getDb,
+  salesAgentNextActions,
   properties
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import { loadOmniLeadContext } from "@/lib/omni-lead-context";
+import { buildSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
+import { buildSalesAgentMemory, getSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -34,6 +38,21 @@ function parseTaskKind(notes: string | null, title: string): "speed_to_lead" | "
   if (/\bkind=speed_to_lead\b/i.test(raw)) return "speed_to_lead";
   if (/\bkind=follow_up\b/i.test(raw)) return "follow_up";
   return isSpeedTask(title) ? "speed_to_lead" : "follow_up";
+}
+
+function actionPriorityScore(value: string | null | undefined): number {
+  switch (value) {
+    case "urgent":
+      return 0;
+    case "high":
+      return 1;
+    case "normal":
+      return 2;
+    case "low":
+      return 3;
+    default:
+      return 4;
+  }
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -398,5 +417,119 @@ export async function GET(request: NextRequest): Promise<Response> {
     });
   }
 
-  return NextResponse.json({ ok: true, memberId, now: now.toISOString(), items });
+  const contactIds = Array.from(new Set(items.map((item) => item.contact.id))).filter(
+    (value): value is string => typeof value === "string" && value.length > 0
+  );
+  const existingNextActions =
+    contactIds.length > 0
+      ? await db
+          .select()
+          .from(salesAgentNextActions)
+          .where(inArray(salesAgentNextActions.contactId, contactIds))
+      : [];
+  const existingNextActionMap = new Map(existingNextActions.map((row) => [row.contactId, row]));
+  const rebuiltNextActionMap = new Map<
+    string,
+    | {
+        actionType: string;
+        channel: string | null;
+        priority: string;
+        confidence: string;
+        summary: string | null;
+        dueAt: string | null;
+      }
+    | null
+  >();
+
+  await Promise.all(
+    contactIds.map(async (contactId) => {
+      const existing = existingNextActionMap.get(contactId);
+      const existingUpdatedAt = existing?.updatedAt instanceof Date ? existing.updatedAt.getTime() : null;
+      const isFresh = typeof existingUpdatedAt === "number" && now.getTime() - existingUpdatedAt <= 30 * 60 * 1000;
+      if (existing && isFresh) {
+        rebuiltNextActionMap.set(contactId, {
+          actionType: existing.actionType,
+          channel: existing.channel ?? null,
+          priority: existing.priority,
+          confidence: existing.confidence,
+          summary: existing.summary ?? null,
+          dueAt: existing.dueAt instanceof Date ? existing.dueAt.toISOString() : null,
+        });
+        return;
+      }
+
+      const liveContext = await loadOmniLeadContext(db, {
+        contactId,
+        includeQuotePrice: true,
+      });
+      if (!liveContext) {
+        rebuiltNextActionMap.set(contactId, null);
+        return;
+      }
+
+      const memory =
+        (await getSalesAgentMemory(db, contactId)) ??
+        (await upsertSalesAgentMemory(db, {
+          contactId,
+          leadId: liveContext.latestLead?.id ?? null,
+          memory: buildSalesAgentMemory(liveContext),
+        }));
+
+      if (!memory) {
+        rebuiltNextActionMap.set(contactId, null);
+        return;
+      }
+
+      const nextAction = await upsertSalesAgentNextAction(db, {
+        contactId,
+        leadId: liveContext.latestLead?.id ?? null,
+        action: buildSalesAgentNextAction({
+          context: liveContext,
+          memory: {
+            summary: memory.summary,
+            customerIntent: memory.customerIntent,
+            jobType: memory.jobType,
+            pricingContext: memory.pricingContext,
+            objections: memory.objections,
+            channelPreference: memory.channelPreference,
+            lastPromisedNextStep: memory.lastPromisedNextStep,
+            lastHumanSummary: memory.lastHumanSummary,
+            bookingReadiness: memory.bookingReadiness,
+            quoteConfidence: memory.quoteConfidence,
+            missingFields: memory.missingFields,
+            factsJson: (memory.factsJson as Record<string, unknown> | null) ?? {},
+          },
+        }),
+      });
+
+      rebuiltNextActionMap.set(
+        contactId,
+        nextAction
+          ? {
+              actionType: nextAction.actionType,
+              channel: nextAction.channel ?? null,
+              priority: nextAction.priority,
+              confidence: nextAction.confidence,
+              summary: nextAction.summary ?? null,
+              dueAt: nextAction.dueAt instanceof Date ? nextAction.dueAt.toISOString() : null,
+            }
+          : null,
+      );
+    }),
+  );
+
+  const enrichedItems = items
+    .map((item) => ({
+      ...item,
+      nextAction: rebuiltNextActionMap.get(item.contact.id) ?? null,
+    }))
+    .sort((a, b) => {
+      const priorityDiff = actionPriorityScore(a.nextAction?.priority) - actionPriorityScore(b.nextAction?.priority);
+      if (priorityDiff !== 0) return priorityDiff;
+      const aDue = a.dueAt ? Date.parse(a.dueAt) : Number.POSITIVE_INFINITY;
+      const bDue = b.dueAt ? Date.parse(b.dueAt) : Number.POSITIVE_INFINITY;
+      return aDue - bDue;
+    });
+
+  return NextResponse.json({ ok: true, memberId, now: now.toISOString(), items: enrichedItems });
 }
