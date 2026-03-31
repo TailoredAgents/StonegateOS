@@ -51,6 +51,14 @@ async function runGoogleAdsAnalystQueueOnce() {
   }
 }
 
+async function runSalesDraftPrepOnce() {
+  const { prepareDueSalesQueueDrafts } = await import("../apps/api/src/lib/sales-draft-prep-scheduler");
+  const result = await prepareDueSalesQueueDrafts();
+  if (result.prepared > 0 || result.reused > 0 || result.error) {
+    console.log(JSON.stringify({ ok: !result.error, salesDraftPrep: result }, null, 2));
+  }
+}
+
 async function main() {
   registerAliases();
   const limit = Number(process.env["OUTBOX_BATCH_SIZE"] ?? 10);
@@ -59,8 +67,12 @@ async function main() {
   const googleAdsIntervalMs = Number(
     process.env["GOOGLE_ADS_SYNC_INTERVAL_MS"] ?? 24 * 60 * 60 * 1000
   );
+  const salesDraftPrepIntervalMs = Number(
+    process.env["SALES_DRAFT_PREP_INTERVAL_MS"] ?? 3 * 60 * 1000
+  );
   let nextSeoAt = Date.now();
   let nextGoogleAdsAt = Date.now();
+  let nextSalesDraftPrepAt = Date.now();
 
   if (pollIntervalMs > 0) {
     // Continuous polling loop
@@ -87,6 +99,18 @@ async function main() {
             ? googleAdsIntervalMs
             : 24 * 60 * 60 * 1000);
       }
+      if (Date.now() >= nextSalesDraftPrepAt) {
+        try {
+          await runSalesDraftPrepOnce();
+        } catch (error) {
+          console.warn("[sales_draft_prep] loop_failed", String(error));
+        }
+        nextSalesDraftPrepAt =
+          Date.now() +
+          (Number.isFinite(salesDraftPrepIntervalMs) && salesDraftPrepIntervalMs > 30_000
+            ? salesDraftPrepIntervalMs
+            : 3 * 60 * 1000);
+      }
       if (stats.total === 0) {
         await sleep(pollIntervalMs);
       }
@@ -95,6 +119,7 @@ async function main() {
     await runOnce(limit);
     await runSeoOnce();
     await runGoogleAdsQueueOnce();
+    await runSalesDraftPrepOnce();
   }
 }
 
