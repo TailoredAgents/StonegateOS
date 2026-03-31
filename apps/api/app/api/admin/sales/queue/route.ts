@@ -17,7 +17,7 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
-import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import { getSalesAutopilotPolicy, getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { buildSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 import { buildSalesAgentMemory, getSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
@@ -126,6 +126,23 @@ function summarizeAgentActivity(row: {
   };
 }
 
+function parseIso(value: string | null | undefined): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isPlannerActionDue(value: { dueAt?: string | null } | null | undefined, now: Date): boolean {
+  if (!value) return false;
+  const dueAt = parseIso(value.dueAt ?? null);
+  if (!dueAt) return true;
+  return dueAt.getTime() <= now.getTime();
+}
+
+function isSafePlannerAutosendAction(actionType: string | null | undefined): boolean {
+  return typeof actionType === "string" && actionType.trim().length > 0;
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -136,11 +153,24 @@ export async function GET(request: NextRequest): Promise<Response> {
   const db = getDb();
   const config = await getSalesScorecardConfig(db);
   const serviceAreaPolicy = await getServiceAreaPolicy(db);
+  const autopilotPolicy = await getSalesAutopilotPolicy(db);
 
   const url = new URL(request.url);
   const memberId = url.searchParams.get("memberId")?.trim() || config.defaultAssigneeMemberId;
 
   const now = new Date();
+  const autoSendEnabled = autopilotPolicy.plannerAutoSendEnabled;
+  const autoSendMinDraftAgeMs = Math.max(60_000, autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000);
+  const allowedAutoSendChannels = new Set(
+    (Array.isArray(autopilotPolicy.plannerAutoSendChannels) ? autopilotPolicy.plannerAutoSendChannels : [])
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  );
+  const allowedAutoSendActions = new Set(
+    (Array.isArray(autopilotPolicy.plannerAutoSendActions) ? autopilotPolicy.plannerAutoSendActions : [])
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  );
   const trackingStartAt =
     config.trackingStartAt && Number.isFinite(Date.parse(config.trackingStartAt)) ? new Date(config.trackingStartAt) : null;
   const effectiveSince = trackingStartAt && trackingStartAt.getTime() < now.getTime() ? trackingStartAt : null;
@@ -741,6 +771,84 @@ export async function GET(request: NextRequest): Promise<Response> {
           draftTarget?.threadId &&
           isSafeDraftPreparationAction(nextAction?.actionType ?? null),
       );
+      const draftCreatedAt = parseIso(draft?.createdAt ?? null);
+      const draftIsOldEnough =
+        draftCreatedAt instanceof Date && now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
+      const plannerDue = isPlannerActionDue(nextAction, now);
+      const autosendActionAllowed = allowedAutoSendActions.has(nextAction?.actionType ?? "");
+      const autosendChannelAllowed = allowedAutoSendChannels.has(draftTarget?.channel ?? draft?.channel ?? "");
+      const autosendEligible = Boolean(
+        autoSendEnabled &&
+          draft?.ready &&
+          draftIsOldEnough &&
+          plannerDue &&
+          autosendActionAllowed &&
+          autosendChannelAllowed &&
+          isSafePlannerAutosendAction(nextAction?.actionType ?? null),
+      );
+      const autosendBlockedReason = !draft?.ready
+        ? null
+        : !autoSendEnabled
+          ? "Autosend disabled"
+          : !plannerDue
+            ? "Waiting for due time"
+            : !autosendActionAllowed
+              ? "Action not allowed"
+              : !autosendChannelAllowed
+                ? "Channel not allowed"
+                : !draftIsOldEnough
+                  ? "Draft aging"
+                  : null;
+      const agentState = autosendEligible
+        ? {
+            code: "autosend_due",
+            label: "Due for autosend",
+            detail: "Worker can send this follow-up automatically.",
+            tone: "good" as const,
+          }
+        : draft?.ready
+          ? {
+              code: autosendBlockedReason === "Waiting for due time" ? "waiting_on_reply" : "draft_ready",
+              label: autosendBlockedReason === "Waiting for due time" ? "Waiting on due time" : "Ready to send",
+              detail: autosendBlockedReason ?? "Draft is ready for human review.",
+              tone: autosendBlockedReason && autosendBlockedReason !== "Waiting for due time" ? ("warn" as const) : ("neutral" as const),
+            }
+          : draftPreparationEligible
+            ? {
+                code: "draft_pending",
+                label: "Draft pending",
+                detail: "Agent should prepare the next draft shortly.",
+                tone: "neutral" as const,
+              }
+            : nextAction?.actionType === "wait_for_appointment"
+              ? {
+                  code: "waiting_for_appointment",
+                  label: "Waiting on appointment",
+                  detail: "Lead already has an upcoming appointment.",
+                  tone: "good" as const,
+                }
+              : nextAction?.actionType === "human_follow_up"
+                ? {
+                    code: "human_takeover",
+                    label: "Human takeover",
+                    detail: nextAction?.summary ?? "Automation is blocked for this lead.",
+                    tone: "warn" as const,
+                  }
+                : nextAction?.actionType === "do_not_contact"
+                  ? {
+                      code: "blocked",
+                      label: "Blocked",
+                      detail: "Do not contact is active.",
+                      tone: "bad" as const,
+                    }
+                  : nextAction?.actionType
+                    ? {
+                        code: "awaiting_action",
+                        label: "Awaiting action",
+                        detail: nextAction.summary ?? "Agent is waiting for the next move.",
+                        tone: nextAction.priority === "urgent" ? ("bad" as const) : ("neutral" as const),
+                      }
+                    : null;
 
       return {
         ...item,
@@ -754,6 +862,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           : null,
         draftPreparationEligible,
         lastAgentActivity,
+        agentState,
       };
     })
     .sort((a, b) => {

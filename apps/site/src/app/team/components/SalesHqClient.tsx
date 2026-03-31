@@ -582,6 +582,11 @@ export function SalesHqClient({
                           {item.nextAction?.summary ? (
                             <div className="mt-2 line-clamp-2 text-xs text-slate-600">{item.nextAction.summary}</div>
                           ) : null}
+                          {item.agentState?.detail ? (
+                            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                              <span className="font-medium text-slate-700">{item.agentState.label}:</span> {item.agentState.detail}
+                            </div>
+                          ) : null}
                           {item.lastAgentActivity?.summary ? (
                             <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
                               <span className="font-medium text-slate-700">Agent:</span> {item.lastAgentActivity.summary}
@@ -604,6 +609,9 @@ export function SalesHqClient({
                             <Pill tone={nextActionTone(item.nextAction.priority)}>
                               {formatActionLabel(item.nextAction.actionType)}
                             </Pill>
+                          ) : null}
+                          {item.agentState?.label ? (
+                            <Pill tone={item.agentState.tone}>{item.agentState.label}</Pill>
                           ) : null}
                           {item.lastAgentActivity?.action ? (
                             <Pill tone={agentActivityTone(item.lastAgentActivity.action)}>
@@ -647,6 +655,9 @@ export function SalesHqClient({
                       <Pill tone={nextActionTone(selectedItem.nextAction.priority)}>
                         {formatActionLabel(selectedItem.nextAction.actionType)}
                       </Pill>
+                    ) : null}
+                    {selectedItem.agentState?.label ? (
+                      <Pill tone={selectedItem.agentState.tone}>{selectedItem.agentState.label}</Pill>
                     ) : null}
                     {selectedItem.draft?.ready ? <Pill tone="good">Draft ready</Pill> : null}
                   </div>
@@ -708,6 +719,16 @@ export function SalesHqClient({
                   <div className="mt-2 text-[11px] text-slate-500">
                     {formatTimestamp(selectedItem.lastAgentActivity.createdAt)}
                   </div>
+                </div>
+              ) : null}
+
+              {selectedItem.agentState?.detail ? (
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Agent state</div>
+                    <Pill tone={selectedItem.agentState.tone}>{selectedItem.agentState.label}</Pill>
+                  </div>
+                  <div className="mt-2">{selectedItem.agentState.detail}</div>
                 </div>
               ) : null}
 

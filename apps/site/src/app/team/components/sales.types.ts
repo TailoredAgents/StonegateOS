@@ -75,6 +75,12 @@ export type QueuePayload = {
       channel: string | null;
       createdAt: string;
     } | null;
+    agentState?: {
+      code: string;
+      label: string;
+      detail: string | null;
+      tone: "good" | "warn" | "bad" | "neutral";
+    } | null;
   }>;
 };
 
