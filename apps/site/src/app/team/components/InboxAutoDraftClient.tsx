@@ -35,22 +35,26 @@ export function InboxAutoDraftClient({
 }: Props): React.ReactElement | null {
   const router = useRouter();
   const inFlightRef = React.useRef(false);
+  const lastAttemptKeyRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
-    if (!threadId || !latestInboundAt) return;
+    if (!threadId) return;
     if (isComposeDirty() || isComposeFocused()) return;
+    if (!latestInboundAt && !latestOutboundAt) return;
 
-    const inboundMs = Date.parse(latestInboundAt);
-    if (!Number.isFinite(inboundMs)) return;
+    const attemptKey = [
+      threadId,
+      channel,
+      latestInboundAt ?? "",
+      latestOutboundAt ?? "",
+      latestAiDraftAt ?? "",
+    ].join("|");
 
-    const outboundMs = latestOutboundAt ? Date.parse(latestOutboundAt) : Number.NaN;
-    if (Number.isFinite(outboundMs) && outboundMs >= inboundMs) return;
-
-    const aiDraftMs = latestAiDraftAt ? Date.parse(latestAiDraftAt) : Number.NaN;
-    if (Number.isFinite(aiDraftMs) && aiDraftMs >= inboundMs) return;
+    if (lastAttemptKeyRef.current === attemptKey) return;
 
     if (inFlightRef.current) return;
     inFlightRef.current = true;
+    lastAttemptKeyRef.current = attemptKey;
 
     void (async () => {
       try {

@@ -65,6 +65,33 @@ function isAiSuggestedDraft(meta: Record<string, unknown> | null | undefined): b
   return Boolean(meta?.["draft"] === true && meta?.["aiSuggested"] === true);
 }
 
+function parseIsoDate(value: string | null | undefined): Date | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isSafePlannerFollowupAction(actionType: string | null | undefined): boolean {
+  return (
+    actionType === "follow_up_quote" ||
+    actionType === "collect_missing_info" ||
+    actionType === "handle_price_objection"
+  );
+}
+
+function isPlannerProactiveDraftEligible(input: {
+  actionType: string | null | undefined;
+  status: string | null | undefined;
+  dueAt: string | null | undefined;
+  now: Date;
+}): boolean {
+  if (!isSafePlannerFollowupAction(input.actionType)) return false;
+  if (input.status === "dismissed" || input.status === "blocked") return false;
+  const dueAt = parseIsoDate(input.dueAt);
+  if (!dueAt) return true;
+  return dueAt.getTime() <= input.now.getTime();
+}
+
 function didCustomerAskAboutPrice(messages: MessageContext[]): boolean {
   const text = messages
     .filter((m) => m.direction === "inbound")
@@ -491,49 +518,6 @@ export async function POST(
     .reverse()
     .find((message) => message.direction === "outbound" && isAiSuggestedDraft(message.metadata));
 
-  if (
-    latestInboundMessage &&
-    latestSentOutboundMessage &&
-    latestSentOutboundMessage.createdAt.getTime() >= latestInboundMessage.createdAt.getTime()
-  ) {
-    return NextResponse.json({
-      ok: true,
-      skipped: "already_replied",
-      channel: replyChannel,
-    });
-  }
-
-  if (
-    latestInboundMessage &&
-    latestAiDraftMessage &&
-    latestAiDraftMessage.createdAt.getTime() >= latestInboundMessage.createdAt.getTime()
-  ) {
-    return NextResponse.json({
-      ok: true,
-      reused: true,
-      messageId: latestAiDraftMessage.id,
-      channel: replyChannel,
-      draft: {
-        subject: replyChannel === "email" ? latestAiDraftMessage.subject ?? null : null,
-        body: latestAiDraftMessage.body,
-      },
-    });
-  }
-
-  if (thread.contactId && latestInboundMessage) {
-    const existingNextAction = await getSalesAgentNextAction(db, thread.contactId);
-    if (
-      existingNextAction?.status === "dismissed" &&
-      existingNextAction.updatedAt.getTime() >= latestInboundMessage.createdAt.getTime()
-    ) {
-      return NextResponse.json({
-        ok: true,
-        skipped: "dismissed",
-        channel: replyChannel,
-      });
-    }
-  }
-
   const contactName = [thread.contactFirstName, thread.contactLastName].filter(Boolean).join(" ").trim();
   const threadContext: ThreadContext = {
     id: thread.id,
@@ -597,6 +581,67 @@ export async function POST(
           }),
         })
       : null;
+  const now = new Date();
+  const proactivePlannerEligible = isPlannerProactiveDraftEligible({
+    actionType: salesAgentNextAction?.actionType ?? null,
+    status: salesAgentNextAction?.status ?? null,
+    dueAt: salesAgentNextAction?.dueAt?.toISOString?.() ?? null,
+    now,
+  });
+
+  const latestInboundMs = latestInboundMessage?.createdAt.getTime() ?? Number.NaN;
+  const latestOutboundMs = latestSentOutboundMessage?.createdAt.getTime() ?? Number.NaN;
+  const latestAiDraftMs = latestAiDraftMessage?.createdAt.getTime() ?? Number.NaN;
+  const referenceMs = Number.isFinite(latestInboundMs)
+    ? latestInboundMs
+    : Number.isFinite(latestOutboundMs)
+      ? latestOutboundMs
+      : Number.NaN;
+
+  if (
+    salesAgentNextAction?.status === "dismissed" &&
+    Number.isFinite(referenceMs) &&
+    salesAgentNextAction.updatedAt.getTime() >= referenceMs
+  ) {
+    return NextResponse.json({
+      ok: true,
+      skipped: "dismissed",
+      channel: replyChannel,
+    });
+  }
+
+  if (
+    Number.isFinite(latestAiDraftMs) &&
+    ((Number.isFinite(referenceMs) && latestAiDraftMs >= referenceMs) ||
+      (!Number.isFinite(referenceMs) && proactivePlannerEligible))
+  ) {
+    return NextResponse.json({
+      ok: true,
+      reused: true,
+      messageId: latestAiDraftMessage!.id,
+      channel: replyChannel,
+      draft: {
+        subject: replyChannel === "email" ? latestAiDraftMessage?.subject ?? null : null,
+        body: latestAiDraftMessage!.body,
+      },
+    });
+  }
+
+  if (Number.isFinite(latestInboundMs) && Number.isFinite(latestOutboundMs) && latestOutboundMs >= latestInboundMs) {
+    if (!proactivePlannerEligible) {
+      return NextResponse.json({
+        ok: true,
+        skipped: "already_replied",
+        channel: replyChannel,
+      });
+    }
+  } else if (!Number.isFinite(latestInboundMs) && !proactivePlannerEligible) {
+    return NextResponse.json({
+      ok: true,
+      skipped: "no_draft_trigger",
+      channel: replyChannel,
+    });
+  }
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, {
     inboundChannel: replyChannel,
@@ -784,7 +829,6 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     return NextResponse.json({ error: "openai_invalid_response" }, { status: 502 });
   }
 
-  const now = new Date();
   const created = await db.transaction(async (tx) => {
     await tx
       .delete(conversationMessages)
