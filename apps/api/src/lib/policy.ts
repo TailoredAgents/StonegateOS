@@ -103,6 +103,10 @@ export type SalesAutopilotPolicy = {
   dmSmsFallbackAfterMinutes: number;
   dmMinSilenceBeforeSmsMinutes: number;
   agentDisplayName: string;
+  plannerAutoSendEnabled: boolean;
+  plannerAutoSendMinDraftAgeMinutes: number;
+  plannerAutoSendChannels: string[];
+  plannerAutoSendActions: string[];
 };
 
 export type InboxAlertsPolicy = {
@@ -182,7 +186,11 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   retryDelayMinutes: 2,
   dmSmsFallbackAfterMinutes: 120,
   dmMinSilenceBeforeSmsMinutes: 45,
-  agentDisplayName: "Devon"
+  agentDisplayName: "Devon",
+  plannerAutoSendEnabled: false,
+  plannerAutoSendMinDraftAgeMinutes: 10,
+  plannerAutoSendChannels: ["sms"],
+  plannerAutoSendActions: ["follow_up_quote", "collect_missing_info"]
 };
 
 export const DEFAULT_INBOX_ALERTS_POLICY: InboxAlertsPolicy = {
@@ -1083,6 +1091,14 @@ function coerceString(value: unknown, fallback: string): string {
   return trimmed.length ? trimmed : fallback;
 }
 
+function coerceStringArray(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback;
+  const normalized = value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry) => entry.length > 0);
+  return normalized.length > 0 ? [...new Set(normalized)] : fallback;
+}
+
 export async function getConversationPersonaPolicy(db: DbExecutor = getDb()): Promise<ConversationPersonaPolicy> {
   const stored = await getPolicySetting(db, "conversation_persona");
   if (!stored) {
@@ -1159,7 +1175,24 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
       DEFAULT_SALES_AUTOPILOT_POLICY.dmMinSilenceBeforeSmsMinutes,
       { min: 5, max: 12 * 60 }
     ),
-    agentDisplayName: coerceString(stored["agentDisplayName"], DEFAULT_SALES_AUTOPILOT_POLICY.agentDisplayName)
+    agentDisplayName: coerceString(stored["agentDisplayName"], DEFAULT_SALES_AUTOPILOT_POLICY.agentDisplayName),
+    plannerAutoSendEnabled:
+      typeof stored["plannerAutoSendEnabled"] === "boolean"
+        ? stored["plannerAutoSendEnabled"]
+        : DEFAULT_SALES_AUTOPILOT_POLICY.plannerAutoSendEnabled,
+    plannerAutoSendMinDraftAgeMinutes: coerceInt(
+      stored["plannerAutoSendMinDraftAgeMinutes"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.plannerAutoSendMinDraftAgeMinutes,
+      { min: 1, max: 24 * 60 }
+    ),
+    plannerAutoSendChannels: coerceStringArray(
+      stored["plannerAutoSendChannels"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.plannerAutoSendChannels
+    ),
+    plannerAutoSendActions: coerceStringArray(
+      stored["plannerAutoSendActions"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.plannerAutoSendActions
+    )
   };
 }
 

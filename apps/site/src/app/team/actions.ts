@@ -2928,6 +2928,7 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const jar = await cookies();
 
   const enabled = formData.get("autopilot_enabled") === "on";
+  const plannerAutoSendEnabled = formData.get("plannerAutoSendEnabled") === "on";
   const autoSendAfterMinutes = formData.get("autoSendAfterMinutes");
   const activityWindowMinutes = formData.get("activityWindowMinutes");
   const retryDelayMinutes = formData.get("retryDelayMinutes");
@@ -2935,9 +2936,20 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const dmMinSilenceBeforeSmsMinutes = formData.get(
     "dmMinSilenceBeforeSmsMinutes",
   );
+  const plannerAutoSendMinDraftAgeMinutes = formData.get(
+    "plannerAutoSendMinDraftAgeMinutes",
+  );
   const agentDisplayName = formData.get("agentDisplayName");
+  const plannerAutoSendChannels = formData
+    .getAll("plannerAutoSendChannels")
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  const plannerAutoSendActions = formData
+    .getAll("plannerAutoSendActions")
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
 
-  const payload: Record<string, unknown> = { enabled };
+  const payload: Record<string, unknown> = { enabled, plannerAutoSendEnabled };
 
   for (const [key, value] of [
     ["autoSendAfterMinutes", autoSendAfterMinutes],
@@ -2945,6 +2957,7 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     ["retryDelayMinutes", retryDelayMinutes],
     ["dmSmsFallbackAfterMinutes", dmSmsFallbackAfterMinutes],
     ["dmMinSilenceBeforeSmsMinutes", dmMinSilenceBeforeSmsMinutes],
+    ["plannerAutoSendMinDraftAgeMinutes", plannerAutoSendMinDraftAgeMinutes],
   ] as const) {
     if (typeof value === "string" && value.trim().length > 0) {
       const num = Number(value);
@@ -2960,6 +2973,9 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   ) {
     payload["agentDisplayName"] = agentDisplayName.trim();
   }
+
+  payload["plannerAutoSendChannels"] = plannerAutoSendChannels;
+  payload["plannerAutoSendActions"] = plannerAutoSendActions;
 
   const response = await callAdminApi("/api/admin/sales/autopilot", {
     method: "PATCH",

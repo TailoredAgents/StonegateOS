@@ -2,7 +2,11 @@ import React from "react";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
-import { updateAutomationModeAction, updateLeadAutomationAction, updateSalesAutopilotPolicyAction } from "../actions";
+import {
+  updateAutomationModeAction,
+  updateLeadAutomationAction,
+  updateSalesAutopilotPolicyAction,
+} from "../actions";
 
 type AutomationChannel = {
   channel: string;
@@ -18,7 +22,24 @@ type SalesAutopilotPolicy = {
   dmSmsFallbackAfterMinutes: number;
   dmMinSilenceBeforeSmsMinutes: number;
   agentDisplayName: string;
+  plannerAutoSendEnabled: boolean;
+  plannerAutoSendMinDraftAgeMinutes: number;
+  plannerAutoSendChannels: string[];
+  plannerAutoSendActions: string[];
 };
+
+const SALES_AGENT_AUTOSEND_CHANNELS = [
+  { value: "sms", label: "SMS" },
+  { value: "dm", label: "Messenger DM" },
+  { value: "email", label: "Email" },
+] as const;
+
+const SALES_AGENT_AUTOSEND_ACTIONS = [
+  { value: "follow_up_quote", label: "Quote follow up" },
+  { value: "collect_missing_info", label: "Collect missing info" },
+  { value: "handle_price_objection", label: "Price objection save" },
+  { value: "reply_now", label: "Immediate reply" },
+] as const;
 
 export async function AutomationSection(): Promise<React.ReactElement> {
   const response = await callAdminApi("/api/admin/automation");
@@ -119,7 +140,7 @@ export async function AutomationSection(): Promise<React.ReactElement> {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="flex flex-col gap-1">
-                <span>DM → SMS fallback after (minutes)</span>
+                <span>DM to SMS fallback after (minutes)</span>
                 <input
                   name="dmSmsFallbackAfterMinutes"
                   type="number"
@@ -140,6 +161,73 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                 />
               </label>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+              <div className="space-y-1">
+                <h4 className="text-sm font-semibold text-slate-900">Planner follow-up auto-send</h4>
+                <p className="text-xs text-slate-500">
+                  Controls the newer Sales HQ and Inbox planner drafts. Leave this off until you trust the follow-up behavior.
+                </p>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    name="plannerAutoSendEnabled"
+                    defaultChecked={autopilot.plannerAutoSendEnabled}
+                    className="h-4 w-4 rounded border-slate-300"
+                  />
+                  Enable planner auto-send
+                </label>
+
+                <label className="flex max-w-xs flex-col gap-1">
+                  <span>Minimum draft age before send (minutes)</span>
+                  <input
+                    name="plannerAutoSendMinDraftAgeMinutes"
+                    type="number"
+                    min={1}
+                    max={1440}
+                    defaultValue={autopilot.plannerAutoSendMinDraftAgeMinutes}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  />
+                </label>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allowed channels</span>
+                    {SALES_AGENT_AUTOSEND_CHANNELS.map((option) => (
+                      <label key={option.value} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          name="plannerAutoSendChannels"
+                          value={option.value}
+                          defaultChecked={autopilot.plannerAutoSendChannels.includes(option.value)}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        {option.label}
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allowed actions</span>
+                    {SALES_AGENT_AUTOSEND_ACTIONS.map((option) => (
+                      <label key={option.value} className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          name="plannerAutoSendActions"
+                          value={option.value}
+                          defaultChecked={autopilot.plannerAutoSendActions.includes(option.value)}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                        {option.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
 
             <SubmitButton

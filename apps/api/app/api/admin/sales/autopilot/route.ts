@@ -24,7 +24,27 @@ function coerceOptionalString(value: unknown): string | null {
   return trimmed.length ? trimmed : null;
 }
 
+function coerceStringArray(value: unknown): string[] | null {
+  if (Array.isArray(value)) {
+    const values = value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter((entry) => entry.length > 0);
+    return [...new Set(values)];
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    return [...new Set(value.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0))];
+  }
+  return null;
+}
+
 const POLICY_KEY = "sales_autopilot" as const;
+const AUTOSEND_CHANNELS = new Set(["sms", "email", "dm"]);
+const AUTOSEND_ACTIONS = new Set([
+  "reply_now",
+  "follow_up_quote",
+  "collect_missing_info",
+  "handle_price_objection",
+]);
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -76,6 +96,30 @@ export async function PATCH(request: NextRequest): Promise<Response> {
   const agentDisplayName = coerceOptionalString(payload["agentDisplayName"]);
   if (agentDisplayName !== null) next["agentDisplayName"] = agentDisplayName;
 
+  if ("plannerAutoSendEnabled" in payload) {
+    const raw = payload["plannerAutoSendEnabled"];
+    if (typeof raw === "boolean") next["plannerAutoSendEnabled"] = raw;
+    else if (typeof raw === "string") next["plannerAutoSendEnabled"] = raw === "true" || raw === "on";
+  }
+
+  const plannerAutoSendMinDraftAgeMinutes = clampInt(payload["plannerAutoSendMinDraftAgeMinutes"], {
+    min: 1,
+    max: 24 * 60,
+  });
+  if (plannerAutoSendMinDraftAgeMinutes !== null) {
+    next["plannerAutoSendMinDraftAgeMinutes"] = plannerAutoSendMinDraftAgeMinutes;
+  }
+
+  const plannerAutoSendChannels = coerceStringArray(payload["plannerAutoSendChannels"]);
+  if (plannerAutoSendChannels !== null) {
+    next["plannerAutoSendChannels"] = plannerAutoSendChannels.filter((value) => AUTOSEND_CHANNELS.has(value));
+  }
+
+  const plannerAutoSendActions = coerceStringArray(payload["plannerAutoSendActions"]);
+  if (plannerAutoSendActions !== null) {
+    next["plannerAutoSendActions"] = plannerAutoSendActions.filter((value) => AUTOSEND_ACTIONS.has(value));
+  }
+
   const db = getDb();
   const actor = getAuditActorFromRequest(request);
 
@@ -118,4 +162,3 @@ export async function PATCH(request: NextRequest): Promise<Response> {
   const policy = await getSalesAutopilotPolicy(db);
   return NextResponse.json({ ok: true, policy });
 }
-

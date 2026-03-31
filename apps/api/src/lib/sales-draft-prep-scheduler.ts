@@ -1,3 +1,6 @@
+import { getDb } from "@/db";
+import { getSalesAutopilotPolicy } from "@/lib/policy";
+
 type TeamDirectoryPayload = {
   ok?: boolean;
   members?: Array<{ id?: string; name?: string | null }>;
@@ -67,7 +70,7 @@ function parseIsoDate(value: string | null | undefined): Date | null {
 }
 
 function isSafePlannerAutosendAction(actionType: string | null | undefined): boolean {
-  return actionType === "follow_up_quote" || actionType === "collect_missing_info";
+  return typeof actionType === "string" && actionType.trim().length > 0;
 }
 
 function isPlannerActionDue(value: { dueAt?: string | null; status?: string | null } | null | undefined, now: Date): boolean {
@@ -118,10 +121,34 @@ export async function prepareDueSalesQueueDrafts(input?: {
   const maxDraftsPerMember = Number.isFinite(input?.maxDraftsPerMember)
     ? Math.max(1, Math.floor(input!.maxDraftsPerMember!))
     : 3;
-  const autoSendEnabled = readEnvString("SALES_AGENT_AUTOSEND_ENABLED") === "1";
+  const autopilotPolicy = await getSalesAutopilotPolicy(getDb());
+  const autoSendOverride = readEnvString("SALES_AGENT_AUTOSEND_ENABLED");
+  const autoSendEnabled =
+    autoSendOverride === "1"
+      ? true
+      : autoSendOverride === "0"
+        ? false
+        : autopilotPolicy.plannerAutoSendEnabled;
+  const allowedAutoSendChannels = new Set(
+    (Array.isArray(autopilotPolicy.plannerAutoSendChannels)
+      ? autopilotPolicy.plannerAutoSendChannels
+      : []
+    )
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  );
+  const allowedAutoSendActions = new Set(
+    (Array.isArray(autopilotPolicy.plannerAutoSendActions)
+      ? autopilotPolicy.plannerAutoSendActions
+      : []
+    )
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  );
   const autoSendMinDraftAgeMs = Math.max(
     60_000,
-    Number.parseInt(readEnvString("SALES_AGENT_AUTOSEND_MIN_DRAFT_AGE_MS") ?? "", 10) || 10 * 60_000,
+    Number.parseInt(readEnvString("SALES_AGENT_AUTOSEND_MIN_DRAFT_AGE_MS") ?? "", 10) ||
+      autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000,
   );
 
   const directoryResult = await fetchJson<TeamDirectoryPayload>("/api/admin/team/directory");
@@ -162,6 +189,8 @@ export async function prepareDueSalesQueueDrafts(input?: {
           autoSendEnabled &&
           item?.draft?.ready === true &&
           draftIsOldEnough &&
+          allowedAutoSendChannels.has(channel) &&
+          allowedAutoSendActions.has(item?.nextAction?.actionType ?? "") &&
           isSafePlannerAutosendAction(item?.nextAction?.actionType ?? null) &&
           isPlannerActionDue(item?.nextAction ?? null, now);
 
@@ -214,6 +243,8 @@ export async function prepareDueSalesQueueDrafts(input?: {
         autoSendEnabled &&
         messageId.length > 0 &&
         draftIsOldEnough &&
+        allowedAutoSendChannels.has(channel) &&
+        allowedAutoSendActions.has(candidate.nextAction?.actionType ?? "") &&
         isSafePlannerAutosendAction(candidate.nextAction?.actionType ?? null) &&
         isPlannerActionDue(candidate.nextAction ?? null, now);
 
