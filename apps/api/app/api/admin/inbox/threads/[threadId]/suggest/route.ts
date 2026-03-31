@@ -42,12 +42,14 @@ type ThreadContext = {
 };
 
 type MessageContext = {
+  id: string;
   direction: string;
   channel: string;
   subject: string | null;
   body: string;
   createdAt: Date;
   participantName: string | null;
+  metadata: Record<string, unknown> | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,6 +58,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isReplyChannel(value: string): value is ReplyChannel {
   return value === "sms" || value === "email" || value === "dm";
+}
+
+function isAiSuggestedDraft(meta: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(meta?.["draft"] === true && meta?.["aiSuggested"] === true);
 }
 
 function didCustomerAskAboutPrice(messages: MessageContext[]): boolean {
@@ -422,12 +428,14 @@ export async function POST(
 
   const messageRows = await db
     .select({
+      id: conversationMessages.id,
       direction: conversationMessages.direction,
       channel: conversationMessages.channel,
       subject: conversationMessages.subject,
       body: conversationMessages.body,
       createdAt: conversationMessages.createdAt,
-      participantName: conversationParticipants.displayName
+      participantName: conversationParticipants.displayName,
+      metadata: conversationMessages.metadata
     })
     .from(conversationMessages)
     .leftJoin(conversationParticipants, eq(conversationMessages.participantId, conversationParticipants.id))
@@ -437,14 +445,58 @@ export async function POST(
 
   const messages: MessageContext[] = messageRows
     .map((row) => ({
+      id: row.id,
       direction: row.direction,
       channel: row.channel,
       subject: row.subject ?? null,
       body: row.body,
       createdAt: row.createdAt,
-      participantName: row.participantName ?? null
+      participantName: row.participantName ?? null,
+      metadata: isRecord(row.metadata) ? row.metadata : null
     }))
     .reverse();
+
+  const latestInboundMessage = [...messages]
+    .reverse()
+    .find((message) => message.direction === "inbound");
+  const latestSentOutboundMessage = [...messages]
+    .reverse()
+    .find(
+      (message) =>
+        message.direction === "outbound" && !Boolean(message.metadata?.["draft"] === true),
+    );
+  const latestAiDraftMessage = [...messages]
+    .reverse()
+    .find((message) => message.direction === "outbound" && isAiSuggestedDraft(message.metadata));
+
+  if (
+    latestInboundMessage &&
+    latestSentOutboundMessage &&
+    latestSentOutboundMessage.createdAt.getTime() >= latestInboundMessage.createdAt.getTime()
+  ) {
+    return NextResponse.json({
+      ok: true,
+      skipped: "already_replied",
+      channel: replyChannel,
+    });
+  }
+
+  if (
+    latestInboundMessage &&
+    latestAiDraftMessage &&
+    latestAiDraftMessage.createdAt.getTime() >= latestInboundMessage.createdAt.getTime()
+  ) {
+    return NextResponse.json({
+      ok: true,
+      reused: true,
+      messageId: latestAiDraftMessage.id,
+      channel: replyChannel,
+      draft: {
+        subject: replyChannel === "email" ? latestAiDraftMessage.subject ?? null : null,
+        body: latestAiDraftMessage.body,
+      },
+    });
+  }
 
   const contactName = [thread.contactFirstName, thread.contactLastName].filter(Boolean).join(" ").trim();
   const threadContext: ThreadContext = {
@@ -675,6 +727,17 @@ Do not write the customer message. Output ONLY JSON matching the schema.
 
   const now = new Date();
   const created = await db.transaction(async (tx) => {
+    await tx
+      .delete(conversationMessages)
+      .where(
+        and(
+          eq(conversationMessages.threadId, threadId),
+          eq(conversationMessages.direction, "outbound"),
+          sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') = 'true'`,
+          sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`
+        )
+      );
+
     const participantId = await ensureAiParticipant(tx, threadId, now);
     const [message] = await tx
       .insert(conversationMessages)
@@ -724,6 +787,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
 
   return NextResponse.json({
     ok: true,
+    created: true,
     messageId: created.id,
     channel: replyChannel,
     draft: {

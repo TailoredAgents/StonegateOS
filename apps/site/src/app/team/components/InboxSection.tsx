@@ -4,6 +4,7 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { InboxAutoScroll } from "./InboxAutoScroll";
+import { InboxAutoDraftClient } from "./InboxAutoDraftClient";
 import { InboxMediaGallery } from "./InboxMediaGallery";
 import { InboxLiveUpdatesClient } from "./InboxLiveUpdatesClient";
 import { TEAM_EMPTY_STATE, TEAM_INPUT_COMPACT, TEAM_SELECT, teamButtonClass } from "./team-ui";
@@ -16,7 +17,6 @@ import {
   sendDraftMessageAction,
   sendThreadMessageAction,
   deleteMessageAction,
-  suggestThreadReplyAction,
   updateThreadAction,
   startContactCallAction,
   markSalesTouchAction,
@@ -419,6 +419,23 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
   const activeContact = timeline?.contact ?? activeThread?.contact ?? null;
   const timelineThreads = timeline?.threads ?? [];
   const timelineMessages = timeline?.messages?.length ? timeline.messages : activeThreadMessages;
+  const latestInboundAt = [...timelineMessages]
+    .reverse()
+    .find((message) => message.direction === "inbound")
+    ?.createdAt ?? null;
+  const latestOutboundAt = [...timelineMessages]
+    .reverse()
+    .find((message) => message.direction === "outbound" && !isDraftMessage(message.metadata ?? null))
+    ?.createdAt ?? null;
+  const latestAiDraftAt = [...timelineMessages]
+    .reverse()
+    .find(
+      (message) =>
+        message.direction === "outbound" &&
+        isDraftMessage(message.metadata ?? null) &&
+        message.metadata?.["aiSuggested"] === true,
+    )
+    ?.createdAt ?? null;
 
   let activeContactSummary:
     | {
@@ -1161,6 +1178,15 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     initialLastMessageAt={activeThread?.lastMessageAt ?? null}
                   />
                 ) : null}
+                {selectedThreadId ? (
+                  <InboxAutoDraftClient
+                    threadId={selectedThreadId}
+                    channel={requestedChannel}
+                    latestInboundAt={latestInboundAt}
+                    latestOutboundAt={latestOutboundAt}
+                    latestAiDraftAt={latestAiDraftAt}
+                  />
+                ) : null}
                 {timelineMessages.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-sm text-slate-500">
                     No messages yet. Send the first touch below.
@@ -1290,32 +1316,11 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
               </div>
 
               <div className="-mx-5 relative z-10 border-t border-slate-200 bg-white/95 px-5 pt-3 pb-[calc(env(safe-area-inset-bottom)+1rem)] backdrop-blur">
-                <form action={suggestThreadReplyAction} className="flex justify-end gap-2">
-                  <input type="hidden" name="contactId" value={activeContactId} />
-                  <input type="hidden" name="channel" value={requestedChannel} />
-                  {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
-                  <SubmitButton
-                    className={teamButtonClass("secondary", "sm")}
-                    pendingLabel="Thinking..."
-                    disabled={
-                      requestedChannel === "dm"
-                        ? !channelThreadMap.get("dm")
-                        : requestedChannel === "sms"
-                          ? !activeContact?.phone
-                          : requestedChannel === "email"
-                            ? !activeContact?.email
-                            : false
-                    }
-                  >
-                    AI Suggest
-                  </SubmitButton>
-                </form>
-
                 <form
                   action={sendThreadMessageAction}
                   method="post"
                   encType="multipart/form-data"
-                  className="mt-3 space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4"
+                  className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4"
                 >
                   <input type="hidden" name="contactId" value={activeContactId} />
                   <input type="hidden" name="channel" value={requestedChannel} />
