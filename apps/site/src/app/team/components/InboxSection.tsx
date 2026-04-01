@@ -26,6 +26,7 @@ import {
 import { ContactNameEditorClient } from "./ContactNameEditorClient";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
+import { ContactMediaAnalysisClient } from "./ContactMediaAnalysisClient";
 import { ContactSalesAgentMemoryClient } from "./ContactSalesAgentMemoryClient";
 import { ContactSalesAgentNextActionClient } from "./ContactSalesAgentNextActionClient";
 
@@ -1719,6 +1720,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                 <InboxContactNotesClient contactId={activeContactId} initialNotes={contactNotes} />
 
                 <ContactSalesAgentMemoryClient contactId={activeContactId} />
+                <ContactMediaAnalysisClient contactId={activeContactId} />
                 <ContactSalesAgentNextActionClient contactId={activeContactId} />
 
                 <div className="space-y-2">
