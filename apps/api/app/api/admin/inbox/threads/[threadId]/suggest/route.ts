@@ -73,6 +73,7 @@ function parseIsoDate(value: string | null | undefined): Date | null {
 
 function isSafePlannerFollowupAction(actionType: string | null | undefined): boolean {
   return (
+    actionType === "missed_call_recovery" ||
     actionType === "follow_up_quote" ||
     actionType === "collect_missing_info" ||
     actionType === "handle_price_objection"
@@ -376,6 +377,8 @@ function buildPlannerInstruction(actionType: string | null | undefined): string 
   switch (actionType) {
     case "reply_now":
       return "Reply promptly, keep momentum, and answer the latest inbound directly.";
+    case "missed_call_recovery":
+      return "Write a short missed-call recovery text that gets the lead talking again without overcomplicating it.";
     case "call_now":
       return "Write a short reply that supports an immediate phone follow up and confirms availability to talk now.";
     case "follow_up_quote":

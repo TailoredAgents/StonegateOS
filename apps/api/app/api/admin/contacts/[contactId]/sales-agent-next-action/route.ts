@@ -71,6 +71,7 @@ function parseIso(value: string | null | undefined): Date | null {
 
 function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
   return (
+    actionType === "missed_call_recovery" ||
     actionType === "reply_now" ||
     actionType === "follow_up_quote" ||
     actionType === "collect_missing_info" ||

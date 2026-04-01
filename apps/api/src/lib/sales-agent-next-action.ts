@@ -68,6 +68,20 @@ function hasRecentOutbound(context: OmniLeadContext, now: Date, minutes: number)
   return now.getTime() - latestOutbound.getTime() <= minutes * 60 * 1000;
 }
 
+function isRecentMissedInboundCall(context: OmniLeadContext, now: Date): boolean {
+  const latestCall = context.latestCall;
+  if (!latestCall) return false;
+  const createdAt = parseIso(latestCall.createdAt);
+  if (!createdAt) return false;
+  const callStatus = typeof latestCall.callStatus === "string" ? latestCall.callStatus.toLowerCase() : "";
+  return (
+    latestCall.direction === "inbound" &&
+    now.getTime() - createdAt.getTime() <= 2 * 60 * 60 * 1000 &&
+    callStatus.length > 0 &&
+    callStatus !== "completed"
+  );
+}
+
 export function buildSalesAgentNextAction(input: {
   context: OmniLeadContext;
   memory: SalesAgentMemoryRecord;
@@ -154,6 +168,29 @@ export function buildSalesAgentNextAction(input: {
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
         memory.lastPromisedNextStep,
         memory.pricingContext,
+      ]),
+      dueAt: now.toISOString(),
+      source: "rules_v1",
+    };
+  }
+
+  if (
+    isRecentMissedInboundCall(context, now) &&
+    (context.contact.phoneE164 || context.contact.phone) &&
+    !hasRecentOutbound(context, now, 20)
+  ) {
+    return {
+      actionType: "missed_call_recovery",
+      channel: "sms",
+      status: "open",
+      priority: "high",
+      confidence: "high",
+      summary: "Send a quick missed-call recovery text and move the lead back into conversation.",
+      reason: "There was a recent inbound call that did not complete, and no recent outbound recovery touch exists yet.",
+      facts: dedupe([
+        context.latestCall?.callStatus ? `Latest call status: ${context.latestCall.callStatus}` : null,
+        memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
+        context.derived.knownZip ? `ZIP: ${context.derived.knownZip}` : null,
       ]),
       dueAt: now.toISOString(),
       source: "rules_v1",

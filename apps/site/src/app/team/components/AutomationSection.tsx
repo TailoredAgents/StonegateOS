@@ -37,6 +37,7 @@ const SALES_AGENT_AUTOSEND_CHANNELS = [
 ] as const;
 
 const SALES_AGENT_AUTOSEND_ACTIONS = [
+  { value: "missed_call_recovery", label: "Missed call recovery" },
   { value: "follow_up_quote", label: "Quote follow up" },
   { value: "collect_missing_info", label: "Collect missing info" },
   { value: "handle_price_objection", label: "Price objection save (Full only)" },

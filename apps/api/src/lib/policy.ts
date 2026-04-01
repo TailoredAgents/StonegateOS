@@ -202,7 +202,7 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   plannerAutoSendEnabled: false,
   plannerAutoSendMinDraftAgeMinutes: 10,
   plannerAutoSendChannels: ["sms"],
-  plannerAutoSendActions: ["follow_up_quote", "collect_missing_info"]
+  plannerAutoSendActions: ["missed_call_recovery", "follow_up_quote", "collect_missing_info"]
 };
 
 export const DEFAULT_INBOX_ALERTS_POLICY: InboxAlertsPolicy = {
@@ -1266,6 +1266,7 @@ export function getSalesPlannerActionClass(
   actionType: string | null | undefined,
 ): SalesPlannerActionClass | null {
   switch (typeof actionType === "string" ? actionType.trim() : "") {
+    case "missed_call_recovery":
     case "follow_up_quote":
     case "collect_missing_info":
       return "follow_up";

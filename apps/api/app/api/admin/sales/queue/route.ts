@@ -75,6 +75,7 @@ function draftReadinessScore(item: {
 
 function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
   return (
+    actionType === "missed_call_recovery" ||
     actionType === "reply_now" ||
     actionType === "follow_up_quote" ||
     actionType === "collect_missing_info" ||

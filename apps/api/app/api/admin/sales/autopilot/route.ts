@@ -40,6 +40,7 @@ function coerceStringArray(value: unknown): string[] | null {
 const POLICY_KEY = "sales_autopilot" as const;
 const AUTOSEND_CHANNELS = new Set(["sms", "email", "dm"]);
 const AUTOSEND_ACTIONS = new Set([
+  "missed_call_recovery",
   "reply_now",
   "follow_up_quote",
   "collect_missing_info",
