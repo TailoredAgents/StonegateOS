@@ -27,6 +27,16 @@ type QuoteState =
       tier: string;
       reason: string;
       needsInPersonEstimate: boolean;
+      addOnTotal: number;
+      mediaAnalysis?: {
+        source?: string;
+        visibleVolumeRange?: string;
+        mergedVolumeRange?: string;
+        visibleMattressCount?: number;
+        visiblePaintCanCount?: number;
+        confidence?: "low" | "medium" | "high";
+        missingViews?: string[];
+      };
     }
   | { status: "error"; message: string };
 
@@ -676,7 +686,17 @@ export function LeadForm({
           reasonSummary: string;
           discountPercent?: number;
           discountAmount?: number;
+          addOnTotal?: number;
           needsInPersonEstimate?: boolean;
+          mediaAnalysis?: {
+            source?: string;
+            visibleVolumeRange?: string;
+            mergedVolumeRange?: string;
+            visibleMattressCount?: number;
+            visiblePaintCanCount?: number;
+            confidence?: "low" | "medium" | "high";
+            missingViews?: string[];
+          };
         };
       } | null;
       if (!res.ok || !data?.ok) {
@@ -701,7 +721,9 @@ export function LeadForm({
         discountAmount: data.quote.discountAmount ?? 0,
         tier: data.quote.displayTierLabel,
         reason: data.quote.reasonSummary,
-        needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate)
+        needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate),
+        addOnTotal: data.quote.addOnTotal ?? 0,
+        mediaAnalysis: data.quote.mediaAnalysis
       });
       applyEnhancedConversionsUserData({
         name: name.trim(),
@@ -1208,6 +1230,35 @@ export function LeadForm({
           ? `${Math.round(quoteState.discountPercent * 100)}% off`
           : null
       : null;
+  const quoteMediaAnalysis = quoteState.status === "ready" ? quoteState.mediaAnalysis : undefined;
+  const quoteMissingViews =
+    quoteState.status === "ready" && Array.isArray(quoteState.mediaAnalysis?.missingViews)
+      ? quoteState.mediaAnalysis.missingViews.filter((item) => typeof item === "string" && item.trim().length > 0)
+      : [];
+  const quoteVisibleRangeLabel =
+    quoteState.status === "ready" ? formatEnumLabel(quoteState.mediaAnalysis?.visibleVolumeRange) : null;
+  const quoteMergedRangeLabel =
+    quoteState.status === "ready" ? formatEnumLabel(quoteState.mediaAnalysis?.mergedVolumeRange) : null;
+  const quoteRangeWasWidened =
+    quoteState.status === "ready" &&
+    Boolean(
+      quoteState.mediaAnalysis?.visibleVolumeRange &&
+        quoteState.mediaAnalysis?.mergedVolumeRange &&
+        quoteState.mediaAnalysis.visibleVolumeRange !== quoteState.mediaAnalysis.mergedVolumeRange
+    );
+  const quoteAddOnSummary =
+    quoteState.status === "ready"
+      ? [
+          (quoteState.mediaAnalysis?.visibleMattressCount ?? 0) > 0
+            ? `${quoteState.mediaAnalysis?.visibleMattressCount} mattress${quoteState.mediaAnalysis?.visibleMattressCount === 1 ? "" : "es"}`
+            : null,
+          (quoteState.mediaAnalysis?.visiblePaintCanCount ?? 0) > 0
+            ? `${quoteState.mediaAnalysis?.visiblePaintCanCount} paint can${quoteState.mediaAnalysis?.visiblePaintCanCount === 1 ? "" : "s"}`
+            : null,
+        ]
+          .filter((value): value is string => Boolean(value))
+          .join(" and ")
+      : "";
 
   const getAnalyticsPath = React.useCallback(() => {
     if (typeof window === "undefined") return "/";
@@ -2121,9 +2172,47 @@ export function LeadForm({
                 </div>
                 <div className="text-sm text-neutral-700">{quoteState.tier}</div>
                 <div className="text-xs text-neutral-600">{quoteState.reason}</div>
-                {!isBrush ? (
+                {!isBrush && !isDemo && quoteMediaAnalysis ? (
+                  <div className="space-y-2 rounded-md border border-primary-100 bg-white/70 px-3 py-2 text-xs text-neutral-700">
+                    {quoteVisibleRangeLabel ? (
+                      <div>
+                        Photos look like about <span className="font-semibold text-primary-900">{quoteVisibleRangeLabel}</span>.
+                        {quoteMergedRangeLabel ? (
+                          <>
+                            {" "}
+                            We priced this around <span className="font-semibold text-primary-900">{quoteMergedRangeLabel}</span>
+                            {quoteMediaAnalysis.confidence ? (
+                              <> with {quoteMediaAnalysis.confidence} confidence.</>
+                            ) : (
+                              <>.</>
+                            )}
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {quoteRangeWasWidened ? (
+                      <div>
+                        We widened the range a bit because your notes or selections suggest there may be more items than what is visible in the photos.
+                      </div>
+                    ) : null}
+                    {quoteState.addOnTotal > 0 && quoteAddOnSummary ? (
+                      <div>
+                        This already includes visible disposal add-ons for <span className="font-semibold text-primary-900">{quoteAddOnSummary}</span>.
+                      </div>
+                    ) : (
+                      <div>
+                        Disposal add-ons apply only when visible or confirmed, such as mattresses at +$35 each and paint cans at +$10 each.
+                      </div>
+                    )}
+                    {quoteMissingViews.length > 0 ? (
+                      <div>
+                        Want a tighter number? Send {quoteMissingViews[0]}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : !isBrush ? (
                   <div className="text-xs text-neutral-600">
-                    Disposal fees may apply for certain items (for example, mattresses/box springs are +$40 each).
+                    Disposal add-ons apply only when needed, such as mattresses at +$35 each and paint cans at +$10 each.
                   </div>
                 ) : null}
                 <div className="text-xs text-neutral-600">
@@ -2451,6 +2540,15 @@ function bucketWebAnalyticsError(err: unknown): string {
   if (text.includes("quote")) return "quote_failed";
   if (text.includes("booking")) return "booking_failed";
   return text.slice(0, 60).replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "") || "unknown";
+}
+
+function formatEnumLabel(value: string | null | undefined): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 async function shrinkImageIfNeeded(file: File): Promise<File> {
