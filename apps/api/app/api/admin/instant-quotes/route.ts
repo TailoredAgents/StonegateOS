@@ -22,6 +22,16 @@ export async function GET(request: NextRequest) {
   const mediaInformedExpr = sql<boolean>`
     coalesce(${instantQuotes.aiResult} -> 'mediaAnalysis' ->> 'source', '') like 'vision%'
   `;
+  const mediaConfidenceExpr = sql<string>`
+    coalesce(${instantQuotes.aiResult} -> 'mediaAnalysis' ->> 'confidence', '')
+  `;
+  const mediaMissingViewsExpr = sql<boolean>`
+    case
+      when jsonb_typeof(${instantQuotes.aiResult} -> 'mediaAnalysis' -> 'missingViews') = 'array'
+        then jsonb_array_length(${instantQuotes.aiResult} -> 'mediaAnalysis' -> 'missingViews') > 0
+      else false
+    end
+  `;
   const bookedFromQuoteExpr = sql<boolean>`
     exists(
       select 1
@@ -37,6 +47,24 @@ export async function GET(request: NextRequest) {
       mediaInformedQuotes: sql<number>`count(*) filter (where ${mediaInformedExpr})::int`,
       bookedQuotes: sql<number>`count(*) filter (where ${bookedFromQuoteExpr})::int`,
       mediaInformedBookedQuotes: sql<number>`count(*) filter (where ${mediaInformedExpr} and ${bookedFromQuoteExpr})::int`,
+      mediaHighConfidenceQuotes: sql<number>`
+        count(*) filter (where ${mediaInformedExpr} and ${mediaConfidenceExpr} = 'high')::int
+      `,
+      mediaHighConfidenceBookedQuotes: sql<number>`
+        count(*) filter (where ${mediaInformedExpr} and ${mediaConfidenceExpr} = 'high' and ${bookedFromQuoteExpr})::int
+      `,
+      mediaLowConfidenceQuotes: sql<number>`
+        count(*) filter (where ${mediaInformedExpr} and ${mediaConfidenceExpr} = 'low')::int
+      `,
+      mediaLowConfidenceBookedQuotes: sql<number>`
+        count(*) filter (where ${mediaInformedExpr} and ${mediaConfidenceExpr} = 'low' and ${bookedFromQuoteExpr})::int
+      `,
+      mediaMissingViewsQuotes: sql<number>`
+        count(*) filter (where ${mediaInformedExpr} and ${mediaMissingViewsExpr})::int
+      `,
+      mediaMissingViewsBookedQuotes: sql<number>`
+        count(*) filter (where ${mediaInformedExpr} and ${mediaMissingViewsExpr} and ${bookedFromQuoteExpr})::int
+      `,
     })
     .from(instantQuotes)
     .where(gte(instantQuotes.createdAt, summaryWindowStart));
@@ -153,6 +181,12 @@ function buildSummary(
         mediaInformedQuotes: number;
         bookedQuotes: number;
         mediaInformedBookedQuotes: number;
+        mediaHighConfidenceQuotes: number;
+        mediaHighConfidenceBookedQuotes: number;
+        mediaLowConfidenceQuotes: number;
+        mediaLowConfidenceBookedQuotes: number;
+        mediaMissingViewsQuotes: number;
+        mediaMissingViewsBookedQuotes: number;
       }
     | undefined,
   windowStart: Date,
@@ -161,6 +195,12 @@ function buildSummary(
   const mediaInformedQuotes = row?.mediaInformedQuotes ?? 0;
   const bookedQuotes = row?.bookedQuotes ?? 0;
   const mediaInformedBookedQuotes = row?.mediaInformedBookedQuotes ?? 0;
+  const mediaHighConfidenceQuotes = row?.mediaHighConfidenceQuotes ?? 0;
+  const mediaHighConfidenceBookedQuotes = row?.mediaHighConfidenceBookedQuotes ?? 0;
+  const mediaLowConfidenceQuotes = row?.mediaLowConfidenceQuotes ?? 0;
+  const mediaLowConfidenceBookedQuotes = row?.mediaLowConfidenceBookedQuotes ?? 0;
+  const mediaMissingViewsQuotes = row?.mediaMissingViewsQuotes ?? 0;
+  const mediaMissingViewsBookedQuotes = row?.mediaMissingViewsBookedQuotes ?? 0;
   const standardQuotes = Math.max(0, totalQuotes - mediaInformedQuotes);
   const standardBookedQuotes = Math.max(0, bookedQuotes - mediaInformedBookedQuotes);
 
@@ -173,6 +213,28 @@ function buildSummary(
       bookedQuotes: mediaInformedBookedQuotes,
       bookRate:
         mediaInformedQuotes > 0 ? Number((mediaInformedBookedQuotes / mediaInformedQuotes).toFixed(4)) : 0,
+      highConfidence: {
+        quotes: mediaHighConfidenceQuotes,
+        bookedQuotes: mediaHighConfidenceBookedQuotes,
+        bookRate:
+          mediaHighConfidenceQuotes > 0
+            ? Number((mediaHighConfidenceBookedQuotes / mediaHighConfidenceQuotes).toFixed(4))
+            : 0,
+      },
+      lowConfidence: {
+        quotes: mediaLowConfidenceQuotes,
+        bookedQuotes: mediaLowConfidenceBookedQuotes,
+        bookRate:
+          mediaLowConfidenceQuotes > 0 ? Number((mediaLowConfidenceBookedQuotes / mediaLowConfidenceQuotes).toFixed(4)) : 0,
+      },
+      missingViews: {
+        quotes: mediaMissingViewsQuotes,
+        bookedQuotes: mediaMissingViewsBookedQuotes,
+        bookRate:
+          mediaMissingViewsQuotes > 0
+            ? Number((mediaMissingViewsBookedQuotes / mediaMissingViewsQuotes).toFixed(4))
+            : 0,
+      },
     },
     standard: {
       quotes: standardQuotes,

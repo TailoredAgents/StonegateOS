@@ -52,6 +52,21 @@ type InstantQuoteSummaryDto = {
     quotes: number;
     bookedQuotes: number;
     bookRate: number;
+    highConfidence: {
+      quotes: number;
+      bookedQuotes: number;
+      bookRate: number;
+    };
+    lowConfidence: {
+      quotes: number;
+      bookedQuotes: number;
+      bookRate: number;
+    };
+    missingViews: {
+      quotes: number;
+      bookedQuotes: number;
+      bookRate: number;
+    };
   };
   standard: {
     quotes: number;
@@ -90,6 +105,14 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             Media-informed quotes booked {summary.mediaInformed.bookedQuotes} of {summary.mediaInformed.quotes} (
             {formatPercent(summary.mediaInformed.bookRate)}), compared with {summary.standard.bookedQuotes} of{" "}
             {summary.standard.quotes} ({formatPercent(summary.standard.bookRate)}) for standard quotes.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-500">
+            High-confidence media quotes: {summary.mediaInformed.highConfidence.bookedQuotes} of{" "}
+            {summary.mediaInformed.highConfidence.quotes} ({formatPercent(summary.mediaInformed.highConfidence.bookRate)})
+            {" | "}Low-confidence: {summary.mediaInformed.lowConfidence.bookedQuotes} of{" "}
+            {summary.mediaInformed.lowConfidence.quotes} ({formatPercent(summary.mediaInformed.lowConfidence.bookRate)})
+            {" | "}Missing-view cases: {summary.mediaInformed.missingViews.bookedQuotes} of{" "}
+            {summary.mediaInformed.missingViews.quotes} ({formatPercent(summary.mediaInformed.missingViews.bookRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
             Booked from quote means the quote is linked to a non-canceled appointment.
