@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import {
-  buildMediaJobAnalysis,
+  buildMediaJobAnalysisWithVision,
   getMediaJobAnalysis,
   upsertMediaJobAnalysis,
 } from "@/lib/media-job-analysis";
@@ -44,7 +44,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       contactId: contactIdTrimmed,
       leadId: liveContext.latestLead?.id ?? null,
       instantQuoteId: liveContext.instantQuote?.id ?? null,
-      analysis: buildMediaJobAnalysis(liveContext),
+      analysis: await buildMediaJobAnalysisWithVision(liveContext),
     });
   }
 

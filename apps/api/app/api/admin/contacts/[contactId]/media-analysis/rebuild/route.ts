@@ -2,7 +2,10 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
-import { buildMediaJobAnalysis, upsertMediaJobAnalysis } from "@/lib/media-job-analysis";
+import {
+  buildMediaJobAnalysisWithVision,
+  upsertMediaJobAnalysis,
+} from "@/lib/media-job-analysis";
 import { isAdminRequest } from "../../../../../web/admin";
 
 type RouteContext = {
@@ -38,7 +41,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     contactId: contactIdTrimmed,
     leadId: liveContext.latestLead?.id ?? null,
     instantQuoteId: liveContext.instantQuote?.id ?? null,
-    analysis: buildMediaJobAnalysis(liveContext),
+    analysis: await buildMediaJobAnalysisWithVision(liveContext),
   });
 
   return NextResponse.json({
