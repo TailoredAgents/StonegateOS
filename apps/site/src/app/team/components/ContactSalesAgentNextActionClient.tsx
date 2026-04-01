@@ -35,6 +35,9 @@ type NextActionPayload = {
     latestLead?: {
       id?: string | null;
     } | null;
+    derived?: {
+      dmEntrySource?: "facebook_ad_lead" | "organic_messenger" | "unknown" | null;
+    } | null;
     automation?: Array<{
       channel?: string | null;
       paused?: boolean;
@@ -156,6 +159,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
       : [];
   const executionState = payload?.executionState ?? null;
   const autopilot = payload?.autopilot ?? null;
+  const dmEntrySource = payload?.liveContext?.derived?.dmEntrySource ?? null;
 
   const runControl = React.useCallback(
     async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
@@ -317,6 +321,12 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                 <div className="font-semibold text-slate-700">Channel</div>
                 <div>{formatLabel(nextAction.channel)}</div>
               </div>
+              {dmEntrySource ? (
+                <div>
+                  <div className="font-semibold text-slate-700">Messenger entry</div>
+                  <div>{formatLabel(dmEntrySource)}</div>
+                </div>
+              ) : null}
               <div>
                 <div className="font-semibold text-slate-700">Priority</div>
                 <div>{formatLabel(nextAction.priority)}</div>

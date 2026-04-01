@@ -19,6 +19,11 @@ type SalesAgentMemoryPayload = {
     missingFields?: string[] | null;
     updatedAt?: string | null;
   } | null;
+  liveContext?: {
+    derived?: {
+      dmEntrySource?: "facebook_ad_lead" | "organic_messenger" | "unknown" | null;
+    } | null;
+  } | null;
   error?: string;
 };
 
@@ -110,6 +115,7 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
 
   const memory = payload?.memory ?? null;
   const updatedAt = formatTimestamp(memory?.updatedAt);
+  const dmEntrySource = payload?.liveContext?.derived?.dmEntrySource ?? null;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -158,6 +164,12 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
                 <div className="font-semibold text-slate-700">Quote confidence</div>
                 <div>{formatLabel(memory.quoteConfidence)}</div>
               </div>
+              {dmEntrySource ? (
+                <div>
+                  <div className="font-semibold text-slate-700">Messenger entry</div>
+                  <div>{formatLabel(dmEntrySource)}</div>
+                </div>
+              ) : null}
             </div>
 
             {memory.pricingContext ? (
