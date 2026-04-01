@@ -39,8 +39,8 @@ const SALES_AGENT_AUTOSEND_CHANNELS = [
 const SALES_AGENT_AUTOSEND_ACTIONS = [
   { value: "follow_up_quote", label: "Quote follow up" },
   { value: "collect_missing_info", label: "Collect missing info" },
-  { value: "handle_price_objection", label: "Price objection save" },
-  { value: "reply_now", label: "Immediate reply" },
+  { value: "handle_price_objection", label: "Price objection save (Full only)" },
+  { value: "reply_now", label: "Immediate reply (Full only)" },
 ] as const;
 
 const AUTOPILOT_MODE_OPTIONS = [
@@ -204,7 +204,7 @@ export async function AutomationSection(): Promise<React.ReactElement> {
               <div className="space-y-1">
                 <h4 className="text-sm font-semibold text-slate-900">Planner follow-up auto-send</h4>
                 <p className="text-xs text-slate-500">
-                  Controls the newer Sales HQ and Inbox planner drafts. This matters in Partial and Full modes. Off mode still drafts, but nothing sends automatically.
+                  Controls the newer Sales HQ and Inbox planner drafts. This matters in Partial and Full modes. Off mode still drafts, but nothing sends automatically. Actions marked Full only will not autosend in Partial mode even if they are checked here.
                 </p>
               </div>
 

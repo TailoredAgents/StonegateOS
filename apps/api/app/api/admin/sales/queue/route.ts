@@ -18,12 +18,12 @@ import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 import {
+  evaluateSalesPlannerAutosendPolicy,
   getSalesAutopilotPolicy,
   getSalesAutopilotChannelMode,
   getServiceAreaPolicy,
   isPostalCodeAllowed,
   isSalesAutopilotLiveReplyEnabled,
-  isSalesPlannerAutosendAllowed,
   normalizePostalCode,
 } from "@/lib/policy";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
@@ -145,10 +145,6 @@ function isPlannerActionDue(value: { dueAt?: string | null } | null | undefined,
   const dueAt = parseIso(value.dueAt ?? null);
   if (!dueAt) return true;
   return dueAt.getTime() <= now.getTime();
-}
-
-function isSafePlannerAutosendAction(actionType: string | null | undefined): boolean {
-  return typeof actionType === "string" && actionType.trim().length > 0;
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -775,23 +771,25 @@ export async function GET(request: NextRequest): Promise<Response> {
       const effectiveChannel = draftTarget?.channel ?? draft?.channel ?? nextAction?.channel ?? null;
       const channelMode = getSalesAutopilotChannelMode(autopilotPolicy, effectiveChannel);
       const liveReplyAllowed = isSalesAutopilotLiveReplyEnabled(autopilotPolicy, effectiveChannel);
-      const autosendPolicyAllowed = isSalesPlannerAutosendAllowed(autopilotPolicy, {
+      const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
         channel: effectiveChannel,
         actionType: nextAction?.actionType ?? null,
       });
+      const autosendPolicyAllowed = autosendPolicy.allowed;
       const autosendEligible = Boolean(
         autosendPolicyAllowed &&
           draft?.ready &&
           draftIsOldEnough &&
-          plannerDue &&
-          isSafePlannerAutosendAction(nextAction?.actionType ?? null),
+          plannerDue,
       );
       const autosendBlockedReason = !draft?.ready
         ? null
         : !autopilotPolicy.plannerAutoSendEnabled || autopilotPolicy.mode === "off"
           ? "Autosend disabled"
-          : !autosendPolicyAllowed
-            ? "Mode or policy blocked"
+          : autosendPolicy.reason === "action_requires_full_mode"
+            ? "Partial mode keeps this live reply approval-only"
+            : !autosendPolicyAllowed
+              ? "Mode or policy blocked"
           : !plannerDue
             ? "Waiting for due time"
             : !draftIsOldEnough

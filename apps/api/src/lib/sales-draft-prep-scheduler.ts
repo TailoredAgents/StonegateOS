@@ -1,6 +1,6 @@
 import { getDb } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
-import { getSalesAutopilotPolicy, isSalesPlannerAutosendAllowed } from "@/lib/policy";
+import { evaluateSalesPlannerAutosendPolicy, getSalesAutopilotPolicy } from "@/lib/policy";
 
 type TeamDirectoryPayload = {
   ok?: boolean;
@@ -71,10 +71,6 @@ function parseIsoDate(value: string | null | undefined): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function isSafePlannerAutosendAction(actionType: string | null | undefined): boolean {
-  return typeof actionType === "string" && actionType.trim().length > 0;
-}
-
 function isPlannerActionDue(value: { dueAt?: string | null; status?: string | null } | null | undefined, now: Date): boolean {
   if (!value) return false;
   if (value.status === "dismissed" || value.status === "blocked") return false;
@@ -105,6 +101,25 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<{ ok: tru
     return { ok: true, data };
   } catch {
     return { ok: false, error: "request_failed" };
+  }
+}
+
+function mapAutosendPolicyReason(
+  reason: ReturnType<typeof evaluateSalesPlannerAutosendPolicy>["reason"],
+): string {
+  switch (reason) {
+    case "planner_autosend_disabled":
+      return "autosend_disabled";
+    case "channel_off":
+      return "channel_off";
+    case "channel_not_allowed":
+      return "channel_not_allowed";
+    case "action_requires_full_mode":
+      return "action_requires_full_mode";
+    case "action_not_allowed":
+      return "action_not_allowed";
+    default:
+      return "autosend_not_allowed";
   }
 }
 
@@ -166,14 +181,14 @@ export async function prepareDueSalesQueueDrafts(input?: {
         const draftIsOldEnough =
           draftCreatedAt instanceof Date &&
           now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
+        const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
+          channel,
+          actionType: item?.nextAction?.actionType ?? null,
+        });
         const autoSendEligible =
-          (overrideAutoSendEnabled ?? isSalesPlannerAutosendAllowed(autopilotPolicy, {
-            channel,
-            actionType: item?.nextAction?.actionType ?? null,
-          })) &&
+          (overrideAutoSendEnabled ?? autosendPolicy.allowed) &&
           item?.draft?.ready === true &&
           draftIsOldEnough &&
-          isSafePlannerAutosendAction(item?.nextAction?.actionType ?? null) &&
           isPlannerActionDue(item?.nextAction ?? null, now);
 
         const prepEligible =
@@ -276,24 +291,20 @@ export async function prepareDueSalesQueueDrafts(input?: {
       const draftCreatedAt = parseIsoDate(candidate.draft?.createdAt ?? null);
       const draftIsOldEnough =
         draftCreatedAt instanceof Date && now.getTime() - draftCreatedAt.getTime() >= autoSendMinDraftAgeMs;
+      const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
+        channel,
+        actionType: candidate.nextAction?.actionType ?? null,
+      });
       const canAutoSend =
-        (overrideAutoSendEnabled ?? isSalesPlannerAutosendAllowed(autopilotPolicy, {
-          channel,
-          actionType: candidate.nextAction?.actionType ?? null,
-        })) &&
+        (overrideAutoSendEnabled ?? autosendPolicy.allowed) &&
         messageId.length > 0 &&
         draftIsOldEnough &&
-        isSafePlannerAutosendAction(candidate.nextAction?.actionType ?? null) &&
         isPlannerActionDue(candidate.nextAction ?? null, now);
 
       if (!canAutoSend) {
         if ((overrideAutoSendEnabled ?? true) && candidate?.draft?.ready === true) {
-          const policyAllowsAutosend = isSalesPlannerAutosendAllowed(autopilotPolicy, {
-            channel,
-            actionType: candidate.nextAction?.actionType ?? null,
-          });
-          const reason = !policyAllowsAutosend && overrideAutoSendEnabled !== true
-            ? "mode_or_policy_blocked"
+          const reason = !autosendPolicy.allowed && overrideAutoSendEnabled !== true
+            ? mapAutosendPolicyReason(autosendPolicy.reason)
                 : !draftIsOldEnough
                 ? "draft_too_fresh"
                 : !isPlannerActionDue(candidate.nextAction ?? null, now)

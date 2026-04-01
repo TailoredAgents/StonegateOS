@@ -97,6 +97,7 @@ export type FollowUpSequencePolicy = {
 
 export type SalesAutopilotMode = "off" | "partial" | "full";
 export type SalesAutopilotChannel = "sms" | "email" | "dm";
+export type SalesPlannerActionClass = "follow_up" | "live_reply";
 
 export type SalesAutopilotPolicy = {
   mode: SalesAutopilotMode;
@@ -1258,14 +1259,60 @@ export function isSalesPlannerAutosendAllowed(
   policy: SalesAutopilotPolicy,
   input: { channel?: string | null; actionType?: string | null },
 ): boolean {
-  if (!policy.plannerAutoSendEnabled) return false;
+  return evaluateSalesPlannerAutosendPolicy(policy, input).allowed;
+}
+
+export function getSalesPlannerActionClass(
+  actionType: string | null | undefined,
+): SalesPlannerActionClass | null {
+  switch (typeof actionType === "string" ? actionType.trim() : "") {
+    case "follow_up_quote":
+    case "collect_missing_info":
+      return "follow_up";
+    case "reply_now":
+    case "handle_price_objection":
+      return "live_reply";
+    default:
+      return null;
+  }
+}
+
+export function evaluateSalesPlannerAutosendPolicy(
+  policy: SalesAutopilotPolicy,
+  input: { channel?: string | null; actionType?: string | null },
+): {
+  allowed: boolean;
+  channelMode: SalesAutopilotMode;
+  actionClass: SalesPlannerActionClass | null;
+  reason:
+    | "planner_autosend_disabled"
+    | "channel_off"
+    | "channel_not_allowed"
+    | "action_not_allowed"
+    | "action_requires_full_mode"
+    | null;
+} {
   const channelMode = getSalesAutopilotChannelMode(policy, input.channel);
-  if (channelMode === "off") return false;
   const channel = typeof input.channel === "string" ? input.channel.trim() : "";
-  if (!channel || !policy.plannerAutoSendChannels.includes(channel)) return false;
   const actionType = typeof input.actionType === "string" ? input.actionType.trim() : "";
-  if (!actionType || !policy.plannerAutoSendActions.includes(actionType)) return false;
-  return true;
+  const actionClass = getSalesPlannerActionClass(actionType);
+
+  if (!policy.plannerAutoSendEnabled) {
+    return { allowed: false, channelMode, actionClass, reason: "planner_autosend_disabled" };
+  }
+  if (channelMode === "off") {
+    return { allowed: false, channelMode, actionClass, reason: "channel_off" };
+  }
+  if (!channel || !policy.plannerAutoSendChannels.includes(channel)) {
+    return { allowed: false, channelMode, actionClass, reason: "channel_not_allowed" };
+  }
+  if (!actionType || !policy.plannerAutoSendActions.includes(actionType) || !actionClass) {
+    return { allowed: false, channelMode, actionClass, reason: "action_not_allowed" };
+  }
+  if (actionClass === "live_reply" && channelMode !== "full") {
+    return { allowed: false, channelMode, actionClass, reason: "action_requires_full_mode" };
+  }
+  return { allowed: true, channelMode, actionClass, reason: null };
 }
 
 export async function getInboxAlertsPolicy(db: DbExecutor = getDb()): Promise<InboxAlertsPolicy> {

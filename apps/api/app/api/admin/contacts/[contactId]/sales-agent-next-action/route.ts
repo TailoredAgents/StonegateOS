@@ -18,10 +18,10 @@ import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import {
+  evaluateSalesPlannerAutosendPolicy,
   getSalesAutopilotChannelMode,
   getSalesAutopilotPolicy,
   isSalesAutopilotLiveReplyEnabled,
-  isSalesPlannerAutosendAllowed,
 } from "@/lib/policy";
 import { and, desc, inArray, sql } from "drizzle-orm";
 
@@ -76,10 +76,6 @@ function isSafeDraftPreparationAction(actionType: string | null | undefined): bo
     actionType === "collect_missing_info" ||
     actionType === "handle_price_objection"
   );
-}
-
-function isSafePlannerAutosendAction(actionType: string | null | undefined): boolean {
-  return typeof actionType === "string" && actionType.trim().length > 0;
 }
 
 function isPlannerActionDue(value: { dueAt?: string | Date | null } | null | undefined, now: Date): boolean {
@@ -165,17 +161,26 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   const draftIsOldEnough =
     draftCreatedAt instanceof Date &&
     now.getTime() - draftCreatedAt.getTime() >= Math.max(60_000, autopilotPolicy.plannerAutoSendMinDraftAgeMinutes * 60_000);
-  const autosendPolicyAllowed = isSalesPlannerAutosendAllowed(autopilotPolicy, {
+  const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
     channel: nextAction?.channel ?? latestDraft?.channel ?? null,
     actionType: nextAction?.actionType ?? null,
   });
+  const autosendPolicyAllowed = autosendPolicy.allowed;
   const autosendEligible = Boolean(
     autosendPolicyAllowed &&
       latestDraft &&
       draftIsOldEnough &&
-      isSafePlannerAutosendAction(nextAction?.actionType ?? null) &&
       isPlannerActionDue(nextAction, now)
   );
+  const draftReadyDetail = !draftIsOldEnough
+    ? "Draft is ready and still aging before autosend."
+    : autosendPolicy.reason === "action_requires_full_mode"
+      ? "Partial mode keeps this kind of live reply approval-only."
+      : autosendPolicy.reason === "channel_not_allowed" || autosendPolicy.reason === "action_not_allowed"
+        ? "Draft is ready, but autosend policy does not allow this action."
+        : liveReplyAllowed
+          ? "Draft is ready for review and send."
+          : "Draft is ready for review.";
   const executionState = automationState?.dnc
     ? {
         code: "blocked",
@@ -215,13 +220,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
             ? {
                 code: "draft_ready",
                 label: "Ready to send",
-                detail: channelMode === "partial"
-                  ? "Draft is ready for human review. Partial mode keeps live replies approval-only."
-                  : autopilotPolicy.plannerAutoSendEnabled && autopilotPolicy.mode !== "off" && !draftIsOldEnough
-                    ? "Draft is ready and still aging before autosend."
-                    : liveReplyAllowed
-                      ? "Draft is ready for review and send."
-                      : "Draft is ready for review.",
+                detail: draftReadyDetail,
                 tone: "neutral" as const,
               }
             : nextAction?.actionType === "wait_for_appointment"
@@ -242,8 +241,10 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
                   ? {
                       code: "draft_pending",
                       label: "Draft pending",
-                      detail: channelMode === "partial"
-                        ? "The agent should prepare the next draft. Partial mode keeps live replies approval-only."
+                      detail: autosendPolicy.reason === "action_requires_full_mode"
+                        ? "The agent should prepare the draft, but Partial mode will keep this live reply approval-only."
+                        : channelMode === "partial"
+                          ? "The agent should prepare the next draft. Partial mode keeps live replies approval-only."
                         : "The agent should prepare the next draft automatically.",
                       tone: "neutral" as const,
                     }

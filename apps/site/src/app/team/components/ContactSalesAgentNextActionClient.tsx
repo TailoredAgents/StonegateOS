@@ -143,6 +143,13 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
   const isDismissed = nextAction?.status === "dismissed";
   const isPaused = automationState?.paused === true;
   const isHumanTakeover = automationState?.humanTakeover === true;
+  const contactOverrideMode = automationState?.dnc
+    ? "dnc"
+    : isHumanTakeover
+      ? "human_takeover"
+      : isPaused
+        ? "drafts_only"
+        : "normal";
   const facts =
     Array.isArray(nextAction?.facts)
       ? nextAction.facts.filter((item) => typeof item === "string" && item.trim().length > 0)
@@ -235,43 +242,52 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               </div>
             ) : null}
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className={teamButtonClass("secondary", "sm")}
-                onClick={() => void runControl("dismiss")}
-                disabled={actionPending !== null || isDismissed}
-              >
-                {actionPending === "dismiss" ? "Dismissing..." : isDismissed ? "Dismissed" : "Dismiss"}
-              </button>
-              <button
-                type="button"
-                className={teamButtonClass("secondary", "sm")}
-                onClick={() => void runControl("pause")}
-                disabled={actionPending !== null || !canControlAutomation || isPaused}
-              >
-                {actionPending === "pause" ? "Pausing..." : isPaused ? "Paused" : "Pause"}
-              </button>
-              <button
-                type="button"
-                className={teamButtonClass("secondary", "sm")}
-                onClick={() => void runControl("human_takeover")}
-                disabled={actionPending !== null || !canControlAutomation || isHumanTakeover}
-              >
-                {actionPending === "human_takeover"
-                  ? "Setting..."
-                  : isHumanTakeover
-                    ? "Human takeover"
-                    : "Human takeover"}
-              </button>
-              <button
-                type="button"
-                className={teamButtonClass("secondary", "sm")}
-                onClick={() => void runControl("resume")}
-                disabled={actionPending !== null || !canControlAutomation || (!isPaused && !isHumanTakeover)}
-              >
-                {actionPending === "resume" ? "Resuming..." : "Resume"}
-              </button>
+            <div className="space-y-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Per-contact override</div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={teamButtonClass(contactOverrideMode === "drafts_only" ? "primary" : "secondary", "sm")}
+                  onClick={() => void runControl("pause")}
+                  disabled={actionPending !== null || !canControlAutomation || isPaused}
+                >
+                  {actionPending === "pause" ? "Saving..." : "Drafts only"}
+                </button>
+                <button
+                  type="button"
+                  className={teamButtonClass(contactOverrideMode === "human_takeover" ? "primary" : "secondary", "sm")}
+                  onClick={() => void runControl("human_takeover")}
+                  disabled={actionPending !== null || !canControlAutomation || isHumanTakeover}
+                >
+                  {actionPending === "human_takeover" ? "Saving..." : "Human only"}
+                </button>
+                <button
+                  type="button"
+                  className={teamButtonClass(contactOverrideMode === "normal" ? "primary" : "secondary", "sm")}
+                  onClick={() => void runControl("resume")}
+                  disabled={actionPending !== null || !canControlAutomation || (!isPaused && !isHumanTakeover)}
+                >
+                  {actionPending === "resume" ? "Saving..." : "Resume normal"}
+                </button>
+                <button
+                  type="button"
+                  className={teamButtonClass("secondary", "sm")}
+                  onClick={() => void runControl("dismiss")}
+                  disabled={actionPending !== null || isDismissed}
+                >
+                  {actionPending === "dismiss" ? "Dismissing..." : isDismissed ? "Dismissed" : "Dismiss action"}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+              {contactOverrideMode === "dnc"
+                ? "This lead is DNC, so automation is blocked until that status is changed elsewhere."
+                : contactOverrideMode === "human_takeover"
+                  ? "Human only keeps the agent visible, but stops it from acting until you hand the lead back."
+                  : contactOverrideMode === "drafts_only"
+                    ? "Drafts only pauses automation for this lead while still letting the agent prepare drafts and plans."
+                    : "Normal mode follows the current channel autopilot setting."}
             </div>
 
             {(isPaused || isHumanTakeover || automationState?.dnc) && (
