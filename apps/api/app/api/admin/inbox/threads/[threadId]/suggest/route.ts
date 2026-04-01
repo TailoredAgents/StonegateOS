@@ -506,6 +506,90 @@ function buildDmOpeningInstruction(input: {
   return null;
 }
 
+function buildMediaReplyInstruction(input: {
+  mediaAnalysis:
+    | {
+        source?: string | null;
+        videoCount?: number | null;
+        visibleVolumeRange?: string | null;
+        mergedVolumeRange?: string | null;
+        confidence?: string | null;
+        visibleMattressCount?: number | null;
+        visiblePaintCanCount?: number | null;
+        visibleTireCount?: number | null;
+        missingViews?: string[] | null;
+        riskFlags?: string[] | null;
+        summary?: string | null;
+      }
+    | null;
+  actionType: string | null | undefined;
+}): string | null {
+  const analysis = input.mediaAnalysis;
+  if (!analysis) return null;
+
+  const missingViews = Array.isArray(analysis.missingViews)
+    ? analysis.missingViews.filter((item) => typeof item === "string" && item.trim().length > 0)
+    : [];
+  const riskFlags = Array.isArray(analysis.riskFlags)
+    ? analysis.riskFlags.filter((item) => typeof item === "string" && item.trim().length > 0)
+    : [];
+  const hasVideo = typeof analysis.videoCount === "number" && analysis.videoCount > 0;
+  const hasMergedRange =
+    typeof analysis.mergedVolumeRange === "string" && analysis.mergedVolumeRange.trim().length > 0;
+  const hasVisibleRange =
+    typeof analysis.visibleVolumeRange === "string" && analysis.visibleVolumeRange.trim().length > 0;
+  const confidence = typeof analysis.confidence === "string" ? analysis.confidence.trim().toLowerCase() : "";
+
+  const baseRules = [
+    hasVideo
+      ? "Media reasoning: video frames were analyzed along with any photos, so you may refer to what the customer's media shows."
+      : "Media reasoning: photos were analyzed, so you may refer to what the customer's media shows.",
+    "Do not invent exact item counts or exact load size beyond the media-analysis facts.",
+    "If you reference load size, talk in approximate trailer-range language, not false precision.",
+    "Do not mention dollar amounts unless the customer explicitly asks about price, quote, cost, or estimate.",
+  ];
+
+  if (hasMergedRange && hasVisibleRange && analysis.mergedVolumeRange !== analysis.visibleVolumeRange) {
+    baseRules.push(
+      "The merged estimate is wider than the visible estimate because the written scope suggests extra unpictured junk. If helpful, acknowledge that the current range accounts for items mentioned but not fully shown."
+    );
+  }
+
+  if ((input.actionType === "collect_missing_info" || confidence === "low") && missingViews.length > 0) {
+    baseRules.push(
+      `If you ask for more media, ask for exactly one highest-signal missing view: ${missingViews[0]}.`
+    );
+  } else if (missingViews.length > 0 && (input.actionType === "follow_up_quote" || input.actionType === "reply_now")) {
+    baseRules.push(
+      "Only bring up an extra photo/video angle if it clearly helps tighten the estimate or answer the customer's question."
+    );
+  }
+
+  if (riskFlags.some((flag) => flag.includes("stated_scope_exceeds_visible_media"))) {
+    baseRules.push(
+      "Be careful not to talk like the media shows the entire job if the notes/text imply more junk than is visible."
+    );
+  }
+
+  const addOnNotes = [
+    (analysis.visibleMattressCount ?? 0) > 0 ? `mattresses=${analysis.visibleMattressCount}` : null,
+    (analysis.visiblePaintCanCount ?? 0) > 0 ? `paint=${analysis.visiblePaintCanCount}` : null,
+    (analysis.visibleTireCount ?? 0) > 0 ? `tires=${analysis.visibleTireCount}` : null,
+  ].filter((item): item is string => Boolean(item));
+
+  if (addOnNotes.length > 0) {
+    baseRules.push(
+      `Visible add-on items were detected (${addOnNotes.join(", ")}). Only mention them if the customer asks or if they matter to the current reply.`
+    );
+  }
+
+  if (typeof analysis.summary === "string" && analysis.summary.trim().length > 0) {
+    baseRules.push(`Media summary: ${analysis.summary.trim()}`);
+  }
+
+  return baseRules.join(" ");
+}
+
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ threadId: string }> }
@@ -915,6 +999,10 @@ export async function POST(
       replyChannel: targetReplyChannel,
       actionType: salesAgentNextAction?.actionType,
       objections: Array.isArray(salesAgentMemory?.objections) ? salesAgentMemory.objections : [],
+    }),
+    buildMediaReplyInstruction({
+      mediaAnalysis,
+      actionType: salesAgentNextAction?.actionType,
     }),
     omni.pipelineStage ? `Pipeline stage: ${omni.pipelineStage}` : null,
     omni.pipelineNotes ? `CRM notes:\n${omni.pipelineNotes}` : null,
