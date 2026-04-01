@@ -375,10 +375,15 @@ function buildTranscript(messages: MessageContext[]): string {
   return lines.join("\n");
 }
 
-function buildPlannerInstruction(actionType: string | null | undefined): string | null {
+function buildPlannerInstruction(
+  actionType: string | null | undefined,
+  replyChannel: ReplyChannel,
+): string | null {
   switch (actionType) {
     case "reply_now":
-      return "Reply promptly, keep momentum, and answer the latest inbound directly.";
+      return replyChannel === "dm"
+        ? "Reply promptly in a short Messenger-chat style. Answer the latest inbound directly without sounding formal."
+        : "Reply promptly, keep momentum, and answer the latest inbound directly.";
     case "missed_call_recovery":
       return "Write a short missed-call recovery text that gets the lead talking again without overcomplicating it.";
     case "dm_sms_handoff":
@@ -386,11 +391,17 @@ function buildPlannerInstruction(actionType: string | null | undefined): string 
     case "call_now":
       return "Write a short reply that supports an immediate phone follow up and confirms availability to talk now.";
     case "follow_up_quote":
-      return "Nudge the customer toward booking by reinforcing the quote, reducing hesitation, and asking for the booking decision.";
+      return replyChannel === "dm"
+        ? "Write a light Messenger follow-up that feels like a real chat. Keep it to one easy nudge toward booking, not a formal sales follow-up."
+        : "Nudge the customer toward booking by reinforcing the quote, reducing hesitation, and asking for the booking decision.";
     case "collect_missing_info":
-      return "Ask for only one missing detail, and make it obvious why that one detail unlocks the next step.";
+      return replyChannel === "dm"
+        ? "Ask for exactly one missing detail in casual Messenger style. Make it feel quick and easy, and briefly say why that one detail helps."
+        : "Ask for only one missing detail, and make it obvious why that one detail unlocks the next step.";
     case "handle_price_objection":
-      return "Address price resistance calmly, reinforce value, and try to keep the lead alive without sounding defensive.";
+      return replyChannel === "dm"
+        ? "Handle the price objection in a calm Messenger style. Keep it short, useful, and non-defensive."
+        : "Address price resistance calmly, reinforce value, and try to keep the lead alive without sounding defensive.";
     case "wait_for_appointment":
       return "Do not re-qualify the lead. Only support the scheduled appointment and keep the message light.";
     case "human_follow_up":
@@ -398,6 +409,27 @@ function buildPlannerInstruction(actionType: string | null | undefined): string 
     default:
       return null;
   }
+}
+
+function buildChannelStyleInstruction(
+  replyChannel: ReplyChannel,
+  actionType: string | null | undefined,
+): string | null {
+  if (replyChannel !== "dm") return null;
+
+  if (actionType === "follow_up_quote") {
+    return "Messenger tone: 1 or 2 short sentences, one easy question max, no corporate 'following up on your quote request' phrasing, and no long explanation of pricing unless they ask.";
+  }
+
+  if (actionType === "collect_missing_info") {
+    return "Messenger tone: ask for one thing only, keep it conversational, and make the request feel low-friction, like a quick reply or photo.";
+  }
+
+  if (actionType === "reply_now" || actionType === "handle_price_objection") {
+    return "Messenger tone: write like a real Facebook chat. Keep it short, natural, and easy to reply to.";
+  }
+
+  return "Messenger tone: write like a short Facebook chat, not like an email or formal text script.";
 }
 
 export async function POST(
@@ -790,7 +822,8 @@ export async function POST(
     Array.isArray(salesAgentNextAction?.facts) && salesAgentNextAction.facts.length
       ? `Planner facts: ${salesAgentNextAction.facts.join(" | ")}`
       : null,
-    buildPlannerInstruction(salesAgentNextAction?.actionType),
+    buildPlannerInstruction(salesAgentNextAction?.actionType, targetReplyChannel),
+    buildChannelStyleInstruction(targetReplyChannel, salesAgentNextAction?.actionType),
     omni.pipelineStage ? `Pipeline stage: ${omni.pipelineStage}` : null,
     omni.pipelineNotes ? `CRM notes:\n${omni.pipelineNotes}` : null,
     omni.latestLead

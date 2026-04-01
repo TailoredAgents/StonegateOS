@@ -609,7 +609,8 @@ export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
   },
   follow_up: {
     sms: "Just checking in. Do you want to lock in a time for your junk removal?",
-    email: "Following up on your quote request. Let us know if you want to schedule."
+    email: "Following up on your quote request. Let us know if you want to schedule.",
+    dm: "Just checking back here. If you still want help with this, message me back and I can keep it moving."
   },
   confirmations: {
     sms: "Confirmed! We will see you at the scheduled time. Reply YES to confirm.",
