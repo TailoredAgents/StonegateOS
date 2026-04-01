@@ -559,6 +559,11 @@ function buildMediaReplyInstruction(input: {
     baseRules.push(
       `If you ask for more media, ask for exactly one highest-signal missing view: ${missingViews[0]}.`
     );
+    if (input.actionType === "follow_up_quote" || input.actionType === "reply_now") {
+      baseRules.push(
+        "Because media confidence is low, do not act like the estimate is fully locked in. Prefer tightening the scope with one better angle before making a strong close push."
+      );
+    }
   } else if (missingViews.length > 0 && (input.actionType === "follow_up_quote" || input.actionType === "reply_now")) {
     baseRules.push(
       "Only bring up an extra photo/video angle if it clearly helps tighten the estimate or answer the customer's question."

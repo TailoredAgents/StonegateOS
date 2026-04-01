@@ -54,6 +54,29 @@ function coerceStringArray(value: unknown): string[] {
     : [];
 }
 
+function extractMediaAnalysis(aiResult: unknown): {
+  confidence: "low" | "medium" | "high" | null;
+  missingViews: string[];
+} {
+  if (!aiResult || typeof aiResult !== "object") {
+    return { confidence: null, missingViews: [] };
+  }
+  const record = aiResult as Record<string, unknown>;
+  const mediaAnalysis = record["mediaAnalysis"];
+  if (!mediaAnalysis || typeof mediaAnalysis !== "object") {
+    return { confidence: null, missingViews: [] };
+  }
+  const mediaRecord = mediaAnalysis as Record<string, unknown>;
+  const confidenceRaw =
+    typeof mediaRecord["confidence"] === "string" ? mediaRecord["confidence"].trim().toLowerCase() : "";
+  const confidence =
+    confidenceRaw === "low" || confidenceRaw === "medium" || confidenceRaw === "high"
+      ? confidenceRaw
+      : null;
+  const missingViews = coerceStringArray(mediaRecord["missingViews"]);
+  return { confidence, missingViews };
+}
+
 function summarizePricing(input: {
   formalQuoteTotal?: string | number | null;
   instantQuoteLow?: number | null;
@@ -605,9 +628,11 @@ export async function loadOmniLeadContext(
     omniFacts.knownZip ??
     normalizePostalCode(recentProperties[0]?.postalCode ?? null) ??
     (latestInstantQuoteRow ? normalizePostalCode(latestInstantQuoteRow.zip) : null);
+  const instantQuoteMediaAnalysis = extractMediaAnalysis(latestInstantQuoteRow?.aiResult);
   const missingFields = Array.from(
     new Set([
       ...omniFacts.missingFields,
+      ...(instantQuoteMediaAnalysis.missingViews.length > 0 ? ["one better photo angle"] : []),
       ...(contact.phoneE164 || contact.phone ? [] : ["phone"]),
       ...(contact.email ? [] : ["email"]),
     ]),
@@ -625,6 +650,8 @@ export async function loadOmniLeadContext(
   const quoteConfidence =
     latestFormalQuoteRow
       ? "high"
+      : instantQuoteMediaAnalysis.confidence
+        ? instantQuoteMediaAnalysis.confidence
       : latestInstantQuoteRow && (latestInstantQuoteRow.photoUrls?.length ?? 0) >= 2
         ? "medium"
         : latestInstantQuoteRow
