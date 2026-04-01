@@ -6,6 +6,11 @@ import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
 import { normalizeName, normalizePhone } from "../web/utils";
 import { JUNK_VOLUME_PRICING, JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
+import {
+  buildMediaJobAnalysisWithVision,
+  type MediaJobAnalysisRecord,
+} from "@/lib/media-job-analysis";
+import type { OmniLeadContext } from "@/lib/omni-lead-context";
 
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
@@ -156,6 +161,8 @@ const QuoteResultSchema = z
 
 const VOLUME_PRICING = JUNK_VOLUME_PRICING;
 const UNIT_PRICE = JUNK_VOLUME_UNIT_PRICE;
+const PUBLIC_MATTRESS_FEE = 35;
+const PUBLIC_PAINT_CAN_FEE = 10;
 type JobInput = z.infer<typeof RequestSchema>["job"];
 type QuoteResult = z.infer<typeof QuoteResultSchema>;
 
@@ -163,6 +170,11 @@ type QuoteBounds = {
   minUnits: number;
   maxUnits: number;
   minHighUnits?: number;
+};
+
+type MediaPricingContext = {
+  analysis: MediaJobAnalysisRecord;
+  addOnTotal: number;
 };
 
 function clampInt(value: number, min: number, max: number): number {
@@ -175,6 +187,171 @@ function clampInt(value: number, min: number, max: number): number {
 function unitsToPrice(units: number): number {
   if (units <= 0) return VOLUME_PRICING.singleItem;
   return units * UNIT_PRICE;
+}
+
+function buildQuoteRequestOmniContext(body: z.infer<typeof RequestSchema>): OmniLeadContext {
+  const trimmedNotes = typeof body.job.notes === "string" ? body.job.notes.trim() : "";
+  return {
+    contact: {
+      id: "00000000-0000-0000-0000-000000000000",
+      name: body.contact.name.trim(),
+      firstName: null,
+      lastName: null,
+      email: null,
+      phone: body.contact.phone.trim(),
+      phoneE164: null,
+      source: body.source ?? "public_site",
+      salespersonMemberId: null,
+    },
+    pipeline: { stage: null, notes: null },
+    latestLead: {
+      id: "00000000-0000-0000-0000-000000000000",
+      createdAt: new Date(0).toISOString(),
+      status: "new",
+      source: body.source ?? "public_site",
+      servicesRequested: body.job.types,
+      notes: trimmedNotes || null,
+      propertyId: null,
+      instantQuoteId: null,
+      formPayload: null,
+    },
+    automation: [],
+    instantQuote: {
+      id: "00000000-0000-0000-0000-000000000000",
+      createdAt: new Date(0).toISOString(),
+      zip: body.job.zip.trim(),
+      timeframe: body.contact.timeframe,
+      jobTypes: body.job.types,
+      perceivedSize: body.job.perceivedSize,
+      notes: trimmedNotes || null,
+      photoUrls: body.job.photoUrls ?? [],
+      priceLow: null,
+      priceHigh: null,
+    },
+    formalQuote: null,
+    nextAppointment: null,
+    properties: [],
+    openTasks: [],
+    recentNotes: [],
+    latestCall: null,
+    channelSummary: [],
+    recentMessages: trimmedNotes
+      ? [
+          {
+            id: "00000000-0000-0000-0000-000000000000",
+            threadId: "00000000-0000-0000-0000-000000000000",
+            channel: "web",
+            direction: "inbound",
+            body: trimmedNotes,
+            subject: null,
+            participantName: body.contact.name.trim(),
+            mediaUrls: body.job.photoUrls ?? [],
+            createdAt: new Date(0).toISOString(),
+            sentAt: null,
+            receivedAt: null,
+          },
+        ]
+      : [],
+    omniFacts: {
+      pipelineStage: null,
+      pipelineNotes: null,
+      latestLead: null,
+      instantQuote: null,
+      nextAppointment: null,
+      otherChannelThreads: [],
+      knownZip: normalizePostalCode(body.job.zip),
+      hasKnownJob: body.job.types.length > 0 || trimmedNotes.length > 0,
+      hasPhotos: Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0,
+      missingFields: [],
+    },
+    derived: {
+      knownZip: normalizePostalCode(body.job.zip),
+      objections: [],
+      channelPreference: "sms",
+      dmEntrySource: null,
+      customerIntent: "junk_removal_quote",
+      pricingContext: null,
+      lastPromisedNextStep: null,
+      lastHumanSummary: null,
+      bookingReadiness: "low",
+      quoteConfidence: Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0 ? "medium" : "low",
+      missingFields: [],
+    },
+  };
+}
+
+function mediaRangeToBounds(range: string | null | undefined): QuoteBounds | null {
+  switch ((range ?? "").trim()) {
+    case "under_quarter":
+      return { minUnits: 0, maxUnits: 1 };
+    case "quarter":
+      return { minUnits: 1, maxUnits: 1 };
+    case "quarter_to_half":
+      return { minUnits: 1, maxUnits: 2 };
+    case "half":
+      return { minUnits: 2, maxUnits: 2 };
+    case "half_to_three_quarters":
+      return { minUnits: 2, maxUnits: 3 };
+    case "three_quarters":
+      return { minUnits: 3, maxUnits: 3 };
+    case "three_quarters_to_full":
+      return { minUnits: 3, maxUnits: 4 };
+    case "full":
+      return { minUnits: 4, maxUnits: 4 };
+    case "full_plus":
+      return { minUnits: 5, maxUnits: 8, minHighUnits: 6 };
+    default:
+      return null;
+  }
+}
+
+function canUseMediaAnalysisForBounds(analysis: MediaJobAnalysisRecord | null | undefined): boolean {
+  return analysis?.source === "vision_v1";
+}
+
+function mergeQuoteBoundsWithMedia(base: QuoteBounds, media: QuoteBounds | null, job: JobInput): QuoteBounds {
+  if (!media) return base;
+
+  const merged: QuoteBounds = {
+    minUnits: media.minUnits,
+    maxUnits: Math.max(media.minUnits, media.maxUnits),
+    minHighUnits: media.minHighUnits,
+  };
+
+  const types = new Set(job.types);
+  if (types.has("hot_tub_playset")) {
+    return {
+      minUnits: Math.max(merged.minUnits, base.minUnits),
+      maxUnits: Math.max(merged.maxUnits, base.maxUnits),
+      minHighUnits: Math.max(merged.minHighUnits ?? 0, base.minHighUnits ?? 0) || undefined,
+    };
+  }
+
+  if (types.has("business_commercial") && job.perceivedSize === "big_cleanout") {
+    return {
+      minUnits: Math.max(merged.minUnits, base.minUnits),
+      maxUnits: Math.max(merged.maxUnits, base.maxUnits),
+      minHighUnits: Math.max(merged.minHighUnits ?? 0, base.minHighUnits ?? 0) || undefined,
+    };
+  }
+
+  return merged;
+}
+
+function calculateMediaAddOnTotal(analysis: MediaJobAnalysisRecord | null | undefined): number {
+  if (!analysis) return 0;
+  const mattresses = Math.max(0, analysis.visibleMattressCount ?? 0);
+  const paintCans = Math.max(0, analysis.visiblePaintCanCount ?? 0);
+  return mattresses * PUBLIC_MATTRESS_FEE + paintCans * PUBLIC_PAINT_CAN_FEE;
+}
+
+function applyMediaAddOnsToQuote(quote: QuoteResult, addOnTotal: number): QuoteResult {
+  if (!Number.isFinite(addOnTotal) || addOnTotal <= 0) return quote;
+  return {
+    ...quote,
+    priceLow: quote.priceLow + addOnTotal,
+    priceHigh: quote.priceHigh + addOnTotal,
+  };
 }
 
 function priceToUnits(price: number): number {
@@ -459,9 +636,25 @@ export async function POST(request: NextRequest) {
           message: "Thanks for reaching out. We currently serve Georgia only."
         }, requestOrigin);
       }
-      const bounds = getQuoteBounds(body.job);
+      const originalBounds = getQuoteBounds(body.job);
+    let mediaPricing: MediaPricingContext | null = null;
+    if (Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0) {
+      try {
+        const mediaAnalysis = await buildMediaJobAnalysisWithVision(buildQuoteRequestOmniContext(body));
+        mediaPricing = {
+          analysis: mediaAnalysis,
+          addOnTotal: calculateMediaAddOnTotal(mediaAnalysis),
+        };
+      } catch (error) {
+        console.error("[junk-quote] media_analysis_failed", error instanceof Error ? error.message : error);
+      }
+    }
+    const mediaBounds = canUseMediaAnalysisForBounds(mediaPricing?.analysis)
+      ? mediaRangeToBounds(mediaPricing?.analysis.mergedVolumeRange ?? null)
+      : null;
+    const bounds = mergeQuoteBoundsWithMedia(originalBounds, mediaBounds, body.job);
     const fallback = getFallbackQuote(body.job, bounds);
-    const aiResult = await getQuoteFromAi(body, bounds).catch((err) => {
+    const aiResult = await getQuoteFromAi(body, bounds, mediaPricing?.analysis ?? null).catch((err) => {
       console.error("[junk-quote] ai_failed", err instanceof Error ? err.message : err);
       return fallback;
     });
@@ -471,10 +664,23 @@ export async function POST(request: NextRequest) {
       console.error("[junk-quote] ai_invalid_response", aiResult);
     }
 
-    const base = applyBoundsToQuote(baseCandidate, body.job, bounds);
+    const base = applyMediaAddOnsToQuote(applyBoundsToQuote(baseCandidate, body.job, bounds), mediaPricing?.addOnTotal ?? 0);
 
     const storedAiResult = {
-      ...base
+      ...base,
+      mediaAnalysis:
+        mediaPricing?.analysis
+          ? {
+              source: mediaPricing.analysis.source,
+              visibleVolumeRange: mediaPricing.analysis.visibleVolumeRange,
+              mergedVolumeRange: mediaPricing.analysis.mergedVolumeRange,
+              visibleMattressCount: mediaPricing.analysis.visibleMattressCount,
+              visiblePaintCanCount: mediaPricing.analysis.visiblePaintCanCount,
+              confidence: mediaPricing.analysis.confidence,
+              missingViews: mediaPricing.analysis.missingViews,
+            }
+          : null,
+      addOnTotal: mediaPricing?.addOnTotal ?? 0,
     };
 
     const db = getDb();
@@ -629,6 +835,19 @@ export async function POST(request: NextRequest) {
         quoteId,
         quote: {
           ...base,
+          addOnTotal: mediaPricing?.addOnTotal ?? 0,
+          mediaAnalysis:
+            mediaPricing?.analysis
+              ? {
+                  source: mediaPricing.analysis.source,
+                  visibleVolumeRange: mediaPricing.analysis.visibleVolumeRange,
+                  mergedVolumeRange: mediaPricing.analysis.mergedVolumeRange,
+                  visibleMattressCount: mediaPricing.analysis.visibleMattressCount,
+                  visiblePaintCanCount: mediaPricing.analysis.visiblePaintCanCount,
+                  confidence: mediaPricing.analysis.confidence,
+                  missingViews: mediaPricing.analysis.missingViews,
+                }
+              : undefined,
           discountAmount: discountAmount > 0 ? discountAmount : undefined,
           priceLowDiscounted: priceLowDiscounted ?? undefined,
           priceHighDiscounted: priceHighDiscounted ?? undefined
@@ -642,7 +861,11 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function getQuoteFromAi(body: z.infer<typeof RequestSchema>, bounds: QuoteBounds) {
+async function getQuoteFromAi(
+  body: z.infer<typeof RequestSchema>,
+  bounds: QuoteBounds,
+  mediaAnalysis: MediaJobAnalysisRecord | null,
+) {
   const apiKey = process.env["OPENAI_API_KEY"];
   const model = (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
   if (!apiKey) {
@@ -685,7 +908,21 @@ async function getQuoteFromAi(body: z.infer<typeof RequestSchema>, bounds: Quote
       typeof body.job.notes === "string" && body.job.notes.trim().length > 0
         ? body.job.notes.trim().slice(0, 600)
         : undefined,
-    photoCount: Array.isArray(body.job.photoUrls) ? body.job.photoUrls.length : 0
+    photoCount: Array.isArray(body.job.photoUrls) ? body.job.photoUrls.length : 0,
+    mediaAnalysis: mediaAnalysis
+      ? {
+          source: mediaAnalysis.source,
+          visibleVolumeRange: mediaAnalysis.visibleVolumeRange,
+          mergedVolumeRange: mediaAnalysis.mergedVolumeRange,
+          visibleMattressCount: mediaAnalysis.visibleMattressCount,
+          visiblePaintCanCount: mediaAnalysis.visiblePaintCanCount,
+          visibleTireCount: mediaAnalysis.visibleTireCount,
+          confidence: mediaAnalysis.confidence,
+          riskFlags: mediaAnalysis.riskFlags,
+          missingViews: mediaAnalysis.missingViews,
+          summary: mediaAnalysis.summary,
+        }
+      : null,
   };
   const jobForAiInput = JSON.stringify(jobForAi);
 
