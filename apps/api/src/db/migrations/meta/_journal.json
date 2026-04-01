@@ -309,6 +309,13 @@
       "when": 1774939200000,
       "tag": "0043_sales_agent_next_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1775030400000,
+      "tag": "0044_media_job_analyses",
+      "breakpoints": true
     }
   ]
 }

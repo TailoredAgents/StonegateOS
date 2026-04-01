@@ -674,6 +674,52 @@ export const salesAgentNextActions = pgTable(
   }),
 );
 
+export const mediaJobAnalyses = pgTable(
+  "media_job_analyses",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => contacts.id, { onDelete: "cascade" }),
+    leadId: uuid("lead_id").references(() => leads.id, {
+      onDelete: "set null",
+    }),
+    instantQuoteId: uuid("instant_quote_id").references(() => instantQuotes.id, {
+      onDelete: "set null",
+    }),
+    sourceChannel: text("source_channel"),
+    mediaCount: integer("media_count").notNull().default(0),
+    videoCount: integer("video_count").notNull().default(0),
+    visibleVolumeBucket: text("visible_volume_bucket"),
+    visibleVolumeRange: text("visible_volume_range"),
+    mergedVolumeBucket: text("merged_volume_bucket"),
+    mergedVolumeRange: text("merged_volume_range"),
+    visibleMattressCount: integer("visible_mattress_count").notNull().default(0),
+    visiblePaintCanCount: integer("visible_paint_can_count").notNull().default(0),
+    visibleTireCount: integer("visible_tire_count").notNull().default(0),
+    sceneGroupsJson: jsonb("scene_groups_json").$type<Array<Record<string, unknown>> | null>(),
+    statedScopeJson: jsonb("stated_scope_json").$type<Record<string, unknown> | null>(),
+    riskFlags: text("risk_flags").array().notNull().default([]),
+    missingViews: text("missing_views").array().notNull().default([]),
+    confidence: text("confidence"),
+    summary: text("summary"),
+    rawModelOutputJson: jsonb("raw_model_output_json").$type<Record<string, unknown> | null>(),
+    source: text("source").default("scaffold_v1").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    contactIdx: uniqueIndex("media_job_analyses_contact_key").on(table.contactId),
+    leadIdx: index("media_job_analyses_lead_idx").on(table.leadId),
+    instantQuoteIdx: index("media_job_analyses_instant_quote_idx").on(table.instantQuoteId),
+  }),
+);
+
 export const conversationThreads = pgTable(
   "conversation_threads",
   {
@@ -1956,6 +2002,7 @@ export const contactRelations = relations(contacts, ({ many, one }) => ({
   appointments: many(appointments),
   tasks: many(crmTasks),
   salesAgentMemories: many(salesAgentMemories),
+  mediaJobAnalyses: many(mediaJobAnalyses),
   salesAgentNextAction: one(salesAgentNextActions, {
     fields: [contacts.id],
     references: [salesAgentNextActions.contactId],
@@ -1994,6 +2041,24 @@ export const salesAgentNextActionRelations = relations(
   }),
 );
 
+export const mediaJobAnalysisRelations = relations(
+  mediaJobAnalyses,
+  ({ one }) => ({
+    contact: one(contacts, {
+      fields: [mediaJobAnalyses.contactId],
+      references: [contacts.id],
+    }),
+    lead: one(leads, {
+      fields: [mediaJobAnalyses.leadId],
+      references: [leads.id],
+    }),
+    instantQuote: one(instantQuotes, {
+      fields: [mediaJobAnalyses.instantQuoteId],
+      references: [instantQuotes.id],
+    }),
+  }),
+);
+
 export const propertyRelations = relations(properties, ({ one, many }) => ({
   contact: one(contacts, {
     fields: [properties.contactId],
@@ -2013,6 +2078,7 @@ export const leadRelations = relations(leads, ({ one, many }) => ({
     fields: [leads.propertyId],
     references: [properties.id],
   }),
+  mediaJobAnalyses: many(mediaJobAnalyses),
   appointments: many(appointments),
 }));
 
