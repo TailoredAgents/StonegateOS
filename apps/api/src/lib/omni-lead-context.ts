@@ -245,6 +245,7 @@ export type OmniLeadContext = {
     knownZip: string | null;
     objections: string[];
     channelPreference: string | null;
+    dmEntrySource: "facebook_ad_lead" | "organic_messenger" | "unknown" | null;
     customerIntent: string | null;
     pricingContext: string | null;
     lastPromisedNextStep: string | null;
@@ -571,6 +572,21 @@ export async function loadOmniLeadContext(
     latestInbound?.channel ??
     channelSummary.find((channel) => channel.threadCount > 0)?.channel ??
     null;
+  const hasMessengerHistory = channelSummary.some((channel) => channel.channel === "dm" && channel.threadCount > 0);
+  const latestLeadSource = latestLead?.source?.toLowerCase() ?? null;
+  const latestLeadFormSource =
+    typeof latestLead?.formPayload?.["source"] === "string"
+      ? latestLead.formPayload["source"].toLowerCase()
+      : null;
+  const contactSource = contact.source?.toLowerCase() ?? null;
+  const dmEntrySource =
+    hasMessengerHistory
+      ? latestLeadSource === "facebook_lead" ||
+        latestLeadFormSource === "facebook_lead" ||
+        contactSource === "facebook_lead"
+        ? "facebook_ad_lead"
+        : "organic_messenger"
+      : null;
 
   const instantQuotePrice = latestInstantQuoteRow ? extractQuotePrice(latestInstantQuoteRow.aiResult) : { priceLow: null, priceHigh: null };
   const pricingContext = summarizePricing({
@@ -725,6 +741,7 @@ export async function loadOmniLeadContext(
       knownZip,
       objections,
       channelPreference,
+      dmEntrySource,
       customerIntent,
       pricingContext,
       lastPromisedNextStep,

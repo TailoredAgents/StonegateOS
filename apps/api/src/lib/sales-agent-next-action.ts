@@ -70,6 +70,32 @@ function hasRecentOutbound(context: OmniLeadContext, now: Date, minutes: number)
   return now.getTime() - latestOutbound.getTime() <= minutes * 60 * 1000;
 }
 
+function getDmEntryProfile(context: OmniLeadContext): {
+  source: "facebook_ad_lead" | "organic_messenger" | "unknown";
+  quoteDelayMinutes: number;
+  missingInfoDelayMinutes: number;
+  objectionDelayMinutes: number;
+  handoffMultiplier: number;
+} {
+  const source = context.derived.dmEntrySource ?? "unknown";
+  if (source === "organic_messenger") {
+    return {
+      source,
+      quoteDelayMinutes: 360,
+      missingInfoDelayMinutes: 180,
+      objectionDelayMinutes: 720,
+      handoffMultiplier: 1.75,
+    };
+  }
+  return {
+    source,
+    quoteDelayMinutes: 180,
+    missingInfoDelayMinutes: 90,
+    objectionDelayMinutes: 360,
+    handoffMultiplier: 1,
+  };
+}
+
 function isRecentMissedInboundCall(context: OmniLeadContext, now: Date): boolean {
   const latestCall = context.latestCall;
   if (!latestCall) return false;
@@ -115,6 +141,7 @@ export function buildSalesAgentNextAction(input: {
   const latestLeadCreatedAt = parseIso(context.latestLead?.createdAt ?? null);
   const hasFormalQuote = Boolean(context.formalQuote?.id);
   const hasInstantQuote = Boolean(context.instantQuote?.id);
+  const dmEntryProfile = getDmEntryProfile(context);
   const hasUpcomingAppointment =
     Boolean(context.nextAppointment?.id) &&
     context.nextAppointment?.status !== "cancelled" &&
@@ -262,7 +289,13 @@ export function buildSalesAgentNextAction(input: {
   const dmFollowupStrategy = getDmFollowupStrategy({
     context,
     now,
-    autopilotPolicy,
+    autopilotPolicy: {
+      ...autopilotPolicy,
+      dmSmsFallbackAfterMinutes: Math.round(autopilotPolicy.dmSmsFallbackAfterMinutes * dmEntryProfile.handoffMultiplier),
+      dmMinSilenceBeforeSmsMinutes: Math.round(
+        autopilotPolicy.dmMinSilenceBeforeSmsMinutes * dmEntryProfile.handoffMultiplier,
+      ),
+    },
   });
   if (dmFollowupStrategy.recommendation === "handoff_sms") {
     return {
@@ -275,6 +308,7 @@ export function buildSalesAgentNextAction(input: {
       reason: dmFollowupStrategy.summary,
       facts: dedupe([
         ...dmFollowupStrategy.facts,
+        context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
       dueAt: now.toISOString(),
@@ -294,13 +328,14 @@ export function buildSalesAgentNextAction(input: {
       facts: dedupe([
         memory.pricingContext,
         "Known objection: price",
+        context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.lastPromisedNextStep,
       ]),
       dueAt:
         preferredChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
-              delayMinutes: autopilotPolicy.dmObjectionFollowupDelayMinutes,
+              delayMinutes: dmEntryProfile.objectionDelayMinutes,
               baselines: [nextTaskDue],
             })
           : nextTaskDue?.toISOString() ?? now.toISOString(),
@@ -319,13 +354,14 @@ export function buildSalesAgentNextAction(input: {
       reason: "The lead is still missing key information for a confident quote or booking.",
       facts: dedupe([
         `Missing: ${memory.missingFields.join(", ")}`,
+        context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
       dueAt:
         preferredChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
-              delayMinutes: autopilotPolicy.dmMissingInfoFollowupDelayMinutes,
+              delayMinutes: dmEntryProfile.missingInfoDelayMinutes,
               baselines: [nextAutomationFollowup],
             })
           : nextAutomationFollowup?.toISOString() ?? now.toISOString(),
@@ -345,13 +381,14 @@ export function buildSalesAgentNextAction(input: {
       facts: dedupe([
         memory.pricingContext,
         memory.lastPromisedNextStep,
+        context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
       dueAt:
         preferredChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
-              delayMinutes: autopilotPolicy.dmQuoteFollowupDelayMinutes,
+              delayMinutes: dmEntryProfile.quoteDelayMinutes,
               baselines: [nextTaskDue, nextAutomationFollowup],
             })
           : nextTaskDue?.toISOString() ?? nextAutomationFollowup?.toISOString() ?? now.toISOString(),

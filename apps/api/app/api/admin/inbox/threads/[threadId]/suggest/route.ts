@@ -876,6 +876,7 @@ export async function POST(
     salesAgentMemory?.summary ? `Sales agent memory: ${salesAgentMemory.summary}` : null,
     salesAgentMemory?.customerIntent ? `Memory intent: ${salesAgentMemory.customerIntent}` : null,
     salesAgentMemory?.channelPreference ? `Preferred channel: ${salesAgentMemory.channelPreference}` : null,
+    leadContext?.derived.dmEntrySource ? `Messenger entry source: ${leadContext.derived.dmEntrySource.replace(/_/g, " ")}` : null,
     salesAgentMemory?.bookingReadiness ? `Booking readiness: ${salesAgentMemory.bookingReadiness}` : null,
     salesAgentMemory?.quoteConfidence ? `Quote confidence: ${salesAgentMemory.quoteConfidence}` : null,
     Array.isArray(salesAgentMemory?.objections) && salesAgentMemory.objections.length
