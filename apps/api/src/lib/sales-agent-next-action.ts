@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb, salesAgentNextActions } from "@/db";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 import type { SalesAgentMemoryRecord } from "@/lib/sales-agent-memory";
-import { isMessengerLeadCardBody } from "@/lib/dm-autopilot";
+import { getDmFollowupStrategy } from "@/lib/dm-autopilot";
 import type { SalesAutopilotPolicy } from "@/lib/policy";
 
 type DatabaseClient = ReturnType<typeof getDb>;
@@ -70,22 +70,6 @@ function hasRecentOutbound(context: OmniLeadContext, now: Date, minutes: number)
   return now.getTime() - latestOutbound.getTime() <= minutes * 60 * 1000;
 }
 
-function latestRecentMessage(
-  context: OmniLeadContext,
-  predicate: (message: OmniLeadContext["recentMessages"][number]) => boolean,
-): OmniLeadContext["recentMessages"][number] | null {
-  for (let index = context.recentMessages.length - 1; index >= 0; index -= 1) {
-    const message = context.recentMessages[index];
-    if (message && predicate(message)) return message;
-  }
-  return null;
-}
-
-function latestMessageTimestamp(message: OmniLeadContext["recentMessages"][number] | null): Date | null {
-  if (!message) return null;
-  return pickLatestDate([message.receivedAt, message.sentAt, message.createdAt]);
-}
-
 function isRecentMissedInboundCall(context: OmniLeadContext, now: Date): boolean {
   const latestCall = context.latestCall;
   if (!latestCall) return false;
@@ -98,76 +82,6 @@ function isRecentMissedInboundCall(context: OmniLeadContext, now: Date): boolean
     callStatus.length > 0 &&
     callStatus !== "completed"
   );
-}
-
-function shouldHandoffMessengerToSms(input: {
-  context: OmniLeadContext;
-  now: Date;
-  autopilotPolicy: Pick<SalesAutopilotPolicy, "dmSmsFallbackAfterMinutes" | "dmMinSilenceBeforeSmsMinutes">;
-}): {
-  shouldHandoff: boolean;
-  latestMeaningfulInboundDmAt: Date | null;
-  latestOutboundDmAt: Date | null;
-  latestOutboundSmsAt: Date | null;
-} {
-  const { context, now, autopilotPolicy } = input;
-  if (!(context.contact.phoneE164 || context.contact.phone)) {
-    return {
-      shouldHandoff: false,
-      latestMeaningfulInboundDmAt: null,
-      latestOutboundDmAt: null,
-      latestOutboundSmsAt: null,
-    };
-  }
-
-  const latestMeaningfulInboundDm = latestRecentMessage(
-    context,
-    (message) =>
-      message.channel === "dm" &&
-      message.direction === "inbound" &&
-      typeof message.body === "string" &&
-      message.body.trim().length > 0 &&
-      !isMessengerLeadCardBody(message.body),
-  );
-  const latestOutboundDm = latestRecentMessage(
-    context,
-    (message) => message.channel === "dm" && message.direction === "outbound" && typeof message.sentAt === "string",
-  );
-  const latestOutboundSms = latestRecentMessage(
-    context,
-    (message) => message.channel === "sms" && message.direction === "outbound" && typeof message.sentAt === "string",
-  );
-
-  const latestMeaningfulInboundDmAt = latestMessageTimestamp(latestMeaningfulInboundDm);
-  const latestOutboundDmAt = latestMessageTimestamp(latestOutboundDm);
-  const latestOutboundSmsAt = latestMessageTimestamp(latestOutboundSms);
-
-  if (!latestMeaningfulInboundDmAt || !latestOutboundDmAt) {
-    return { shouldHandoff: false, latestMeaningfulInboundDmAt, latestOutboundDmAt, latestOutboundSmsAt };
-  }
-
-  if (latestOutboundDmAt.getTime() < latestMeaningfulInboundDmAt.getTime()) {
-    return { shouldHandoff: false, latestMeaningfulInboundDmAt, latestOutboundDmAt, latestOutboundSmsAt };
-  }
-
-  const preferredChannel = chooseChannel(context);
-  if (preferredChannel !== "dm") {
-    return { shouldHandoff: false, latestMeaningfulInboundDmAt, latestOutboundDmAt, latestOutboundSmsAt };
-  }
-
-  const silenceMs = autopilotPolicy.dmMinSilenceBeforeSmsMinutes * 60 * 1000;
-  const fallbackMs = autopilotPolicy.dmSmsFallbackAfterMinutes * 60 * 1000;
-  const dmSilentLongEnough = now.getTime() - latestMeaningfulInboundDmAt.getTime() >= silenceMs;
-  const waitedLongEnoughSinceDmReply = now.getTime() - latestOutboundDmAt.getTime() >= fallbackMs;
-  const recentSmsTouchExists =
-    latestOutboundSmsAt && now.getTime() - latestOutboundSmsAt.getTime() < silenceMs;
-
-  return {
-    shouldHandoff: Boolean(dmSilentLongEnough && waitedLongEnoughSinceDmReply && !recentSmsTouchExists),
-    latestMeaningfulInboundDmAt,
-    latestOutboundDmAt,
-    latestOutboundSmsAt,
-  };
 }
 
 export function buildSalesAgentNextAction(input: {
@@ -313,12 +227,12 @@ export function buildSalesAgentNextAction(input: {
     };
   }
 
-  const dmSmsHandoff = shouldHandoffMessengerToSms({
+  const dmFollowupStrategy = getDmFollowupStrategy({
     context,
     now,
     autopilotPolicy,
   });
-  if (dmSmsHandoff.shouldHandoff) {
+  if (dmFollowupStrategy.recommendation === "handoff_sms") {
     return {
       actionType: "dm_sms_handoff",
       channel: "sms",
@@ -326,17 +240,9 @@ export function buildSalesAgentNextAction(input: {
       priority: "high",
       confidence: "medium",
       summary: "Move this lead from Messenger to text and keep the conversation going there.",
-      reason: "Messenger has gone quiet long enough, the lead has a phone number, and SMS is the next best follow-up path.",
+      reason: dmFollowupStrategy.summary,
       facts: dedupe([
-        dmSmsHandoff.latestMeaningfulInboundDmAt
-          ? `Last meaningful Messenger inbound: ${dmSmsHandoff.latestMeaningfulInboundDmAt.toISOString()}`
-          : null,
-        dmSmsHandoff.latestOutboundDmAt
-          ? `Last Messenger reply from us: ${dmSmsHandoff.latestOutboundDmAt.toISOString()}`
-          : null,
-        dmSmsHandoff.latestOutboundSmsAt
-          ? `Last SMS touch: ${dmSmsHandoff.latestOutboundSmsAt.toISOString()}`
-          : "No recent SMS follow-up exists.",
+        ...dmFollowupStrategy.facts,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
       dueAt: now.toISOString(),
