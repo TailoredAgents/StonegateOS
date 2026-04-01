@@ -40,15 +40,39 @@ type InstantQuoteDto = {
       confidence?: "low" | "medium" | "high";
     };
   };
+  isMediaInformed?: boolean;
+  hasBookedAppointment?: boolean;
 };
+
+type InstantQuoteSummaryDto = {
+  windowStart: string;
+  totalQuotes: number;
+  bookedQuotes: number;
+  mediaInformed: {
+    quotes: number;
+    bookedQuotes: number;
+    bookRate: number;
+  };
+  standard: {
+    quotes: number;
+    bookedQuotes: number;
+    bookRate: number;
+  };
+};
+
+function formatPercent(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
+  return `${Math.round(value * 100)}%`;
+}
 
 export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const res = await callAdminApi("/api/admin/instant-quotes?limit=25");
   if (!res.ok) {
     return <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Instant quotes unavailable.</div>;
   }
-  const data = (await res.json()) as { quotes?: InstantQuoteDto[] };
+  const data = (await res.json()) as { quotes?: InstantQuoteDto[]; summary?: InstantQuoteSummaryDto };
   const quotes = data.quotes ?? [];
+  const summary = data.summary;
 
   return (
     <section className="space-y-4 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
@@ -59,6 +83,19 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
         </div>
         <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">{quotes.length}</span>
       </div>
+      {summary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Last 90 days</div>
+          <div className="mt-1">
+            Media-informed quotes booked {summary.mediaInformed.bookedQuotes} of {summary.mediaInformed.quotes} (
+            {formatPercent(summary.mediaInformed.bookRate)}), compared with {summary.standard.bookedQuotes} of{" "}
+            {summary.standard.quotes} ({formatPercent(summary.standard.bookRate)}) for standard quotes.
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Booked from quote means the quote is linked to a non-canceled appointment.
+          </div>
+        </div>
+      ) : null}
       <div className="space-y-2">
         {quotes.map((q) => {
           const discount = q.aiResult.discountPercent ?? 0;
@@ -70,10 +107,22 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm"
             >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="font-semibold text-slate-900">{q.contactName}</div>
+                <div className="font-semibold text-slate-900">{q.contactName}</div>
                 <div className="text-[11px] text-slate-500">
                   {new Date(q.createdAt).toLocaleString(undefined, { timeZone: TEAM_TIME_ZONE })}
                 </div>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                {q.isMediaInformed ? (
+                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800">
+                    Media-informed
+                  </span>
+                ) : null}
+                {q.hasBookedAppointment ? (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                    Booked from quote
+                  </span>
+                ) : null}
               </div>
               <div className="text-xs text-slate-600">
                 {q.contactPhone} - {q.zip} - timeframe: {q.timeframe}

@@ -45,6 +45,8 @@ type InstantQuoteDto = {
       missingViews?: string[];
     };
   };
+  isMediaInformed?: boolean;
+  hasBookedAppointment?: boolean;
 };
 
 export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
@@ -78,6 +80,18 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
       </div>
       <div className="text-xs text-slate-600">
         {quote.contactPhone} - {quote.zip} - timeframe: {quote.timeframe}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {quote.isMediaInformed ? (
+          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800">
+            Media-informed quote
+          </span>
+        ) : null}
+        {quote.hasBookedAppointment ? (
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+            Booked from quote
+          </span>
+        ) : null}
       </div>
       <div className="text-lg font-semibold text-primary-900">
         ${low} – ${high}{" "}
