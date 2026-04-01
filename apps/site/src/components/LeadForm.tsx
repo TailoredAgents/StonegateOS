@@ -527,10 +527,13 @@ export function LeadForm({
     setPhotoUploadStatus("uploading");
     setPhotoUploadMessage(null);
     try {
+      const preparedFiles = await prepareMediaUploads(selected);
+      if (!preparedFiles.length) {
+        throw new Error("No usable photos or video frames were generated.");
+      }
       const uploadForm = new FormData();
-      for (const file of selected) {
-        const prepared = await shrinkImageIfNeeded(file);
-        uploadForm.append("file", prepared, prepared.name);
+      for (const file of preparedFiles) {
+        uploadForm.append("file", file, file.name);
       }
       const res = await fetch(`${apiBase}/api/public/junk-quote/uploads`, {
         method: "POST",
@@ -548,6 +551,12 @@ export function LeadForm({
       setPhotos(urls);
       setPhotoSkipped(false);
       setPhotoUploadStatus("idle");
+      const sourceVideoCount = selected.filter((file) => file.type.startsWith("video/")).length;
+      setPhotoUploadMessage(
+        sourceVideoCount > 0
+          ? `Uploaded ${urls.length} estimating frame${urls.length === 1 ? "" : "s"} from your photo/video selection.`
+          : null
+      );
       trackWebEvent({ event: `${eventPrefix}_photo_upload_success`, path, meta: { photoCount: urls.length } });
     } catch (err) {
       setPhotoUploadStatus("error");
@@ -1751,7 +1760,7 @@ export function LeadForm({
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-0.5">
                   <label htmlFor="lead-photos" className="text-sm font-semibold text-neutral-800">
-                    {isBrush ? "Add 1-4 photos for the most accurate estimate" : "Add 1-4 photos for the most accurate quote"}
+                    {isBrush ? "Add photos or a short video for the most accurate estimate" : "Add photos or a short video for the most accurate quote"}
                   </label>
                   <p className="text-xs text-neutral-500">
                     {isBrush
@@ -1772,15 +1781,17 @@ export function LeadForm({
                   <input
                     id="lead-photos"
                     type="file"
-                    accept="image/*"
+                    accept="image/*,video/*"
                     multiple
                     onChange={(e) => void handlePhotos(e.target.files)}
                     className="block w-full cursor-pointer rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
                   />
                   {photoUploadStatus === "uploading" ? (
-                    <div className="text-xs text-neutral-600">Uploading photos...</div>
+                    <div className="text-xs text-neutral-600">Preparing photos/video frames...</div>
                   ) : photoUploadStatus === "error" ? (
                     <div className="text-xs text-amber-700">{photoUploadMessage ?? "Unable to upload photos."}</div>
+                  ) : photoUploadMessage ? (
+                    <div className="text-xs text-neutral-600">{photoUploadMessage}</div>
                   ) : null}
                   <button
                     type="button"
@@ -1804,7 +1815,7 @@ export function LeadForm({
               {photos.length ? (
                 <div className="flex flex-wrap gap-2 text-xs text-neutral-600">
                   {photos.map((_, idx) => (
-                    <span key={idx} className="rounded-full bg-neutral-100 px-2 py-1">{`Photo ${idx + 1}`}</span>
+                    <span key={idx} className="rounded-full bg-neutral-100 px-2 py-1">{`Estimate image ${idx + 1}`}</span>
                   ))}
                 </div>
               ) : photoSkipped ? (
@@ -2579,4 +2590,119 @@ async function shrinkImageIfNeeded(file: File): Promise<File> {
 
   const baseName = file.name.replace(/\.[^/.]+$/u, "") || "photo";
   return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+}
+
+function getVideoFrameTargetCount(videoFileCount: number, imageFileCount: number): number {
+  const MAX_UPLOAD_IMAGES = 8;
+  const remainingSlots = Math.max(0, MAX_UPLOAD_IMAGES - imageFileCount);
+  if (videoFileCount <= 0 || remainingSlots <= 0) return 0;
+  const perVideo = Math.max(1, Math.floor(remainingSlots / videoFileCount));
+  return Math.min(4, perVideo);
+}
+
+async function prepareMediaUploads(files: File[]): Promise<File[]> {
+  const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+  const videoFiles = files.filter((file) => file.type.startsWith("video/"));
+  const preparedImages = await Promise.all(imageFiles.map((file) => shrinkImageIfNeeded(file)));
+  const frameTargetCount = getVideoFrameTargetCount(videoFiles.length, preparedImages.length);
+  if (videoFiles.length === 0 || frameTargetCount <= 0) {
+    return preparedImages.slice(0, 8);
+  }
+
+  const frameFiles = (await Promise.all(videoFiles.map((file) => extractVideoFrames(file, frameTargetCount)))).flat();
+  return [...preparedImages, ...frameFiles].slice(0, 8);
+}
+
+async function extractVideoFrames(file: File, frameCount: number): Promise<File[]> {
+  if (typeof window === "undefined" || frameCount <= 0) return [];
+
+  const objectUrl = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.preload = "metadata";
+  video.muted = true;
+  video.playsInline = true;
+  video.src = objectUrl;
+
+  try {
+    await waitForVideoEvent(video, "loadedmetadata");
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    if (duration <= 0) return [];
+
+    const sourceWidth = Math.max(1, video.videoWidth || 1280);
+    const sourceHeight = Math.max(1, video.videoHeight || 720);
+    const scale = Math.min(1, 1600 / Math.max(sourceWidth, sourceHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return [];
+
+    const timestamps = buildVideoFrameTimestamps(duration, frameCount);
+    const frames: File[] = [];
+    const baseName = file.name.replace(/\.[^/.]+$/u, "") || "video";
+
+    for (let index = 0; index < timestamps.length; index += 1) {
+      const timestamp = timestamps[index]!;
+      await seekVideoTo(video, timestamp);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const blob = await canvasToBlob(canvas, "image/jpeg", 0.76);
+      if (!blob) continue;
+      frames.push(new File([blob], `${baseName}-frame-${index + 1}.jpg`, { type: "image/jpeg" }));
+    }
+
+    return frames;
+  } finally {
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function buildVideoFrameTimestamps(durationSeconds: number, frameCount: number): number[] {
+  if (frameCount <= 1) {
+    return [Math.max(0, Math.min(durationSeconds * 0.5, Math.max(0, durationSeconds - 0.05)))];
+  }
+
+  const startRatio = 0.15;
+  const endRatio = 0.85;
+  const timestamps: number[] = [];
+  for (let index = 0; index < frameCount; index += 1) {
+    const progress = frameCount === 1 ? 0.5 : index / (frameCount - 1);
+    const ratio = startRatio + (endRatio - startRatio) * progress;
+    timestamps.push(Math.max(0, Math.min(durationSeconds * ratio, Math.max(0, durationSeconds - 0.05))));
+  }
+  return timestamps;
+}
+
+function waitForVideoEvent(video: HTMLVideoElement, eventName: "loadedmetadata" | "seeked"): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const handleSuccess = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error("Unable to read the uploaded video."));
+    };
+    const cleanup = () => {
+      video.removeEventListener(eventName, handleSuccess);
+      video.removeEventListener("error", handleError);
+    };
+    video.addEventListener(eventName, handleSuccess, { once: true });
+    video.addEventListener("error", handleError, { once: true });
+  });
+}
+
+async function seekVideoTo(video: HTMLVideoElement, timestampSeconds: number): Promise<void> {
+  if (Math.abs(video.currentTime - timestampSeconds) < 0.05) return;
+  const seekPromise = waitForVideoEvent(video, "seeked");
+  video.currentTime = timestampSeconds;
+  await seekPromise;
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), type, quality);
+  });
 }
