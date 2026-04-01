@@ -432,6 +432,35 @@ function buildChannelStyleInstruction(
   return "Messenger tone: write like a short Facebook chat, not like an email or formal text script.";
 }
 
+function buildDmSalesAngleInstruction(input: {
+  replyChannel: ReplyChannel;
+  actionType: string | null | undefined;
+  objections: string[];
+}): string | null {
+  if (input.replyChannel !== "dm") return null;
+
+  const objections = new Set(input.objections);
+
+  if (input.actionType === "follow_up_quote") {
+    if (objections.has("price") || objections.has("comparison_shopping")) {
+      return "Messenger sales angle: if they seem price-sensitive or are comparing companies, keep it short. Reinforce fairness and ease, do not dump a long value pitch, and end with one simple question that keeps the lead alive.";
+    }
+    if (objections.has("timing") || objections.has("decision_maker")) {
+      return "Messenger sales angle: if they are thinking about it or need to check with someone, acknowledge that lightly and make the next step easy. Do not pressure. Offer a simple reopen question instead of a hard close.";
+    }
+    return "Messenger sales angle: push gently toward booking with one low-friction question, not a formal follow-up paragraph.";
+  }
+
+  if (input.actionType === "handle_price_objection") {
+    if (objections.has("comparison_shopping")) {
+      return "Messenger objection angle: answer like a confident human, not a script. Briefly separate Stonegate on speed, service, or reliability, and ask one soft question to keep the conversation moving.";
+    }
+    return "Messenger objection angle: address price calmly in 1 or 2 short sentences. Do not sound defensive. Keep the goal on reopening the conversation, not winning a debate.";
+  }
+
+  return null;
+}
+
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ threadId: string }> }
@@ -824,6 +853,11 @@ export async function POST(
       : null,
     buildPlannerInstruction(salesAgentNextAction?.actionType, targetReplyChannel),
     buildChannelStyleInstruction(targetReplyChannel, salesAgentNextAction?.actionType),
+    buildDmSalesAngleInstruction({
+      replyChannel: targetReplyChannel,
+      actionType: salesAgentNextAction?.actionType,
+      objections: Array.isArray(salesAgentMemory?.objections) ? salesAgentMemory.objections : [],
+    }),
     omni.pipelineStage ? `Pipeline stage: ${omni.pipelineStage}` : null,
     omni.pipelineNotes ? `CRM notes:\n${omni.pipelineNotes}` : null,
     omni.latestLead

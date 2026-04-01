@@ -75,16 +75,28 @@ function detectObjections(messages: Array<{ direction: string; body: string }>):
     .join("\n");
 
   const results = new Set<string>();
-  if (/(too high|expensive|higher than|more than|overpriced|cheaper company|better price)/.test(text)) {
+  if (
+    /(too high|too much|way too much|expensive|higher than|more than|overpriced|out of budget|can't do that price|cheaper company|better price)/.test(
+      text,
+    )
+  ) {
     results.add("price");
   }
-  if (/(need to talk to|check with|ask my husband|ask my wife|landlord|owner)/.test(text)) {
+  if (
+    /(need to talk to|need to check with|check with|ask my husband|ask my wife|ask my partner|talk to my partner|talk to the homeowner|check with the owner|landlord|owner)/.test(
+      text,
+    )
+  ) {
     results.add("decision_maker");
   }
-  if (/(not ready|later|next week|next month|not sure yet|still deciding)/.test(text)) {
+  if (
+    /(not ready|later|next week|next month|not sure yet|still deciding|thinking about it|let me think|need to think|maybe later|hold off for now)/.test(
+      text,
+    )
+  ) {
     results.add("timing");
   }
-  if (/(shopping around|other companies|comparing quotes)/.test(text)) {
+  if (/(shopping around|other companies|another company|another quote|other quote|comparing quotes|someone else)/.test(text)) {
     results.add("comparison_shopping");
   }
   if (/(don't call|stop|unsubscribe|leave me alone)/.test(text)) {
