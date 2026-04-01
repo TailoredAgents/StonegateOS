@@ -4,6 +4,15 @@ import { deleteInstantQuoteAction } from "../actions";
 import { DeleteInstantQuoteForm } from "./DeleteInstantQuoteForm";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 
+function formatLabel(value: string | null | undefined): string {
+  if (typeof value !== "string" || value.trim().length === 0) return "Unknown";
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 type InstantQuoteDto = {
   id: string;
   createdAt: string;
@@ -21,9 +30,15 @@ type InstantQuoteDto = {
     priceLowDiscounted?: number;
     priceHighDiscounted?: number;
     discountPercent?: number;
+    addOnTotal?: number;
     displayTierLabel: string;
     reasonSummary: string;
     needsInPersonEstimate: boolean;
+    mediaAnalysis?: {
+      visibleVolumeRange?: string;
+      mergedVolumeRange?: string;
+      confidence?: "low" | "medium" | "high";
+    };
   };
 };
 
@@ -74,6 +89,15 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
               <div className="text-[12px] text-slate-600">
                 {q.aiResult.displayTierLabel} - {q.aiResult.loadFractionEstimate.toFixed(2)} trailer - {q.aiResult.reasonSummary}
               </div>
+              {q.aiResult.mediaAnalysis ? (
+                <div className="text-[11px] text-slate-500">
+                  Visible {formatLabel(q.aiResult.mediaAnalysis.visibleVolumeRange)} | Merged{" "}
+                  {formatLabel(q.aiResult.mediaAnalysis.mergedVolumeRange)} | {formatLabel(q.aiResult.mediaAnalysis.confidence)}
+                  {typeof q.aiResult.addOnTotal === "number" && q.aiResult.addOnTotal > 0
+                    ? ` | Add-ons +$${q.aiResult.addOnTotal}`
+                    : ""}
+                </div>
+              ) : null}
               <div className="text-[12px] text-slate-600">
                 Types: {q.jobTypes.join(", ")} | Size: {q.perceivedSize} | Photos: {q.photoCount}
               </div>

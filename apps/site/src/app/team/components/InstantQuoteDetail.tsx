@@ -4,6 +4,15 @@ import { deleteInstantQuoteAction } from "../actions";
 import { DeleteInstantQuoteForm } from "./DeleteInstantQuoteForm";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 
+function formatLabel(value: string | null | undefined): string {
+  if (typeof value !== "string" || value.trim().length === 0) return "Unknown";
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 type InstantQuoteDto = {
   id: string;
   createdAt: string;
@@ -22,9 +31,19 @@ type InstantQuoteDto = {
     priceLowDiscounted?: number;
     priceHighDiscounted?: number;
     discountPercent?: number;
+    addOnTotal?: number;
     displayTierLabel: string;
     reasonSummary: string;
     needsInPersonEstimate: boolean;
+    mediaAnalysis?: {
+      source?: string;
+      visibleVolumeRange?: string;
+      mergedVolumeRange?: string;
+      visibleMattressCount?: number;
+      visiblePaintCanCount?: number;
+      confidence?: "low" | "medium" | "high";
+      missingViews?: string[];
+    };
   };
 };
 
@@ -71,6 +90,27 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
       <div className="text-xs text-slate-600">
         {quote.aiResult.displayTierLabel} - {quote.aiResult.loadFractionEstimate.toFixed(2)} trailer - {quote.aiResult.reasonSummary}
       </div>
+      {quote.aiResult.mediaAnalysis ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <div>
+            Visible: {formatLabel(quote.aiResult.mediaAnalysis.visibleVolumeRange)} | Merged:{" "}
+            {formatLabel(quote.aiResult.mediaAnalysis.mergedVolumeRange)} | Confidence:{" "}
+            {formatLabel(quote.aiResult.mediaAnalysis.confidence)}
+          </div>
+          {(quote.aiResult.mediaAnalysis.visibleMattressCount ?? 0) > 0 ||
+          (quote.aiResult.mediaAnalysis.visiblePaintCanCount ?? 0) > 0 ||
+          (quote.aiResult.addOnTotal ?? 0) > 0 ? (
+            <div className="mt-1">
+              Add-ons included: mattresses {(quote.aiResult.mediaAnalysis.visibleMattressCount ?? 0)}, paint cans{" "}
+              {(quote.aiResult.mediaAnalysis.visiblePaintCanCount ?? 0)}
+              {(quote.aiResult.addOnTotal ?? 0) > 0 ? `, total +$${quote.aiResult.addOnTotal}` : ""}
+            </div>
+          ) : null}
+          {Array.isArray(quote.aiResult.mediaAnalysis.missingViews) && quote.aiResult.mediaAnalysis.missingViews.length > 0 ? (
+            <div className="mt-1">Missing views: {quote.aiResult.mediaAnalysis.missingViews.join(", ")}</div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="text-xs text-slate-600">
         Types: {quote.jobTypes.join(", ")} | Size: {quote.perceivedSize} | Photos: {quote.photoUrls.length}
       </div>

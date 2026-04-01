@@ -19,6 +19,7 @@ import { buildSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent
 import { buildSalesAgentNextAction, getSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 import { getDmOpeningStrategy } from "@/lib/dm-autopilot";
+import { getMediaJobAnalysis } from "@/lib/media-job-analysis";
 
 type ReplyChannel = "sms" | "email" | "dm";
 
@@ -695,6 +696,9 @@ export async function POST(
           }),
         })
       : null;
+  const mediaAnalysis = threadContext.contactId
+    ? await getMediaJobAnalysis(db, threadContext.contactId)
+    : null;
   const now = new Date();
   const proactivePlannerEligible = isPlannerProactiveDraftEligible({
     actionType: salesAgentNextAction?.actionType ?? null,
@@ -879,6 +883,9 @@ export async function POST(
     leadContext?.derived.dmEntrySource ? `Messenger entry source: ${leadContext.derived.dmEntrySource.replace(/_/g, " ")}` : null,
     salesAgentMemory?.bookingReadiness ? `Booking readiness: ${salesAgentMemory.bookingReadiness}` : null,
     salesAgentMemory?.quoteConfidence ? `Quote confidence: ${salesAgentMemory.quoteConfidence}` : null,
+    mediaAnalysis
+      ? `Media estimate: visible=${mediaAnalysis.visibleVolumeRange}, merged=${mediaAnalysis.mergedVolumeRange}, confidence=${mediaAnalysis.confidence}, mattresses=${mediaAnalysis.visibleMattressCount}, paint=${mediaAnalysis.visiblePaintCanCount}${Array.isArray(mediaAnalysis.missingViews) && mediaAnalysis.missingViews.length ? `, missing views=${mediaAnalysis.missingViews.join(" | ")}` : ""}`
+      : null,
     Array.isArray(salesAgentMemory?.objections) && salesAgentMemory.objections.length
       ? `Known objections: ${salesAgentMemory.objections.join(", ")}`
       : null,
