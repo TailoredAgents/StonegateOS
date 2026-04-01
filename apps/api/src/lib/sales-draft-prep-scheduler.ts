@@ -1,6 +1,7 @@
 import { getDb } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
 import { evaluateSalesPlannerAutosendPolicy, getSalesAutopilotPolicy } from "@/lib/policy";
+import { getDmLiveAutopilotState } from "@/lib/dm-autopilot";
 
 type TeamDirectoryPayload = {
   ok?: boolean;
@@ -295,15 +296,28 @@ export async function prepareDueSalesQueueDrafts(input?: {
         channel,
         actionType: candidate.nextAction?.actionType ?? null,
       });
+      const dmLiveAutopilotState =
+        channel === "dm" && candidate.draftTarget?.threadId
+          ? await getDmLiveAutopilotState(getDb(), candidate.draftTarget.threadId)
+          : null;
+      const dmLiveAutopilotBlocked = Boolean(
+        channel === "dm" &&
+          autosendPolicy.actionClass === "live_reply" &&
+          dmLiveAutopilotState &&
+          !dmLiveAutopilotState.ready,
+      );
       const canAutoSend =
         (overrideAutoSendEnabled ?? autosendPolicy.allowed) &&
         messageId.length > 0 &&
         draftIsOldEnough &&
+        !dmLiveAutopilotBlocked &&
         isPlannerActionDue(candidate.nextAction ?? null, now);
 
       if (!canAutoSend) {
         if ((overrideAutoSendEnabled ?? true) && candidate?.draft?.ready === true) {
-          const reason = !autosendPolicy.allowed && overrideAutoSendEnabled !== true
+          const reason = dmLiveAutopilotBlocked
+            ? `dm_warmup_${dmLiveAutopilotState?.meaningfulInboundCount ?? 0}`
+            : !autosendPolicy.allowed && overrideAutoSendEnabled !== true
             ? mapAutosendPolicyReason(autosendPolicy.reason)
                 : !draftIsOldEnough
                 ? "draft_too_fresh"

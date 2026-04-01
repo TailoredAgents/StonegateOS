@@ -19,6 +19,7 @@ import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 import {
   evaluateSalesPlannerAutosendPolicy,
+  getSalesPlannerActionClass,
   getSalesAutopilotPolicy,
   getSalesAutopilotChannelMode,
   getServiceAreaPolicy,
@@ -29,6 +30,7 @@ import {
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { buildSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 import { buildSalesAgentMemory, getSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
+import { getDmLiveAutopilotStates } from "@/lib/dm-autopilot";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -565,6 +567,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       byChannel: Map<string, { threadId: string; channel: string }>;
     }
   >();
+  const dmAutopilotByThreadId = new Map<string, { ready: boolean; meaningfulInboundCount: number }>();
 
   await Promise.all(
     contactIds.map(async (contactId) => {
@@ -748,6 +751,18 @@ export async function GET(request: NextRequest): Promise<Response> {
         createdAt: row.createdAt.toISOString(),
       });
     }
+
+    const dmThreadIds = [...new Set(
+      [...threadByContactId.values()]
+        .map((entry) => entry.byChannel.get("dm")?.threadId ?? null)
+        .filter((value): value is string => Boolean(value)),
+    )];
+    if (dmThreadIds.length > 0) {
+      const dmStates = await getDmLiveAutopilotStates(db, dmThreadIds);
+      for (const [threadId, state] of dmStates.entries()) {
+        dmAutopilotByThreadId.set(threadId, state);
+      }
+    }
   }
 
   const enrichedItems = items
@@ -777,16 +792,30 @@ export async function GET(request: NextRequest): Promise<Response> {
         actionType: nextAction?.actionType ?? null,
       });
       const autosendPolicyAllowed = autosendPolicy.allowed;
+      const actionClass = getSalesPlannerActionClass(nextAction?.actionType ?? null);
+      const dmLiveAutopilotState =
+        effectiveChannel === "dm" && draftTarget?.threadId && actionClass === "live_reply"
+          ? dmAutopilotByThreadId.get(draftTarget.threadId) ?? { ready: false, meaningfulInboundCount: 0 }
+          : null;
+      const dmLiveAutopilotBlocked = Boolean(
+        effectiveChannel === "dm" &&
+          actionClass === "live_reply" &&
+          dmLiveAutopilotState &&
+          !dmLiveAutopilotState.ready,
+      );
       const autosendEligible = Boolean(
         autosendPolicyAllowed &&
           draft?.ready &&
           draftIsOldEnough &&
+          !dmLiveAutopilotBlocked &&
           plannerDue,
       );
       const autosendBlockedReason = !draft?.ready
         ? null
         : !autopilotPolicy.plannerAutoSendEnabled || autopilotPolicy.mode === "off"
           ? "Autosend disabled"
+          : dmLiveAutopilotBlocked
+            ? `Messenger warm-up: ${dmLiveAutopilotState?.meaningfulInboundCount ?? 0} meaningful inbound message${(dmLiveAutopilotState?.meaningfulInboundCount ?? 0) === 1 ? "" : "s"}`
           : autosendPolicy.reason === "action_requires_full_mode"
             ? "Partial mode keeps this live reply approval-only"
             : !autosendPolicyAllowed

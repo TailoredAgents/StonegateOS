@@ -19,11 +19,13 @@ import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import {
   evaluateSalesPlannerAutosendPolicy,
+  getSalesPlannerActionClass,
   getSalesAutopilotChannelMode,
   getSalesAutopilotPolicy,
   isSalesAutopilotLiveReplyEnabled,
 } from "@/lib/policy";
 import { and, desc, inArray, sql } from "drizzle-orm";
+import { getDmLiveAutopilotState } from "@/lib/dm-autopilot";
 
 type RouteContext = {
   params: Promise<{ contactId?: string }>;
@@ -167,14 +169,28 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     actionType: nextAction?.actionType ?? null,
   });
   const autosendPolicyAllowed = autosendPolicy.allowed;
+  const actionClass = getSalesPlannerActionClass(nextAction?.actionType ?? null);
+  const dmLiveAutopilotState =
+    effectiveChannel === "dm" && latestDraft?.threadId && actionClass === "live_reply"
+      ? await getDmLiveAutopilotState(db, latestDraft.threadId)
+      : null;
+  const dmLiveAutopilotBlocked = Boolean(
+    effectiveChannel === "dm" &&
+      actionClass === "live_reply" &&
+      dmLiveAutopilotState &&
+      !dmLiveAutopilotState.ready,
+  );
   const autosendEligible = Boolean(
     autosendPolicyAllowed &&
       latestDraft &&
       draftIsOldEnough &&
+      !dmLiveAutopilotBlocked &&
       isPlannerActionDue(nextAction, now)
   );
   const draftReadyDetail = !draftIsOldEnough
     ? "Draft is ready and still aging before autosend."
+    : dmLiveAutopilotBlocked
+      ? `Messenger stays approval-only until there has been a real back-and-forth. Current DM warm-up: ${dmLiveAutopilotState?.meaningfulInboundCount ?? 0} meaningful inbound message${(dmLiveAutopilotState?.meaningfulInboundCount ?? 0) === 1 ? "" : "s"}.`
     : autosendPolicy.reason === "action_requires_full_mode"
       ? "Partial mode keeps this kind of live reply approval-only."
       : autosendPolicy.reason === "channel_not_allowed" || autosendPolicy.reason === "action_not_allowed"
@@ -244,6 +260,8 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
                       label: "Draft pending",
                       detail: autosendPolicy.reason === "action_requires_full_mode"
                         ? "The agent should prepare the draft, but Partial mode will keep this live reply approval-only."
+                        : effectiveChannel === "dm" && actionClass === "live_reply"
+                          ? "The agent should prepare the Messenger draft, but DM live autopilot will stay approval-only until the customer has had a real back-and-forth."
                         : channelMode === "partial"
                           ? "The agent should prepare the next draft. Partial mode keeps live replies approval-only."
                         : "The agent should prepare the next draft automatically.",

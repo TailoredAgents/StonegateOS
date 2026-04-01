@@ -110,6 +110,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                 <p className="text-xs text-slate-500">
                   Set SMS, Messenger, and email independently. Off means drafts only. Partial means safe follow-ups only. Full allows live autopilot behavior on that channel.
                 </p>
+                <p className="text-xs text-slate-500">
+                  Messenger has one extra guardrail: live DM autopilot stays approval-only until there has been a real back-and-forth, so the system does not treat the first Facebook lead card like a fully trusted conversation.
+                </p>
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
