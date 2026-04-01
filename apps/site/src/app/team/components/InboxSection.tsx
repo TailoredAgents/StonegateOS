@@ -146,6 +146,19 @@ type NextActionSummaryResponse = {
   } | null;
 };
 
+type MediaAnalysisSummaryResponse = {
+  ok?: boolean;
+  analysis?: {
+    source?: string | null;
+    visibleVolumeRange?: string | null;
+    mergedVolumeRange?: string | null;
+    confidence?: "low" | "medium" | "high" | null;
+    videoCount?: number | null;
+    missingViews?: string[] | null;
+    summary?: string | null;
+  } | null;
+};
+
 type ProviderHealth = {
   provider: "sms" | "email" | "calendar";
   status: "healthy" | "degraded" | "unknown";
@@ -630,16 +643,26 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
       }
     : null;
   let nextActionSummary: NextActionSummaryResponse | null = null;
+  let mediaAnalysisSummary: MediaAnalysisSummaryResponse | null = null;
   if (activeContactId) {
     try {
-      const res = await callAdminApi(
-        `/api/admin/contacts/${encodeURIComponent(activeContactId)}/sales-agent-next-action?includeQuotePrice=1`,
-      );
-      if (res.ok) {
-        nextActionSummary = (await res.json().catch(() => null)) as NextActionSummaryResponse | null;
+      const [nextActionRes, mediaAnalysisRes] = await Promise.all([
+        callAdminApi(
+          `/api/admin/contacts/${encodeURIComponent(activeContactId)}/sales-agent-next-action?includeQuotePrice=1`,
+        ),
+        callAdminApi(
+          `/api/admin/contacts/${encodeURIComponent(activeContactId)}/media-analysis?includeQuotePrice=1`,
+        ),
+      ]);
+      if (nextActionRes.ok) {
+        nextActionSummary = (await nextActionRes.json().catch(() => null)) as NextActionSummaryResponse | null;
+      }
+      if (mediaAnalysisRes.ok) {
+        mediaAnalysisSummary = (await mediaAnalysisRes.json().catch(() => null)) as MediaAnalysisSummaryResponse | null;
       }
     } catch {
       nextActionSummary = null;
+      mediaAnalysisSummary = null;
     }
   }
 
@@ -693,6 +716,24 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
       : "Prepare next reply";
   const agentSecondaryButtonLabel = currentThreadAiDraft && !agentAutoSendDue ? "Refresh draft" : null;
   const agentPassiveChoiceLabel = agentAutoSendDue ? "Let autosend handle it" : null;
+  const agentMediaAnalysis = mediaAnalysisSummary?.analysis ?? null;
+  const agentMediaUsesVision =
+    typeof agentMediaAnalysis?.source === "string" && agentMediaAnalysis.source.toLowerCase().includes("vision");
+  const agentMediaVisibleRange = formatMetaLabel(agentMediaAnalysis?.visibleVolumeRange ?? null);
+  const agentMediaMergedRange = formatMetaLabel(agentMediaAnalysis?.mergedVolumeRange ?? null);
+  const agentMediaConfidence = formatMetaLabel(agentMediaAnalysis?.confidence ?? null);
+  const agentMediaMissingView =
+    Array.isArray(agentMediaAnalysis?.missingViews) && agentMediaAnalysis.missingViews.length > 0
+      ? agentMediaAnalysis.missingViews.find((item) => typeof item === "string" && item.trim().length > 0) ?? null
+      : null;
+  const agentMediaSummary =
+    agentMediaVisibleRange && agentMediaMergedRange && agentMediaVisibleRange !== agentMediaMergedRange
+      ? `Visible ${agentMediaVisibleRange}; merged to ${agentMediaMergedRange}.`
+      : agentMediaMergedRange
+        ? `Estimate looks around ${agentMediaMergedRange}.`
+        : agentMediaVisibleRange
+          ? `Visible estimate looks around ${agentMediaVisibleRange}.`
+          : null;
 
   const selectedThreadState = (selectedThread as { state?: string | null } | null)?.state ?? "new";
   const allowedStates = selectedThread ? getAllowedStates(selectedThreadState) : [...THREAD_STATES];
@@ -1335,6 +1376,33 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                         {currentThreadAiDraftPlanner?.reason ? (
                           <div className="mt-2 text-xs text-slate-600">
                             <span className="font-semibold text-slate-700">Why now:</span> {currentThreadAiDraftPlanner.reason}
+                          </div>
+                        ) : null}
+                        {agentMediaUsesVision && (agentMediaSummary || agentMediaMissingView) ? (
+                          <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-950">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-semibold">Media-informed</span>
+                              {agentMediaAnalysis?.videoCount && agentMediaAnalysis.videoCount > 0 ? (
+                                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                                  video + photo estimate
+                                </span>
+                              ) : (
+                                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                                  photo estimate
+                                </span>
+                              )}
+                              {agentMediaConfidence ? (
+                                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                                  {agentMediaConfidence} confidence
+                                </span>
+                              ) : null}
+                            </div>
+                            {agentMediaSummary ? <div className="mt-1">{agentMediaSummary}</div> : null}
+                            {agentMediaMissingView ? (
+                              <div className="mt-1 text-[11px] text-sky-900">
+                                Best next angle: {agentMediaMissingView}
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
                         <div className="mt-3">
