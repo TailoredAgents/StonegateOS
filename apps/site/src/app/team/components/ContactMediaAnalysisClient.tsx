@@ -149,7 +149,7 @@ export function ContactMediaAnalysisClient({ contactId }: Props): React.ReactEle
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Media Estimate</div>
-          <div className="text-sm font-semibold text-slate-900">Photo analysis</div>
+          <div className="text-sm font-semibold text-slate-900">Media analysis</div>
         </div>
         <button
           type="button"
