@@ -20,6 +20,8 @@ const OPEN_THREAD_STATUSES = ["open", "pending"] as const;
 
 export type InboundChannel = "sms" | "email" | "dm" | "call" | "web";
 
+export type InboxThreadChannel = InboundChannel;
+
 export type InboundMessageInput = {
   channel: InboundChannel;
   body: string;
@@ -565,6 +567,92 @@ async function findLatestLeadForContact(
     .limit(1);
 
   return row ?? null;
+}
+
+export async function ensureInboxThreadForContactChannel(
+  db: DbExecutor,
+  input: { contactId: string; channel: InboxThreadChannel; now?: Date },
+): Promise<string | null> {
+  const now = input.now ?? new Date();
+
+  const [existingThread] = await db
+    .select({
+      id: conversationThreads.id,
+      status: conversationThreads.status,
+    })
+    .from(conversationThreads)
+    .where(and(eq(conversationThreads.contactId, input.contactId), eq(conversationThreads.channel, input.channel)))
+    .orderBy(desc(conversationThreads.lastMessageAt), desc(conversationThreads.updatedAt))
+    .limit(1);
+
+  if (existingThread?.id) {
+    if (existingThread.status !== "open") {
+      await db
+        .update(conversationThreads)
+        .set({
+          status: "open",
+          updatedAt: now,
+        })
+        .where(eq(conversationThreads.id, existingThread.id));
+    }
+    return existingThread.id;
+  }
+
+  const [contact] = await db
+    .select({
+      id: contacts.id,
+      firstName: contacts.firstName,
+      lastName: contacts.lastName,
+      email: contacts.email,
+      phone: contacts.phone,
+      phoneE164: contacts.phoneE164,
+      salespersonMemberId: contacts.salespersonMemberId,
+    })
+    .from(contacts)
+    .where(eq(contacts.id, input.contactId))
+    .limit(1);
+
+  if (!contact?.id) return null;
+
+  const lead = await findLatestLeadForContact(db, contact.id);
+  const [thread] = await db
+    .insert(conversationThreads)
+    .values({
+      contactId: contact.id,
+      leadId: lead?.leadId ?? null,
+      propertyId: lead?.propertyId ?? null,
+      status: "open",
+      state: "new",
+      channel: input.channel,
+      assignedTo: contact.salespersonMemberId ?? null,
+      subject: input.channel === "email" ? "Stonegate" : null,
+      stateUpdatedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning({ id: conversationThreads.id });
+
+  const threadId = thread?.id ?? null;
+  if (!threadId) return null;
+
+  const displayName = [contact.firstName, contact.lastName].filter(Boolean).join(" ").trim() || "Contact";
+  const externalAddress =
+    input.channel === "email"
+      ? contact.email ?? null
+      : input.channel === "dm"
+        ? null
+        : contact.phoneE164 ?? contact.phone ?? null;
+
+  await db.insert(conversationParticipants).values({
+    threadId,
+    participantType: "contact",
+    contactId: contact.id,
+    externalAddress,
+    displayName,
+    createdAt: now,
+  });
+
+  return threadId;
 }
 
 function parseNoteField(notes: string, key: string): string | null {

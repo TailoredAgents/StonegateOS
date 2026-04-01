@@ -31,6 +31,7 @@ import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { buildSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 import { buildSalesAgentMemory, getSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
 import { getDmLiveAutopilotStates } from "@/lib/dm-autopilot";
+import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -78,6 +79,7 @@ function draftReadinessScore(item: {
 function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
   return (
     actionType === "missed_call_recovery" ||
+    actionType === "dm_sms_handoff" ||
     actionType === "reply_now" ||
     actionType === "follow_up_quote" ||
     actionType === "collect_missing_info" ||
@@ -627,6 +629,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             missingFields: memory.missingFields,
             factsJson: (memory.factsJson as Record<string, unknown> | null) ?? {},
           },
+          autopilotPolicy,
         }),
       });
 
@@ -679,6 +682,37 @@ export async function GET(request: NextRequest): Promise<Response> {
       }
       threadByContactId.set(row.contactId, current);
     }
+
+    await Promise.all(
+      contactIds.map(async (contactId) => {
+        const nextAction = rebuiltNextActionMap.get(contactId) ?? null;
+        const targetChannel = nextAction?.channel ?? null;
+        if (
+          !targetChannel ||
+          !isSafeDraftPreparationAction(nextAction?.actionType ?? null) ||
+          (targetChannel !== "sms" && targetChannel !== "email" && targetChannel !== "dm")
+        ) {
+          return;
+        }
+
+        const current =
+          threadByContactId.get(contactId) ??
+          { any: null, byChannel: new Map<string, { threadId: string; channel: string }>() };
+        if (current.byChannel.has(targetChannel)) return;
+
+        const ensuredThreadId = await ensureInboxThreadForContactChannel(db, {
+          contactId,
+          channel: targetChannel,
+          now,
+        });
+        if (!ensuredThreadId) return;
+
+        const targetThread = { threadId: ensuredThreadId, channel: targetChannel };
+        if (!current.any) current.any = targetThread;
+        current.byChannel.set(targetChannel, targetThread);
+        threadByContactId.set(contactId, current);
+      }),
+    );
 
     const draftRows = await db
       .select({

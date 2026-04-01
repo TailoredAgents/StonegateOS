@@ -3860,6 +3860,19 @@ export async function suggestThreadReplyAction(formData: FormData) {
     return;
   }
 
+  const suggestPayload = (await response.json().catch(() => null)) as {
+    threadId?: string;
+    channel?: string;
+  } | null;
+  const redirectedThreadId =
+    typeof suggestPayload?.threadId === "string" && suggestPayload.threadId.trim().length > 0
+      ? suggestPayload.threadId.trim()
+      : resolvedThreadId;
+  const redirectedChannel =
+    typeof suggestPayload?.channel === "string" && suggestPayload.channel.trim().length > 0
+      ? suggestPayload.channel.trim()
+      : resolvedChannel;
+
   jar.set({
     name: "myst-flash",
     value: "AI draft created. Review and click Send when ready.",
@@ -3867,7 +3880,7 @@ export async function suggestThreadReplyAction(formData: FormData) {
   });
   revalidatePath("/team");
   redirect(
-    `/team?tab=inbox&threadId=${encodeURIComponent(resolvedThreadId)}${resolvedChannel ? `&channel=${encodeURIComponent(resolvedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`,
+    `/team?tab=inbox&threadId=${encodeURIComponent(redirectedThreadId)}${redirectedChannel ? `&channel=${encodeURIComponent(redirectedChannel)}` : ""}${resolvedContactId ? `&contactId=${encodeURIComponent(resolvedContactId)}` : ""}&r=${Date.now()}`,
   );
 }
 

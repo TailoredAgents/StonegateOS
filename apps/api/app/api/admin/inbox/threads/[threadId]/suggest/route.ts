@@ -10,13 +10,14 @@ import {
   properties
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
-import { getBusinessHoursPolicy, getCompanyProfilePolicy, getConversationPersonaPolicy, getServiceAreaPolicy, getTemplatesPolicy, isGeorgiaPostalCode, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
+import { getBusinessHoursPolicy, getCompanyProfilePolicy, getConversationPersonaPolicy, getSalesAutopilotPolicy, getServiceAreaPolicy, getTemplatesPolicy, isGeorgiaPostalCode, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
 import { buildSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
 import { buildSalesAgentNextAction, getSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
+import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 
 type ReplyChannel = "sms" | "email" | "dm";
 
@@ -57,7 +58,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isReplyChannel(value: string): value is ReplyChannel {
+function isReplyChannel(value: string | null | undefined): value is ReplyChannel {
   return value === "sms" || value === "email" || value === "dm";
 }
 
@@ -74,6 +75,7 @@ function parseIsoDate(value: string | null | undefined): Date | null {
 function isSafePlannerFollowupAction(actionType: string | null | undefined): boolean {
   return (
     actionType === "missed_call_recovery" ||
+    actionType === "dm_sms_handoff" ||
     actionType === "follow_up_quote" ||
     actionType === "collect_missing_info" ||
     actionType === "handle_price_objection"
@@ -379,6 +381,8 @@ function buildPlannerInstruction(actionType: string | null | undefined): string 
       return "Reply promptly, keep momentum, and answer the latest inbound directly.";
     case "missed_call_recovery":
       return "Write a short missed-call recovery text that gets the lead talking again without overcomplicating it.";
+    case "dm_sms_handoff":
+      return "Write a short SMS that naturally picks up the earlier Messenger conversation and moves the lead into texting without sounding robotic.";
     case "call_now":
       return "Write a short reply that supports an immediate phone follow up and confirms availability to talk now.";
     case "follow_up_quote":
@@ -539,12 +543,13 @@ export async function POST(
     propertyState: thread.propertyState ?? null
   };
 
-  const [templates, serviceArea, businessHours, companyProfile, persona] = await Promise.all([
+  const [templates, serviceArea, businessHours, companyProfile, persona, autopilotPolicy] = await Promise.all([
     getTemplatesPolicy(db),
     getServiceAreaPolicy(db),
     getBusinessHoursPolicy(db),
     getCompanyProfilePolicy(db),
-    getConversationPersonaPolicy(db)
+    getConversationPersonaPolicy(db),
+    getSalesAutopilotPolicy(db),
   ]);
 
  const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
@@ -581,6 +586,7 @@ export async function POST(
           action: buildSalesAgentNextAction({
             context: leadContext,
             memory: builtSalesAgentMemory,
+            autopilotPolicy,
           }),
         })
       : null;
@@ -591,10 +597,71 @@ export async function POST(
     dueAt: salesAgentNextAction?.dueAt?.toISOString?.() ?? null,
     now,
   });
+  const plannerTargetChannel = isReplyChannel(salesAgentNextAction?.channel)
+    ? salesAgentNextAction.channel
+    : null;
+  const targetReplyChannel: ReplyChannel =
+    proactivePlannerEligible && plannerTargetChannel ? plannerTargetChannel : replyChannel;
+  let draftThreadId = threadId;
+  if (
+    threadContext.contactId &&
+    targetReplyChannel !== replyChannel
+  ) {
+    draftThreadId =
+      (await ensureInboxThreadForContactChannel(db, {
+        contactId: threadContext.contactId,
+        channel: targetReplyChannel,
+        now,
+      })) ?? threadId;
+  }
+  const targetDraftRows =
+    draftThreadId === threadId
+      ? []
+      : await db
+          .select({
+            id: conversationMessages.id,
+            subject: conversationMessages.subject,
+            body: conversationMessages.body,
+            createdAt: conversationMessages.createdAt,
+            metadata: conversationMessages.metadata,
+          })
+          .from(conversationMessages)
+          .where(
+            and(
+              eq(conversationMessages.threadId, draftThreadId),
+              eq(conversationMessages.direction, "outbound"),
+              sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') = 'true'`,
+              sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`
+            ),
+          )
+          .orderBy(desc(conversationMessages.createdAt))
+          .limit(1);
+  const targetAiDraftMessage =
+    draftThreadId === threadId
+      ? latestAiDraftMessage
+      : targetDraftRows[0]
+        ? {
+            id: targetDraftRows[0].id,
+            direction: "outbound",
+            channel: targetReplyChannel,
+            subject: targetDraftRows[0].subject ?? null,
+            body: targetDraftRows[0].body,
+            createdAt: targetDraftRows[0].createdAt,
+            participantName: null,
+            metadata: isRecord(targetDraftRows[0].metadata) ? targetDraftRows[0].metadata : null,
+          }
+        : null;
+  const targetToAddress =
+    targetReplyChannel === "sms"
+      ? thread.contactPhoneE164 ?? thread.contactPhone ?? null
+      : targetReplyChannel === "email"
+        ? thread.contactEmail ?? null
+        : toAddress;
+  const targetDmMetadata = targetReplyChannel === "dm" ? dmMetadata : null;
 
   const latestInboundMs = latestInboundMessage?.createdAt.getTime() ?? Number.NaN;
   const latestOutboundMs = latestSentOutboundMessage?.createdAt.getTime() ?? Number.NaN;
-  const latestAiDraftMs = latestAiDraftMessage?.createdAt.getTime() ?? Number.NaN;
+  const latestAiDraftMs = targetAiDraftMessage?.createdAt.getTime() ?? Number.NaN;
   const referenceMs = Number.isFinite(latestInboundMs)
     ? latestInboundMs
     : Number.isFinite(latestOutboundMs)
@@ -609,7 +676,8 @@ export async function POST(
     return NextResponse.json({
       ok: true,
       skipped: "dismissed",
-      channel: replyChannel,
+      channel: targetReplyChannel,
+      threadId: draftThreadId,
     });
   }
 
@@ -621,11 +689,12 @@ export async function POST(
     return NextResponse.json({
       ok: true,
       reused: true,
-      messageId: latestAiDraftMessage!.id,
-      channel: replyChannel,
+      messageId: targetAiDraftMessage!.id,
+      channel: targetReplyChannel,
+      threadId: draftThreadId,
       draft: {
-        subject: replyChannel === "email" ? latestAiDraftMessage?.subject ?? null : null,
-        body: latestAiDraftMessage!.body,
+        subject: targetReplyChannel === "email" ? targetAiDraftMessage?.subject ?? null : null,
+        body: targetAiDraftMessage!.body,
       },
     });
   }
@@ -635,28 +704,30 @@ export async function POST(
       return NextResponse.json({
         ok: true,
         skipped: "already_replied",
-        channel: replyChannel,
+        channel: targetReplyChannel,
+        threadId: draftThreadId,
       });
     }
   } else if (!Number.isFinite(latestInboundMs) && !proactivePlannerEligible) {
     return NextResponse.json({
       ok: true,
       skipped: "no_draft_trigger",
-      channel: replyChannel,
+      channel: targetReplyChannel,
+      threadId: draftThreadId,
     });
   }
 
   const firstTouchExample = resolveTemplateForChannel(templates.first_touch, {
     inboundChannel: replyChannel,
-    replyChannel
+    replyChannel: targetReplyChannel
   });
   const followUpExample = resolveTemplateForChannel(templates.follow_up, {
     inboundChannel: replyChannel,
-    replyChannel
+    replyChannel: targetReplyChannel
   });
   const outOfAreaExample =
-    replyChannel === "email" || replyChannel === "sms"
-      ? resolveTemplateForChannel(templates.out_of_area, { inboundChannel: replyChannel, replyChannel })
+    targetReplyChannel === "email" || targetReplyChannel === "sms"
+      ? resolveTemplateForChannel(templates.out_of_area, { inboundChannel: replyChannel, replyChannel: targetReplyChannel })
       : null;
 
  const systemPrompt = `
@@ -681,8 +752,20 @@ export async function POST(
  Notes: ${companyProfile.agentNotes}
   `.trim();
 
+  const crossChannelRecentSummary =
+    salesAgentNextAction?.actionType === "dm_sms_handoff" && leadContext
+      ? leadContext.recentMessages
+          .slice(-6)
+          .map((message) => {
+            const who = message.direction === "inbound" ? "Customer" : "Team";
+            return `[${message.channel.toUpperCase()}] ${who}: ${message.body}`;
+          })
+          .join("\n")
+      : null;
+
   const contextLines = [
-    `Channel: ${replyChannel}`,
+    `Reply channel: ${targetReplyChannel}`,
+    targetReplyChannel !== replyChannel ? `Source thread channel: ${replyChannel}` : null,
     `Thread state: ${threadContext.state}`,
     `Customer name: ${threadContext.contactName ?? "Unknown"}`,
     salesAgentMemory?.summary ? `Sales agent memory: ${salesAgentMemory.summary}` : null,
@@ -739,6 +822,7 @@ export async function POST(
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
     followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,
+    crossChannelRecentSummary ? `Recent cross-channel context:\n${crossChannelRecentSummary}` : null,
     `Transcript:\n${buildTranscript(messages)}`
   ].filter((line): line is string => Boolean(line));
 
@@ -837,27 +921,27 @@ Do not write the customer message. Output ONLY JSON matching the schema.
       .delete(conversationMessages)
       .where(
         and(
-          eq(conversationMessages.threadId, threadId),
+          eq(conversationMessages.threadId, draftThreadId),
           eq(conversationMessages.direction, "outbound"),
           sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') = 'true'`,
           sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`
         )
       );
 
-    const participantId = await ensureAiParticipant(tx, threadId, now);
+    const participantId = await ensureAiParticipant(tx, draftThreadId, now);
     const [message] = await tx
       .insert(conversationMessages)
       .values({
-        threadId,
+        threadId: draftThreadId,
         participantId,
         direction: "outbound",
-        channel: replyChannel,
-        subject: replyChannel === "email" ? suggestion.subject ?? thread.subject ?? "Stonegate message" : null,
+        channel: targetReplyChannel,
+        subject: targetReplyChannel === "email" ? suggestion.subject ?? thread.subject ?? "Stonegate message" : null,
         body: suggestion.body,
-        toAddress,
+        toAddress: targetToAddress,
         deliveryStatus: "queued",
         metadata: {
-          ...(replyChannel === "dm" ? (dmMetadata ?? {}) : {}),
+          ...(targetReplyChannel === "dm" ? (targetDmMetadata ?? {}) : {}),
           draft: true,
           aiSuggested: true,
           aiModel: suggestionResult.modelUsed,
@@ -892,17 +976,24 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     actor: getAuditActorFromRequest(request),
     action: "inbox.suggest.draft_created",
     entityType: "conversation_thread",
-    entityId: threadId,
-    meta: { channel: replyChannel, messageId: created.id }
+    entityId: draftThreadId,
+    meta: {
+      channel: targetReplyChannel,
+      messageId: created.id,
+      sourceThreadId: threadId,
+      targetThreadId: draftThreadId,
+      handoff: targetReplyChannel !== replyChannel ? `${replyChannel}_to_${targetReplyChannel}` : undefined,
+    }
   });
 
   return NextResponse.json({
     ok: true,
     created: true,
     messageId: created.id,
-    channel: replyChannel,
+    channel: targetReplyChannel,
+    threadId: draftThreadId,
     draft: {
-      subject: replyChannel === "email" ? suggestion.subject ?? null : null,
+      subject: targetReplyChannel === "email" ? suggestion.subject ?? null : null,
       body: suggestion.body
     }
   });

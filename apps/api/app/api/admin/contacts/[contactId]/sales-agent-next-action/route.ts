@@ -74,6 +74,7 @@ function parseIso(value: string | null | undefined): Date | null {
 function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
   return (
     actionType === "missed_call_recovery" ||
+    actionType === "dm_sms_handoff" ||
     actionType === "reply_now" ||
     actionType === "follow_up_quote" ||
     actionType === "collect_missing_info" ||
@@ -111,6 +112,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   if (!liveContext) {
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
   }
+  const autopilotPolicy = await getSalesAutopilotPolicy(db);
 
   let memory = await getSalesAgentMemory(db, contactIdTrimmed);
   if (!memory) {
@@ -129,11 +131,11 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       action: buildSalesAgentNextAction({
         context: liveContext,
         memory: toMemoryRecord(memory),
+        autopilotPolicy,
       }),
     });
   }
 
-  const autopilotPolicy = await getSalesAutopilotPolicy(db);
   const now = new Date();
   const latestDraftRows = await db
     .select({

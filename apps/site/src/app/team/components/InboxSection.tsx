@@ -127,6 +127,16 @@ type TimelineResponse = {
 
 type NextActionSummaryResponse = {
   ok?: boolean;
+  nextAction?: {
+    actionType?: string | null;
+    channel?: string | null;
+    summary?: string | null;
+  } | null;
+  latestDraft?: {
+    threadId?: string | null;
+    channel?: string | null;
+    createdAt?: string | null;
+  } | null;
   executionState?: {
     code?: string | null;
     label?: string | null;
@@ -634,10 +644,27 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
 
   const agentExecutionState = nextActionSummary?.executionState ?? null;
   const agentExecutionCode = agentExecutionState?.code ?? null;
+  const agentNextAction = nextActionSummary?.nextAction ?? null;
+  const agentTargetChannel = isSupportedChannel(agentNextAction?.channel) ? agentNextAction.channel : requestedChannel;
+  const agentIsChannelHandoff = agentTargetChannel !== requestedChannel;
+  const agentLatestDraft = nextActionSummary?.latestDraft ?? null;
+  const agentExternalDraft =
+    typeof agentLatestDraft?.threadId === "string" &&
+    agentLatestDraft.threadId.trim().length > 0 &&
+    agentLatestDraft.threadId !== selectedThreadId
+      ? {
+          threadId: agentLatestDraft.threadId.trim(),
+          channel: isSupportedChannel(agentLatestDraft.channel) ? agentLatestDraft.channel : agentTargetChannel,
+        }
+      : null;
   const agentAutoSendDue = agentExecutionCode === "autosend_due" && Boolean(currentThreadAiDraft);
   const agentDraftPending = agentExecutionCode === "draft_pending" && !currentThreadAiDraft;
   const agentPrimaryTitle = agentAutoSendDue
     ? "Next move: send now or let autosend handle it"
+    : agentExternalDraft
+      ? `Next move: open ${agentExternalDraft.channel === "sms" ? "SMS" : agentExternalDraft.channel.toUpperCase()} draft`
+    : agentIsChannelHandoff && !currentThreadAiDraft
+      ? `Next move: switch to ${agentTargetChannel === "sms" ? "text" : agentTargetChannel.toUpperCase()}`
     : currentThreadAiDraft
       ? "Next move: approve and send"
       : agentDraftPending
@@ -645,6 +672,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         : "Next move: prepare the reply";
   const agentPrimaryDescription = agentAutoSendDue
     ? "This follow-up is already due and eligible for autosend. Send it now if you want to move first, or leave it alone and let the worker handle it."
+    : agentExternalDraft
+      ? `The agent already prepared this reply on ${agentExternalDraft.channel === "sms" ? "SMS" : agentExternalDraft.channel.toUpperCase()}. Open that draft and send it from the correct channel thread.`
+    : agentIsChannelHandoff && !currentThreadAiDraft
+      ? `The planner wants to continue this conversation over ${agentTargetChannel === "sms" ? "SMS" : agentTargetChannel.toUpperCase()}. Prepare that handoff draft here and the inbox will take you to the right channel thread.`
     : currentThreadAiDraft
       ? "The agent has already written the next reply. Review it here and send from this card."
       : agentDraftPending
@@ -652,6 +683,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         : "No draft is ready yet. Let the agent prepare the next reply for this thread.";
   const agentPrimaryButtonLabel = agentAutoSendDue
     ? "Send now"
+    : agentExternalDraft
+      ? `Open ${agentExternalDraft.channel === "sms" ? "SMS" : agentExternalDraft.channel.toUpperCase()} draft`
+    : agentIsChannelHandoff && !currentThreadAiDraft
+      ? `Prepare ${agentTargetChannel === "sms" ? "SMS" : agentTargetChannel.toUpperCase()} draft`
     : currentThreadAiDraft
       ? "Approve and send"
       : "Prepare next reply";
@@ -1328,7 +1363,21 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                         ) : null}
                       </div>
                       <div className="flex shrink-0 flex-wrap gap-2">
-                        {currentThreadAiDraft ? (
+                        {agentExternalDraft ? (
+                          <a
+                            href={buildInboxHref({
+                              status: activeStatus === "all" ? null : activeStatus,
+                              threadId: agentExternalDraft.threadId,
+                              contactId: activeContactId,
+                              channel: agentExternalDraft.channel,
+                              q: searchQuery || null,
+                              offset: offset ?? null,
+                            })}
+                            className={teamButtonClass("primary", "sm")}
+                          >
+                            {agentPrimaryButtonLabel}
+                          </a>
+                        ) : currentThreadAiDraft ? (
                           <form action={sendDraftMessageAction}>
                             <input type="hidden" name="messageId" value={currentThreadAiDraft.id} />
                             <input type="hidden" name="threadId" value={selectedThreadId} />
@@ -1345,7 +1394,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                           <form action={suggestThreadReplyAction}>
                             <input type="hidden" name="threadId" value={selectedThreadId} />
                             <input type="hidden" name="contactId" value={activeContactId} />
-                            <input type="hidden" name="channel" value={requestedChannel} />
+                            <input type="hidden" name="channel" value={agentTargetChannel} />
                             <SubmitButton
                               className={teamButtonClass("primary", "sm")}
                               pendingLabel="Drafting..."
@@ -1358,7 +1407,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                           <form action={suggestThreadReplyAction}>
                             <input type="hidden" name="threadId" value={selectedThreadId} />
                             <input type="hidden" name="contactId" value={activeContactId} />
-                            <input type="hidden" name="channel" value={requestedChannel} />
+                            <input type="hidden" name="channel" value={agentTargetChannel} />
                             <SubmitButton
                               className={teamButtonClass("secondary", "sm")}
                               pendingLabel="Refreshing..."
