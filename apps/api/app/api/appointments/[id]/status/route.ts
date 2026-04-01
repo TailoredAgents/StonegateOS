@@ -16,7 +16,7 @@ import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
 import {
   getOrCreateCommissionSettings,
-  recalculateAppointmentCommissions,
+  recalculateAppointmentCommissionsAndRefreshDraftPayouts,
 } from "@/lib/commissions";
 
 const StatusSchema = z.object({
@@ -299,7 +299,10 @@ export async function POST(
   }
 
   if (needsRecalc || leavingCompleted) {
-    await recalculateAppointmentCommissions(db, appointmentId);
+    await recalculateAppointmentCommissionsAndRefreshDraftPayouts(
+      db,
+      appointmentId,
+    );
   }
 
   if (updated.calendarEventId && status === "canceled") {

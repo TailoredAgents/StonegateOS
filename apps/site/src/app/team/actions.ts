@@ -909,6 +909,16 @@ export async function bookAppointmentAction(formData: FormData) {
     if (soldByMemberId) {
       payload["soldByMemberId"] = soldByMemberId;
     }
+    if (assignedAssociateMemberId) {
+      payload["assignedAssociateMemberId"] = assignedAssociateMemberId;
+    }
+    const soldByOverrideCodeRaw = formData.get("soldByOverrideCode");
+    if (
+      typeof soldByOverrideCodeRaw === "string" &&
+      soldByOverrideCodeRaw.trim().length > 0
+    ) {
+      payload["soldByOverrideCode"] = soldByOverrideCodeRaw.trim();
+    }
 
     const assigneeChanged =
       assignedAssociateMemberId !== currentAssignedAssociateMemberId;
@@ -1083,6 +1093,7 @@ export async function convertAppointmentToJobAction(formData: FormData) {
   const appointmentId = formData.get("appointmentId");
   const startAt = formData.get("startAt");
   const soldByMemberId = formData.get("soldByMemberId");
+  const soldByOverrideCode = formData.get("soldByOverrideCode");
 
   if (typeof appointmentId !== "string" || appointmentId.trim().length === 0) {
     jar.set({
@@ -1137,6 +1148,10 @@ export async function convertAppointmentToJobAction(formData: FormData) {
       body: JSON.stringify({
         startAt: startAt.trim(),
         soldByMemberId: soldByMemberId.trim(),
+        ...(typeof soldByOverrideCode === "string" &&
+        soldByOverrideCode.trim().length > 0
+          ? { soldByOverrideCode: soldByOverrideCode.trim() }
+          : {}),
         quotedTotalCents: bookingDetailsResult.quotedTotalCents,
         bookingDetails: bookingDetailsResult.bookingDetails,
       }),
@@ -1151,6 +1166,67 @@ export async function convertAppointmentToJobAction(formData: FormData) {
   }
 
   jar.set({ name: "myst-flash", value: "Quote converted to job", path: "/" });
+  revalidatePath("/team");
+}
+
+export async function updateAppointmentSoldByAction(formData: FormData) {
+  const jar = await cookies();
+  const appointmentId = formData.get("appointmentId");
+  const soldByMemberId = formData.get("soldByMemberId");
+  const soldByOverrideCode = formData.get("soldByOverrideCode");
+
+  if (typeof appointmentId !== "string" || appointmentId.trim().length === 0) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Appointment ID missing",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  if (
+    typeof soldByMemberId !== "string" ||
+    soldByMemberId.trim().length === 0
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Who sold the job is required.",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(
+    `/api/appointments/${encodeURIComponent(appointmentId.trim())}/sold-by`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        soldByMemberId: soldByMemberId.trim(),
+        ...(typeof soldByOverrideCode === "string" &&
+        soldByOverrideCode.trim().length > 0
+          ? { soldByOverrideCode: soldByOverrideCode.trim() }
+          : {}),
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const message = await readErrorMessage(
+      response,
+      "Unable to update who sold the job",
+    );
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({
+    name: "myst-flash",
+    value: "Who sold the job updated",
+    path: "/",
+  });
   revalidatePath("/team");
 }
 

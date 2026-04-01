@@ -1128,10 +1128,20 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                       ))}
                     </select>
                   </label>
+                  <label className="flex flex-col gap-1">
+                    <span>Seller override code</span>
+                    <input
+                      name="soldByOverrideCode"
+                      type="password"
+                      autoComplete="off"
+                      placeholder="Only needed if changing seller"
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    />
+                  </label>
                   <p className="sm:col-span-2 text-[11px] text-slate-500">
                     Assigned Associate controls call routing and follow-up
-                    ownership. Who sold the job controls sales commission and
-                    locks once the appointment is booked.
+                    ownership. Who sold the job controls sales commission, and
+                    changing it later requires the secret code.
                   </p>
                   <AppointmentBookingDetailsFields
                     teamMembers={teamMembers}

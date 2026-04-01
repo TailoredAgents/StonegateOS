@@ -6,6 +6,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import {
   appointmentNotes,
   appointments,
+  contacts,
   crmPipeline,
   crmTasks,
   getDb,
@@ -20,6 +21,11 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { getBusinessHoursPolicy } from "@/lib/policy";
+import {
+  isValidSoldByOverrideCode,
+  normalizeSoldByMemberId,
+  soldByChangeRequiresOverride,
+} from "@/lib/sold-by-override";
 import { isAdminRequest } from "../../../web/admin";
 
 function parseStartAt(value: string, timezone: string): Date | null {
@@ -44,6 +50,8 @@ type BookRequest = {
   bookingDetails?: unknown;
   notes?: string;
   soldByMemberId?: string | null;
+  soldByOverrideCode?: string | null;
+  assignedAssociateMemberId?: string | null;
   marketingMemberId?: string | null;
   source?: string;
 };
@@ -83,6 +91,9 @@ export async function POST(request: NextRequest): Promise<Response> {
         ? JSON.parse(form.get("bookingDetails")!.toString())
         : undefined,
       notes: form.get("notes")?.toString(),
+      soldByMemberId: form.get("soldByMemberId")?.toString(),
+      soldByOverrideCode: form.get("soldByOverrideCode")?.toString(),
+      assignedAssociateMemberId: form.get("assignedAssociateMemberId")?.toString(),
       services: form.get("services")
         ? form
             .get("services")!
@@ -139,10 +150,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       ? payload.notes.trim()
       : null;
   const soldByMemberId =
-    typeof payload.soldByMemberId === "string" &&
-    payload.soldByMemberId.trim().length > 0
-      ? payload.soldByMemberId.trim()
+    normalizeSoldByMemberId(payload.soldByMemberId);
+  const soldByOverrideCode =
+    typeof payload.soldByOverrideCode === "string"
+      ? payload.soldByOverrideCode.trim()
       : null;
+  const assignedAssociateMemberId = normalizeSoldByMemberId(
+    payload.assignedAssociateMemberId,
+  );
   const marketingMemberId =
     typeof payload.marketingMemberId === "string" &&
     payload.marketingMemberId.trim().length > 0
@@ -200,6 +215,14 @@ export async function POST(request: NextRequest): Promise<Response> {
       let resolvedPropertyId = propertyId;
       let createdPropertyId: string | null = null;
       let resolvedSoldByMemberId = soldByMemberId;
+      const [contact] = await tx
+        .select({ salespersonMemberId: contacts.salespersonMemberId })
+        .from(contacts)
+        .where(eq(contacts.id, contactId))
+        .limit(1);
+      const baselineSoldByMemberId =
+        assignedAssociateMemberId ??
+        normalizeSoldByMemberId(contact?.salespersonMemberId);
 
       if (!resolvedSoldByMemberId && source === "sales_autopilot") {
         try {
@@ -211,6 +234,20 @@ export async function POST(request: NextRequest): Promise<Response> {
           resolvedSoldByMemberId = austin?.id ?? null;
         } catch {
           resolvedSoldByMemberId = null;
+        }
+      }
+
+      if (
+        soldByChangeRequiresOverride({
+          nextSoldByMemberId: resolvedSoldByMemberId,
+          assignedSalespersonMemberId: baselineSoldByMemberId,
+        })
+      ) {
+        if (!process.env["SOLD_BY_OVERRIDE_CODE"]?.trim()) {
+          throw new Error("sold_by_override_unconfigured");
+        }
+        if (!isValidSoldByOverrideCode(soldByOverrideCode)) {
+          throw new Error("sold_by_override_code_required");
         }
       }
 
@@ -378,6 +415,10 @@ export async function POST(request: NextRequest): Promise<Response> {
         source: result.source,
         soldByMemberId: result.soldByMemberId ?? null,
         marketingMemberId: result.marketingMemberId ?? null,
+        soldByOverrideUsed: soldByChangeRequiresOverride({
+          nextSoldByMemberId: result.soldByMemberId ?? null,
+          assignedSalespersonMemberId: assignedAssociateMemberId,
+        }),
       },
     });
 
@@ -390,6 +431,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "booking_failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: message },
+      { status: message === "sold_by_override_code_required" ? 403 : 500 },
+    );
   }
 }

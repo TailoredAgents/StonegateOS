@@ -601,6 +601,14 @@ export async function recalculateAppointmentCommissions(
   }
 }
 
+export async function recalculateAppointmentCommissionsAndRefreshDraftPayouts(
+  db: DatabaseClient,
+  appointmentId: string,
+): Promise<void> {
+  await recalculateAppointmentCommissions(db, appointmentId);
+  await refreshDraftPayoutReports(db);
+}
+
 export async function createOrGetCurrentPayoutRun(
   db: DatabaseClient,
   input: { actorId?: string | null },

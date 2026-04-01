@@ -26,12 +26,17 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { getBusinessHoursPolicy } from "@/lib/policy";
 import { extractQuoteFollowUpAppointmentId } from "@/lib/quote-followups";
+import {
+  isValidSoldByOverrideCode,
+  soldByChangeRequiresOverride,
+} from "@/lib/sold-by-override";
 import { isAdminRequest } from "../../../web/admin";
 import { buildRescheduleUrl } from "../../../web/scheduling";
 
 const ConvertSchema = z.object({
   startAt: z.string().min(1),
   soldByMemberId: z.string().uuid(),
+  soldByOverrideCode: z.string().optional(),
   quotedTotalCents: z.number().int().nonnegative().nullable(),
   bookingDetails: z.unknown(),
 });
@@ -115,6 +120,7 @@ export async function POST(
       id: appointments.id,
       type: appointments.type,
       status: appointments.status,
+      soldByMemberId: appointments.soldByMemberId,
       leadId: appointments.leadId,
       contactId: appointments.contactId,
       calendarEventId: appointments.calendarEventId,
@@ -126,6 +132,7 @@ export async function POST(
       contactEmail: contacts.email,
       contactPhone: contacts.phone,
       contactPhoneE164: contacts.phoneE164,
+      contactSalespersonMemberId: contacts.salespersonMemberId,
       propertyAddressLine1: properties.addressLine1,
       propertyCity: properties.city,
       propertyState: properties.state,
@@ -151,6 +158,27 @@ export async function POST(
       { error: "appointment_is_not_an_in_person_quote" },
       { status: 400 },
     );
+  }
+
+  if (
+    soldByChangeRequiresOverride({
+      nextSoldByMemberId: parsed.data.soldByMemberId,
+      currentSoldByMemberId: existing.soldByMemberId,
+      assignedSalespersonMemberId: existing.contactSalespersonMemberId,
+    })
+  ) {
+    if (!process.env["SOLD_BY_OVERRIDE_CODE"]?.trim()) {
+      return NextResponse.json(
+        { error: "sold_by_override_unconfigured" },
+        { status: 500 },
+      );
+    }
+    if (!isValidSoldByOverrideCode(parsed.data.soldByOverrideCode)) {
+      return NextResponse.json(
+        { error: "sold_by_override_code_required" },
+        { status: 403 },
+      );
+    }
   }
 
   if (
@@ -335,6 +363,11 @@ export async function POST(
       startAt: startAt.toISOString(),
       quotedTotalCents: parsed.data.quotedTotalCents,
       soldByMemberId: parsed.data.soldByMemberId,
+      soldByOverrideUsed: soldByChangeRequiresOverride({
+        nextSoldByMemberId: parsed.data.soldByMemberId,
+        currentSoldByMemberId: existing.soldByMemberId,
+        assignedSalespersonMemberId: existing.contactSalespersonMemberId,
+      }),
       bookingDetails,
     },
   });

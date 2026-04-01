@@ -671,10 +671,24 @@ export function ContactsDetailsPaneClient({
                   </select>
                 </label>
 
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Seller Override Code
+                  </span>
+                  <input
+                    name="soldByOverrideCode"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="Only needed if changing seller"
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  />
+                </label>
+
                 <p className="sm:col-span-2 text-[11px] text-slate-500">
                   Assigned Associate keeps the contact routed to the right phone
                   and owner. Who sold the job is stored on the appointment for
-                  commission payouts and is not editable after booking.
+                  commission payouts, and changing it later requires the secret
+                  code.
                 </p>
                 <AppointmentBookingDetailsFields
                   teamMembers={teamMembers}

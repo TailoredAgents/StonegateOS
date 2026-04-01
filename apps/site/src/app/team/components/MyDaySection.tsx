@@ -8,6 +8,7 @@ import {
   scheduleQuoteFollowupAction,
   startContactCallAction,
   updateAppointmentBookingDetailsAction,
+  updateAppointmentSoldByAction,
 } from "../actions";
 import { callAdminApi } from "../lib/api";
 import {
@@ -632,6 +633,61 @@ function AppointmentCard({
         )}
       </div>
 
+      {!item.isQuoteOnly ? (
+        <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
+          <summary className={summaryButtonClass("secondary")}>
+            Edit seller
+          </summary>
+          <form
+            action={updateAppointmentSoldByAction}
+            className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
+          >
+            <input type="hidden" name="appointmentId" value={a.id} />
+            <label className="flex flex-col gap-1">
+              <span>Who sold the job?</span>
+              <select
+                name="soldByMemberId"
+                defaultValue={
+                  a.soldByMemberId ?? a.contact.assignedAssociateMemberId ?? ""
+                }
+                required
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              >
+                <option value="">(Select seller)</option>
+                {teamMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span>Seller override code</span>
+              <input
+                name="soldByOverrideCode"
+                type="password"
+                autoComplete="off"
+                placeholder="Required if changing seller"
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+              Sales payouts use this seller. Completed jobs update draft payout
+              reports immediately. Locked or paid payout periods must be
+              unlocked before seller changes.
+            </div>
+            <div className="sm:col-span-2 flex items-center justify-end">
+              <SubmitButton
+                className={teamButtonClass("primary", "sm")}
+                pendingLabel="Saving..."
+              >
+                Save seller
+              </SubmitButton>
+            </div>
+          </form>
+        </details>
+      ) : null}
+
       {!isCompleted ? (
         <div className="mt-4 space-y-3">
           {item.isQuoteOnly ? (
@@ -696,6 +752,17 @@ function AppointmentCard({
                         </option>
                       ))}
                     </select>
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <span>Seller override code</span>
+                    <input
+                      name="soldByOverrideCode"
+                      type="password"
+                      autoComplete="off"
+                      placeholder="Only needed if changing seller"
+                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    />
                   </label>
 
                   <label className="flex flex-col gap-1">
@@ -867,8 +934,8 @@ function AppointmentCard({
                   </summary>
                   <div className="mt-3 space-y-3">
                     <div className="text-[11px] text-slate-600">
-                      Sales commission is locked to the person selected in Who
-                      sold the job? when the appointment was booked.
+                      Sales commission uses the person in Who sold the job?.
+                      Changing that seller requires the secret code.
                     </div>
                     <div className="text-[11px] text-slate-600">
                       Crew payout is locked by the selected crew combo, and at
