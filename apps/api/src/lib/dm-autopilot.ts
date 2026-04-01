@@ -10,6 +10,12 @@ type TransactionExecutor =
     : never;
 type DbExecutor = DatabaseClient | TransactionExecutor;
 
+type DmLikeMessage = {
+  channel?: string | null;
+  direction: string;
+  body: string | null | undefined;
+};
+
 export function isMessengerLeadCardBody(body: string): boolean {
   const text = body.toLowerCase();
   const markers = ["phone number:", "email:", "zip code:", "first name:", "when do you want it gone?:"];
@@ -20,6 +26,58 @@ export function isMessengerLeadCardBody(body: string): boolean {
 function isMeaningfulInboundDmBody(body: string | null | undefined): boolean {
   const trimmed = typeof body === "string" ? body.trim() : "";
   return trimmed.length > 0 && !isMessengerLeadCardBody(trimmed);
+}
+
+export type DmOpeningStrategy = {
+  openingType: "lead_card" | "typed_message" | "mixed" | "unknown";
+  latestInboundWasLeadCard: boolean;
+  meaningfulInboundCount: number;
+  summary: string;
+};
+
+export function getDmOpeningStrategy(messages: DmLikeMessage[]): DmOpeningStrategy {
+  const inboundDmMessages = messages.filter(
+    (message) =>
+      message.direction === "inbound" &&
+      (message.channel === "dm" || typeof message.channel !== "string"),
+  );
+
+  if (inboundDmMessages.length === 0) {
+    return {
+      openingType: "unknown",
+      latestInboundWasLeadCard: false,
+      meaningfulInboundCount: 0,
+      summary: "Messenger opening type is unknown.",
+    };
+  }
+
+  const latestInbound = inboundDmMessages[inboundDmMessages.length - 1];
+  const latestBody = typeof latestInbound?.body === "string" ? latestInbound.body : "";
+  const latestInboundWasLeadCard = isMessengerLeadCardBody(latestBody);
+  const leadCardCount = inboundDmMessages.filter((message) => isMessengerLeadCardBody(message.body ?? "")).length;
+  const meaningfulInboundCount = inboundDmMessages.filter((message) => isMeaningfulInboundDmBody(message.body)).length;
+
+  if (latestInboundWasLeadCard) {
+    return {
+      openingType: meaningfulInboundCount > 0 ? "mixed" : "lead_card",
+      latestInboundWasLeadCard: true,
+      meaningfulInboundCount,
+      summary:
+        meaningfulInboundCount > 0
+          ? "Messenger thread includes both lead-card answers and typed customer messages."
+          : "Latest Messenger inbound looks like a Facebook lead-card style message.",
+    };
+  }
+
+  return {
+    openingType: leadCardCount > 0 ? "mixed" : "typed_message",
+    latestInboundWasLeadCard: false,
+    meaningfulInboundCount,
+    summary:
+      leadCardCount > 0
+        ? "Messenger thread started from a lead card but the latest inbound is a real typed message."
+        : "Messenger thread looks like a normal typed DM conversation.",
+  };
 }
 
 function parseIso(value: string | null | undefined): Date | null {

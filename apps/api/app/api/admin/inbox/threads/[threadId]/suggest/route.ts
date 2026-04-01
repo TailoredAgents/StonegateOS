@@ -18,6 +18,7 @@ import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
 import { buildSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
 import { buildSalesAgentNextAction, getSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
+import { getDmOpeningStrategy } from "@/lib/dm-autopilot";
 
 type ReplyChannel = "sms" | "email" | "dm";
 
@@ -461,6 +462,49 @@ function buildDmSalesAngleInstruction(input: {
   return null;
 }
 
+function buildDmOpeningInstruction(input: {
+  replyChannel: ReplyChannel;
+  actionType: string | null | undefined;
+  messages: MessageContext[];
+  memoryMissingFields: string[];
+}): string | null {
+  if (input.replyChannel !== "dm") return null;
+
+  const opening = getDmOpeningStrategy(
+    input.messages.map((message) => ({
+      channel: message.channel,
+      direction: message.direction,
+      body: message.body,
+    })),
+  );
+
+  if (opening.openingType === "lead_card") {
+    return [
+      "Messenger opening: this lead looks like a Facebook lead-card opener, not a normal typed first message.",
+      "Acknowledge briefly, then move straight to the next useful step.",
+      "Do not re-ask for basics that may already be in the lead card or CRM memory, like name, phone, ZIP, or timing, unless they are still truly missing.",
+      input.actionType === "collect_missing_info" && input.memoryMissingFields.length > 0
+        ? `If you ask for more info, ask for just one thing from this list: ${input.memoryMissingFields.join(", ")}.`
+        : "If more info is needed, ask for only one easy thing, like a photo or one missing job detail.",
+      "Keep it short and friendly, like picking up a conversation that already started.",
+    ].join(" ");
+  }
+
+  if (opening.openingType === "mixed") {
+    return [
+      "Messenger opening: this thread started from lead-card info but now has real typed customer messages.",
+      "Treat the typed message as the live conversation.",
+      "Still avoid re-asking for basics already captured from the lead card or CRM memory.",
+    ].join(" ");
+  }
+
+  if (opening.openingType === "typed_message") {
+    return "Messenger opening: this is a normal typed DM conversation, so respond naturally to the latest message instead of using a lead-form style opener.";
+  }
+
+  return null;
+}
+
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ threadId: string }> }
@@ -853,6 +897,12 @@ export async function POST(
       : null,
     buildPlannerInstruction(salesAgentNextAction?.actionType, targetReplyChannel),
     buildChannelStyleInstruction(targetReplyChannel, salesAgentNextAction?.actionType),
+    buildDmOpeningInstruction({
+      replyChannel: targetReplyChannel,
+      actionType: salesAgentNextAction?.actionType,
+      messages,
+      memoryMissingFields: Array.isArray(salesAgentMemory?.missingFields) ? salesAgentMemory.missingFields : [],
+    }),
     buildDmSalesAngleInstruction({
       replyChannel: targetReplyChannel,
       actionType: salesAgentNextAction?.actionType,
