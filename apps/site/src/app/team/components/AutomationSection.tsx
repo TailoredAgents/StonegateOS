@@ -23,6 +23,9 @@ type SalesAutopilotPolicy = {
   retryDelayMinutes: number;
   dmSmsFallbackAfterMinutes: number;
   dmMinSilenceBeforeSmsMinutes: number;
+  dmMissingInfoFollowupDelayMinutes: number;
+  dmQuoteFollowupDelayMinutes: number;
+  dmObjectionFollowupDelayMinutes: number;
   agentDisplayName: string;
   plannerAutoSendEnabled: boolean;
   plannerAutoSendMinDraftAgeMinutes: number;
@@ -180,7 +183,7 @@ export async function AutomationSection(): Promise<React.ReactElement> {
               </label>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <label className="flex flex-col gap-1">
                 <span>DM to SMS fallback after (minutes)</span>
                 <input
@@ -200,6 +203,39 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                   min={5}
                   max={720}
                   defaultValue={autopilot.dmMinSilenceBeforeSmsMinutes}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>DM missing-info delay (minutes)</span>
+                <input
+                  name="dmMissingInfoFollowupDelayMinutes"
+                  type="number"
+                  min={5}
+                  max={1440}
+                  defaultValue={autopilot.dmMissingInfoFollowupDelayMinutes}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>DM quote follow-up delay (minutes)</span>
+                <input
+                  name="dmQuoteFollowupDelayMinutes"
+                  type="number"
+                  min={15}
+                  max={4320}
+                  defaultValue={autopilot.dmQuoteFollowupDelayMinutes}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>DM objection / hesitation delay (minutes)</span>
+                <input
+                  name="dmObjectionFollowupDelayMinutes"
+                  type="number"
+                  min={15}
+                  max={7200}
+                  defaultValue={autopilot.dmObjectionFollowupDelayMinutes}
                   className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
                 />
               </label>

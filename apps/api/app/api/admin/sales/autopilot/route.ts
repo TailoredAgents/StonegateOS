@@ -119,6 +119,30 @@ export async function PATCH(request: NextRequest): Promise<Response> {
   const dmMinSilenceBeforeSmsMinutes = clampInt(payload["dmMinSilenceBeforeSmsMinutes"], { min: 5, max: 12 * 60 });
   if (dmMinSilenceBeforeSmsMinutes !== null) next["dmMinSilenceBeforeSmsMinutes"] = dmMinSilenceBeforeSmsMinutes;
 
+  const dmMissingInfoFollowupDelayMinutes = clampInt(payload["dmMissingInfoFollowupDelayMinutes"], {
+    min: 5,
+    max: 24 * 60,
+  });
+  if (dmMissingInfoFollowupDelayMinutes !== null) {
+    next["dmMissingInfoFollowupDelayMinutes"] = dmMissingInfoFollowupDelayMinutes;
+  }
+
+  const dmQuoteFollowupDelayMinutes = clampInt(payload["dmQuoteFollowupDelayMinutes"], {
+    min: 15,
+    max: 3 * 24 * 60,
+  });
+  if (dmQuoteFollowupDelayMinutes !== null) {
+    next["dmQuoteFollowupDelayMinutes"] = dmQuoteFollowupDelayMinutes;
+  }
+
+  const dmObjectionFollowupDelayMinutes = clampInt(payload["dmObjectionFollowupDelayMinutes"], {
+    min: 15,
+    max: 5 * 24 * 60,
+  });
+  if (dmObjectionFollowupDelayMinutes !== null) {
+    next["dmObjectionFollowupDelayMinutes"] = dmObjectionFollowupDelayMinutes;
+  }
+
   const agentDisplayName = coerceOptionalString(payload["agentDisplayName"]);
   if (agentDisplayName !== null) next["agentDisplayName"] = agentDisplayName;
 

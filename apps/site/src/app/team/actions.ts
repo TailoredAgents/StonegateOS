@@ -2937,6 +2937,9 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const dmMinSilenceBeforeSmsMinutes = formData.get(
     "dmMinSilenceBeforeSmsMinutes",
   );
+  const dmMissingInfoFollowupDelayMinutes = formData.get("dmMissingInfoFollowupDelayMinutes");
+  const dmQuoteFollowupDelayMinutes = formData.get("dmQuoteFollowupDelayMinutes");
+  const dmObjectionFollowupDelayMinutes = formData.get("dmObjectionFollowupDelayMinutes");
   const plannerAutoSendMinDraftAgeMinutes = formData.get(
     "plannerAutoSendMinDraftAgeMinutes",
   );
@@ -2968,6 +2971,9 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     ["retryDelayMinutes", retryDelayMinutes],
     ["dmSmsFallbackAfterMinutes", dmSmsFallbackAfterMinutes],
     ["dmMinSilenceBeforeSmsMinutes", dmMinSilenceBeforeSmsMinutes],
+    ["dmMissingInfoFollowupDelayMinutes", dmMissingInfoFollowupDelayMinutes],
+    ["dmQuoteFollowupDelayMinutes", dmQuoteFollowupDelayMinutes],
+    ["dmObjectionFollowupDelayMinutes", dmObjectionFollowupDelayMinutes],
     ["plannerAutoSendMinDraftAgeMinutes", plannerAutoSendMinDraftAgeMinutes],
   ] as const) {
     if (typeof value === "string" && value.trim().length > 0) {

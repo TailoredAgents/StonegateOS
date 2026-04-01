@@ -87,7 +87,14 @@ function isRecentMissedInboundCall(context: OmniLeadContext, now: Date): boolean
 export function buildSalesAgentNextAction(input: {
   context: OmniLeadContext;
   memory: SalesAgentMemoryRecord;
-  autopilotPolicy?: Pick<SalesAutopilotPolicy, "dmSmsFallbackAfterMinutes" | "dmMinSilenceBeforeSmsMinutes">;
+  autopilotPolicy?: Pick<
+    SalesAutopilotPolicy,
+    | "dmSmsFallbackAfterMinutes"
+    | "dmMinSilenceBeforeSmsMinutes"
+    | "dmMissingInfoFollowupDelayMinutes"
+    | "dmQuoteFollowupDelayMinutes"
+    | "dmObjectionFollowupDelayMinutes"
+  >;
   now?: Date;
 }): SalesAgentNextActionRecord {
   const { context, memory } = input;
@@ -95,6 +102,9 @@ export function buildSalesAgentNextAction(input: {
   const autopilotPolicy = input.autopilotPolicy ?? {
     dmSmsFallbackAfterMinutes: 120,
     dmMinSilenceBeforeSmsMinutes: 45,
+    dmMissingInfoFollowupDelayMinutes: 90,
+    dmQuoteFollowupDelayMinutes: 180,
+    dmObjectionFollowupDelayMinutes: 360,
   };
   const preferredChannel = chooseChannel(context);
   const pendingHumanTakeover = context.automation.some((row) => row.humanTakeover);
@@ -109,6 +119,28 @@ export function buildSalesAgentNextAction(input: {
     Boolean(context.nextAppointment?.id) &&
     context.nextAppointment?.status !== "cancelled" &&
     context.nextAppointment?.status !== "completed";
+
+  const latestChannelTouchAt = (channel: string | null | undefined): Date | null => {
+    if (!channel) return null;
+    return pickLatestDate(
+      context.channelSummary
+        .filter((row) => row.channel === channel)
+        .map((row) => row.lastMessageAt),
+    );
+  };
+
+  const resolveDeferredDueAt = (input: {
+    channel: string | null | undefined;
+    delayMinutes: number;
+    baselines?: Array<Date | null | undefined>;
+  }): string => {
+    const channelTouchAt = latestChannelTouchAt(input.channel);
+    const delayedAt = new Date((channelTouchAt ?? now).getTime() + input.delayMinutes * 60 * 1000);
+    const floor = delayedAt.getTime();
+    const candidateMs = [floor, ...((input.baselines ?? []).map((value) => value?.getTime() ?? Number.NaN))]
+      .filter((value) => Number.isFinite(value));
+    return new Date(Math.max(...candidateMs)).toISOString();
+  };
 
   if (pendingDnc) {
     return {
@@ -264,7 +296,14 @@ export function buildSalesAgentNextAction(input: {
         "Known objection: price",
         memory.lastPromisedNextStep,
       ]),
-      dueAt: nextTaskDue?.toISOString() ?? now.toISOString(),
+      dueAt:
+        preferredChannel === "dm"
+          ? resolveDeferredDueAt({
+              channel: "dm",
+              delayMinutes: autopilotPolicy.dmObjectionFollowupDelayMinutes,
+              baselines: [nextTaskDue],
+            })
+          : nextTaskDue?.toISOString() ?? now.toISOString(),
       source: "rules_v1",
     };
   }
@@ -282,7 +321,14 @@ export function buildSalesAgentNextAction(input: {
         `Missing: ${memory.missingFields.join(", ")}`,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
-      dueAt: nextAutomationFollowup?.toISOString() ?? now.toISOString(),
+      dueAt:
+        preferredChannel === "dm"
+          ? resolveDeferredDueAt({
+              channel: "dm",
+              delayMinutes: autopilotPolicy.dmMissingInfoFollowupDelayMinutes,
+              baselines: [nextAutomationFollowup],
+            })
+          : nextAutomationFollowup?.toISOString() ?? now.toISOString(),
       source: "rules_v1",
     };
   }
@@ -301,7 +347,14 @@ export function buildSalesAgentNextAction(input: {
         memory.lastPromisedNextStep,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
-      dueAt: nextTaskDue?.toISOString() ?? nextAutomationFollowup?.toISOString() ?? now.toISOString(),
+      dueAt:
+        preferredChannel === "dm"
+          ? resolveDeferredDueAt({
+              channel: "dm",
+              delayMinutes: autopilotPolicy.dmQuoteFollowupDelayMinutes,
+              baselines: [nextTaskDue, nextAutomationFollowup],
+            })
+          : nextTaskDue?.toISOString() ?? nextAutomationFollowup?.toISOString() ?? now.toISOString(),
       source: "rules_v1",
     };
   }

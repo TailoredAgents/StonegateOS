@@ -108,6 +108,9 @@ export type SalesAutopilotPolicy = {
   retryDelayMinutes: number;
   dmSmsFallbackAfterMinutes: number;
   dmMinSilenceBeforeSmsMinutes: number;
+  dmMissingInfoFollowupDelayMinutes: number;
+  dmQuoteFollowupDelayMinutes: number;
+  dmObjectionFollowupDelayMinutes: number;
   agentDisplayName: string;
   plannerAutoSendEnabled: boolean;
   plannerAutoSendMinDraftAgeMinutes: number;
@@ -198,6 +201,9 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   retryDelayMinutes: 2,
   dmSmsFallbackAfterMinutes: 120,
   dmMinSilenceBeforeSmsMinutes: 45,
+  dmMissingInfoFollowupDelayMinutes: 90,
+  dmQuoteFollowupDelayMinutes: 180,
+  dmObjectionFollowupDelayMinutes: 360,
   agentDisplayName: "Devon",
   plannerAutoSendEnabled: false,
   plannerAutoSendMinDraftAgeMinutes: 10,
@@ -1217,6 +1223,21 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
       stored["dmMinSilenceBeforeSmsMinutes"],
       DEFAULT_SALES_AUTOPILOT_POLICY.dmMinSilenceBeforeSmsMinutes,
       { min: 5, max: 12 * 60 }
+    ),
+    dmMissingInfoFollowupDelayMinutes: coerceInt(
+      stored["dmMissingInfoFollowupDelayMinutes"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.dmMissingInfoFollowupDelayMinutes,
+      { min: 5, max: 24 * 60 }
+    ),
+    dmQuoteFollowupDelayMinutes: coerceInt(
+      stored["dmQuoteFollowupDelayMinutes"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.dmQuoteFollowupDelayMinutes,
+      { min: 15, max: 3 * 24 * 60 }
+    ),
+    dmObjectionFollowupDelayMinutes: coerceInt(
+      stored["dmObjectionFollowupDelayMinutes"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.dmObjectionFollowupDelayMinutes,
+      { min: 15, max: 5 * 24 * 60 }
     ),
     agentDisplayName: coerceString(stored["agentDisplayName"], DEFAULT_SALES_AUTOPILOT_POLICY.agentDisplayName),
     plannerAutoSendEnabled:
