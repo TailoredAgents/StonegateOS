@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
+import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import {
   buildSalesAgentNextAction,
@@ -73,6 +74,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   const includeQuotePrice = request.nextUrl.searchParams.get("includeQuotePrice") === "1";
   const db = getDb();
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
+  const appointmentPreservationOutcomeSummary = await loadAppointmentPreservationOutcomeSummary(db);
   const liveContext = await loadOmniLeadContext(db, {
     contactId: contactIdTrimmed,
     includeQuotePrice,
@@ -113,6 +115,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
         missingFields: memory?.missingFields ?? [],
         factsJson: (memory?.factsJson as Record<string, unknown> | null) ?? {},
       }),
+      appointmentPreservationOutcomeSummary,
       appointmentReminderOutcomeSummary,
       missingInfoOutcomeSummary,
       objectionSaveOutcomeSummary,

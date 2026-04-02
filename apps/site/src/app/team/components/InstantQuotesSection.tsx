@@ -239,6 +239,41 @@ type AppointmentReminderSummaryDto = {
   };
 };
 
+type AppointmentPreservationBucketDto = {
+  attempts: number;
+  preserved: number;
+  preservedRate: number;
+  completed: number;
+  completedRate: number;
+  canceled: number;
+  canceledRate: number;
+  noShows: number;
+  noShowRate: number;
+};
+
+type AppointmentPreservationSummaryDto = {
+  windowStart: string;
+  attempts: number;
+  preserved: number;
+  preservedRate: number;
+  completed: number;
+  completedRate: number;
+  canceled: number;
+  canceledRate: number;
+  noShows: number;
+  noShowRate: number;
+  byKind: {
+    requested: AppointmentPreservationBucketDto;
+    rescheduled: AppointmentPreservationBucketDto;
+    reminder: AppointmentPreservationBucketDto;
+    other: AppointmentPreservationBucketDto;
+  };
+  learned: {
+    strongestTouchKind: "requested" | "rescheduled" | "reminder" | "other" | null;
+    needsHumanBackup: boolean;
+  };
+};
+
 type ReactivationBucketDto = {
   attempts: number;
   reopened: number;
@@ -343,6 +378,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const data = (await res.json()) as {
     quotes?: InstantQuoteDto[];
     summary?: InstantQuoteSummaryDto;
+    appointmentPreservationSummary?: AppointmentPreservationSummaryDto;
     appointmentReminderSummary?: AppointmentReminderSummaryDto;
     missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
@@ -352,6 +388,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   };
   const quotes = data.quotes ?? [];
   const summary = data.summary;
+  const appointmentPreservationSummary = data.appointmentPreservationSummary;
   const appointmentReminderSummary = data.appointmentReminderSummary;
   const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
@@ -585,6 +622,40 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {appointmentReminderSummary.learned.rescheduleSavesWorking
               ? "Reschedule saves are preserving booked work."
               : "No strong reschedule-save edge yet."}
+          </div>
+        </div>
+      ) : null}
+      {appointmentPreservationSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Appointment preservation learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks real post-booking confirmation-loop touches and measures which ones correlate with kept jobs versus cancellations and no-shows.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-600">
+            Attempts: {appointmentPreservationSummary.attempts} | Preserved: {appointmentPreservationSummary.preserved} (
+            {formatPercent(appointmentPreservationSummary.preservedRate)}) | Completed: {appointmentPreservationSummary.completed} (
+            {formatPercent(appointmentPreservationSummary.completedRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Canceled {formatPercent(appointmentPreservationSummary.canceledRate)} | No-show {formatPercent(appointmentPreservationSummary.noShowRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Initial confirmation preserve {formatPercent(appointmentPreservationSummary.byKind.requested.preservedRate)} | Reschedule confirmation preserve{" "}
+            {formatPercent(appointmentPreservationSummary.byKind.rescheduled.preservedRate)} | Reminder preserve{" "}
+            {formatPercent(appointmentPreservationSummary.byKind.reminder.preservedRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {appointmentPreservationSummary.learned.strongestTouchKind === "requested"
+              ? "Learned appointment-preservation lean: initial confirmations"
+              : appointmentPreservationSummary.learned.strongestTouchKind === "rescheduled"
+                ? "Learned appointment-preservation lean: reschedule confirmations"
+                : appointmentPreservationSummary.learned.strongestTouchKind === "reminder"
+                  ? "Learned appointment-preservation lean: pre-job reminders"
+                  : "Learned appointment-preservation lean: not strong enough yet"}
+            {" | "}
+            {appointmentPreservationSummary.learned.needsHumanBackup
+              ? "Booked jobs still need human backup on shakier appointments."
+              : "No strong human-backup warning yet."}
           </div>
         </div>
       ) : null}

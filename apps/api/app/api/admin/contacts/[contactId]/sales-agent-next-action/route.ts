@@ -8,6 +8,7 @@ import {
   getSalesAgentNextAction,
   upsertSalesAgentNextAction,
 } from "@/lib/sales-agent-next-action";
+import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import {
   buildSalesAgentMemory,
@@ -120,6 +121,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
   }
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
+  const appointmentPreservationOutcomeSummary = await loadAppointmentPreservationOutcomeSummary(db);
   const appointmentReminderOutcomeSummary = await loadAppointmentReminderOutcomeSummary(db);
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
@@ -145,6 +147,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       action: buildSalesAgentNextAction({
         context: liveContext,
         memory: toMemoryRecord(memory),
+        appointmentPreservationOutcomeSummary,
         appointmentReminderOutcomeSummary,
         missingInfoOutcomeSummary,
         objectionSaveOutcomeSummary,

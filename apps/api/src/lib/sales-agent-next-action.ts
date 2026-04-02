@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { getDb, salesAgentNextActions } from "@/db";
+import type { AppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import type { AppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import {
   getPreferredMissingInfoChannel,
@@ -195,6 +196,7 @@ function getLatestQuoteCreatedAt(context: OmniLeadContext): Date | null {
 export function buildSalesAgentNextAction(input: {
   context: OmniLeadContext;
   memory: SalesAgentMemoryRecord;
+  appointmentPreservationOutcomeSummary?: AppointmentPreservationOutcomeSummary | null;
   appointmentReminderOutcomeSummary?: AppointmentReminderOutcomeSummary | null;
   missingInfoOutcomeSummary?: MissingInfoOutcomeSummary | null;
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
@@ -357,6 +359,7 @@ export function buildSalesAgentNextAction(input: {
   }
 
   if (hasUpcomingAppointment) {
+    const preservationLearning = input.appointmentPreservationOutcomeSummary;
     const reminderLearning = input.appointmentReminderOutcomeSummary;
     const preferredReminderWindow =
       reminderLearning?.learned.preferredWindow === "24h"
@@ -364,6 +367,14 @@ export function buildSalesAgentNextAction(input: {
         : reminderLearning?.learned.preferredWindow === "2h"
           ? "2 hour"
           : null;
+    const strongestTouchKind =
+      preservationLearning?.learned.strongestTouchKind === "requested"
+        ? "initial confirmations"
+        : preservationLearning?.learned.strongestTouchKind === "rescheduled"
+          ? "reschedule confirmations"
+          : preservationLearning?.learned.strongestTouchKind === "reminder"
+            ? "pre-job reminders"
+            : null;
     return {
       actionType: "wait_for_appointment",
       channel: preferredChannel,
@@ -375,8 +386,12 @@ export function buildSalesAgentNextAction(input: {
       facts: dedupe([
         context.nextAppointment?.startAt ? `Appointment at ${context.nextAppointment.startAt}` : null,
         preferredReminderWindow ? `Recent appointment acknowledgements are stronger after the ${preferredReminderWindow} reminder.` : null,
+        strongestTouchKind ? `Recent booked jobs are being preserved best after ${strongestTouchKind}.` : null,
         reminderLearning?.learned.rescheduleSavesWorking
           ? "Recent reschedule requests are turning back into kept appointments often enough that keeping the reschedule path easy is paying off."
+          : null,
+        preservationLearning?.learned.needsHumanBackup
+          ? "Recent booked jobs are still slipping into cancellations or no-shows often enough that shakier appointments may need a human backup touch."
           : null,
         reminderLearning && !reminderLearning.learned.confirmationLoopHealthy
           ? "Recent reminder acknowledgements are still soft overall, so shaky appointments may still need human confirmation."

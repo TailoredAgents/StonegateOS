@@ -20,6 +20,7 @@ import { buildSalesAgentNextAction, getSalesAgentNextAction, upsertSalesAgentNex
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 import { getDmOpeningStrategy } from "@/lib/dm-autopilot";
 import { getMediaJobAnalysis } from "@/lib/media-job-analysis";
+import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
@@ -772,6 +773,7 @@ export async function POST(
       })
     : null;
   const builtSalesAgentMemory = leadContext ? buildSalesAgentMemory(leadContext) : null;
+  const appointmentPreservationOutcomeSummary = leadContext ? await loadAppointmentPreservationOutcomeSummary(db) : null;
   const appointmentReminderOutcomeSummary = leadContext ? await loadAppointmentReminderOutcomeSummary(db) : null;
   const mediaOutcomeSummary = leadContext ? await loadMediaQuoteOutcomeSummary(db) : null;
   const missingInfoOutcomeSummary = leadContext ? await loadMissingInfoOutcomeSummary(db) : null;
@@ -795,6 +797,7 @@ export async function POST(
           action: buildSalesAgentNextAction({
             context: leadContext,
             memory: builtSalesAgentMemory,
+            appointmentPreservationOutcomeSummary,
             appointmentReminderOutcomeSummary,
             missingInfoOutcomeSummary,
             objectionSaveOutcomeSummary,
