@@ -3,6 +3,7 @@ import { getDb, salesAgentNextActions } from "@/db";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 import type { MediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import {
+  getQuoteFollowupLearningScope,
   getPreferredQuoteFollowupChannel,
   shouldPreferFastQuoteFollowup,
   type QuoteFollowupOutcomeSummary,
@@ -80,8 +81,9 @@ function chooseQuoteFollowupChannel(
   context: OmniLeadContext,
   fallbackChannel: string | null,
   summary: QuoteFollowupOutcomeSummary | null | undefined,
+  scope?: Parameters<typeof getPreferredQuoteFollowupChannel>[1],
 ): string | null {
-  const learned = getPreferredQuoteFollowupChannel(summary);
+  const learned = getPreferredQuoteFollowupChannel(summary, scope);
   if (learned === "sms" && hasChannelAvailable(context, "sms")) return "sms";
   if (learned === "dm" && hasChannelAvailable(context, "dm")) return "dm";
   return fallbackChannel;
@@ -176,8 +178,23 @@ export function buildSalesAgentNextAction(input: {
     dmObjectionFollowupDelayMinutes: 360,
   };
   const preferredChannel = chooseChannel(context);
-  const quoteFollowupChannel = chooseQuoteFollowupChannel(context, preferredChannel, input.quoteFollowupOutcomeSummary);
-  const preferFastQuoteFollowup = shouldPreferFastQuoteFollowup(input.quoteFollowupOutcomeSummary);
+  const quoteFollowupLearningScope = getQuoteFollowupLearningScope({
+    latestLeadSource: context.latestLead?.source ?? null,
+    contactSource: context.contact.source ?? null,
+    dmEntrySource: context.derived.dmEntrySource ?? null,
+    latestLeadServices: context.latestLead?.servicesRequested ?? [],
+    instantQuoteJobTypes: context.instantQuote?.jobTypes ?? [],
+  });
+  const quoteFollowupChannel = chooseQuoteFollowupChannel(
+    context,
+    preferredChannel,
+    input.quoteFollowupOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
+  const preferFastQuoteFollowup = shouldPreferFastQuoteFollowup(
+    input.quoteFollowupOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
   const latestQuoteCreatedAt = getLatestQuoteCreatedAt(context);
   const accelerateQuoteFollowup = Boolean(
     preferFastQuoteFollowup &&
