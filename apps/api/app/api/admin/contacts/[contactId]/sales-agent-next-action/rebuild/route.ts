@@ -12,6 +12,7 @@ import {
   type SalesAgentMemoryRecord,
 } from "@/lib/sales-agent-memory";
 import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
+import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
 import { getSalesAutopilotPolicy } from "@/lib/policy";
@@ -83,6 +84,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     memory: buildSalesAgentMemory(liveContext),
   });
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
+  const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
   const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
 
@@ -105,6 +107,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
         missingFields: memory?.missingFields ?? [],
         factsJson: (memory?.factsJson as Record<string, unknown> | null) ?? {},
       }),
+      missingInfoOutcomeSummary,
       objectionSaveOutcomeSummary,
       mediaOutcomeSummary,
       quoteFollowupOutcomeSummary,

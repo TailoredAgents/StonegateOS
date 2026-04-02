@@ -84,7 +84,7 @@ function toneClasses(value: "good" | "warn" | "bad" | "neutral" | null | undefin
 function getLearningSignalFact(facts: string[]): string | null {
   return (
     facts.find((fact) =>
-      /tightened weak quotes are booking better than unresolved weak quotes|recent quote follow-ups are booking better/i.test(
+      /tightened weak quotes are booking better than unresolved weak quotes|recent quote follow-ups are booking better|recent missing-detail requests are resolving better|recent missing-detail requests are stalling/i.test(
         fact,
       ),
     ) ?? null

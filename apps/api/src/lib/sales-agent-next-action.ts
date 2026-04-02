@@ -1,5 +1,11 @@
 import { eq } from "drizzle-orm";
 import { getDb, salesAgentNextActions } from "@/db";
+import {
+  getPreferredMissingInfoChannel,
+  shouldKeepSingleMissingInfoAsk,
+  shouldLeanIntoMissingInfoRequests,
+  type MissingInfoOutcomeSummary,
+} from "@/lib/missing-info-outcomes";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 import {
   getPreferredObjectionSaveChannel,
@@ -94,6 +100,17 @@ function chooseQuoteFollowupChannel(
   return fallbackChannel;
 }
 
+function chooseMissingInfoChannel(
+  context: OmniLeadContext,
+  fallbackChannel: string | null,
+  summary: MissingInfoOutcomeSummary | null | undefined,
+): string | null {
+  const learned = getPreferredMissingInfoChannel(summary);
+  if (learned === "sms" && hasChannelAvailable(context, "sms")) return "sms";
+  if (learned === "dm" && hasChannelAvailable(context, "dm")) return "dm";
+  return fallbackChannel;
+}
+
 function hasRecentInboundWithoutReply(context: OmniLeadContext, now: Date): boolean {
   const latestInbound = pickLatestDate(context.channelSummary.map((row) => row.lastInboundAt));
   if (!latestInbound) return false;
@@ -155,6 +172,7 @@ function getLatestQuoteCreatedAt(context: OmniLeadContext): Date | null {
 export function buildSalesAgentNextAction(input: {
   context: OmniLeadContext;
   memory: SalesAgentMemoryRecord;
+  missingInfoOutcomeSummary?: MissingInfoOutcomeSummary | null;
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
   mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
   quoteFollowupOutcomeSummary?: QuoteFollowupOutcomeSummary | null;
@@ -207,6 +225,8 @@ export function buildSalesAgentNextAction(input: {
     input.quoteFollowupOutcomeSummary,
     quoteFollowupLearningScope,
   );
+  const keepSingleMissingInfoAsk = shouldKeepSingleMissingInfoAsk(input.missingInfoOutcomeSummary);
+  const leanIntoMissingInfoRequests = shouldLeanIntoMissingInfoRequests(input.missingInfoOutcomeSummary);
   const keepSofterObjectionSave = shouldUseSofterObjectionSave(input.objectionSaveOutcomeSummary);
   const latestQuoteCreatedAt = getLatestQuoteCreatedAt(context);
   const accelerateQuoteFollowup = Boolean(
@@ -222,6 +242,11 @@ export function buildSalesAgentNextAction(input: {
   const latestLeadCreatedAt = parseIso(context.latestLead?.createdAt ?? null);
   const hasFormalQuote = Boolean(context.formalQuote?.id);
   const hasInstantQuote = Boolean(context.instantQuote?.id);
+  const missingInfoChannel = chooseMissingInfoChannel(
+    context,
+    (hasInstantQuote || hasFormalQuote ? quoteFollowupChannel : preferredChannel) ?? preferredChannel,
+    input.missingInfoOutcomeSummary,
+  );
   const dmEntryProfile = getDmEntryProfile(context);
   const hasUpcomingAppointment =
     Boolean(context.nextAppointment?.id) &&
@@ -439,6 +464,15 @@ export function buildSalesAgentNextAction(input: {
   const preferredMissingAngle = extractPreferredMissingAngle(memory);
   const needsMediaRefinement =
     Boolean(preferredMissingAngle) || ((hasInstantQuote || hasFormalQuote) && memory.quoteConfidence === "low");
+  const hasCriticalMissingInfo = memory.missingFields.some((field) =>
+    /photo angle|missing view|video angle|zip|postal|address|phone|email/i.test(field),
+  );
+  const shouldKeepMomentumDespiteMissingInfo = Boolean(
+    memory.missingFields.length > 0 &&
+      !hasCriticalMissingInfo &&
+      context.derived.bookingReadiness !== "low" &&
+      !leanIntoMissingInfoRequests,
+  );
 
   if (
     (hasInstantQuote || hasFormalQuote) &&
@@ -448,7 +482,7 @@ export function buildSalesAgentNextAction(input: {
   ) {
     return {
       actionType: "collect_missing_info",
-      channel: quoteFollowupChannel,
+      channel: missingInfoChannel,
       status: "open",
       priority: "high",
       confidence: "high",
@@ -462,15 +496,18 @@ export function buildSalesAgentNextAction(input: {
         memory.quoteConfidence ? `Quote confidence: ${memory.quoteConfidence}` : null,
         preferredMissingAngle ? `Best next angle: ${preferredMissingAngle}` : null,
         weakMediaTighteningOutperforms ? "Recent outcomes show tightened weak quotes are booking better than unresolved weak quotes." : null,
-        quoteFollowupChannel && quoteFollowupChannel !== preferredChannel
-          ? `Recent quote follow-ups are booking better on ${quoteFollowupChannel.toUpperCase()}.`
+        missingInfoChannel && missingInfoChannel !== preferredChannel
+          ? `Recent missing-detail requests are resolving better on ${missingInfoChannel.toUpperCase()}.`
+          : null,
+        keepSingleMissingInfoAsk
+          ? "Recent missing-detail requests are stalling, so keep the ask to one specific detail or angle."
           : null,
         preferFastQuoteFollowup ? "Recent quote follow-ups are booking better when the first follow-up goes out within 60 minutes." : null,
         context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
       dueAt:
-        quoteFollowupChannel === "dm"
+        missingInfoChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
               delayMinutes: dmEntryProfile.missingInfoDelayMinutes,
@@ -483,10 +520,14 @@ export function buildSalesAgentNextAction(input: {
     };
   }
 
-  if (memory.missingFields.length > 0 && !hasRecentOutbound(context, now, 120)) {
+  if (
+    memory.missingFields.length > 0 &&
+    !hasRecentOutbound(context, now, 120) &&
+    (hasCriticalMissingInfo || context.derived.bookingReadiness === "low" || leanIntoMissingInfoRequests || (!hasInstantQuote && !hasFormalQuote))
+  ) {
     return {
       actionType: "collect_missing_info",
-      channel: preferredChannel,
+      channel: missingInfoChannel,
       status: "open",
       priority: "high",
       confidence: "medium",
@@ -494,11 +535,17 @@ export function buildSalesAgentNextAction(input: {
       reason: "The lead is still missing key information for a confident quote or booking.",
       facts: dedupe([
         `Missing: ${memory.missingFields.join(", ")}`,
+        missingInfoChannel && missingInfoChannel !== preferredChannel
+          ? `Recent missing-detail requests are resolving better on ${missingInfoChannel.toUpperCase()}.`
+          : null,
+        keepSingleMissingInfoAsk
+          ? "Recent missing-detail requests are stalling, so keep the ask to one specific detail or angle."
+          : null,
         context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
       dueAt:
-        preferredChannel === "dm"
+        missingInfoChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
               delayMinutes: dmEntryProfile.missingInfoDelayMinutes,
@@ -523,6 +570,9 @@ export function buildSalesAgentNextAction(input: {
         memory.lastPromisedNextStep,
         quoteFollowupChannel && quoteFollowupChannel !== preferredChannel
           ? `Recent quote follow-ups are booking better on ${quoteFollowupChannel.toUpperCase()}.`
+          : null,
+        shouldKeepMomentumDespiteMissingInfo
+          ? "Recent missing-detail requests are resolving weakly, so keeping momentum is safer than blocking on another detail first."
           : null,
         preferFastQuoteFollowup ? "Recent quote follow-ups are booking better when the first follow-up goes out within 60 minutes." : null,
         context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,

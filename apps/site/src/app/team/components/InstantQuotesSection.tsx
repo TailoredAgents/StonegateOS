@@ -157,6 +157,41 @@ type ObjectionSummaryDto = {
   };
 };
 
+type MissingInfoBucketDto = {
+  attempts: number;
+  resolved: number;
+  resolutionRate: number;
+  resolvedWithMedia: number;
+  mediaResolutionRate: number;
+  resolvedWithText: number;
+  textResolutionRate: number;
+  booked: number;
+  bookRate: number;
+};
+
+type MissingInfoSummaryDto = {
+  windowStart: string;
+  attempts: number;
+  resolved: number;
+  resolutionRate: number;
+  resolvedWithMedia: number;
+  mediaResolutionRate: number;
+  resolvedWithText: number;
+  textResolutionRate: number;
+  booked: number;
+  bookRate: number;
+  byChannel: {
+    sms: MissingInfoBucketDto;
+    dm: MissingInfoBucketDto;
+    email: MissingInfoBucketDto;
+  };
+  learned: {
+    preferredChannel: "sms" | "dm" | null;
+    keepSingleAsk: boolean;
+    leanIntoRequests: boolean;
+  };
+};
+
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
@@ -204,11 +239,13 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const data = (await res.json()) as {
     quotes?: InstantQuoteDto[];
     summary?: InstantQuoteSummaryDto;
+    missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
     followupSummary?: FollowupSummaryDto;
   };
   const quotes = data.quotes ?? [];
   const summary = data.summary;
+  const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
   const followupSummary = data.followupSummary;
 
@@ -292,6 +329,43 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {objectionSummary.learned.keepSofter
               ? "Low-pressure reopens are safer right now."
               : "No strong softer-save warning yet."}
+          </div>
+        </div>
+      ) : null}
+      {missingInfoSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Missing-info learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks real sent missing-detail requests and whether the customer actually sent back the needed info within 48 hours.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-600">
+            Attempts: {missingInfoSummary.attempts} | Resolved: {missingInfoSummary.resolved} (
+            {formatPercent(missingInfoSummary.resolutionRate)}) | Booked later: {missingInfoSummary.booked} (
+            {formatPercent(missingInfoSummary.bookRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Resolved with media {formatPercent(missingInfoSummary.mediaResolutionRate)} | Resolved with text{" "}
+            {formatPercent(missingInfoSummary.textResolutionRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            SMS resolve {formatPercent(missingInfoSummary.byChannel.sms.resolutionRate)} | Messenger resolve{" "}
+            {formatPercent(missingInfoSummary.byChannel.dm.resolutionRate)} | Email resolve{" "}
+            {formatPercent(missingInfoSummary.byChannel.email.resolutionRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {missingInfoSummary.learned.preferredChannel === "sms"
+              ? "Learned missing-info lean: SMS"
+              : missingInfoSummary.learned.preferredChannel === "dm"
+                ? "Learned missing-info lean: Messenger"
+                : "Learned missing-info lean: not strong enough yet"}
+            {" | "}
+            {missingInfoSummary.learned.keepSingleAsk
+              ? "Single specific asks are safer right now."
+              : "No strong single-ask warning yet."}
+            {" | "}
+            {missingInfoSummary.learned.leanIntoRequests
+              ? "Missing-detail requests are resolving well enough to use when they unblock the estimate."
+              : "No strong push toward extra missing-detail asks yet."}
           </div>
         </div>
       ) : null}
