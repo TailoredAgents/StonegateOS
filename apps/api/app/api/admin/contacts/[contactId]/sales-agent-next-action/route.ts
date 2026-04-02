@@ -15,6 +15,7 @@ import {
   type SalesAgentMemoryRecord,
 } from "@/lib/sales-agent-memory";
 import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
+import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -115,6 +116,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   }
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
+  const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
 
   let memory = await getSalesAgentMemory(db, contactIdTrimmed);
   if (!memory) {
@@ -134,6 +136,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
         context: liveContext,
         memory: toMemoryRecord(memory),
         mediaOutcomeSummary,
+        quoteFollowupOutcomeSummary,
         autopilotPolicy,
       }),
     });

@@ -2,6 +2,11 @@ import { eq } from "drizzle-orm";
 import { getDb, salesAgentNextActions } from "@/db";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 import type { MediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
+import {
+  getPreferredQuoteFollowupChannel,
+  shouldPreferFastQuoteFollowup,
+  type QuoteFollowupOutcomeSummary,
+} from "@/lib/quote-followup-outcomes";
 import type { SalesAgentMemoryRecord } from "@/lib/sales-agent-memory";
 import { getDmFollowupStrategy } from "@/lib/dm-autopilot";
 import type { SalesAutopilotPolicy } from "@/lib/policy";
@@ -64,6 +69,24 @@ function chooseChannel(context: OmniLeadContext): string | null {
   return context.channelSummary[0]?.channel ?? null;
 }
 
+function hasChannelAvailable(context: OmniLeadContext, channel: string | null | undefined): boolean {
+  if (!channel) return false;
+  if (channel === "sms") return Boolean(context.contact.phoneE164 || context.contact.phone);
+  if (channel === "email") return Boolean(context.contact.email);
+  return context.channelSummary.some((row) => row.channel === channel);
+}
+
+function chooseQuoteFollowupChannel(
+  context: OmniLeadContext,
+  fallbackChannel: string | null,
+  summary: QuoteFollowupOutcomeSummary | null | undefined,
+): string | null {
+  const learned = getPreferredQuoteFollowupChannel(summary);
+  if (learned === "sms" && hasChannelAvailable(context, "sms")) return "sms";
+  if (learned === "dm" && hasChannelAvailable(context, "dm")) return "dm";
+  return fallbackChannel;
+}
+
 function hasRecentInboundWithoutReply(context: OmniLeadContext, now: Date): boolean {
   const latestInbound = pickLatestDate(context.channelSummary.map((row) => row.lastInboundAt));
   if (!latestInbound) return false;
@@ -118,10 +141,15 @@ function isRecentMissedInboundCall(context: OmniLeadContext, now: Date): boolean
   );
 }
 
+function getLatestQuoteCreatedAt(context: OmniLeadContext): Date | null {
+  return pickLatestDate([context.instantQuote?.createdAt ?? null, context.formalQuote?.createdAt ?? null]);
+}
+
 export function buildSalesAgentNextAction(input: {
   context: OmniLeadContext;
   memory: SalesAgentMemoryRecord;
   mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
+  quoteFollowupOutcomeSummary?: QuoteFollowupOutcomeSummary | null;
   autopilotPolicy?: Pick<
     SalesAutopilotPolicy,
     | "dmSmsFallbackAfterMinutes"
@@ -148,6 +176,14 @@ export function buildSalesAgentNextAction(input: {
     dmObjectionFollowupDelayMinutes: 360,
   };
   const preferredChannel = chooseChannel(context);
+  const quoteFollowupChannel = chooseQuoteFollowupChannel(context, preferredChannel, input.quoteFollowupOutcomeSummary);
+  const preferFastQuoteFollowup = shouldPreferFastQuoteFollowup(input.quoteFollowupOutcomeSummary);
+  const latestQuoteCreatedAt = getLatestQuoteCreatedAt(context);
+  const accelerateQuoteFollowup = Boolean(
+    preferFastQuoteFollowup &&
+      latestQuoteCreatedAt &&
+      now.getTime() - latestQuoteCreatedAt.getTime() <= 6 * 60 * 60 * 1000,
+  );
   const pendingHumanTakeover = context.automation.some((row) => row.humanTakeover);
   const pendingDnc = context.automation.some((row) => row.dnc);
   const paused = context.automation.some((row) => row.paused);
@@ -334,7 +370,7 @@ export function buildSalesAgentNextAction(input: {
   if ((hasInstantQuote || hasFormalQuote) && context.derived.objections.includes("price")) {
     return {
       actionType: "handle_price_objection",
-      channel: preferredChannel,
+      channel: quoteFollowupChannel,
       status: "open",
       priority: "high",
       confidence: "medium",
@@ -343,17 +379,23 @@ export function buildSalesAgentNextAction(input: {
       facts: dedupe([
         memory.pricingContext,
         "Known objection: price",
+        quoteFollowupChannel && quoteFollowupChannel !== preferredChannel
+          ? `Recent quote follow-ups are booking better on ${quoteFollowupChannel.toUpperCase()}.`
+          : null,
+        preferFastQuoteFollowup ? "Recent quote follow-ups are booking better when the first follow-up goes out within 60 minutes." : null,
         context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.lastPromisedNextStep,
       ]),
       dueAt:
-        preferredChannel === "dm"
+        quoteFollowupChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
               delayMinutes: dmEntryProfile.objectionDelayMinutes,
               baselines: [nextTaskDue],
             })
-          : nextTaskDue?.toISOString() ?? now.toISOString(),
+          : accelerateQuoteFollowup
+            ? now.toISOString()
+            : nextTaskDue?.toISOString() ?? now.toISOString(),
       source: "rules_v1",
     };
   }
@@ -370,7 +412,7 @@ export function buildSalesAgentNextAction(input: {
   ) {
     return {
       actionType: "collect_missing_info",
-      channel: preferredChannel,
+      channel: quoteFollowupChannel,
       status: "open",
       priority: "high",
       confidence: "high",
@@ -384,17 +426,23 @@ export function buildSalesAgentNextAction(input: {
         memory.quoteConfidence ? `Quote confidence: ${memory.quoteConfidence}` : null,
         preferredMissingAngle ? `Best next angle: ${preferredMissingAngle}` : null,
         weakMediaTighteningOutperforms ? "Recent outcomes show tightened weak quotes are booking better than unresolved weak quotes." : null,
+        quoteFollowupChannel && quoteFollowupChannel !== preferredChannel
+          ? `Recent quote follow-ups are booking better on ${quoteFollowupChannel.toUpperCase()}.`
+          : null,
+        preferFastQuoteFollowup ? "Recent quote follow-ups are booking better when the first follow-up goes out within 60 minutes." : null,
         context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
       dueAt:
-        preferredChannel === "dm"
+        quoteFollowupChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
               delayMinutes: dmEntryProfile.missingInfoDelayMinutes,
               baselines: [nextAutomationFollowup],
             })
-          : nextAutomationFollowup?.toISOString() ?? now.toISOString(),
+          : accelerateQuoteFollowup
+            ? now.toISOString()
+            : nextAutomationFollowup?.toISOString() ?? now.toISOString(),
       source: "rules_v1",
     };
   }
@@ -428,7 +476,7 @@ export function buildSalesAgentNextAction(input: {
   if ((hasInstantQuote || hasFormalQuote) && context.derived.bookingReadiness !== "low") {
     return {
       actionType: "follow_up_quote",
-      channel: preferredChannel,
+      channel: quoteFollowupChannel,
       status: "open",
       priority: context.derived.bookingReadiness === "high" ? "high" : "normal",
       confidence: "medium",
@@ -437,17 +485,23 @@ export function buildSalesAgentNextAction(input: {
       facts: dedupe([
         memory.pricingContext,
         memory.lastPromisedNextStep,
+        quoteFollowupChannel && quoteFollowupChannel !== preferredChannel
+          ? `Recent quote follow-ups are booking better on ${quoteFollowupChannel.toUpperCase()}.`
+          : null,
+        preferFastQuoteFollowup ? "Recent quote follow-ups are booking better when the first follow-up goes out within 60 minutes." : null,
         context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
       dueAt:
-        preferredChannel === "dm"
+        quoteFollowupChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
               delayMinutes: dmEntryProfile.quoteDelayMinutes,
               baselines: [nextTaskDue, nextAutomationFollowup],
             })
-          : nextTaskDue?.toISOString() ?? nextAutomationFollowup?.toISOString() ?? now.toISOString(),
+          : accelerateQuoteFollowup
+            ? now.toISOString()
+            : nextTaskDue?.toISOString() ?? nextAutomationFollowup?.toISOString() ?? now.toISOString(),
       source: "rules_v1",
     };
   }

@@ -33,6 +33,7 @@ import { buildSalesAgentMemory, getSalesAgentMemory, upsertSalesAgentMemory } fr
 import { getDmLiveAutopilotStates } from "@/lib/dm-autopilot";
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
+import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -165,6 +166,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const serviceAreaPolicy = await getServiceAreaPolicy(db);
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
+  const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
 
   const url = new URL(request.url);
   const memberId = url.searchParams.get("memberId")?.trim() || config.defaultAssigneeMemberId;
@@ -632,6 +634,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             factsJson: (memory.factsJson as Record<string, unknown> | null) ?? {},
           },
           mediaOutcomeSummary,
+          quoteFollowupOutcomeSummary,
           autopilotPolicy,
         }),
       });

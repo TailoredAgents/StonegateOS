@@ -84,7 +84,9 @@ function toneClasses(value: "good" | "warn" | "bad" | "neutral" | null | undefin
 function getLearningSignalFact(facts: string[]): string | null {
   return (
     facts.find((fact) =>
-      /tightened weak quotes are booking better than unresolved weak quotes/i.test(fact),
+      /tightened weak quotes are booking better than unresolved weak quotes|recent quote follow-ups are booking better/i.test(
+        fact,
+      ),
     ) ?? null
   );
 }
@@ -210,7 +212,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             {executionState.detail ? <div className="mt-1 text-[11px] opacity-90">{executionState.detail}</div> : null}
             {learningSignalFact ? (
               <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
-                Recent results show weak quotes tend to book better after one more angle tightens the estimate.
+                {learningSignalFact}
               </div>
             ) : null}
           </>
@@ -378,7 +380,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
 
             {learningSignalFact ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-                Learned signal: recent weak estimates have booked better after one more angle tightened the quote.
+                Learned signal: {learningSignalFact}
               </div>
             ) : null}
 
