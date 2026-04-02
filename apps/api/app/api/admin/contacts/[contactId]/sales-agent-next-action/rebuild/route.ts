@@ -11,6 +11,7 @@ import {
   upsertSalesAgentMemory,
   type SalesAgentMemoryRecord,
 } from "@/lib/sales-agent-memory";
+import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { getSalesAutopilotPolicy } from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
 
@@ -79,6 +80,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     leadId: liveContext.latestLead?.id ?? null,
     memory: buildSalesAgentMemory(liveContext),
   });
+  const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
 
   const nextAction = await upsertSalesAgentNextAction(db, {
     contactId: contactIdTrimmed,
@@ -99,6 +101,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
         missingFields: memory?.missingFields ?? [],
         factsJson: (memory?.factsJson as Record<string, unknown> | null) ?? {},
       }),
+      mediaOutcomeSummary,
       autopilotPolicy,
     }),
   });

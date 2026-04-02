@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb, salesAgentNextActions } from "@/db";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
+import type { MediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import type { SalesAgentMemoryRecord } from "@/lib/sales-agent-memory";
 import { getDmFollowupStrategy } from "@/lib/dm-autopilot";
 import type { SalesAutopilotPolicy } from "@/lib/policy";
@@ -120,6 +121,7 @@ function isRecentMissedInboundCall(context: OmniLeadContext, now: Date): boolean
 export function buildSalesAgentNextAction(input: {
   context: OmniLeadContext;
   memory: SalesAgentMemoryRecord;
+  mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
   autopilotPolicy?: Pick<
     SalesAutopilotPolicy,
     | "dmSmsFallbackAfterMinutes"
@@ -132,6 +134,12 @@ export function buildSalesAgentNextAction(input: {
 }): SalesAgentNextActionRecord {
   const { context, memory } = input;
   const now = input.now ?? new Date();
+  const weakMediaTighteningOutperforms = Boolean(
+    input.mediaOutcomeSummary &&
+      input.mediaOutcomeSummary.mediaInformed.tightenedAfterMoreMedia.quotes >= 3 &&
+      input.mediaOutcomeSummary.mediaInformed.tightenedAfterMoreMedia.bookRate >=
+        input.mediaOutcomeSummary.mediaInformed.unresolvedWeakMedia.bookRate + 0.05,
+  );
   const autopilotPolicy = input.autopilotPolicy ?? {
     dmSmsFallbackAfterMinutes: 120,
     dmMinSilenceBeforeSmsMinutes: 45,
@@ -357,7 +365,7 @@ export function buildSalesAgentNextAction(input: {
   if (
     (hasInstantQuote || hasFormalQuote) &&
     needsMediaRefinement &&
-    context.derived.bookingReadiness !== "high" &&
+    (context.derived.bookingReadiness !== "high" || (weakMediaTighteningOutperforms && Boolean(preferredMissingAngle))) &&
     !hasRecentOutbound(context, now, 60)
   ) {
     return {
@@ -375,6 +383,7 @@ export function buildSalesAgentNextAction(input: {
         memory.pricingContext,
         memory.quoteConfidence ? `Quote confidence: ${memory.quoteConfidence}` : null,
         preferredMissingAngle ? `Best next angle: ${preferredMissingAngle}` : null,
+        weakMediaTighteningOutperforms ? "Recent outcomes show tightened weak quotes are booking better than unresolved weak quotes." : null,
         context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),

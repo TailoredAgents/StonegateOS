@@ -14,6 +14,7 @@ import {
   upsertSalesAgentMemory,
   type SalesAgentMemoryRecord,
 } from "@/lib/sales-agent-memory";
+import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -113,6 +114,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
   }
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
+  const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
 
   let memory = await getSalesAgentMemory(db, contactIdTrimmed);
   if (!memory) {
@@ -131,6 +133,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       action: buildSalesAgentNextAction({
         context: liveContext,
         memory: toMemoryRecord(memory),
+        mediaOutcomeSummary,
         autopilotPolicy,
       }),
     });

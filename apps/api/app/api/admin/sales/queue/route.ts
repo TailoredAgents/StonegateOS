@@ -32,6 +32,7 @@ import { buildSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sal
 import { buildSalesAgentMemory, getSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
 import { getDmLiveAutopilotStates } from "@/lib/dm-autopilot";
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
+import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -163,6 +164,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const config = await getSalesScorecardConfig(db);
   const serviceAreaPolicy = await getServiceAreaPolicy(db);
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
+  const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
 
   const url = new URL(request.url);
   const memberId = url.searchParams.get("memberId")?.trim() || config.defaultAssigneeMemberId;
@@ -629,6 +631,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             missingFields: memory.missingFields,
             factsJson: (memory.factsJson as Record<string, unknown> | null) ?? {},
           },
+          mediaOutcomeSummary,
           autopilotPolicy,
         }),
       });
