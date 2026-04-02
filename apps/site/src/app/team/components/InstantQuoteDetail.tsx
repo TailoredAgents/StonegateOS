@@ -47,6 +47,7 @@ type InstantQuoteDto = {
   };
   isMediaInformed?: boolean;
   hasBookedAppointment?: boolean;
+  tightenedAfterMoreMedia?: boolean;
 };
 
 export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
@@ -90,6 +91,11 @@ export async function InstantQuoteDetail({ quoteId }: { quoteId: string }) {
         {quote.hasBookedAppointment ? (
           <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
             Booked from quote
+          </span>
+        ) : null}
+        {quote.tightenedAfterMoreMedia ? (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+            Tightened after more media
           </span>
         ) : null}
       </div>

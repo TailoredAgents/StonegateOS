@@ -42,6 +42,7 @@ type InstantQuoteDto = {
   };
   isMediaInformed?: boolean;
   hasBookedAppointment?: boolean;
+  tightenedAfterMoreMedia?: boolean;
 };
 
 type InstantQuoteSummaryDto = {
@@ -63,6 +64,21 @@ type InstantQuoteSummaryDto = {
       bookRate: number;
     };
     missingViews: {
+      quotes: number;
+      bookedQuotes: number;
+      bookRate: number;
+    };
+    weakQuotes: {
+      quotes: number;
+      bookedQuotes: number;
+      bookRate: number;
+    };
+    tightenedAfterMoreMedia: {
+      quotes: number;
+      bookedQuotes: number;
+      bookRate: number;
+    };
+    unresolvedWeakMedia: {
       quotes: number;
       bookedQuotes: number;
       bookRate: number;
@@ -115,6 +131,14 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {summary.mediaInformed.missingViews.quotes} ({formatPercent(summary.mediaInformed.missingViews.bookRate)})
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
+            Weak media quotes later tightened: {summary.mediaInformed.tightenedAfterMoreMedia.bookedQuotes} of{" "}
+            {summary.mediaInformed.tightenedAfterMoreMedia.quotes} (
+            {formatPercent(summary.mediaInformed.tightenedAfterMoreMedia.bookRate)})
+            {" | "}Still unresolved weak quotes: {summary.mediaInformed.unresolvedWeakMedia.bookedQuotes} of{" "}
+            {summary.mediaInformed.unresolvedWeakMedia.quotes} (
+            {formatPercent(summary.mediaInformed.unresolvedWeakMedia.bookRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
             Booked from quote means the quote is linked to a non-canceled appointment.
           </div>
         </div>
@@ -144,6 +168,11 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
                 {q.hasBookedAppointment ? (
                   <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
                     Booked from quote
+                  </span>
+                ) : null}
+                {q.tightenedAfterMoreMedia ? (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                    Tightened after more media
                   </span>
                 ) : null}
               </div>

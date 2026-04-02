@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { appointments, getDb, instantQuotes } from "@/db";
-import { desc, eq, gte, sql } from "drizzle-orm";
+import { appointments, getDb, instantQuotes, leads, mediaJobAnalyses } from "@/db";
+import { desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { isAdminRequest } from "../../web/admin";
 
 function parseLimit(value: string | null): number {
@@ -40,34 +40,31 @@ export async function GET(request: NextRequest) {
         and appt.status <> 'canceled'
     )
   `;
-
-  const [summaryRow] = await db
-    .select({
-      totalQuotes: sql<number>`count(*)::int`,
-      mediaInformedQuotes: sql<number>`count(*) filter (where ${mediaInformedExpr})::int`,
-      bookedQuotes: sql<number>`count(*) filter (where ${bookedFromQuoteExpr})::int`,
-      mediaInformedBookedQuotes: sql<number>`count(*) filter (where ${mediaInformedExpr} and ${bookedFromQuoteExpr})::int`,
-      mediaHighConfidenceQuotes: sql<number>`
-        count(*) filter (where ${mediaInformedExpr} and ${mediaConfidenceExpr} = 'high')::int
-      `,
-      mediaHighConfidenceBookedQuotes: sql<number>`
-        count(*) filter (where ${mediaInformedExpr} and ${mediaConfidenceExpr} = 'high' and ${bookedFromQuoteExpr})::int
-      `,
-      mediaLowConfidenceQuotes: sql<number>`
-        count(*) filter (where ${mediaInformedExpr} and ${mediaConfidenceExpr} = 'low')::int
-      `,
-      mediaLowConfidenceBookedQuotes: sql<number>`
-        count(*) filter (where ${mediaInformedExpr} and ${mediaConfidenceExpr} = 'low' and ${bookedFromQuoteExpr})::int
-      `,
-      mediaMissingViewsQuotes: sql<number>`
-        count(*) filter (where ${mediaInformedExpr} and ${mediaMissingViewsExpr})::int
-      `,
-      mediaMissingViewsBookedQuotes: sql<number>`
-        count(*) filter (where ${mediaInformedExpr} and ${mediaMissingViewsExpr} and ${bookedFromQuoteExpr})::int
-      `,
-    })
-    .from(instantQuotes)
-    .where(gte(instantQuotes.createdAt, summaryWindowStart));
+  const summaryCandidates = dedupeQuoteInsights(
+    await db
+      .select({
+        id: instantQuotes.id,
+        createdAt: instantQuotes.createdAt,
+        isMediaInformed: mediaInformedExpr,
+        hasBookedAppointment: bookedFromQuoteExpr,
+        originalConfidence: mediaConfidenceExpr,
+        originalMissingViewCount: sql<number>`
+          case
+            when jsonb_typeof(${instantQuotes.aiResult} -> 'mediaAnalysis' -> 'missingViews') = 'array'
+              then jsonb_array_length(${instantQuotes.aiResult} -> 'mediaAnalysis' -> 'missingViews')
+            else 0
+          end
+        `,
+        currentAnalysisUpdatedAt: mediaJobAnalyses.updatedAt,
+        currentAnalysisConfidence: mediaJobAnalyses.confidence,
+        currentMissingViewCount: sql<number>`coalesce(array_length(${mediaJobAnalyses.missingViews}, 1), 0)`,
+      })
+      .from(instantQuotes)
+      .leftJoin(leads, eq(leads.instantQuoteId, instantQuotes.id))
+      .leftJoin(mediaJobAnalyses, eq(mediaJobAnalyses.contactId, leads.contactId))
+      .where(gte(instantQuotes.createdAt, summaryWindowStart)),
+  );
+  const summary = buildSummary(summaryCandidates, summaryWindowStart);
 
   if (id) {
     const rows = await db
@@ -91,9 +88,13 @@ export async function GET(request: NextRequest) {
       .where(eq(instantQuotes.id, id))
       .orderBy(desc(instantQuotes.createdAt))
       .limit(1);
+    const quoteInsights = await loadQuoteInsightMap(db, rows.map((row) => row.id));
     return NextResponse.json({
-      quotes: rows,
-      summary: buildSummary(summaryRow, summaryWindowStart),
+      quotes: rows.map((row) => ({
+        ...row,
+        tightenedAfterMoreMedia: quoteInsights.get(row.id)?.tightenedAfterMoreMedia ?? false,
+      })),
+      summary,
     });
   }
 
@@ -128,6 +129,10 @@ export async function GET(request: NextRequest) {
     .from(instantQuotes)
     .orderBy(desc(instantQuotes.createdAt))
     .limit(limit);
+  const quoteInsights = await loadQuoteInsightMap(
+    db,
+    rows.map((row) => row.id),
+  );
 
   const quotes = rows.map((row) => ({
     id: row.id,
@@ -166,43 +171,179 @@ export async function GET(request: NextRequest) {
     },
     isMediaInformed: row.mediaAnalysisSource.startsWith("vision"),
     hasBookedAppointment: row.hasBookedAppointment,
+    tightenedAfterMoreMedia: quoteInsights.get(row.id)?.tightenedAfterMoreMedia ?? false,
   }));
 
   return NextResponse.json({
     quotes,
-    summary: buildSummary(summaryRow, summaryWindowStart),
+    summary,
   });
 }
 
-function buildSummary(
-  row:
-    | {
-        totalQuotes: number;
-        mediaInformedQuotes: number;
-        bookedQuotes: number;
-        mediaInformedBookedQuotes: number;
-        mediaHighConfidenceQuotes: number;
-        mediaHighConfidenceBookedQuotes: number;
-        mediaLowConfidenceQuotes: number;
-        mediaLowConfidenceBookedQuotes: number;
-        mediaMissingViewsQuotes: number;
-        mediaMissingViewsBookedQuotes: number;
-      }
-    | undefined,
-  windowStart: Date,
-) {
-  const totalQuotes = row?.totalQuotes ?? 0;
-  const mediaInformedQuotes = row?.mediaInformedQuotes ?? 0;
-  const bookedQuotes = row?.bookedQuotes ?? 0;
-  const mediaInformedBookedQuotes = row?.mediaInformedBookedQuotes ?? 0;
-  const mediaHighConfidenceQuotes = row?.mediaHighConfidenceQuotes ?? 0;
-  const mediaHighConfidenceBookedQuotes = row?.mediaHighConfidenceBookedQuotes ?? 0;
-  const mediaLowConfidenceQuotes = row?.mediaLowConfidenceQuotes ?? 0;
-  const mediaLowConfidenceBookedQuotes = row?.mediaLowConfidenceBookedQuotes ?? 0;
-  const mediaMissingViewsQuotes = row?.mediaMissingViewsQuotes ?? 0;
-  const mediaMissingViewsBookedQuotes = row?.mediaMissingViewsBookedQuotes ?? 0;
+type QuoteInsightRow = {
+  id: string;
+  createdAt: Date;
+  isMediaInformed: boolean;
+  hasBookedAppointment: boolean;
+  originalConfidence: string;
+  originalMissingViewCount: number;
+  currentAnalysisUpdatedAt: Date | null;
+  currentAnalysisConfidence: string | null;
+  currentMissingViewCount: number;
+};
+
+type QuoteInsight = {
+  id: string;
+  createdAt: Date;
+  isMediaInformed: boolean;
+  hasBookedAppointment: boolean;
+  originalConfidence: "low" | "medium" | "high" | null;
+  originalMissingViewCount: number;
+  tightenedAfterMoreMedia: boolean;
+};
+
+function normalizeConfidence(value: string | null | undefined): "low" | "medium" | "high" | null {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized === "low" || normalized === "medium" || normalized === "high" ? normalized : null;
+}
+
+function isWeakOriginalMedia(input: {
+  isMediaInformed: boolean;
+  originalConfidence: "low" | "medium" | "high" | null;
+  originalMissingViewCount: number;
+}): boolean {
+  return input.isMediaInformed && (input.originalConfidence === "low" || input.originalMissingViewCount > 0);
+}
+
+function computeTightenedAfterMoreMedia(row: QuoteInsightRow): boolean {
+  const originalConfidence = normalizeConfidence(row.originalConfidence);
+  const currentConfidence = normalizeConfidence(row.currentAnalysisConfidence);
+  if (
+    !isWeakOriginalMedia({
+      isMediaInformed: row.isMediaInformed,
+      originalConfidence,
+      originalMissingViewCount: row.originalMissingViewCount,
+    })
+  ) {
+    return false;
+  }
+  if (!(row.currentAnalysisUpdatedAt instanceof Date) || row.currentAnalysisUpdatedAt.getTime() <= row.createdAt.getTime()) {
+    return false;
+  }
+  if (row.currentMissingViewCount > 0) return false;
+  return currentConfidence === "medium" || currentConfidence === "high";
+}
+
+function dedupeQuoteInsights(rows: QuoteInsightRow[]): QuoteInsight[] {
+  const byId = new Map<string, QuoteInsight>();
+  for (const row of rows) {
+    const next: QuoteInsight = {
+      id: row.id,
+      createdAt: row.createdAt,
+      isMediaInformed: row.isMediaInformed,
+      hasBookedAppointment: row.hasBookedAppointment,
+      originalConfidence: normalizeConfidence(row.originalConfidence),
+      originalMissingViewCount: row.originalMissingViewCount,
+      tightenedAfterMoreMedia: computeTightenedAfterMoreMedia(row),
+    };
+    const existing = byId.get(row.id);
+    if (!existing) {
+      byId.set(row.id, next);
+      continue;
+    }
+    byId.set(row.id, {
+      ...existing,
+      hasBookedAppointment: existing.hasBookedAppointment || next.hasBookedAppointment,
+      tightenedAfterMoreMedia: existing.tightenedAfterMoreMedia || next.tightenedAfterMoreMedia,
+    });
+  }
+  return [...byId.values()];
+}
+
+async function loadQuoteInsightMap(
+  db: ReturnType<typeof getDb>,
+  quoteIds: string[],
+): Promise<Map<string, QuoteInsight>> {
+  const ids = [...new Set(quoteIds.filter((id) => typeof id === "string" && id.trim().length > 0))];
+  if (!ids.length) return new Map();
+  const rows = await db
+    .select({
+      id: instantQuotes.id,
+      createdAt: instantQuotes.createdAt,
+      isMediaInformed: mediaInformedExprForHelper(),
+      hasBookedAppointment: bookedFromQuoteExprForHelper(),
+      originalConfidence: mediaConfidenceExprForHelper(),
+      originalMissingViewCount: originalMissingViewCountExprForHelper(),
+      currentAnalysisUpdatedAt: mediaJobAnalyses.updatedAt,
+      currentAnalysisConfidence: mediaJobAnalyses.confidence,
+      currentMissingViewCount: sql<number>`coalesce(array_length(${mediaJobAnalyses.missingViews}, 1), 0)`,
+    })
+    .from(instantQuotes)
+    .leftJoin(leads, eq(leads.instantQuoteId, instantQuotes.id))
+    .leftJoin(mediaJobAnalyses, eq(mediaJobAnalyses.contactId, leads.contactId))
+    .where(inArray(instantQuotes.id, ids));
+  return new Map(dedupeQuoteInsights(rows).map((row) => [row.id, row]));
+}
+
+function mediaInformedExprForHelper() {
+  return sql<boolean>`coalesce(${instantQuotes.aiResult} -> 'mediaAnalysis' ->> 'source', '') like 'vision%'`;
+}
+
+function mediaConfidenceExprForHelper() {
+  return sql<string>`coalesce(${instantQuotes.aiResult} -> 'mediaAnalysis' ->> 'confidence', '')`;
+}
+
+function originalMissingViewCountExprForHelper() {
+  return sql<number>`
+    case
+      when jsonb_typeof(${instantQuotes.aiResult} -> 'mediaAnalysis' -> 'missingViews') = 'array'
+        then jsonb_array_length(${instantQuotes.aiResult} -> 'mediaAnalysis' -> 'missingViews')
+      else 0
+    end
+  `;
+}
+
+function bookedFromQuoteExprForHelper() {
+  return sql<boolean>`
+    exists(
+      select 1
+      from ${appointments} appt
+      where appt.instant_quote_id = ${instantQuotes.id}
+        and appt.status <> 'canceled'
+    )
+  `;
+}
+
+function buildSummary(rows: QuoteInsight[], windowStart: Date) {
+  const totalQuotes = rows.length;
+  const mediaInformedQuotes = rows.filter((row) => row.isMediaInformed).length;
+  const bookedQuotes = rows.filter((row) => row.hasBookedAppointment).length;
+  const mediaInformedBookedQuotes = rows.filter((row) => row.isMediaInformed && row.hasBookedAppointment).length;
+  const mediaHighConfidenceQuotes = rows.filter((row) => row.isMediaInformed && row.originalConfidence === "high").length;
+  const mediaHighConfidenceBookedQuotes = rows.filter(
+    (row) => row.isMediaInformed && row.originalConfidence === "high" && row.hasBookedAppointment,
+  ).length;
+  const mediaLowConfidenceQuotes = rows.filter((row) => row.isMediaInformed && row.originalConfidence === "low").length;
+  const mediaLowConfidenceBookedQuotes = rows.filter(
+    (row) => row.isMediaInformed && row.originalConfidence === "low" && row.hasBookedAppointment,
+  ).length;
+  const mediaMissingViewsQuotes = rows.filter(
+    (row) => row.isMediaInformed && row.originalMissingViewCount > 0,
+  ).length;
+  const mediaMissingViewsBookedQuotes = rows.filter(
+    (row) => row.isMediaInformed && row.originalMissingViewCount > 0 && row.hasBookedAppointment,
+  ).length;
   const standardQuotes = Math.max(0, totalQuotes - mediaInformedQuotes);
   const standardBookedQuotes = Math.max(0, bookedQuotes - mediaInformedBookedQuotes);
+  const weakMediaQuotes = rows.filter((row) =>
+    isWeakOriginalMedia({
+      isMediaInformed: row.isMediaInformed,
+      originalConfidence: row.originalConfidence,
+      originalMissingViewCount: row.originalMissingViewCount,
+    }),
+  );
+  const tightenedWeakMediaQuotes = weakMediaQuotes.filter((row) => row.tightenedAfterMoreMedia);
+  const unresolvedWeakMediaQuotes = weakMediaQuotes.filter((row) => !row.tightenedAfterMoreMedia);
 
   return {
     windowStart: windowStart.toISOString(),
@@ -233,6 +374,44 @@ function buildSummary(
         bookRate:
           mediaMissingViewsQuotes > 0
             ? Number((mediaMissingViewsBookedQuotes / mediaMissingViewsQuotes).toFixed(4))
+            : 0,
+      },
+      weakQuotes: {
+        quotes: weakMediaQuotes.length,
+        bookedQuotes: weakMediaQuotes.filter((row) => row.hasBookedAppointment).length,
+        bookRate:
+          weakMediaQuotes.length > 0
+            ? Number(
+                (
+                  weakMediaQuotes.filter((row) => row.hasBookedAppointment).length / weakMediaQuotes.length
+                ).toFixed(4),
+              )
+            : 0,
+      },
+      tightenedAfterMoreMedia: {
+        quotes: tightenedWeakMediaQuotes.length,
+        bookedQuotes: tightenedWeakMediaQuotes.filter((row) => row.hasBookedAppointment).length,
+        bookRate:
+          tightenedWeakMediaQuotes.length > 0
+            ? Number(
+                (
+                  tightenedWeakMediaQuotes.filter((row) => row.hasBookedAppointment).length /
+                  tightenedWeakMediaQuotes.length
+                ).toFixed(4),
+              )
+            : 0,
+      },
+      unresolvedWeakMedia: {
+        quotes: unresolvedWeakMediaQuotes.length,
+        bookedQuotes: unresolvedWeakMediaQuotes.filter((row) => row.hasBookedAppointment).length,
+        bookRate:
+          unresolvedWeakMediaQuotes.length > 0
+            ? Number(
+                (
+                  unresolvedWeakMediaQuotes.filter((row) => row.hasBookedAppointment).length /
+                  unresolvedWeakMediaQuotes.length
+                ).toFixed(4),
+              )
             : 0,
       },
     },
