@@ -81,6 +81,14 @@ function toneClasses(value: "good" | "warn" | "bad" | "neutral" | null | undefin
   return "border-slate-200 bg-slate-50 text-slate-700";
 }
 
+function getLearningSignalFact(facts: string[]): string | null {
+  return (
+    facts.find((fact) =>
+      /tightened weak quotes are booking better than unresolved weak quotes/i.test(fact),
+    ) ?? null
+  );
+}
+
 export function ContactSalesAgentNextActionClient({ contactId, compact = false }: Props): React.ReactElement {
   const [payload, setPayload] = React.useState<NextActionPayload | null>(null);
   const [status, setStatus] = React.useState<"idle" | "loading" | "error">("loading");
@@ -157,6 +165,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
     Array.isArray(nextAction?.facts)
       ? nextAction.facts.filter((item) => typeof item === "string" && item.trim().length > 0)
       : [];
+  const learningSignalFact = getLearningSignalFact(facts);
   const executionState = payload?.executionState ?? null;
   const autopilot = payload?.autopilot ?? null;
   const dmEntrySource = payload?.liveContext?.derived?.dmEntrySource ?? null;
@@ -199,6 +208,11 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
           <>
             <div className="font-semibold uppercase tracking-wide">{executionState.label}</div>
             {executionState.detail ? <div className="mt-1 text-[11px] opacity-90">{executionState.detail}</div> : null}
+            {learningSignalFact ? (
+              <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+                Recent results show weak quotes tend to book better after one more angle tightens the estimate.
+              </div>
+            ) : null}
           </>
         ) : nextAction?.summary ? (
           <div>{nextAction.summary}</div>
@@ -359,6 +373,12 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               <div>
                 <div className="font-semibold text-slate-700">Why</div>
                 <div>{nextAction.reason}</div>
+              </div>
+            ) : null}
+
+            {learningSignalFact ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                Learned signal: recent weak estimates have booked better after one more angle tightened the quote.
               </div>
             ) : null}
 
