@@ -1,6 +1,11 @@
 import { eq } from "drizzle-orm";
 import { getDb, salesAgentNextActions } from "@/db";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
+import {
+  getPreferredObjectionSaveChannel,
+  shouldUseSofterObjectionSave,
+  type ObjectionSaveOutcomeSummary,
+} from "@/lib/objection-save-outcomes";
 import type { MediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import {
   getQuoteFollowupLearningScope,
@@ -150,6 +155,7 @@ function getLatestQuoteCreatedAt(context: OmniLeadContext): Date | null {
 export function buildSalesAgentNextAction(input: {
   context: OmniLeadContext;
   memory: SalesAgentMemoryRecord;
+  objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
   mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
   quoteFollowupOutcomeSummary?: QuoteFollowupOutcomeSummary | null;
   autopilotPolicy?: Pick<
@@ -191,10 +197,17 @@ export function buildSalesAgentNextAction(input: {
     input.quoteFollowupOutcomeSummary,
     quoteFollowupLearningScope,
   );
+  const objectionSaveChannel = (() => {
+    const learned = getPreferredObjectionSaveChannel(input.objectionSaveOutcomeSummary);
+    if (learned === "sms" && hasChannelAvailable(context, "sms")) return "sms";
+    if (learned === "dm" && hasChannelAvailable(context, "dm")) return "dm";
+    return quoteFollowupChannel;
+  })();
   const preferFastQuoteFollowup = shouldPreferFastQuoteFollowup(
     input.quoteFollowupOutcomeSummary,
     quoteFollowupLearningScope,
   );
+  const keepSofterObjectionSave = shouldUseSofterObjectionSave(input.objectionSaveOutcomeSummary);
   const latestQuoteCreatedAt = getLatestQuoteCreatedAt(context);
   const accelerateQuoteFollowup = Boolean(
     preferFastQuoteFollowup &&
@@ -387,7 +400,7 @@ export function buildSalesAgentNextAction(input: {
   if ((hasInstantQuote || hasFormalQuote) && context.derived.objections.includes("price")) {
     return {
       actionType: "handle_price_objection",
-      channel: quoteFollowupChannel,
+      channel: objectionSaveChannel,
       status: "open",
       priority: "high",
       confidence: "medium",
@@ -396,6 +409,12 @@ export function buildSalesAgentNextAction(input: {
       facts: dedupe([
         memory.pricingContext,
         "Known objection: price",
+        objectionSaveChannel && objectionSaveChannel !== quoteFollowupChannel
+          ? `Recent objection-save attempts are reopening better on ${objectionSaveChannel.toUpperCase()}.`
+          : null,
+        keepSofterObjectionSave
+          ? "Recent objection saves are reopening weakly overall, so a short low-pressure reopen is safer than a hard push."
+          : null,
         quoteFollowupChannel && quoteFollowupChannel !== preferredChannel
           ? `Recent quote follow-ups are booking better on ${quoteFollowupChannel.toUpperCase()}.`
           : null,
@@ -404,7 +423,7 @@ export function buildSalesAgentNextAction(input: {
         memory.lastPromisedNextStep,
       ]),
       dueAt:
-        quoteFollowupChannel === "dm"
+        objectionSaveChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
               delayMinutes: dmEntryProfile.objectionDelayMinutes,

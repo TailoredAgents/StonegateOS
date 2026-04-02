@@ -97,6 +97,14 @@ type FollowupBucketDto = {
   bookRate: number;
 };
 
+type ObjectionBucketDto = {
+  attempts: number;
+  reopened: number;
+  reopenRate: number;
+  booked: number;
+  bookRate: number;
+};
+
 type FollowupSliceDto = {
   quotesWithFollowup: number;
   bookedQuotes: number;
@@ -128,6 +136,24 @@ type FollowupSummaryDto = FollowupSliceDto & {
     public_site: FollowupSliceDto;
     other: FollowupSliceDto;
     unknown: FollowupSliceDto;
+  };
+};
+
+type ObjectionSummaryDto = {
+  windowStart: string;
+  attempts: number;
+  reopened: number;
+  reopenRate: number;
+  booked: number;
+  bookRate: number;
+  byChannel: {
+    sms: ObjectionBucketDto;
+    dm: ObjectionBucketDto;
+    email: ObjectionBucketDto;
+  };
+  learned: {
+    preferredChannel: "sms" | "dm" | null;
+    keepSofter: boolean;
   };
 };
 
@@ -178,10 +204,12 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const data = (await res.json()) as {
     quotes?: InstantQuoteDto[];
     summary?: InstantQuoteSummaryDto;
+    objectionSummary?: ObjectionSummaryDto;
     followupSummary?: FollowupSummaryDto;
   };
   const quotes = data.quotes ?? [];
   const summary = data.summary;
+  const objectionSummary = data.objectionSummary;
   const followupSummary = data.followupSummary;
 
   return (
@@ -235,6 +263,35 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {renderFollowupLearning("Brush quotes", followupSummary.byServiceFamily.brush)}
             {renderFollowupLearning("Facebook-sourced", followupSummary.bySourceFamily.facebook)}
             {renderFollowupLearning("Public-site sourced", followupSummary.bySourceFamily.public_site)}
+          </div>
+        </div>
+      ) : null}
+      {objectionSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Objection-save learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks real sent price-objection save attempts and whether they reopened the conversation within 48 hours.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-600">
+            Attempts: {objectionSummary.attempts} | Reopened: {objectionSummary.reopened} (
+            {formatPercent(objectionSummary.reopenRate)}) | Booked later: {objectionSummary.booked} (
+            {formatPercent(objectionSummary.bookRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            SMS reopen {formatPercent(objectionSummary.byChannel.sms.reopenRate)} | Messenger reopen{" "}
+            {formatPercent(objectionSummary.byChannel.dm.reopenRate)} | Email reopen{" "}
+            {formatPercent(objectionSummary.byChannel.email.reopenRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {objectionSummary.learned.preferredChannel === "sms"
+              ? "Learned objection-save lean: SMS"
+              : objectionSummary.learned.preferredChannel === "dm"
+                ? "Learned objection-save lean: Messenger"
+                : "Learned objection-save lean: not strong enough yet"}
+            {" | "}
+            {objectionSummary.learned.keepSofter
+              ? "Low-pressure reopens are safer right now."
+              : "No strong softer-save warning yet."}
           </div>
         </div>
       ) : null}

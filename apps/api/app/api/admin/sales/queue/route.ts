@@ -33,6 +33,7 @@ import { buildSalesAgentMemory, getSalesAgentMemory, upsertSalesAgentMemory } fr
 import { getDmLiveAutopilotStates } from "@/lib/dm-autopilot";
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
+import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
 
 function parseLeadId(notes: string | null): string | null {
@@ -166,6 +167,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const serviceAreaPolicy = await getServiceAreaPolicy(db);
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
+  const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
   const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
 
   const url = new URL(request.url);
@@ -633,6 +635,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             missingFields: memory.missingFields,
             factsJson: (memory.factsJson as Record<string, unknown> | null) ?? {},
           },
+          objectionSaveOutcomeSummary,
           mediaOutcomeSummary,
           quoteFollowupOutcomeSummary,
           autopilotPolicy,

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb, instantQuotes } from "@/db";
 import { desc, eq, sql } from "drizzle-orm";
 import { loadMediaQuoteOutcomeSummary, loadQuoteInsightMap } from "@/lib/media-quote-outcomes";
+import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
 import { isAdminRequest } from "../../web/admin";
 
@@ -20,6 +21,7 @@ export async function GET(request: NextRequest) {
   const id = searchParams.get("id");
   const limit = Math.min(parseLimit(searchParams.get("limit")), 50);
   const summary = await loadMediaQuoteOutcomeSummary(db);
+  const objectionSummary = await loadObjectionSaveOutcomeSummary(db);
   const followupSummary = await loadQuoteFollowupOutcomeSummary(db);
   const bookedFromQuoteExpr = sql<boolean>`
     exists(
@@ -61,6 +63,7 @@ export async function GET(request: NextRequest) {
         tightenedAfterMoreMedia: quoteInsights.get(row.id)?.tightenedAfterMoreMedia ?? false,
       })),
       summary,
+      objectionSummary,
       followupSummary,
     });
   }
@@ -141,6 +144,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     quotes,
     summary,
+    objectionSummary,
     followupSummary,
   });
 }

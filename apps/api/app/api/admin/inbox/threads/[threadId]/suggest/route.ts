@@ -21,6 +21,7 @@ import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 import { getDmOpeningStrategy } from "@/lib/dm-autopilot";
 import { getMediaJobAnalysis } from "@/lib/media-job-analysis";
 import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
+import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
 
 type ReplyChannel = "sms" | "email" | "dm";
@@ -768,6 +769,7 @@ export async function POST(
     : null;
   const builtSalesAgentMemory = leadContext ? buildSalesAgentMemory(leadContext) : null;
   const mediaOutcomeSummary = leadContext ? await loadMediaQuoteOutcomeSummary(db) : null;
+  const objectionSaveOutcomeSummary = leadContext ? await loadObjectionSaveOutcomeSummary(db) : null;
   const quoteFollowupOutcomeSummary = leadContext ? await loadQuoteFollowupOutcomeSummary(db) : null;
   const salesAgentMemory =
     threadContext.contactId && leadContext && builtSalesAgentMemory
@@ -785,6 +787,7 @@ export async function POST(
           action: buildSalesAgentNextAction({
             context: leadContext,
             memory: builtSalesAgentMemory,
+            objectionSaveOutcomeSummary,
             mediaOutcomeSummary,
             quoteFollowupOutcomeSummary,
             autopilotPolicy,
