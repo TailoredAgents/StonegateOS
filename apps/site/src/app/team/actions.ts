@@ -824,22 +824,10 @@ export async function bookAppointmentAction(formData: FormData) {
       const hasName = Boolean(
         `${contactRecord?.firstName ?? ""} ${contactRecord?.lastName ?? ""}`.trim(),
       );
-      const hasPhone = Boolean(
-        (contactRecord?.phoneE164 ?? contactRecord?.phone ?? "").trim(),
-      );
       if (!hasName) {
         jar.set({
           name: "myst-flash-error",
           value: "Name is required to book an in-person quote.",
-          path: "/",
-        });
-        revalidatePath("/team");
-        return;
-      }
-      if (!hasPhone) {
-        jar.set({
-          name: "myst-flash-error",
-          value: "Phone number is required to book an in-person quote.",
           path: "/",
         });
         revalidatePath("/team");

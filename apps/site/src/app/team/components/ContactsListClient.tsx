@@ -182,11 +182,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
   );
   const hasBookingProperty = contactState.properties.length > 0;
   const isInPersonQuoteBooking = bookingAppointmentType === "in_person_quote";
-  const canSubmitQuoteBooking =
-    hasBookingName && hasBookingPhone && hasBookingProperty;
+  const canSubmitQuoteBooking = hasBookingName && hasBookingProperty;
   const quoteBookingBlockers = [
     !hasBookingName ? "contact name" : null,
-    !hasBookingPhone ? "phone number" : null,
     !hasBookingProperty ? "saved address" : null,
   ].filter((value): value is string => value !== null);
   const quoteBookingBlockedMessage =
@@ -1065,10 +1063,9 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               </label>
               {isInPersonQuoteBooking ? (
                 <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
-                  In-person quote only uses the saved contact name and phone
-                  plus a saved address, date, and time.
+                  In-person quote only uses the saved contact details plus a
+                  saved address, date, and time.
                   {!hasBookingName ? " Add the contact name first." : ""}
-                  {!hasBookingPhone ? " Add a phone number first." : ""}
                   {!hasBookingProperty ? " Add a property address first." : ""}
                 </div>
               ) : (
@@ -1188,6 +1185,11 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               {quoteBookingBlockedMessage ? (
                 <span className="text-[11px] font-medium text-rose-600">
                   {quoteBookingBlockedMessage}
+                </span>
+              ) : null}
+              {!hasBookingPhone ? (
+                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] font-medium text-amber-800">
+                  Need&apos;s phone number
                 </span>
               ) : null}
             </div>
