@@ -6,6 +6,7 @@ import { loadMediaQuoteOutcomeSummary, loadQuoteInsightMap } from "@/lib/media-q
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
+import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 import { isAdminRequest } from "../../web/admin";
 
@@ -27,6 +28,7 @@ export async function GET(request: NextRequest) {
   const appointmentReminderSummary = await loadAppointmentReminderOutcomeSummary(db);
   const missingInfoSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSummary = await loadObjectionSaveOutcomeSummary(db);
+  const quoteCloseSummary = await loadQuoteCloseOutcomeSummary(db);
   const followupSummary = await loadQuoteFollowupOutcomeSummary(db);
   const reactivationSummary = await loadReactivationOutcomeSummary(db);
   const bookedFromQuoteExpr = sql<boolean>`
@@ -72,6 +74,7 @@ export async function GET(request: NextRequest) {
       appointmentReminderSummary,
       missingInfoSummary,
       objectionSummary,
+      quoteCloseSummary,
       followupSummary,
       reactivationSummary,
     });
@@ -156,6 +159,7 @@ export async function GET(request: NextRequest) {
     appointmentReminderSummary,
     missingInfoSummary,
     objectionSummary,
+    quoteCloseSummary,
     followupSummary,
     reactivationSummary,
   });

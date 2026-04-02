@@ -16,6 +16,7 @@ import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
+import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 import { getSalesAutopilotPolicy } from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
@@ -89,6 +90,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   const appointmentReminderOutcomeSummary = await loadAppointmentReminderOutcomeSummary(db);
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
+  const quoteCloseOutcomeSummary = await loadQuoteCloseOutcomeSummary(db);
   const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
   const reactivationOutcomeSummary = await loadReactivationOutcomeSummary(db);
 
@@ -115,6 +117,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
       missingInfoOutcomeSummary,
       objectionSaveOutcomeSummary,
       mediaOutcomeSummary,
+      quoteCloseOutcomeSummary,
       reactivationOutcomeSummary,
       quoteFollowupOutcomeSummary,
       autopilotPolicy,

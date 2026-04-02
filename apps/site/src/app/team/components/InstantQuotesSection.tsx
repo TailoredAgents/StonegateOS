@@ -270,6 +270,32 @@ type ReactivationSummaryDto = {
   };
 };
 
+type QuoteCloseBucketDto = {
+  attempts: number;
+  booked: number;
+  bookRate: number;
+  lost: number;
+  lostRate: number;
+};
+
+type QuoteCloseSummaryDto = {
+  windowStart: string;
+  attempts: number;
+  booked: number;
+  bookRate: number;
+  lost: number;
+  lostRate: number;
+  byChannel: {
+    sms: QuoteCloseBucketDto;
+    dm: QuoteCloseBucketDto;
+    email: QuoteCloseBucketDto;
+  };
+  learned: {
+    preferredChannel: "sms" | "dm" | null;
+    keepSofter: boolean;
+  };
+};
+
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
@@ -320,6 +346,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
     appointmentReminderSummary?: AppointmentReminderSummaryDto;
     missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
+    quoteCloseSummary?: QuoteCloseSummaryDto;
     followupSummary?: FollowupSummaryDto;
     reactivationSummary?: ReactivationSummaryDto;
   };
@@ -328,6 +355,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const appointmentReminderSummary = data.appointmentReminderSummary;
   const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
+  const quoteCloseSummary = data.quoteCloseSummary;
   const followupSummary = data.followupSummary;
   const reactivationSummary = data.reactivationSummary;
 
@@ -419,6 +447,40 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {reactivationSummary.learned.worthReactivating
               ? "Dormant leads are still worth reviving."
               : "Dormant lead reactivations are weak right now, so keep them low pressure."}
+          </div>
+        </div>
+      ) : null}
+      {quoteCloseSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Quote close learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks real agent-driven quote follow-ups and measures whether they turned into booked jobs or ended in lost dispositions within 14 days.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-600">
+            Attempts: {quoteCloseSummary.attempts} | Booked: {quoteCloseSummary.booked} (
+            {formatPercent(quoteCloseSummary.bookRate)}) | Lost: {quoteCloseSummary.lost} (
+            {formatPercent(quoteCloseSummary.lostRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            SMS book {formatPercent(quoteCloseSummary.byChannel.sms.bookRate)} | Messenger book{" "}
+            {formatPercent(quoteCloseSummary.byChannel.dm.bookRate)} | Email book{" "}
+            {formatPercent(quoteCloseSummary.byChannel.email.bookRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            SMS lost {formatPercent(quoteCloseSummary.byChannel.sms.lostRate)} | Messenger lost{" "}
+            {formatPercent(quoteCloseSummary.byChannel.dm.lostRate)} | Email lost{" "}
+            {formatPercent(quoteCloseSummary.byChannel.email.lostRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {quoteCloseSummary.learned.preferredChannel === "sms"
+              ? "Learned quote-close lean: SMS"
+              : quoteCloseSummary.learned.preferredChannel === "dm"
+                ? "Learned quote-close lean: Messenger"
+                : "Learned quote-close lean: not strong enough yet"}
+            {" | "}
+            {quoteCloseSummary.learned.keepSofter
+              ? "Hard booking pushes are underperforming right now."
+              : "No strong softer-close warning yet."}
           </div>
         </div>
       ) : null}

@@ -21,6 +21,11 @@ import {
   type ReactivationOutcomeSummary,
 } from "@/lib/reactivation-outcomes";
 import {
+  getPreferredQuoteCloseChannel,
+  shouldUseSofterQuoteClose,
+  type QuoteCloseOutcomeSummary,
+} from "@/lib/quote-close-outcomes";
+import {
   getQuoteFollowupLearningScope,
   getPreferredQuoteFollowupChannel,
   shouldPreferFastQuoteFollowup,
@@ -194,6 +199,7 @@ export function buildSalesAgentNextAction(input: {
   missingInfoOutcomeSummary?: MissingInfoOutcomeSummary | null;
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
   mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
+  quoteCloseOutcomeSummary?: QuoteCloseOutcomeSummary | null;
   reactivationOutcomeSummary?: ReactivationOutcomeSummary | null;
   quoteFollowupOutcomeSummary?: QuoteFollowupOutcomeSummary | null;
   autopilotPolicy?: Pick<
@@ -241,10 +247,17 @@ export function buildSalesAgentNextAction(input: {
     if (learned === "dm" && hasChannelAvailable(context, "dm")) return "dm";
     return quoteFollowupChannel;
   })();
+  const quoteCloseChannel = (() => {
+    const learned = getPreferredQuoteCloseChannel(input.quoteCloseOutcomeSummary);
+    if (learned === "sms" && hasChannelAvailable(context, "sms")) return "sms";
+    if (learned === "dm" && hasChannelAvailable(context, "dm")) return "dm";
+    return quoteFollowupChannel;
+  })();
   const preferFastQuoteFollowup = shouldPreferFastQuoteFollowup(
     input.quoteFollowupOutcomeSummary,
     quoteFollowupLearningScope,
   );
+  const keepSofterQuoteClose = shouldUseSofterQuoteClose(input.quoteCloseOutcomeSummary);
   const keepSofterReactivation = shouldUseSofterReactivation(input.reactivationOutcomeSummary);
   const reactivationWorthwhile = isReactivationWorthwhile(input.reactivationOutcomeSummary);
   const keepSingleMissingInfoAsk = shouldKeepSingleMissingInfoAsk(input.missingInfoOutcomeSummary);
@@ -605,7 +618,7 @@ export function buildSalesAgentNextAction(input: {
   }
 
   if ((hasInstantQuote || hasFormalQuote) && context.derived.bookingReadiness !== "low") {
-    const effectiveQuoteFollowupChannel = dormantQuoteLead ? reactivationChannel : quoteFollowupChannel;
+    const effectiveQuoteFollowupChannel = dormantQuoteLead ? reactivationChannel : quoteCloseChannel;
     return {
       actionType: "follow_up_quote",
       channel: effectiveQuoteFollowupChannel,
@@ -629,7 +642,10 @@ export function buildSalesAgentNextAction(input: {
         effectiveQuoteFollowupChannel && effectiveQuoteFollowupChannel !== preferredChannel
           ? dormantQuoteLead
             ? `Recent dormant lead reactivations are reopening better on ${effectiveQuoteFollowupChannel.toUpperCase()}.`
-            : `Recent quote follow-ups are booking better on ${effectiveQuoteFollowupChannel.toUpperCase()}.`
+            : `Recent agent quote follow-ups are converting better on ${effectiveQuoteFollowupChannel.toUpperCase()}.`
+          : null,
+        !dormantQuoteLead && keepSofterQuoteClose
+          ? "Recent agent quote follow-ups are ending in losses more often than bookings, so a softer reopen is safer than a hard booking push."
           : null,
         dormantQuoteLead && keepSofterReactivation
           ? "Recent dormant lead reactivations are reopening weakly overall, so a softer reopen is safer than a hard booking push."
