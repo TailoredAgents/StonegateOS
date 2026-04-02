@@ -91,9 +91,83 @@ type InstantQuoteSummaryDto = {
   };
 };
 
+type FollowupBucketDto = {
+  quotes: number;
+  bookedQuotes: number;
+  bookRate: number;
+};
+
+type FollowupSliceDto = {
+  quotesWithFollowup: number;
+  bookedQuotes: number;
+  byChannel: {
+    sms: FollowupBucketDto;
+    dm: FollowupBucketDto;
+    email: FollowupBucketDto;
+  };
+  byTiming: {
+    fast: FollowupBucketDto;
+    delayed: FollowupBucketDto;
+  };
+  learned: {
+    preferredChannel: "sms" | "dm" | null;
+    preferFast: boolean;
+  };
+};
+
+type FollowupSummaryDto = FollowupSliceDto & {
+  windowStart: string;
+  byServiceFamily: {
+    junk: FollowupSliceDto;
+    demo: FollowupSliceDto;
+    brush: FollowupSliceDto;
+    unknown: FollowupSliceDto;
+  };
+  bySourceFamily: {
+    facebook: FollowupSliceDto;
+    public_site: FollowupSliceDto;
+    other: FollowupSliceDto;
+    unknown: FollowupSliceDto;
+  };
+};
+
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
+}
+
+function renderFollowupLearning(label: string, summary: FollowupSliceDto): React.ReactElement {
+  const preferredChannel =
+    summary.learned.preferredChannel === "sms"
+      ? "SMS"
+      : summary.learned.preferredChannel === "dm"
+        ? "Messenger"
+        : null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="font-semibold text-slate-900">{label}</div>
+      <div className="mt-1 text-[11px] text-slate-600">
+        Quotes with follow-up: {summary.quotesWithFollowup} | Booked: {summary.bookedQuotes} (
+        {formatPercent(
+          summary.quotesWithFollowup > 0 ? summary.bookedQuotes / summary.quotesWithFollowup : 0,
+        )}
+        )
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        SMS {formatPercent(summary.byChannel.sms.bookRate)} | Messenger {formatPercent(summary.byChannel.dm.bookRate)} |
+        Email {formatPercent(summary.byChannel.email.bookRate)}
+      </div>
+      <div className="text-[11px] text-slate-500">
+        Fast follow-up {formatPercent(summary.byTiming.fast.bookRate)} | Delayed {formatPercent(summary.byTiming.delayed.bookRate)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        {preferredChannel ? `Learned channel lean: ${preferredChannel}` : "Learned channel lean: not strong enough yet"}
+        {" | "}
+        {summary.learned.preferFast ? "Fast first follow-up is outperforming." : "No strong fast-follow-up edge yet."}
+      </div>
+    </div>
+  );
 }
 
 export async function InstantQuotesSection(): Promise<React.ReactElement> {
@@ -101,9 +175,14 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   if (!res.ok) {
     return <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">Instant quotes unavailable.</div>;
   }
-  const data = (await res.json()) as { quotes?: InstantQuoteDto[]; summary?: InstantQuoteSummaryDto };
+  const data = (await res.json()) as {
+    quotes?: InstantQuoteDto[];
+    summary?: InstantQuoteSummaryDto;
+    followupSummary?: FollowupSummaryDto;
+  };
   const quotes = data.quotes ?? [];
   const summary = data.summary;
+  const followupSummary = data.followupSummary;
 
   return (
     <section className="space-y-4 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
@@ -140,6 +219,22 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
             Booked from quote means the quote is linked to a non-canceled appointment.
+          </div>
+        </div>
+      ) : null}
+      {followupSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Quote follow-up learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Planner guidance is now learning from first real follow-up outcomes after a quote, segmented by service family and lead source.
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {renderFollowupLearning("Overall", followupSummary)}
+            {renderFollowupLearning("Junk quotes", followupSummary.byServiceFamily.junk)}
+            {renderFollowupLearning("Demo quotes", followupSummary.byServiceFamily.demo)}
+            {renderFollowupLearning("Brush quotes", followupSummary.byServiceFamily.brush)}
+            {renderFollowupLearning("Facebook-sourced", followupSummary.bySourceFamily.facebook)}
+            {renderFollowupLearning("Public-site sourced", followupSummary.bySourceFamily.public_site)}
           </div>
         </div>
       ) : null}
