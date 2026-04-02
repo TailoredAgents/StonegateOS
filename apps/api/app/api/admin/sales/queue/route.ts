@@ -37,6 +37,7 @@ import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
+import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 
 function parseLeadId(notes: string | null): string | null {
   if (!notes) return null;
@@ -173,6 +174,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
   const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
+  const reactivationOutcomeSummary = await loadReactivationOutcomeSummary(db);
 
   const url = new URL(request.url);
   const memberId = url.searchParams.get("memberId")?.trim() || config.defaultAssigneeMemberId;
@@ -643,6 +645,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           missingInfoOutcomeSummary,
           objectionSaveOutcomeSummary,
           mediaOutcomeSummary,
+          reactivationOutcomeSummary,
           quoteFollowupOutcomeSummary,
           autopilotPolicy,
         }),

@@ -15,6 +15,12 @@ import {
 } from "@/lib/objection-save-outcomes";
 import type { MediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import {
+  getPreferredReactivationChannel,
+  isReactivationWorthwhile,
+  shouldUseSofterReactivation,
+  type ReactivationOutcomeSummary,
+} from "@/lib/reactivation-outcomes";
+import {
   getQuoteFollowupLearningScope,
   getPreferredQuoteFollowupChannel,
   shouldPreferFastQuoteFollowup,
@@ -112,6 +118,17 @@ function chooseMissingInfoChannel(
   return fallbackChannel;
 }
 
+function chooseReactivationChannel(
+  context: OmniLeadContext,
+  fallbackChannel: string | null,
+  summary: ReactivationOutcomeSummary | null | undefined,
+): string | null {
+  const learned = getPreferredReactivationChannel(summary);
+  if (learned === "sms" && hasChannelAvailable(context, "sms")) return "sms";
+  if (learned === "dm" && hasChannelAvailable(context, "dm")) return "dm";
+  return fallbackChannel;
+}
+
 function hasRecentInboundWithoutReply(context: OmniLeadContext, now: Date): boolean {
   const latestInbound = pickLatestDate(context.channelSummary.map((row) => row.lastInboundAt));
   if (!latestInbound) return false;
@@ -177,6 +194,7 @@ export function buildSalesAgentNextAction(input: {
   missingInfoOutcomeSummary?: MissingInfoOutcomeSummary | null;
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
   mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
+  reactivationOutcomeSummary?: ReactivationOutcomeSummary | null;
   quoteFollowupOutcomeSummary?: QuoteFollowupOutcomeSummary | null;
   autopilotPolicy?: Pick<
     SalesAutopilotPolicy,
@@ -227,10 +245,13 @@ export function buildSalesAgentNextAction(input: {
     input.quoteFollowupOutcomeSummary,
     quoteFollowupLearningScope,
   );
+  const keepSofterReactivation = shouldUseSofterReactivation(input.reactivationOutcomeSummary);
+  const reactivationWorthwhile = isReactivationWorthwhile(input.reactivationOutcomeSummary);
   const keepSingleMissingInfoAsk = shouldKeepSingleMissingInfoAsk(input.missingInfoOutcomeSummary);
   const leanIntoMissingInfoRequests = shouldLeanIntoMissingInfoRequests(input.missingInfoOutcomeSummary);
   const keepSofterObjectionSave = shouldUseSofterObjectionSave(input.objectionSaveOutcomeSummary);
   const latestQuoteCreatedAt = getLatestQuoteCreatedAt(context);
+  const latestInboundAt = pickLatestDate(context.channelSummary.map((row) => row.lastInboundAt));
   const accelerateQuoteFollowup = Boolean(
     preferFastQuoteFollowup &&
       latestQuoteCreatedAt &&
@@ -248,6 +269,17 @@ export function buildSalesAgentNextAction(input: {
     context,
     (hasInstantQuote || hasFormalQuote ? quoteFollowupChannel : preferredChannel) ?? preferredChannel,
     input.missingInfoOutcomeSummary,
+  );
+  const dormantQuoteLead = Boolean(
+    (hasInstantQuote || hasFormalQuote) &&
+      latestInboundAt &&
+      now.getTime() - latestInboundAt.getTime() >= 24 * 60 * 60 * 1000 &&
+      !hasRecentOutbound(context, now, 12 * 60)
+  );
+  const reactivationChannel = chooseReactivationChannel(
+    context,
+    quoteFollowupChannel,
+    input.reactivationOutcomeSummary,
   );
   const dmEntryProfile = getDmEntryProfile(context);
   const hasUpcomingAppointment =
@@ -573,19 +605,37 @@ export function buildSalesAgentNextAction(input: {
   }
 
   if ((hasInstantQuote || hasFormalQuote) && context.derived.bookingReadiness !== "low") {
+    const effectiveQuoteFollowupChannel = dormantQuoteLead ? reactivationChannel : quoteFollowupChannel;
     return {
       actionType: "follow_up_quote",
-      channel: quoteFollowupChannel,
+      channel: effectiveQuoteFollowupChannel,
       status: "open",
-      priority: context.derived.bookingReadiness === "high" ? "high" : "normal",
+      priority:
+        dormantQuoteLead && !reactivationWorthwhile
+          ? "low"
+          : context.derived.bookingReadiness === "high"
+            ? "high"
+            : "normal",
       confidence: "medium",
-      summary: "Follow up on the quote and try to move the lead toward booking.",
-      reason: "A quote exists, but no appointment is scheduled yet.",
+      summary: dormantQuoteLead
+        ? "Reopen this quiet quote lead with a short follow-up."
+        : "Follow up on the quote and try to move the lead toward booking.",
+      reason: dormantQuoteLead
+        ? "A quote exists, but the lead has gone quiet and needs a light reopen."
+        : "A quote exists, but no appointment is scheduled yet.",
       facts: dedupe([
         memory.pricingContext,
         memory.lastPromisedNextStep,
-        quoteFollowupChannel && quoteFollowupChannel !== preferredChannel
-          ? `Recent quote follow-ups are booking better on ${quoteFollowupChannel.toUpperCase()}.`
+        effectiveQuoteFollowupChannel && effectiveQuoteFollowupChannel !== preferredChannel
+          ? dormantQuoteLead
+            ? `Recent dormant lead reactivations are reopening better on ${effectiveQuoteFollowupChannel.toUpperCase()}.`
+            : `Recent quote follow-ups are booking better on ${effectiveQuoteFollowupChannel.toUpperCase()}.`
+          : null,
+        dormantQuoteLead && keepSofterReactivation
+          ? "Recent dormant lead reactivations are reopening weakly overall, so a softer reopen is safer than a hard booking push."
+          : null,
+        dormantQuoteLead && !reactivationWorthwhile
+          ? "Recent dormant lead reactivations are not converting strongly, so this should stay light and low pressure."
           : null,
         shouldKeepMomentumDespiteMissingInfo
           ? "Recent missing-detail requests are resolving weakly, so keeping momentum is safer than blocking on another detail first."
@@ -595,7 +645,7 @@ export function buildSalesAgentNextAction(input: {
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
       dueAt:
-        quoteFollowupChannel === "dm"
+        effectiveQuoteFollowupChannel === "dm"
           ? resolveDeferredDueAt({
               channel: "dm",
               delayMinutes: dmEntryProfile.quoteDelayMinutes,

@@ -239,6 +239,37 @@ type AppointmentReminderSummaryDto = {
   };
 };
 
+type ReactivationBucketDto = {
+  attempts: number;
+  reopened: number;
+  reopenRate: number;
+  booked: number;
+  bookRate: number;
+};
+
+type ReactivationSummaryDto = {
+  windowStart: string;
+  attempts: number;
+  reopened: number;
+  reopenRate: number;
+  booked: number;
+  bookRate: number;
+  byChannel: {
+    sms: ReactivationBucketDto;
+    dm: ReactivationBucketDto;
+    email: ReactivationBucketDto;
+  };
+  byDormancy: {
+    day_1_3: ReactivationBucketDto;
+    day_3_plus: ReactivationBucketDto;
+  };
+  learned: {
+    preferredChannel: "sms" | "dm" | null;
+    keepSofter: boolean;
+    worthReactivating: boolean;
+  };
+};
+
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
@@ -290,6 +321,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
     missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
     followupSummary?: FollowupSummaryDto;
+    reactivationSummary?: ReactivationSummaryDto;
   };
   const quotes = data.quotes ?? [];
   const summary = data.summary;
@@ -297,6 +329,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
   const followupSummary = data.followupSummary;
+  const reactivationSummary = data.reactivationSummary;
 
   return (
     <section className="space-y-4 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
@@ -349,6 +382,43 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {renderFollowupLearning("Brush quotes", followupSummary.byServiceFamily.brush)}
             {renderFollowupLearning("Facebook-sourced", followupSummary.bySourceFamily.facebook)}
             {renderFollowupLearning("Public-site sourced", followupSummary.bySourceFamily.public_site)}
+          </div>
+        </div>
+      ) : null}
+      {reactivationSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Dormant-lead reactivation learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks real outbound follow-ups sent after at least 24 hours of silence and measures whether they reopen the conversation or eventually book.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-600">
+            Attempts: {reactivationSummary.attempts} | Reopened: {reactivationSummary.reopened} (
+            {formatPercent(reactivationSummary.reopenRate)}) | Booked later: {reactivationSummary.booked} (
+            {formatPercent(reactivationSummary.bookRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            SMS reopen {formatPercent(reactivationSummary.byChannel.sms.reopenRate)} | Messenger reopen{" "}
+            {formatPercent(reactivationSummary.byChannel.dm.reopenRate)} | Email reopen{" "}
+            {formatPercent(reactivationSummary.byChannel.email.reopenRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            1 to 3 day silence reopen {formatPercent(reactivationSummary.byDormancy.day_1_3.reopenRate)} | 3 plus day silence reopen{" "}
+            {formatPercent(reactivationSummary.byDormancy.day_3_plus.reopenRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {reactivationSummary.learned.preferredChannel === "sms"
+              ? "Learned reactivation lean: SMS"
+              : reactivationSummary.learned.preferredChannel === "dm"
+                ? "Learned reactivation lean: Messenger"
+                : "Learned reactivation lean: not strong enough yet"}
+            {" | "}
+            {reactivationSummary.learned.keepSofter
+              ? "Softer reopen touches are safer right now."
+              : "No strong softer-reactivation warning yet."}
+            {" | "}
+            {reactivationSummary.learned.worthReactivating
+              ? "Dormant leads are still worth reviving."
+              : "Dormant lead reactivations are weak right now, so keep them low pressure."}
           </div>
         </div>
       ) : null}

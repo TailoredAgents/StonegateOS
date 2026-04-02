@@ -25,6 +25,7 @@ import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
+import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 
 type ReplyChannel = "sms" | "email" | "dm";
 
@@ -775,6 +776,7 @@ export async function POST(
   const missingInfoOutcomeSummary = leadContext ? await loadMissingInfoOutcomeSummary(db) : null;
   const objectionSaveOutcomeSummary = leadContext ? await loadObjectionSaveOutcomeSummary(db) : null;
   const quoteFollowupOutcomeSummary = leadContext ? await loadQuoteFollowupOutcomeSummary(db) : null;
+  const reactivationOutcomeSummary = leadContext ? await loadReactivationOutcomeSummary(db) : null;
   const salesAgentMemory =
     threadContext.contactId && leadContext && builtSalesAgentMemory
       ? await upsertSalesAgentMemory(db, {
@@ -795,6 +797,7 @@ export async function POST(
             missingInfoOutcomeSummary,
             objectionSaveOutcomeSummary,
             mediaOutcomeSummary,
+            reactivationOutcomeSummary,
             quoteFollowupOutcomeSummary,
             autopilotPolicy,
           }),

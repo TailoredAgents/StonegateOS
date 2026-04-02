@@ -19,6 +19,7 @@ import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
+import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -123,6 +124,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
   const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
+  const reactivationOutcomeSummary = await loadReactivationOutcomeSummary(db);
 
   let memory = await getSalesAgentMemory(db, contactIdTrimmed);
   if (!memory) {
@@ -145,6 +147,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
         missingInfoOutcomeSummary,
         objectionSaveOutcomeSummary,
         mediaOutcomeSummary,
+        reactivationOutcomeSummary,
         quoteFollowupOutcomeSummary,
         autopilotPolicy,
       }),
