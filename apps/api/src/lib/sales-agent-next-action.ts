@@ -267,15 +267,22 @@ export function buildSalesAgentNextAction(input: {
     quoteFollowupLearningScope,
   );
   const keepSofterQuoteClose = shouldUseSofterQuoteClose(input.quoteCloseOutcomeSummary);
-  const keepQuoteEstimateProvisional = shouldKeepQuoteEstimateProvisional(input.quoteAccuracyOutcomeSummary);
+  const keepQuoteEstimateProvisional = shouldKeepQuoteEstimateProvisional(
+    input.quoteAccuracyOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
   const keepSofterReactivation = shouldUseSofterReactivation(input.reactivationOutcomeSummary);
-  const quoteAccuracyTrendsAboveRange = doesQuoteAccuracyTrendAboveRange(input.quoteAccuracyOutcomeSummary);
+  const quoteAccuracyTrendsAboveRange = doesQuoteAccuracyTrendAboveRange(
+    input.quoteAccuracyOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
   const reactivationWorthwhile = isReactivationWorthwhile(input.reactivationOutcomeSummary);
   const keepSingleMissingInfoAsk = shouldKeepSingleMissingInfoAsk(input.missingInfoOutcomeSummary);
   const leanIntoMissingInfoRequests = shouldLeanIntoMissingInfoRequests(input.missingInfoOutcomeSummary);
   const keepSofterObjectionSave = shouldUseSofterObjectionSave(input.objectionSaveOutcomeSummary);
   const tightenLowConfidenceQuoteEstimates = shouldTightenLowConfidenceQuoteEstimates(
     input.quoteAccuracyOutcomeSummary,
+    quoteFollowupLearningScope,
   );
   const latestQuoteCreatedAt = getLatestQuoteCreatedAt(context);
   const latestInboundAt = pickLatestDate(context.channelSummary.map((row) => row.lastInboundAt));

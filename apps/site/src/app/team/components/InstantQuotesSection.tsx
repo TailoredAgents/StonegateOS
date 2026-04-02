@@ -342,8 +342,7 @@ type QuoteAccuracyBucketDto = {
   averageOutsideByCents: number;
 };
 
-type QuoteAccuracySummaryDto = {
-  windowStart: string;
+type QuoteAccuracySliceDto = {
   attempts: number;
   withinRange: number;
   withinRangeRate: number;
@@ -364,6 +363,32 @@ type QuoteAccuracySummaryDto = {
     tendsAboveRange: boolean;
     highConfidenceTrustworthy: boolean;
   };
+};
+
+type QuoteAccuracySummaryDto = {
+  windowStart: string;
+  attempts: number;
+  withinRange: number;
+  withinRangeRate: number;
+  aboveRange: number;
+  aboveRangeRate: number;
+  belowRange: number;
+  belowRangeRate: number;
+  averageOutsideByCents: number;
+  byConfidence: QuoteAccuracySliceDto["byConfidence"];
+  byServiceFamily: {
+    junk: QuoteAccuracySliceDto;
+    demo: QuoteAccuracySliceDto;
+    brush: QuoteAccuracySliceDto;
+    unknown: QuoteAccuracySliceDto;
+  };
+  bySourceFamily: {
+    facebook: QuoteAccuracySliceDto;
+    public_site: QuoteAccuracySliceDto;
+    other: QuoteAccuracySliceDto;
+    unknown: QuoteAccuracySliceDto;
+  };
+  learned: QuoteAccuracySliceDto["learned"];
 };
 
 function formatPercent(value: number | null | undefined): string {
@@ -409,6 +434,31 @@ function renderFollowupLearning(label: string, summary: FollowupSliceDto): React
         {preferredChannel ? `Learned channel lean: ${preferredChannel}` : "Learned channel lean: not strong enough yet"}
         {" | "}
         {summary.learned.preferFast ? "Fast first follow-up is outperforming." : "No strong fast-follow-up edge yet."}
+      </div>
+    </div>
+  );
+}
+
+function renderQuoteAccuracyLearning(
+  label: string,
+  summary: QuoteAccuracySliceDto,
+): React.ReactElement {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="font-semibold text-slate-900">{label}</div>
+      <div className="mt-1 text-[11px] text-slate-600">
+        Completed jobs: {summary.attempts} | Within range: {summary.withinRange} (
+        {formatPercent(summary.withinRangeRate)})
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        Above range {formatPercent(summary.aboveRangeRate)} | Below range {formatPercent(summary.belowRangeRate)}
+      </div>
+      <div className="text-[11px] text-slate-500">
+        High-confidence within range {formatPercent(summary.byConfidence.high.withinRangeRate)} | Low-confidence{" "}
+        {formatPercent(summary.byConfidence.low.withinRangeRate)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        Avg miss outside range: {formatUsdCents(summary.averageOutsideByCents)}
       </div>
     </div>
   );
@@ -569,6 +619,13 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {quoteAccuracySummary.learned.tendsAboveRange
               ? "Completed jobs are skewing above the original instant range."
               : "No strong above-range skew yet."}
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {renderQuoteAccuracyLearning("Junk quotes", quoteAccuracySummary.byServiceFamily.junk)}
+            {renderQuoteAccuracyLearning("Demo quotes", quoteAccuracySummary.byServiceFamily.demo)}
+            {renderQuoteAccuracyLearning("Brush quotes", quoteAccuracySummary.byServiceFamily.brush)}
+            {renderQuoteAccuracyLearning("Facebook-sourced", quoteAccuracySummary.bySourceFamily.facebook)}
+            {renderQuoteAccuracyLearning("Public-site sourced", quoteAccuracySummary.bySourceFamily.public_site)}
           </div>
         </div>
       ) : null}

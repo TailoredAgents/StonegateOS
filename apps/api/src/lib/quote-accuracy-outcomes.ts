@@ -4,11 +4,15 @@ import { sql } from "drizzle-orm";
 type DbExecutor = ReturnType<typeof getDb>;
 type QuoteConfidence = "high" | "medium" | "low" | "unknown";
 type QuoteOutcome = "within" | "above" | "below";
+type ServiceFamily = "junk" | "demo" | "brush" | "unknown";
+type SourceFamily = "facebook" | "public_site" | "other" | "unknown";
 
 type QuoteAccuracyRow = {
   confidence: QuoteConfidence;
   outcome: QuoteOutcome;
   outsideByCents: number;
+  serviceFamily: ServiceFamily;
+  sourceFamily: SourceFamily;
 };
 
 type AccuracyBucket = {
@@ -22,8 +26,7 @@ type AccuracyBucket = {
   averageOutsideByCents: number;
 };
 
-export type QuoteAccuracyOutcomeSummary = {
-  windowStart: string;
+type QuoteAccuracyOutcomeSlice = {
   attempts: number;
   withinRange: number;
   withinRangeRate: number;
@@ -39,6 +42,17 @@ export type QuoteAccuracyOutcomeSummary = {
     tendsAboveRange: boolean;
     highConfidenceTrustworthy: boolean;
   };
+};
+
+export type QuoteAccuracyLearningScope = {
+  serviceFamily?: ServiceFamily | null;
+  sourceFamily?: SourceFamily | null;
+};
+
+export type QuoteAccuracyOutcomeSummary = QuoteAccuracyOutcomeSlice & {
+  windowStart: string;
+  byServiceFamily: Record<ServiceFamily, QuoteAccuracyOutcomeSlice>;
+  bySourceFamily: Record<SourceFamily, QuoteAccuracyOutcomeSlice>;
 };
 
 function toRate(numerator: number, denominator: number): number {
@@ -74,18 +88,18 @@ function summarize(rows: QuoteAccuracyRow[]): AccuracyBucket {
   };
 }
 
-function tendsAboveRange(summary: QuoteAccuracyOutcomeSummary): boolean {
+function tendsAboveRange(summary: QuoteAccuracyOutcomeSlice): boolean {
   if (summary.attempts < 8) return false;
   return summary.aboveRangeRate >= 0.25 && summary.aboveRangeRate >= summary.belowRangeRate + 0.05;
 }
 
-function highConfidenceTrustworthy(summary: QuoteAccuracyOutcomeSummary): boolean {
+function highConfidenceTrustworthy(summary: QuoteAccuracyOutcomeSlice): boolean {
   const high = summary.byConfidence.high;
   if (high.quotes < 4) return false;
   return high.withinRangeRate >= 0.7 && high.aboveRangeRate <= 0.2;
 }
 
-function lowConfidenceNeedsTightening(summary: QuoteAccuracyOutcomeSummary): boolean {
+function lowConfidenceNeedsTightening(summary: QuoteAccuracyOutcomeSlice): boolean {
   const low = summary.byConfidence.low;
   const medium = summary.byConfidence.medium;
   const high = summary.byConfidence.high;
@@ -104,9 +118,83 @@ function lowConfidenceNeedsTightening(summary: QuoteAccuracyOutcomeSummary): boo
   return false;
 }
 
-function keepQuoteProvisional(summary: QuoteAccuracyOutcomeSummary): boolean {
+function keepQuoteProvisional(summary: QuoteAccuracyOutcomeSlice): boolean {
   if (summary.attempts < 8) return false;
   return summary.withinRangeRate < 0.65 || tendsAboveRange(summary);
+}
+
+function classifyServiceFamily(jobTypes: string[]): ServiceFamily {
+  const normalized = jobTypes.map((value) => value.toLowerCase());
+  if (normalized.some((value) => value.includes("demo"))) return "demo";
+  if (normalized.some((value) => value.includes("brush") || value.includes("land"))) return "brush";
+  if (normalized.length > 0) return "junk";
+  return "unknown";
+}
+
+function classifySourceFamily(source: string | null | undefined): SourceFamily {
+  const normalized = typeof source === "string" ? source.trim().toLowerCase() : "";
+  if (!normalized) return "unknown";
+  if (normalized.includes("facebook")) return "facebook";
+  if (
+    normalized.includes("public_site") ||
+    normalized.includes("website") ||
+    normalized === "demo_quote" ||
+    normalized === "brush_quote" ||
+    normalized === "junk_quote"
+  ) {
+    return "public_site";
+  }
+  return "other";
+}
+
+function buildSlice(rows: QuoteAccuracyRow[]): QuoteAccuracyOutcomeSlice {
+  const overall = summarize(rows);
+  const slice: QuoteAccuracyOutcomeSlice = {
+    attempts: overall.quotes,
+    withinRange: overall.withinRange,
+    withinRangeRate: overall.withinRangeRate,
+    aboveRange: overall.aboveRange,
+    aboveRangeRate: overall.aboveRangeRate,
+    belowRange: overall.belowRange,
+    belowRangeRate: overall.belowRangeRate,
+    averageOutsideByCents: overall.averageOutsideByCents,
+    byConfidence: {
+      high: summarize(rows.filter((row) => row.confidence === "high")),
+      medium: summarize(rows.filter((row) => row.confidence === "medium")),
+      low: summarize(rows.filter((row) => row.confidence === "low")),
+      unknown: summarize(rows.filter((row) => row.confidence === "unknown")),
+    },
+    learned: {
+      lowConfidenceNeedsTightening: false,
+      keepQuoteProvisional: false,
+      tendsAboveRange: false,
+      highConfidenceTrustworthy: false,
+    },
+  };
+
+  slice.learned.tendsAboveRange = tendsAboveRange(slice);
+  slice.learned.highConfidenceTrustworthy = highConfidenceTrustworthy(slice);
+  slice.learned.lowConfidenceNeedsTightening = lowConfidenceNeedsTightening(slice);
+  slice.learned.keepQuoteProvisional = keepQuoteProvisional(slice);
+  return slice;
+}
+
+function emptySlice(): QuoteAccuracyOutcomeSlice {
+  return buildSlice([]);
+}
+
+function resolveScopedSummary(
+  summary: QuoteAccuracyOutcomeSummary | null | undefined,
+  scope?: QuoteAccuracyLearningScope | null,
+): QuoteAccuracyOutcomeSlice {
+  if (!summary) return emptySlice();
+  if (scope?.serviceFamily && summary.byServiceFamily[scope.serviceFamily].attempts >= 4) {
+    return summary.byServiceFamily[scope.serviceFamily];
+  }
+  if (scope?.sourceFamily && summary.bySourceFamily[scope.sourceFamily].attempts >= 4) {
+    return summary.bySourceFamily[scope.sourceFamily];
+  }
+  return summary;
 }
 
 export async function loadQuoteAccuracyOutcomeSummary(
@@ -120,9 +208,14 @@ export async function loadQuoteAccuracyOutcomeSummary(
         appt.final_total_cents as "finalTotalCents",
         coalesce((iq.ai_result ->> 'priceLowDiscounted')::int, (iq.ai_result ->> 'priceLow')::int) as "displayLow",
         coalesce((iq.ai_result ->> 'priceHighDiscounted')::int, (iq.ai_result ->> 'priceHigh')::int) as "displayHigh",
-        coalesce(iq.ai_result -> 'mediaAnalysis' ->> 'confidence', 'unknown') as "confidence"
+        coalesce(iq.ai_result -> 'mediaAnalysis' ->> 'confidence', 'unknown') as "confidence",
+        iq.source as "quoteSource",
+        lead.source as "leadSource",
+        iq.job_types as "jobTypes",
+        lead.services_requested as "leadServices"
       from appointments appt
       join instant_quotes iq on iq.id = appt.instant_quote_id
+      left join leads lead on lead.instant_quote_id = iq.id
       where appt.status = 'completed'
         and appt.final_total_cents is not null
         and coalesce(appt.completed_at, appt.created_at) >= ${windowStart}
@@ -134,99 +227,103 @@ export async function loadQuoteAccuracyOutcomeSummary(
     displayLow?: number | null;
     displayHigh?: number | null;
     confidence?: string | null;
+    quoteSource?: string | null;
+    leadSource?: string | null;
+    jobTypes?: string[] | null;
+    leadServices?: string[] | null;
   }>;
 
-  const normalizedRows: QuoteAccuracyRow[] = rows
-    .map((row) => {
-      const finalTotalCents = row.finalTotalCents ?? null;
-      const displayLowCents =
-        typeof row.displayLow === "number" && Number.isFinite(row.displayLow) ? Math.round(row.displayLow * 100) : null;
-      const displayHighCents =
-        typeof row.displayHigh === "number" && Number.isFinite(row.displayHigh) ? Math.round(row.displayHigh * 100) : null;
+  const normalizedRows: QuoteAccuracyRow[] = [];
+  for (const row of rows) {
+    const finalTotalCents = row.finalTotalCents ?? null;
+    const displayLowCents =
+      typeof row.displayLow === "number" && Number.isFinite(row.displayLow) ? Math.round(row.displayLow * 100) : null;
+    const displayHighCents =
+      typeof row.displayHigh === "number" && Number.isFinite(row.displayHigh) ? Math.round(row.displayHigh * 100) : null;
 
-      if (
-        finalTotalCents == null ||
-        displayLowCents == null ||
-        displayHighCents == null ||
-        displayLowCents <= 0 ||
-        displayHighCents <= 0 ||
-        displayHighCents < displayLowCents
-      ) {
-        return null;
-      }
+    if (
+      finalTotalCents == null ||
+      displayLowCents == null ||
+      displayHighCents == null ||
+      displayLowCents <= 0 ||
+      displayHighCents <= 0 ||
+      displayHighCents < displayLowCents
+    ) {
+      continue;
+    }
 
-      if (finalTotalCents < displayLowCents) {
-        return {
-          confidence: normalizeConfidence(row.confidence),
-          outcome: "below" as const,
-          outsideByCents: displayLowCents - finalTotalCents,
-        };
-      }
+    const baseRow = {
+      confidence: normalizeConfidence(row.confidence),
+      serviceFamily: classifyServiceFamily(
+        [
+          ...(Array.isArray(row.jobTypes) ? row.jobTypes : []),
+          ...(Array.isArray(row.leadServices) ? row.leadServices : []),
+        ].filter((item): item is string => typeof item === "string" && item.trim().length > 0),
+      ),
+      sourceFamily: classifySourceFamily(row.leadSource ?? row.quoteSource ?? null),
+    };
 
-      if (finalTotalCents > displayHighCents) {
-        return {
-          confidence: normalizeConfidence(row.confidence),
-          outcome: "above" as const,
-          outsideByCents: finalTotalCents - displayHighCents,
-        };
-      }
+    if (finalTotalCents < displayLowCents) {
+      normalizedRows.push({
+        ...baseRow,
+        outcome: "below",
+        outsideByCents: displayLowCents - finalTotalCents,
+      });
+      continue;
+    }
 
-      return {
-        confidence: normalizeConfidence(row.confidence),
-        outcome: "within" as const,
-        outsideByCents: 0,
-      };
-    })
-    .filter((row): row is QuoteAccuracyRow => row !== null);
+    if (finalTotalCents > displayHighCents) {
+      normalizedRows.push({
+        ...baseRow,
+        outcome: "above",
+        outsideByCents: finalTotalCents - displayHighCents,
+      });
+      continue;
+    }
 
-  const overall = summarize(normalizedRows);
-  const byConfidence = {
-    high: summarize(normalizedRows.filter((row) => row.confidence === "high")),
-    medium: summarize(normalizedRows.filter((row) => row.confidence === "medium")),
-    low: summarize(normalizedRows.filter((row) => row.confidence === "low")),
-    unknown: summarize(normalizedRows.filter((row) => row.confidence === "unknown")),
-  };
+    normalizedRows.push({
+      ...baseRow,
+      outcome: "within",
+      outsideByCents: 0,
+    });
+  }
 
   const summary: QuoteAccuracyOutcomeSummary = {
     windowStart: windowStart.toISOString(),
-    attempts: overall.quotes,
-    withinRange: overall.withinRange,
-    withinRangeRate: overall.withinRangeRate,
-    aboveRange: overall.aboveRange,
-    aboveRangeRate: overall.aboveRangeRate,
-    belowRange: overall.belowRange,
-    belowRangeRate: overall.belowRangeRate,
-    averageOutsideByCents: overall.averageOutsideByCents,
-    byConfidence,
-    learned: {
-      lowConfidenceNeedsTightening: false,
-      keepQuoteProvisional: false,
-      tendsAboveRange: false,
-      highConfidenceTrustworthy: false,
+    ...buildSlice(normalizedRows),
+    byServiceFamily: {
+      junk: buildSlice(normalizedRows.filter((row) => row.serviceFamily === "junk")),
+      demo: buildSlice(normalizedRows.filter((row) => row.serviceFamily === "demo")),
+      brush: buildSlice(normalizedRows.filter((row) => row.serviceFamily === "brush")),
+      unknown: buildSlice(normalizedRows.filter((row) => row.serviceFamily === "unknown")),
+    },
+    bySourceFamily: {
+      facebook: buildSlice(normalizedRows.filter((row) => row.sourceFamily === "facebook")),
+      public_site: buildSlice(normalizedRows.filter((row) => row.sourceFamily === "public_site")),
+      other: buildSlice(normalizedRows.filter((row) => row.sourceFamily === "other")),
+      unknown: buildSlice(normalizedRows.filter((row) => row.sourceFamily === "unknown")),
     },
   };
-
-  summary.learned.tendsAboveRange = tendsAboveRange(summary);
-  summary.learned.highConfidenceTrustworthy = highConfidenceTrustworthy(summary);
-  summary.learned.lowConfidenceNeedsTightening = lowConfidenceNeedsTightening(summary);
-  summary.learned.keepQuoteProvisional = keepQuoteProvisional(summary);
   return summary;
 }
 
 export function shouldTightenLowConfidenceQuoteEstimates(
   summary: QuoteAccuracyOutcomeSummary | null | undefined,
+  scope?: QuoteAccuracyLearningScope | null,
 ): boolean {
-  return summary?.learned.lowConfidenceNeedsTightening === true;
+  return resolveScopedSummary(summary, scope).learned.lowConfidenceNeedsTightening === true;
 }
 
 export function shouldKeepQuoteEstimateProvisional(
   summary: QuoteAccuracyOutcomeSummary | null | undefined,
+  scope?: QuoteAccuracyLearningScope | null,
 ): boolean {
-  return summary?.learned.keepQuoteProvisional === true;
+  return resolveScopedSummary(summary, scope).learned.keepQuoteProvisional === true;
 }
 
 export function doesQuoteAccuracyTrendAboveRange(
   summary: QuoteAccuracyOutcomeSummary | null | undefined,
+  scope?: QuoteAccuracyLearningScope | null,
 ): boolean {
-  return summary?.learned.tendsAboveRange === true;
+  return resolveScopedSummary(summary, scope).learned.tendsAboveRange === true;
 }
