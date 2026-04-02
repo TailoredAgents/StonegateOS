@@ -726,6 +726,21 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
     Array.isArray(agentMediaAnalysis?.missingViews) && agentMediaAnalysis.missingViews.length > 0
       ? agentMediaAnalysis.missingViews.find((item) => typeof item === "string" && item.trim().length > 0) ?? null
       : null;
+  const agentMediaIsWeak =
+    agentMediaUsesVision &&
+    (agentMediaAnalysis?.confidence === "low" || Boolean(agentMediaMissingView));
+  const agentWeakEstimateHeadline =
+    currentThreadAiDraftPlanner?.actionType === "collect_missing_info"
+      ? "Estimate needs one better angle"
+      : "Estimate is still visually weak";
+  const agentWeakEstimateDetail =
+    agentMediaMissingView && agentMediaAnalysis?.confidence === "low"
+      ? `The current photos/video are low-confidence. One better angle would help: ${agentMediaMissingView}.`
+      : agentMediaMissingView
+        ? `The current estimate is missing one key view. Best next angle: ${agentMediaMissingView}.`
+        : agentMediaAnalysis?.confidence === "low"
+          ? "The current photos/video do not give the agent enough confidence to treat the estimate like it is fully locked in."
+          : null;
   const agentMediaSummary =
     agentMediaVisibleRange && agentMediaMergedRange && agentMediaVisibleRange !== agentMediaMergedRange
       ? `Visible ${agentMediaVisibleRange}; merged to ${agentMediaMergedRange}.`
@@ -1403,6 +1418,12 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                                 Best next angle: {agentMediaMissingView}
                               </div>
                             ) : null}
+                          </div>
+                        ) : null}
+                        {agentMediaIsWeak && agentWeakEstimateDetail ? (
+                          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                            <div className="font-semibold text-amber-900">{agentWeakEstimateHeadline}</div>
+                            <div className="mt-1">{agentWeakEstimateDetail}</div>
                           </div>
                         ) : null}
                         <div className="mt-3">
