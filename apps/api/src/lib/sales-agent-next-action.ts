@@ -47,6 +47,13 @@ function dedupe(items: Array<string | null | undefined>): string[] {
   return [...new Set(items.filter((item): item is string => typeof item === "string" && item.trim().length > 0))];
 }
 
+function extractPreferredMissingAngle(memory: SalesAgentMemoryRecord): string | null {
+  return (
+    memory.missingFields.find((field) => typeof field === "string" && /photo angle|missing view|video angle/i.test(field)) ??
+    null
+  );
+}
+
 function chooseChannel(context: OmniLeadContext): string | null {
   if (context.derived.channelPreference) return context.derived.channelPreference;
   if (context.contact.phoneE164 || context.contact.phone) return "sms";
@@ -339,6 +346,46 @@ export function buildSalesAgentNextAction(input: {
               baselines: [nextTaskDue],
             })
           : nextTaskDue?.toISOString() ?? now.toISOString(),
+      source: "rules_v1",
+    };
+  }
+
+  const preferredMissingAngle = extractPreferredMissingAngle(memory);
+  const needsMediaRefinement =
+    Boolean(preferredMissingAngle) || ((hasInstantQuote || hasFormalQuote) && memory.quoteConfidence === "low");
+
+  if (
+    (hasInstantQuote || hasFormalQuote) &&
+    needsMediaRefinement &&
+    context.derived.bookingReadiness !== "high" &&
+    !hasRecentOutbound(context, now, 60)
+  ) {
+    return {
+      actionType: "collect_missing_info",
+      channel: preferredChannel,
+      status: "open",
+      priority: "high",
+      confidence: "high",
+      summary: "Tighten the estimate with one better media angle before pushing the quote harder.",
+      reason:
+        preferredMissingAngle
+          ? `The current estimate is still missing a key view (${preferredMissingAngle}), so the next best move is to tighten the scope first.`
+          : "The current quote exists, but media confidence is still low enough that one better angle is safer than a normal quote follow-up.",
+      facts: dedupe([
+        memory.pricingContext,
+        memory.quoteConfidence ? `Quote confidence: ${memory.quoteConfidence}` : null,
+        preferredMissingAngle ? `Best next angle: ${preferredMissingAngle}` : null,
+        context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
+        memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
+      ]),
+      dueAt:
+        preferredChannel === "dm"
+          ? resolveDeferredDueAt({
+              channel: "dm",
+              delayMinutes: dmEntryProfile.missingInfoDelayMinutes,
+              baselines: [nextAutomationFollowup],
+            })
+          : nextAutomationFollowup?.toISOString() ?? now.toISOString(),
       source: "rules_v1",
     };
   }
