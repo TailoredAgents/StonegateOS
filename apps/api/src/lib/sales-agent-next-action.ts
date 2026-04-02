@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { getDb, salesAgentNextActions } from "@/db";
+import type { AppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import {
   getPreferredMissingInfoChannel,
   shouldKeepSingleMissingInfoAsk,
@@ -172,6 +173,7 @@ function getLatestQuoteCreatedAt(context: OmniLeadContext): Date | null {
 export function buildSalesAgentNextAction(input: {
   context: OmniLeadContext;
   memory: SalesAgentMemoryRecord;
+  appointmentReminderOutcomeSummary?: AppointmentReminderOutcomeSummary | null;
   missingInfoOutcomeSummary?: MissingInfoOutcomeSummary | null;
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
   mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
@@ -310,6 +312,13 @@ export function buildSalesAgentNextAction(input: {
   }
 
   if (hasUpcomingAppointment) {
+    const reminderLearning = input.appointmentReminderOutcomeSummary;
+    const preferredReminderWindow =
+      reminderLearning?.learned.preferredWindow === "24h"
+        ? "24 hour"
+        : reminderLearning?.learned.preferredWindow === "2h"
+          ? "2 hour"
+          : null;
     return {
       actionType: "wait_for_appointment",
       channel: preferredChannel,
@@ -320,6 +329,13 @@ export function buildSalesAgentNextAction(input: {
       reason: `A ${context.nextAppointment?.type ?? "scheduled"} appointment is already on the books.`,
       facts: dedupe([
         context.nextAppointment?.startAt ? `Appointment at ${context.nextAppointment.startAt}` : null,
+        preferredReminderWindow ? `Recent appointment acknowledgements are stronger after the ${preferredReminderWindow} reminder.` : null,
+        reminderLearning?.learned.rescheduleSavesWorking
+          ? "Recent reschedule requests are turning back into kept appointments often enough that keeping the reschedule path easy is paying off."
+          : null,
+        reminderLearning && !reminderLearning.learned.confirmationLoopHealthy
+          ? "Recent reminder acknowledgements are still soft overall, so shaky appointments may still need human confirmation."
+          : null,
         memory.lastPromisedNextStep,
       ]),
       dueAt: context.nextAppointment?.startAt ?? null,

@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
+import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import {
   buildSalesAgentNextAction,
   upsertSalesAgentNextAction,
@@ -84,6 +85,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
     memory: buildSalesAgentMemory(liveContext),
   });
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
+  const appointmentReminderOutcomeSummary = await loadAppointmentReminderOutcomeSummary(db);
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
   const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
@@ -107,6 +109,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
         missingFields: memory?.missingFields ?? [],
         factsJson: (memory?.factsJson as Record<string, unknown> | null) ?? {},
       }),
+      appointmentReminderOutcomeSummary,
       missingInfoOutcomeSummary,
       objectionSaveOutcomeSummary,
       mediaOutcomeSummary,

@@ -32,6 +32,7 @@ import { buildSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sal
 import { buildSalesAgentMemory, getSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent-memory";
 import { getDmLiveAutopilotStates } from "@/lib/dm-autopilot";
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
+import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
@@ -167,6 +168,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const config = await getSalesScorecardConfig(db);
   const serviceAreaPolicy = await getServiceAreaPolicy(db);
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
+  const appointmentReminderOutcomeSummary = await loadAppointmentReminderOutcomeSummary(db);
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
@@ -637,6 +639,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             missingFields: memory.missingFields,
             factsJson: (memory.factsJson as Record<string, unknown> | null) ?? {},
           },
+          appointmentReminderOutcomeSummary,
           missingInfoOutcomeSummary,
           objectionSaveOutcomeSummary,
           mediaOutcomeSummary,

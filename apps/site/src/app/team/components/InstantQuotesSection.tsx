@@ -192,6 +192,53 @@ type MissingInfoSummaryDto = {
   };
 };
 
+type AppointmentReminderBucketDto = {
+  attempts: number;
+  acknowledged: number;
+  acknowledgedRate: number;
+  confirmedReplies: number;
+  confirmRate: number;
+  rescheduleRequests: number;
+  rescheduleRequestRate: number;
+  rescheduled: number;
+  rescheduleSaveRate: number;
+  activeAppointments: number;
+  activeRate: number;
+  completed: number;
+  completedRate: number;
+  noShows: number;
+  noShowRate: number;
+};
+
+type AppointmentReminderSummaryDto = {
+  windowStart: string;
+  attempts: number;
+  acknowledged: number;
+  acknowledgedRate: number;
+  confirmedReplies: number;
+  confirmRate: number;
+  rescheduleRequests: number;
+  rescheduleRequestRate: number;
+  rescheduled: number;
+  rescheduleSaveRate: number;
+  activeAppointments: number;
+  activeRate: number;
+  completed: number;
+  completedRate: number;
+  noShows: number;
+  noShowRate: number;
+  byWindow: {
+    "24h": AppointmentReminderBucketDto;
+    "2h": AppointmentReminderBucketDto;
+    other: AppointmentReminderBucketDto;
+  };
+  learned: {
+    preferredWindow: "24h" | "2h" | "other" | null;
+    confirmationLoopHealthy: boolean;
+    rescheduleSavesWorking: boolean;
+  };
+};
+
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
@@ -239,12 +286,14 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const data = (await res.json()) as {
     quotes?: InstantQuoteDto[];
     summary?: InstantQuoteSummaryDto;
+    appointmentReminderSummary?: AppointmentReminderSummaryDto;
     missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
     followupSummary?: FollowupSummaryDto;
   };
   const quotes = data.quotes ?? [];
   const summary = data.summary;
+  const appointmentReminderSummary = data.appointmentReminderSummary;
   const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
   const followupSummary = data.followupSummary;
@@ -366,6 +415,44 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {missingInfoSummary.learned.leanIntoRequests
               ? "Missing-detail requests are resolving well enough to use when they unblock the estimate."
               : "No strong push toward extra missing-detail asks yet."}
+          </div>
+        </div>
+      ) : null}
+      {appointmentReminderSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Appointment reminder learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks real appointment reminder texts, how often they get acknowledged, and whether reschedule requests are getting preserved instead of turning into lost jobs.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-600">
+            Attempts: {appointmentReminderSummary.attempts} | Acknowledged: {appointmentReminderSummary.acknowledged} (
+            {formatPercent(appointmentReminderSummary.acknowledgedRate)}) | No-shows: {appointmentReminderSummary.noShows} (
+            {formatPercent(appointmentReminderSummary.noShowRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Confirm replies {formatPercent(appointmentReminderSummary.confirmRate)} | Reschedule requests{" "}
+            {formatPercent(appointmentReminderSummary.rescheduleRequestRate)} | Rescheduled after request{" "}
+            {formatPercent(appointmentReminderSummary.rescheduleSaveRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            24h reminder ack {formatPercent(appointmentReminderSummary.byWindow["24h"].acknowledgedRate)} | 2h reminder ack{" "}
+            {formatPercent(appointmentReminderSummary.byWindow["2h"].acknowledgedRate)} | Completed after reminder{" "}
+            {formatPercent(appointmentReminderSummary.completedRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {appointmentReminderSummary.learned.preferredWindow === "24h"
+              ? "Learned reminder-window lean: 24h"
+              : appointmentReminderSummary.learned.preferredWindow === "2h"
+                ? "Learned reminder-window lean: 2h"
+                : "Learned reminder-window lean: not strong enough yet"}
+            {" | "}
+            {appointmentReminderSummary.learned.confirmationLoopHealthy
+              ? "Confirmation loop is healthy right now."
+              : "Confirmation loop still needs human backup on shakier appointments."}
+            {" | "}
+            {appointmentReminderSummary.learned.rescheduleSavesWorking
+              ? "Reschedule saves are preserving booked work."
+              : "No strong reschedule-save edge yet."}
           </div>
         </div>
       ) : null}
