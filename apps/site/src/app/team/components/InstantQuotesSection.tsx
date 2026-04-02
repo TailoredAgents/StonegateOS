@@ -331,9 +331,53 @@ type QuoteCloseSummaryDto = {
   };
 };
 
+type QuoteAccuracyBucketDto = {
+  quotes: number;
+  withinRange: number;
+  withinRangeRate: number;
+  aboveRange: number;
+  aboveRangeRate: number;
+  belowRange: number;
+  belowRangeRate: number;
+  averageOutsideByCents: number;
+};
+
+type QuoteAccuracySummaryDto = {
+  windowStart: string;
+  attempts: number;
+  withinRange: number;
+  withinRangeRate: number;
+  aboveRange: number;
+  aboveRangeRate: number;
+  belowRange: number;
+  belowRangeRate: number;
+  averageOutsideByCents: number;
+  byConfidence: {
+    high: QuoteAccuracyBucketDto;
+    medium: QuoteAccuracyBucketDto;
+    low: QuoteAccuracyBucketDto;
+    unknown: QuoteAccuracyBucketDto;
+  };
+  learned: {
+    lowConfidenceNeedsTightening: boolean;
+    keepQuoteProvisional: boolean;
+    tendsAboveRange: boolean;
+    highConfidenceTrustworthy: boolean;
+  };
+};
+
 function formatPercent(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
+}
+
+function formatUsdCents(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "$0";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value / 100);
 }
 
 function renderFollowupLearning(label: string, summary: FollowupSliceDto): React.ReactElement {
@@ -382,6 +426,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
     appointmentReminderSummary?: AppointmentReminderSummaryDto;
     missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
+    quoteAccuracySummary?: QuoteAccuracySummaryDto;
     quoteCloseSummary?: QuoteCloseSummaryDto;
     followupSummary?: FollowupSummaryDto;
     reactivationSummary?: ReactivationSummaryDto;
@@ -392,6 +437,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const appointmentReminderSummary = data.appointmentReminderSummary;
   const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
+  const quoteAccuracySummary = data.quoteAccuracySummary;
   const quoteCloseSummary = data.quoteCloseSummary;
   const followupSummary = data.followupSummary;
   const reactivationSummary = data.reactivationSummary;
@@ -484,6 +530,45 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {reactivationSummary.learned.worthReactivating
               ? "Dormant leads are still worth reviving."
               : "Dormant lead reactivations are weak right now, so keep them low pressure."}
+          </div>
+        </div>
+      ) : null}
+      {quoteAccuracySummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Quote accuracy learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This compares completed jobs linked to instant quotes against the original displayed quote range, so the agent can learn when instant estimates are trustworthy versus when they should stay softer.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-600">
+            Completed jobs: {quoteAccuracySummary.attempts} | Finished inside range: {quoteAccuracySummary.withinRange} (
+            {formatPercent(quoteAccuracySummary.withinRangeRate)}) | Above range: {quoteAccuracySummary.aboveRange} (
+            {formatPercent(quoteAccuracySummary.aboveRangeRate)}) | Below range: {quoteAccuracySummary.belowRange} (
+            {formatPercent(quoteAccuracySummary.belowRangeRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            High-confidence within range {formatPercent(quoteAccuracySummary.byConfidence.high.withinRangeRate)} | Medium{" "}
+            {formatPercent(quoteAccuracySummary.byConfidence.medium.withinRangeRate)} | Low{" "}
+            {formatPercent(quoteAccuracySummary.byConfidence.low.withinRangeRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Average miss when outside range: {formatUsdCents(quoteAccuracySummary.averageOutsideByCents)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {quoteAccuracySummary.learned.highConfidenceTrustworthy
+              ? "High-confidence instant estimates are holding up well."
+              : "No strong high-confidence trust signal yet."}
+            {" | "}
+            {quoteAccuracySummary.learned.lowConfidenceNeedsTightening
+              ? "Lower-confidence instant estimates should usually be tightened first."
+              : "No strong low-confidence tightening warning yet."}
+            {" | "}
+            {quoteAccuracySummary.learned.keepQuoteProvisional
+              ? "Shakier quotes should stay framed as working estimates."
+              : "No strong provisional-quote warning yet."}
+            {" | "}
+            {quoteAccuracySummary.learned.tendsAboveRange
+              ? "Completed jobs are skewing above the original instant range."
+              : "No strong above-range skew yet."}
           </div>
         </div>
       ) : null}

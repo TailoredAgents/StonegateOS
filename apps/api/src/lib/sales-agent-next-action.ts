@@ -22,6 +22,12 @@ import {
   type ReactivationOutcomeSummary,
 } from "@/lib/reactivation-outcomes";
 import {
+  doesQuoteAccuracyTrendAboveRange,
+  shouldKeepQuoteEstimateProvisional,
+  shouldTightenLowConfidenceQuoteEstimates,
+  type QuoteAccuracyOutcomeSummary,
+} from "@/lib/quote-accuracy-outcomes";
+import {
   getPreferredQuoteCloseChannel,
   shouldUseSofterQuoteClose,
   type QuoteCloseOutcomeSummary,
@@ -201,6 +207,7 @@ export function buildSalesAgentNextAction(input: {
   missingInfoOutcomeSummary?: MissingInfoOutcomeSummary | null;
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
   mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
+  quoteAccuracyOutcomeSummary?: QuoteAccuracyOutcomeSummary | null;
   quoteCloseOutcomeSummary?: QuoteCloseOutcomeSummary | null;
   reactivationOutcomeSummary?: ReactivationOutcomeSummary | null;
   quoteFollowupOutcomeSummary?: QuoteFollowupOutcomeSummary | null;
@@ -260,17 +267,26 @@ export function buildSalesAgentNextAction(input: {
     quoteFollowupLearningScope,
   );
   const keepSofterQuoteClose = shouldUseSofterQuoteClose(input.quoteCloseOutcomeSummary);
+  const keepQuoteEstimateProvisional = shouldKeepQuoteEstimateProvisional(input.quoteAccuracyOutcomeSummary);
   const keepSofterReactivation = shouldUseSofterReactivation(input.reactivationOutcomeSummary);
+  const quoteAccuracyTrendsAboveRange = doesQuoteAccuracyTrendAboveRange(input.quoteAccuracyOutcomeSummary);
   const reactivationWorthwhile = isReactivationWorthwhile(input.reactivationOutcomeSummary);
   const keepSingleMissingInfoAsk = shouldKeepSingleMissingInfoAsk(input.missingInfoOutcomeSummary);
   const leanIntoMissingInfoRequests = shouldLeanIntoMissingInfoRequests(input.missingInfoOutcomeSummary);
   const keepSofterObjectionSave = shouldUseSofterObjectionSave(input.objectionSaveOutcomeSummary);
+  const tightenLowConfidenceQuoteEstimates = shouldTightenLowConfidenceQuoteEstimates(
+    input.quoteAccuracyOutcomeSummary,
+  );
   const latestQuoteCreatedAt = getLatestQuoteCreatedAt(context);
   const latestInboundAt = pickLatestDate(context.channelSummary.map((row) => row.lastInboundAt));
+  const lowConfidenceQuoteAccuracyRisk = Boolean(
+    memory.quoteConfidence !== "high" && tightenLowConfidenceQuoteEstimates,
+  );
   const accelerateQuoteFollowup = Boolean(
     preferFastQuoteFollowup &&
       latestQuoteCreatedAt &&
-      now.getTime() - latestQuoteCreatedAt.getTime() <= 6 * 60 * 60 * 1000,
+      now.getTime() - latestQuoteCreatedAt.getTime() <= 6 * 60 * 60 * 1000 &&
+      !lowConfidenceQuoteAccuracyRisk,
   );
   const pendingHumanTakeover = context.automation.some((row) => row.humanTakeover);
   const pendingDnc = context.automation.some((row) => row.dnc);
@@ -553,7 +569,11 @@ export function buildSalesAgentNextAction(input: {
   if (
     (hasInstantQuote || hasFormalQuote) &&
     needsMediaRefinement &&
-    (context.derived.bookingReadiness !== "high" || (weakMediaTighteningOutperforms && Boolean(preferredMissingAngle))) &&
+    (
+      context.derived.bookingReadiness !== "high" ||
+      lowConfidenceQuoteAccuracyRisk ||
+      (weakMediaTighteningOutperforms && Boolean(preferredMissingAngle))
+    ) &&
     !hasRecentOutbound(context, now, 60)
   ) {
     return {
@@ -572,6 +592,12 @@ export function buildSalesAgentNextAction(input: {
         memory.quoteConfidence ? `Quote confidence: ${memory.quoteConfidence}` : null,
         preferredMissingAngle ? `Best next angle: ${preferredMissingAngle}` : null,
         weakMediaTighteningOutperforms ? "Recent outcomes show tightened weak quotes are booking better than unresolved weak quotes." : null,
+        lowConfidenceQuoteAccuracyRisk
+          ? "Recent lower-confidence instant estimates are landing outside the original range often enough that tightening the estimate first is safer."
+          : null,
+        quoteAccuracyTrendsAboveRange
+          ? "Recent completed jobs are finishing above the original instant range often enough that shaky estimates should stay provisional until tightened."
+          : null,
         missingInfoChannel && missingInfoChannel !== preferredChannel
           ? `Recent missing-detail requests are resolving better on ${missingInfoChannel.toUpperCase()}.`
           : null,
@@ -641,7 +667,7 @@ export function buildSalesAgentNextAction(input: {
       priority:
         dormantQuoteLead && !reactivationWorthwhile
           ? "low"
-          : context.derived.bookingReadiness === "high"
+          : context.derived.bookingReadiness === "high" && !lowConfidenceQuoteAccuracyRisk
             ? "high"
             : "normal",
       confidence: "medium",
@@ -661,6 +687,11 @@ export function buildSalesAgentNextAction(input: {
           : null,
         !dormantQuoteLead && keepSofterQuoteClose
           ? "Recent agent quote follow-ups are ending in losses more often than bookings, so a softer reopen is safer than a hard booking push."
+          : null,
+        keepQuoteEstimateProvisional
+          ? quoteAccuracyTrendsAboveRange
+            ? "Recent completed jobs are finishing above the original instant range often enough that this quote should stay framed as a working estimate until tightened."
+            : "Recent completed jobs are landing outside the original instant range often enough that this quote should stay framed as a working estimate, not a locked-in price."
           : null,
         dormantQuoteLead && keepSofterReactivation
           ? "Recent dormant lead reactivations are reopening weakly overall, so a softer reopen is safer than a hard booking push."

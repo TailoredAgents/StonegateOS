@@ -26,6 +26,7 @@ import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
+import { loadQuoteAccuracyOutcomeSummary } from "@/lib/quote-accuracy-outcomes";
 import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 
@@ -778,6 +779,7 @@ export async function POST(
   const mediaOutcomeSummary = leadContext ? await loadMediaQuoteOutcomeSummary(db) : null;
   const missingInfoOutcomeSummary = leadContext ? await loadMissingInfoOutcomeSummary(db) : null;
   const objectionSaveOutcomeSummary = leadContext ? await loadObjectionSaveOutcomeSummary(db) : null;
+  const quoteAccuracyOutcomeSummary = leadContext ? await loadQuoteAccuracyOutcomeSummary(db) : null;
   const quoteCloseOutcomeSummary = leadContext ? await loadQuoteCloseOutcomeSummary(db) : null;
   const quoteFollowupOutcomeSummary = leadContext ? await loadQuoteFollowupOutcomeSummary(db) : null;
   const reactivationOutcomeSummary = leadContext ? await loadReactivationOutcomeSummary(db) : null;
@@ -802,6 +804,7 @@ export async function POST(
             missingInfoOutcomeSummary,
             objectionSaveOutcomeSummary,
             mediaOutcomeSummary,
+            quoteAccuracyOutcomeSummary,
             quoteCloseOutcomeSummary,
             reactivationOutcomeSummary,
             quoteFollowupOutcomeSummary,
