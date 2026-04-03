@@ -38,6 +38,31 @@ function cleanText(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function mediaRangeRank(value: string | null | undefined): number {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "under_quarter":
+      return 1;
+    case "quarter":
+      return 2;
+    case "quarter_to_half":
+      return 3;
+    case "half":
+      return 4;
+    case "half_to_three_quarter":
+      return 5;
+    case "three_quarter":
+      return 6;
+    case "three_quarter_to_full":
+      return 7;
+    case "full":
+      return 8;
+    case "full_plus":
+      return 9;
+    default:
+      return 0;
+  }
+}
+
 function extractQuotePrice(aiResult: unknown): { priceLow: number | null; priceHigh: number | null } {
   if (!aiResult || typeof aiResult !== "object") return { priceLow: null, priceHigh: null };
   const record = aiResult as Record<string, unknown>;
@@ -137,6 +162,9 @@ function detectExceptionSignals(input: {
   latestCallSummary?: string | null;
   serviceHints: string[];
   mediaRiskFlags?: string[] | null;
+  mediaVisibleRange?: string | null;
+  mediaMergedRange?: string | null;
+  mediaConfidence?: "low" | "medium" | "high" | null;
 }): string[] {
   const inboundText = input.recentMessages
     .filter((message) => message.direction === "inbound")
@@ -180,6 +208,22 @@ function detectExceptionSignals(input: {
     )
   ) {
     results.add("high_risk_demo_scope");
+  }
+
+  const mediaRiskFlags = Array.isArray(input.mediaRiskFlags) ? input.mediaRiskFlags : [];
+  const contradictionFromRiskFlags =
+    mediaRiskFlags.includes("stated_scope_exceeds_visible_media") &&
+    mediaRiskFlags.includes("text_add_on_hints_exceed_visible_counts");
+  const mediaRangeGap =
+    mediaRangeRank(input.mediaMergedRange) > 0 && mediaRangeRank(input.mediaVisibleRange) > 0
+      ? mediaRangeRank(input.mediaMergedRange) - mediaRangeRank(input.mediaVisibleRange)
+      : 0;
+  if (
+    contradictionFromRiskFlags ||
+    (mediaRangeGap >= 2 && input.mediaConfidence !== "high") ||
+    (mediaRangeGap >= 1 && input.mediaConfidence === "low" && mediaRiskFlags.includes("stated_scope_exceeds_visible_media"))
+  ) {
+    results.add("scope_pricing_contradiction");
   }
 
   return [...results];
@@ -302,6 +346,8 @@ export type OmniLeadContext = {
   } | null;
   mediaAnalysis: {
     confidence: "low" | "medium" | "high" | null;
+    visibleVolumeRange: string | null;
+    mergedVolumeRange: string | null;
     riskFlags: string[];
     missingViews: string[];
     summary: string | null;
@@ -493,6 +539,8 @@ export async function loadOmniLeadContext(
       db
         .select({
           confidence: mediaJobAnalyses.confidence,
+          visibleVolumeRange: mediaJobAnalyses.visibleVolumeRange,
+          mergedVolumeRange: mediaJobAnalyses.mergedVolumeRange,
           riskFlags: mediaJobAnalyses.riskFlags,
           missingViews: mediaJobAnalyses.missingViews,
           summary: mediaJobAnalyses.summary,
@@ -714,6 +762,8 @@ export async function loadOmniLeadContext(
   const mediaAnalysis = latestMediaAnalysisRow
     ? {
         confidence: mediaConfidence,
+        visibleVolumeRange: cleanText(latestMediaAnalysisRow.visibleVolumeRange),
+        mergedVolumeRange: cleanText(latestMediaAnalysisRow.mergedVolumeRange),
         riskFlags: coerceStringArray(latestMediaAnalysisRow.riskFlags),
         missingViews: coerceStringArray(latestMediaAnalysisRow.missingViews),
         summary: cleanText(latestMediaAnalysisRow.summary),
@@ -771,6 +821,9 @@ export async function loadOmniLeadContext(
     latestCallSummary: latestCallRow?.summary ?? null,
     serviceHints,
     mediaRiskFlags: mediaAnalysis?.riskFlags ?? [],
+    mediaVisibleRange: mediaAnalysis?.visibleVolumeRange ?? null,
+    mediaMergedRange: mediaAnalysis?.mergedVolumeRange ?? null,
+    mediaConfidence: mediaAnalysis?.confidence ?? null,
   });
 
   return {

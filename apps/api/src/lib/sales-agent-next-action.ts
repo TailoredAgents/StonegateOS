@@ -270,6 +270,27 @@ function buildExceptionRouting(context: OmniLeadContext): {
     };
   }
 
+  if (signals.includes("scope_pricing_contradiction")) {
+    return {
+      summary: "Human review needed before replying because the photos, stated scope, and quote signals disagree too much.",
+      reason: "The current media estimate and stated scope conflict strongly enough that the next pricing touch should be reviewed by a human.",
+      facts: dedupe([
+        context.mediaAnalysis?.visibleVolumeRange
+          ? `Visible media estimate: ${context.mediaAnalysis.visibleVolumeRange.replace(/_/g, " ")}.`
+          : null,
+        context.mediaAnalysis?.mergedVolumeRange
+          ? `Merged estimate after stated scope: ${context.mediaAnalysis.mergedVolumeRange.replace(/_/g, " ")}.`
+          : null,
+        context.mediaAnalysis?.riskFlags.length
+          ? `Media risk flags: ${context.mediaAnalysis.riskFlags.join(", ")}.`
+          : null,
+        context.instantQuote?.perceivedSize
+          ? `Customer-selected size: ${context.instantQuote.perceivedSize.replace(/_/g, " ")}.`
+          : null,
+      ]),
+    };
+  }
+
   if (signals.includes("frustrated_or_dispute")) {
     return {
       summary: "Human review needed before the next touch because the lead appears frustrated or in dispute.",
