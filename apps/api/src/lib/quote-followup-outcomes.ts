@@ -5,6 +5,7 @@ type DbExecutor = ReturnType<typeof getDb>;
 
 type FollowupChannel = "sms" | "dm" | "email";
 type TimingBucket = "fast" | "delayed";
+type DepthBucket = "first" | "second" | "third_plus";
 type ServiceFamily = "junk" | "demo" | "brush" | "unknown";
 type SourceFamily = "facebook" | "public_site" | "other" | "unknown";
 
@@ -14,6 +15,7 @@ type QuoteFollowupOutcomeRow = {
   channel: FollowupChannel;
   touchAt: Date;
   hasBookedAppointment: boolean;
+  followupDepth: number;
   serviceFamily: ServiceFamily;
   sourceFamily: SourceFamily;
 };
@@ -34,9 +36,13 @@ type QuoteFollowupOutcomeSlice = {
   bookedQuotes: number;
   byChannel: Record<FollowupChannel, OutcomeBucket>;
   byTiming: Record<TimingBucket, OutcomeBucket>;
+  byDepth: Record<DepthBucket, OutcomeBucket>;
   learned: {
     preferredChannel: "sms" | "dm" | null;
     preferFast: boolean;
+    secondTouchStillWorthwhile: boolean;
+    thirdPlusWorthwhile: boolean;
+    keepDepthLight: boolean;
   };
 };
 
@@ -75,6 +81,12 @@ function getTimingBucket(row: QuoteFollowupOutcomeRow): TimingBucket {
   return delayMinutes <= 60 ? "fast" : "delayed";
 }
 
+function getDepthBucket(row: QuoteFollowupOutcomeRow): DepthBucket {
+  if (row.followupDepth >= 3) return "third_plus";
+  if (row.followupDepth === 2) return "second";
+  return "first";
+}
+
 function getPreferredChannel(
   summary: QuoteFollowupOutcomeSlice,
 ): "sms" | "dm" | null {
@@ -97,12 +109,40 @@ function shouldPreferFast(summary: QuoteFollowupOutcomeSlice): boolean {
   return fast.bookRate >= delayed.bookRate + 0.05;
 }
 
+function isSecondTouchStillWorthwhile(summary: QuoteFollowupOutcomeSlice): boolean {
+  const second = summary.byDepth.second;
+  const first = summary.byDepth.first;
+  if (second.quotes < 4) return true;
+  if (first.quotes < 3) return second.bookRate >= 0.05;
+  return second.bookRate >= 0.05 || second.bookRate + 0.03 >= first.bookRate;
+}
+
+function isThirdPlusWorthwhile(summary: QuoteFollowupOutcomeSlice): boolean {
+  const thirdPlus = summary.byDepth.third_plus;
+  const second = summary.byDepth.second;
+  if (thirdPlus.quotes < 4) return true;
+  if (second.quotes < 3) return thirdPlus.bookRate >= 0.04;
+  return thirdPlus.bookRate >= 0.04 && thirdPlus.bookRate + 0.03 >= second.bookRate;
+}
+
+function shouldKeepDepthLight(summary: QuoteFollowupOutcomeSlice): boolean {
+  const second = summary.byDepth.second;
+  const thirdPlus = summary.byDepth.third_plus;
+  if (thirdPlus.quotes >= 5 && thirdPlus.bookRate < 0.03) return true;
+  if (second.quotes >= 5 && thirdPlus.quotes >= 3 && thirdPlus.bookRate + 0.03 <= second.bookRate) return true;
+  if (second.quotes >= 5 && second.bookRate < 0.04 && summary.byDepth.first.bookRate >= second.bookRate + 0.05) return true;
+  return false;
+}
+
 function buildSlice(rows: QuoteFollowupOutcomeRow[]): QuoteFollowupOutcomeSlice {
   const smsRows = rows.filter((row) => row.channel === "sms");
   const dmRows = rows.filter((row) => row.channel === "dm");
   const emailRows = rows.filter((row) => row.channel === "email");
   const fastRows = rows.filter((row) => getTimingBucket(row) === "fast");
   const delayedRows = rows.filter((row) => getTimingBucket(row) === "delayed");
+  const firstRows = rows.filter((row) => getDepthBucket(row) === "first");
+  const secondRows = rows.filter((row) => getDepthBucket(row) === "second");
+  const thirdPlusRows = rows.filter((row) => getDepthBucket(row) === "third_plus");
   const bookedQuotes = rows.filter((row) => row.hasBookedAppointment).length;
 
   const slice: QuoteFollowupOutcomeSlice = {
@@ -117,14 +157,25 @@ function buildSlice(rows: QuoteFollowupOutcomeRow[]): QuoteFollowupOutcomeSlice 
       fast: summarizeBucket(fastRows),
       delayed: summarizeBucket(delayedRows),
     },
+    byDepth: {
+      first: summarizeBucket(firstRows),
+      second: summarizeBucket(secondRows),
+      third_plus: summarizeBucket(thirdPlusRows),
+    },
     learned: {
       preferredChannel: null,
       preferFast: false,
+      secondTouchStillWorthwhile: true,
+      thirdPlusWorthwhile: true,
+      keepDepthLight: false,
     },
   };
 
   slice.learned.preferredChannel = getPreferredChannel(slice);
   slice.learned.preferFast = shouldPreferFast(slice);
+  slice.learned.secondTouchStillWorthwhile = isSecondTouchStillWorthwhile(slice);
+  slice.learned.thirdPlusWorthwhile = isThirdPlusWorthwhile(slice);
+  slice.learned.keepDepthLight = shouldKeepDepthLight(slice);
   return slice;
 }
 
@@ -253,14 +304,17 @@ export async function loadQuoteFollowupOutcomeSummary(
       ),
     )
     .orderBy(asc(instantQuotes.id), asc(touchAtExpr));
-
-  return buildSummary(
-    rows.map((row) => ({
+  const depthByQuoteId = new Map<string, number>();
+  const mappedRows = rows.map((row) => {
+    const nextDepth = (depthByQuoteId.get(row.quoteId) ?? 0) + 1;
+    depthByQuoteId.set(row.quoteId, nextDepth);
+    return {
       quoteId: row.quoteId,
       quoteCreatedAt: row.quoteCreatedAt,
       channel: row.channel,
       touchAt: row.touchAt,
       hasBookedAppointment: row.hasBookedAppointment,
+      followupDepth: nextDepth,
       serviceFamily: classifyServiceFamily(
         [
           ...(Array.isArray(row.jobTypes) ? row.jobTypes : []),
@@ -268,9 +322,10 @@ export async function loadQuoteFollowupOutcomeSummary(
         ].filter((item): item is string => typeof item === "string" && item.trim().length > 0),
       ),
       sourceFamily: classifySourceFamily(row.leadSource ?? row.source ?? null),
-    })),
-    windowStart,
-  );
+    };
+  });
+
+  return buildSummary(mappedRows, windowStart);
 }
 
 export function getPreferredQuoteFollowupChannel(
@@ -285,4 +340,25 @@ export function shouldPreferFastQuoteFollowup(
   scope?: QuoteFollowupLearningScope | null,
 ): boolean {
   return resolveScopedSummary(summary, scope).learned.preferFast;
+}
+
+export function isSecondQuoteFollowupStillWorthwhile(
+  summary: QuoteFollowupOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.secondTouchStillWorthwhile;
+}
+
+export function isThirdPlusQuoteFollowupWorthwhile(
+  summary: QuoteFollowupOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.thirdPlusWorthwhile;
+}
+
+export function shouldKeepQuoteFollowupDepthLight(
+  summary: QuoteFollowupOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.keepDepthLight;
 }

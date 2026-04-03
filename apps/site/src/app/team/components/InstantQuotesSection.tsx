@@ -192,9 +192,17 @@ type FollowupSliceDto = {
     fast: FollowupBucketDto;
     delayed: FollowupBucketDto;
   };
+  byDepth: {
+    first: FollowupBucketDto;
+    second: FollowupBucketDto;
+    third_plus: FollowupBucketDto;
+  };
   learned: {
     preferredChannel: "sms" | "dm" | null;
     preferFast: boolean;
+    secondTouchStillWorthwhile: boolean;
+    thirdPlusWorthwhile: boolean;
+    keepDepthLight: boolean;
   };
 };
 
@@ -530,6 +538,23 @@ function renderFollowupLearning(label: string, summary: FollowupSliceDto): React
         {preferredChannel ? `Learned channel lean: ${preferredChannel}` : "Learned channel lean: not strong enough yet"}
         {" | "}
         {summary.learned.preferFast ? "Fast first follow-up is outperforming." : "No strong fast-follow-up edge yet."}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        First touch {formatPercent(summary.byDepth.first.bookRate)} | Second touch {formatPercent(summary.byDepth.second.bookRate)} |
+        Third plus {formatPercent(summary.byDepth.third_plus.bookRate)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        {summary.learned.secondTouchStillWorthwhile
+          ? "Second-touch quote follow-ups are still worth sending."
+          : "Second-touch quote follow-ups are weakening."}
+        {" | "}
+        {summary.learned.thirdPlusWorthwhile
+          ? "Third-touch and later quote follow-ups are still worth sending."
+          : "Third-touch and later quote follow-ups are weak."}
+        {" | "}
+        {summary.learned.keepDepthLight
+          ? "Later-stage follow-ups should stay light."
+          : "No strong late-stage softness warning yet."}
       </div>
     </div>
   );

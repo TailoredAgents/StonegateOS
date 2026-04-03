@@ -52,6 +52,9 @@ import {
 import {
   getQuoteFollowupLearningScope,
   getPreferredQuoteFollowupChannel,
+  isSecondQuoteFollowupStillWorthwhile,
+  isThirdPlusQuoteFollowupWorthwhile,
+  shouldKeepQuoteFollowupDepthLight,
   shouldPreferFastQuoteFollowup,
   type QuoteFollowupOutcomeSummary,
 } from "@/lib/quote-followup-outcomes";
@@ -306,6 +309,18 @@ export function buildSalesAgentNextAction(input: {
     input.quoteFollowupOutcomeSummary,
     quoteFollowupLearningScope,
   );
+  const secondQuoteFollowupStillWorthwhile = isSecondQuoteFollowupStillWorthwhile(
+    input.quoteFollowupOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
+  const thirdPlusQuoteFollowupWorthwhile = isThirdPlusQuoteFollowupWorthwhile(
+    input.quoteFollowupOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
+  const keepQuoteFollowupDepthLight = shouldKeepQuoteFollowupDepthLight(
+    input.quoteFollowupOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
   const keepSofterQuoteClose = shouldUseSofterQuoteClose(input.quoteCloseOutcomeSummary);
   const keepQuoteEstimateProvisional = shouldKeepQuoteEstimateProvisional(
     input.quoteAccuracyOutcomeSummary,
@@ -364,6 +379,10 @@ export function buildSalesAgentNextAction(input: {
   const pendingHumanTakeover = context.automation.some((row) => row.humanTakeover);
   const pendingDnc = context.automation.some((row) => row.dnc);
   const paused = context.automation.some((row) => row.paused);
+  const currentFollowupDepth = context.automation.reduce(
+    (max, row) => (typeof row.followupStep === "number" ? Math.max(max, row.followupStep) : max),
+    0,
+  );
   const nextAutomationFollowup = pickLatestDate(context.automation.map((row) => row.nextFollowupAt));
   const nextTaskDue = pickLatestDate(context.openTasks.map((row) => row.dueAt));
   const latestLeadCreatedAt = parseIso(context.latestLead?.createdAt ?? null);
@@ -780,13 +799,20 @@ export function buildSalesAgentNextAction(input: {
       priority:
         dormantQuoteLead && !reactivationWorthwhile
           ? "low"
+          : currentFollowupDepth >= 3 && !thirdPlusQuoteFollowupWorthwhile
+            ? "low"
+            : currentFollowupDepth >= 2 && !secondQuoteFollowupStillWorthwhile
+              ? "normal"
           : context.derived.bookingReadiness === "high" && !lowConfidenceQuoteAccuracyRisk
             ? "high"
             : "normal",
       confidence: "medium",
-      summary: dormantQuoteLead
-        ? "Reopen this quiet quote lead with a short follow-up."
-        : "Follow up on the quote and try to move the lead toward booking.",
+      summary:
+        currentFollowupDepth >= 3 && keepQuoteFollowupDepthLight
+          ? "Use a light late-stage quote nudge, not a hard repeated push."
+          : dormantQuoteLead
+            ? "Reopen this quiet quote lead with a short follow-up."
+            : "Follow up on the quote and try to move the lead toward booking.",
       reason: dormantQuoteLead
         ? "A quote exists, but the lead has gone quiet and needs a light reopen."
         : "A quote exists, but no appointment is scheduled yet.",
@@ -805,6 +831,15 @@ export function buildSalesAgentNextAction(input: {
           ? quoteAccuracyTrendsAboveRange
             ? "Recent completed jobs are finishing above the original instant range often enough that this quote should stay framed as a working estimate until tightened."
             : "Recent completed jobs are landing outside the original instant range often enough that this quote should stay framed as a working estimate, not a locked-in price."
+          : null,
+        currentFollowupDepth >= 2 && !secondQuoteFollowupStillWorthwhile
+          ? "Recent second-touch quote follow-ups are not outperforming enough to justify repeated pushes."
+          : null,
+        currentFollowupDepth >= 3 && !thirdPlusQuoteFollowupWorthwhile
+          ? "Recent third-touch quote follow-ups are closing weakly enough that this should stay low pressure."
+          : null,
+        keepQuoteFollowupDepthLight
+          ? "Recent later-stage quote follow-ups are performing better when they stay light instead of stacking repeated pushes."
           : null,
         dormantQuoteLead && keepSofterReactivation
           ? "Recent dormant lead reactivations are reopening weakly overall, so a softer reopen is safer than a hard booking push."
