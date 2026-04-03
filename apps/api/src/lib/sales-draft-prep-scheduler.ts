@@ -111,10 +111,14 @@ function mapAutosendPolicyReason(
   switch (reason) {
     case "planner_autosend_disabled":
       return "autosend_disabled";
+    case "live_reply_autonomy_disabled":
+      return "live_reply_autonomy_disabled";
     case "channel_off":
       return "channel_off";
     case "channel_not_allowed":
       return "channel_not_allowed";
+    case "live_reply_channel_not_allowed":
+      return "live_reply_channel_not_allowed";
     case "action_requires_full_mode":
       return "action_requires_full_mode";
     case "action_not_allowed":

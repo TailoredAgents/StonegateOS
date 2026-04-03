@@ -31,6 +31,9 @@ type SalesAutopilotPolicy = {
   plannerAutoSendMinDraftAgeMinutes: number;
   plannerAutoSendChannels: string[];
   plannerAutoSendActions: string[];
+  liveReplyAutonomyEnabled: boolean;
+  liveReplyAutonomyChannels: string[];
+  liveReplyAutonomyActions: string[];
 };
 
 const SALES_AGENT_AUTOSEND_CHANNELS = [
@@ -44,6 +47,9 @@ const SALES_AGENT_AUTOSEND_ACTIONS = [
   { value: "dm_sms_handoff", label: "Messenger to SMS handoff" },
   { value: "follow_up_quote", label: "Quote follow up" },
   { value: "collect_missing_info", label: "Collect missing info" },
+];
+
+const SALES_AGENT_LIVE_REPLY_ACTIONS = [
   { value: "handle_price_objection", label: "Price objection save (Full only)" },
   { value: "reply_now", label: "Immediate reply (Full only)" },
 ] as const;
@@ -245,7 +251,7 @@ export async function AutomationSection(): Promise<React.ReactElement> {
               <div className="space-y-1">
                 <h4 className="text-sm font-semibold text-slate-900">Planner follow-up auto-send</h4>
                 <p className="text-xs text-slate-500">
-                  Controls the newer Sales HQ and Inbox planner drafts. This matters in Partial and Full modes. Off mode still drafts, but nothing sends automatically. Actions marked Full only will not autosend in Partial mode even if they are checked here.
+                  Controls the newer Sales HQ and Inbox planner drafts for scheduled follow-up behavior. This matters in Partial and Full modes. Off mode still drafts, but nothing sends automatically.
                 </p>
               </div>
 
@@ -306,6 +312,64 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                   </div>
                 </div>
               </div>
+
+              <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-semibold text-slate-900">Live reply autonomy</h4>
+                  <p className="text-xs text-slate-600">
+                    This is the Phase 7 gate for true autonomous salesperson behavior. Keep this off while you tune the system in suggest mode. Even in Full mode, live inbound replies will stay approval-only until this block is enabled and scoped.
+                  </p>
+                  <p className="text-xs text-slate-600">
+                    This still runs through the same planner autosend worker above, so if planner auto-send is off, live replies will not send even if this block is enabled.
+                  </p>
+                </div>
+
+                <div className="mt-4 space-y-4">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      name="liveReplyAutonomyEnabled"
+                      defaultChecked={autopilot.liveReplyAutonomyEnabled}
+                      className="h-4 w-4 rounded border-slate-300"
+                    />
+                    Enable live reply autonomy
+                  </label>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allowed live-reply channels</span>
+                      {SALES_AGENT_AUTOSEND_CHANNELS.map((option) => (
+                        <label key={`live-${option.value}`} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            name="liveReplyAutonomyChannels"
+                            value={option.value}
+                            defaultChecked={autopilot.liveReplyAutonomyChannels.includes(option.value)}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          {option.label}
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="space-y-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Allowed live-reply actions</span>
+                      {SALES_AGENT_LIVE_REPLY_ACTIONS.map((option) => (
+                        <label key={option.value} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            name="liveReplyAutonomyActions"
+                            value={option.value}
+                            defaultChecked={autopilot.liveReplyAutonomyActions.includes(option.value)}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          {option.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <SubmitButton
@@ -329,9 +393,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
               <span className="font-semibold text-slate-900">Partial:</span> the system can send approved follow-up types automatically, but new live replies still wait on you.
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-              <span className="font-semibold text-slate-900">Full:</span> the system is allowed to run live channel autopilot where supported and trusted.
-            </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <span className="font-semibold text-slate-900">Full:</span> the system is allowed to run live channel autopilot where supported and trusted, but live replies still stay approval-only until the live reply autonomy gate below is enabled.
+          </div>
           </div>
         </div>
 

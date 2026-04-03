@@ -884,6 +884,10 @@ export async function GET(request: NextRequest): Promise<Response> {
         ? null
         : !autopilotPolicy.plannerAutoSendEnabled || autopilotPolicy.mode === "off"
           ? "Autosend disabled"
+        : autosendPolicy.reason === "live_reply_autonomy_disabled"
+          ? "Live reply autonomy off"
+        : autosendPolicy.reason === "live_reply_channel_not_allowed"
+          ? "Live reply channel blocked"
           : dmLiveAutopilotBlocked
             ? `Messenger warm-up: ${dmLiveAutopilotState?.meaningfulInboundCount ?? 0} meaningful inbound message${(dmLiveAutopilotState?.meaningfulInboundCount ?? 0) === 1 ? "" : "s"}`
           : autosendPolicy.reason === "action_requires_full_mode"
@@ -969,6 +973,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         autopilot: {
           mode: autopilotPolicy.mode,
           channelMode,
+          liveReplyAutonomyEnabled: autopilotPolicy.liveReplyAutonomyEnabled,
           liveReplyAllowed,
         },
       };

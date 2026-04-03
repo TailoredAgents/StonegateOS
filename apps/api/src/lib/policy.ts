@@ -116,6 +116,9 @@ export type SalesAutopilotPolicy = {
   plannerAutoSendMinDraftAgeMinutes: number;
   plannerAutoSendChannels: string[];
   plannerAutoSendActions: string[];
+  liveReplyAutonomyEnabled: boolean;
+  liveReplyAutonomyChannels: string[];
+  liveReplyAutonomyActions: string[];
 };
 
 export type InboxAlertsPolicy = {
@@ -208,7 +211,10 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   plannerAutoSendEnabled: false,
   plannerAutoSendMinDraftAgeMinutes: 10,
   plannerAutoSendChannels: ["sms"],
-  plannerAutoSendActions: ["missed_call_recovery", "dm_sms_handoff", "follow_up_quote", "collect_missing_info"]
+  plannerAutoSendActions: ["missed_call_recovery", "dm_sms_handoff", "follow_up_quote", "collect_missing_info"],
+  liveReplyAutonomyEnabled: false,
+  liveReplyAutonomyChannels: [],
+  liveReplyAutonomyActions: []
 };
 
 export const DEFAULT_INBOX_ALERTS_POLICY: InboxAlertsPolicy = {
@@ -1256,7 +1262,19 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
     plannerAutoSendActions: coerceStringArray(
       stored["plannerAutoSendActions"],
       DEFAULT_SALES_AUTOPILOT_POLICY.plannerAutoSendActions
-    )
+    ),
+    liveReplyAutonomyEnabled:
+      typeof stored["liveReplyAutonomyEnabled"] === "boolean"
+        ? stored["liveReplyAutonomyEnabled"]
+        : DEFAULT_SALES_AUTOPILOT_POLICY.liveReplyAutonomyEnabled,
+    liveReplyAutonomyChannels: coerceStringArray(
+      stored["liveReplyAutonomyChannels"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.liveReplyAutonomyChannels
+    ),
+    liveReplyAutonomyActions: coerceStringArray(
+      stored["liveReplyAutonomyActions"],
+      DEFAULT_SALES_AUTOPILOT_POLICY.liveReplyAutonomyActions
+    ),
   };
 }
 
@@ -1274,7 +1292,14 @@ export function isSalesAutopilotLiveReplyEnabled(
   policy: SalesAutopilotPolicy,
   channel: string | null | undefined,
 ): boolean {
-  return policy.mode === "full" && getSalesAutopilotChannelMode(policy, channel) === "full";
+  const normalizedChannel = typeof channel === "string" ? channel.trim() : "";
+  return (
+    policy.mode === "full" &&
+    getSalesAutopilotChannelMode(policy, normalizedChannel) === "full" &&
+    policy.liveReplyAutonomyEnabled === true &&
+    !!normalizedChannel &&
+    policy.liveReplyAutonomyChannels.includes(normalizedChannel)
+  );
 }
 
 export function isSalesPlannerAutosendAllowed(
@@ -1310,8 +1335,10 @@ export function evaluateSalesPlannerAutosendPolicy(
   actionClass: SalesPlannerActionClass | null;
   reason:
     | "planner_autosend_disabled"
+    | "live_reply_autonomy_disabled"
     | "channel_off"
     | "channel_not_allowed"
+    | "live_reply_channel_not_allowed"
     | "action_not_allowed"
     | "action_requires_full_mode"
     | null;
@@ -1327,10 +1354,20 @@ export function evaluateSalesPlannerAutosendPolicy(
   if (channelMode === "off") {
     return { allowed: false, channelMode, actionClass, reason: "channel_off" };
   }
-  if (!channel || !policy.plannerAutoSendChannels.includes(channel)) {
+  if (actionClass === "live_reply" && !policy.liveReplyAutonomyEnabled) {
+    return { allowed: false, channelMode, actionClass, reason: "live_reply_autonomy_disabled" };
+  }
+  const requiresPlannerFollowupChannel =
+    actionClass !== "live_reply" && (!channel || !policy.plannerAutoSendChannels.includes(channel));
+  if (requiresPlannerFollowupChannel) {
     return { allowed: false, channelMode, actionClass, reason: "channel_not_allowed" };
   }
-  if (!actionType || !policy.plannerAutoSendActions.includes(actionType) || !actionClass) {
+  if (actionClass === "live_reply" && !policy.liveReplyAutonomyChannels.includes(channel)) {
+    return { allowed: false, channelMode, actionClass, reason: "live_reply_channel_not_allowed" };
+  }
+  const allowedActions =
+    actionClass === "live_reply" ? policy.liveReplyAutonomyActions : policy.plannerAutoSendActions;
+  if (!actionType || !allowedActions.includes(actionType) || !actionClass) {
     return { allowed: false, channelMode, actionClass, reason: "action_not_allowed" };
   }
   if (actionClass === "live_reply" && channelMode !== "full") {

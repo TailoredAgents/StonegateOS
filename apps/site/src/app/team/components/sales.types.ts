@@ -84,6 +84,7 @@ export type QueuePayload = {
     autopilot?: {
       mode: "off" | "partial" | "full";
       channelMode: "off" | "partial" | "full";
+      liveReplyAutonomyEnabled: boolean;
       liveReplyAllowed: boolean;
     } | null;
   }>;

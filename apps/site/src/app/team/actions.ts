@@ -2994,6 +2994,7 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const mode =
     typeof formData.get("mode") === "string" ? String(formData.get("mode")).trim() : "";
   const plannerAutoSendEnabled = formData.get("plannerAutoSendEnabled") === "on";
+  const liveReplyAutonomyEnabled = formData.get("liveReplyAutonomyEnabled") === "on";
   const autoSendAfterMinutes = formData.get("autoSendAfterMinutes");
   const activityWindowMinutes = formData.get("activityWindowMinutes");
   const retryDelayMinutes = formData.get("retryDelayMinutes");
@@ -3016,6 +3017,14 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     .getAll("plannerAutoSendActions")
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .map((value) => value.trim());
+  const liveReplyAutonomyChannels = formData
+    .getAll("liveReplyAutonomyChannels")
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  const liveReplyAutonomyActions = formData
+    .getAll("liveReplyAutonomyActions")
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
   const channelModes = {
     sms: typeof formData.get("channelMode_sms") === "string" ? String(formData.get("channelMode_sms")).trim() : "",
     email:
@@ -3023,7 +3032,7 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     dm: typeof formData.get("channelMode_dm") === "string" ? String(formData.get("channelMode_dm")).trim() : "",
   };
 
-  const payload: Record<string, unknown> = { plannerAutoSendEnabled };
+  const payload: Record<string, unknown> = { plannerAutoSendEnabled, liveReplyAutonomyEnabled };
   if (mode === "off" || mode === "partial" || mode === "full") {
     payload["mode"] = mode;
   }
@@ -3057,6 +3066,8 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
 
   payload["plannerAutoSendChannels"] = plannerAutoSendChannels;
   payload["plannerAutoSendActions"] = plannerAutoSendActions;
+  payload["liveReplyAutonomyChannels"] = liveReplyAutonomyChannels;
+  payload["liveReplyAutonomyActions"] = liveReplyAutonomyActions;
 
   const response = await callAdminApi("/api/admin/sales/autopilot", {
     method: "PATCH",

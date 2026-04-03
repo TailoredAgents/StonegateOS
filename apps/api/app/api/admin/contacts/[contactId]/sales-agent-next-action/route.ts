@@ -229,6 +229,10 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     ? "Draft is ready and still aging before autosend."
     : dmLiveAutopilotBlocked
       ? `Messenger stays approval-only until there has been a real back-and-forth. Current DM warm-up: ${dmLiveAutopilotState?.meaningfulInboundCount ?? 0} meaningful inbound message${(dmLiveAutopilotState?.meaningfulInboundCount ?? 0) === 1 ? "" : "s"}.`
+    : autosendPolicy.reason === "live_reply_autonomy_disabled"
+      ? "Live reply autonomy is still off. This draft can be suggested, but it will not auto-send until you enable live reply autonomy in Automation."
+    : autosendPolicy.reason === "live_reply_channel_not_allowed"
+      ? "Live reply autonomy is enabled, but this channel is not allowed to auto-send live replies yet."
     : autosendPolicy.reason === "action_requires_full_mode"
       ? "Partial mode keeps this kind of live reply approval-only."
       : autosendPolicy.reason === "channel_not_allowed" || autosendPolicy.reason === "action_not_allowed"
@@ -296,7 +300,11 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
                   ? {
                       code: "draft_pending",
                       label: "Draft pending",
-                      detail: autosendPolicy.reason === "action_requires_full_mode"
+                      detail: autosendPolicy.reason === "live_reply_autonomy_disabled"
+                        ? "The agent should prepare the draft, but live reply autonomy is still turned off."
+                        : autosendPolicy.reason === "live_reply_channel_not_allowed"
+                          ? "The agent should prepare the draft, but this channel is not yet approved for live reply autonomy."
+                        : autosendPolicy.reason === "action_requires_full_mode"
                         ? "The agent should prepare the draft, but Partial mode will keep this live reply approval-only."
                         : effectiveChannel === "dm" && actionClass === "live_reply"
                           ? "The agent should prepare the Messenger draft, but DM live autopilot will stay approval-only until the customer has had a real back-and-forth."
@@ -324,6 +332,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       channelMode,
       channel: effectiveChannel,
       plannerAutoSendEnabled: autopilotPolicy.plannerAutoSendEnabled,
+      liveReplyAutonomyEnabled: autopilotPolicy.liveReplyAutonomyEnabled,
       liveReplyAllowed,
     },
     latestDraft: latestDraft

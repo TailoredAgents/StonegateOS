@@ -151,6 +151,11 @@ export async function PATCH(request: NextRequest): Promise<Response> {
     if (typeof raw === "boolean") next["plannerAutoSendEnabled"] = raw;
     else if (typeof raw === "string") next["plannerAutoSendEnabled"] = raw === "true" || raw === "on";
   }
+  if ("liveReplyAutonomyEnabled" in payload) {
+    const raw = payload["liveReplyAutonomyEnabled"];
+    if (typeof raw === "boolean") next["liveReplyAutonomyEnabled"] = raw;
+    else if (typeof raw === "string") next["liveReplyAutonomyEnabled"] = raw === "true" || raw === "on";
+  }
 
   const plannerAutoSendMinDraftAgeMinutes = clampInt(payload["plannerAutoSendMinDraftAgeMinutes"], {
     min: 1,
@@ -168,6 +173,14 @@ export async function PATCH(request: NextRequest): Promise<Response> {
   const plannerAutoSendActions = coerceStringArray(payload["plannerAutoSendActions"]);
   if (plannerAutoSendActions !== null) {
     next["plannerAutoSendActions"] = plannerAutoSendActions.filter((value) => AUTOSEND_ACTIONS.has(value));
+  }
+  const liveReplyAutonomyChannels = coerceStringArray(payload["liveReplyAutonomyChannels"]);
+  if (liveReplyAutonomyChannels !== null) {
+    next["liveReplyAutonomyChannels"] = liveReplyAutonomyChannels.filter((value) => AUTOSEND_CHANNELS.has(value));
+  }
+  const liveReplyAutonomyActions = coerceStringArray(payload["liveReplyAutonomyActions"]);
+  if (liveReplyAutonomyActions !== null) {
+    next["liveReplyAutonomyActions"] = liveReplyAutonomyActions.filter((value) => AUTOSEND_ACTIONS.has(value));
   }
 
   const db = getDb();

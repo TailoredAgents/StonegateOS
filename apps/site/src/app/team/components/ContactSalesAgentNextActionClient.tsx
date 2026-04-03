@@ -29,6 +29,7 @@ type NextActionPayload = {
     channelMode?: "off" | "partial" | "full" | null;
     channel?: string | null;
     plannerAutoSendEnabled?: boolean;
+    liveReplyAutonomyEnabled?: boolean;
     liveReplyAllowed?: boolean;
   } | null;
   liveContext?: {
@@ -367,7 +368,9 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                 : autopilot?.channelMode === "partial"
                   ? "Partial mode: scheduled follow-ups may automate when allowed, but live conversation replies stay approval-only."
                   : autopilot?.channelMode === "full"
-                    ? "Full mode: this channel is allowed to run live autopilot where supported."
+                    ? autopilot?.liveReplyAutonomyEnabled
+                      ? "Full mode: this channel can run live autopilot where supported and approved."
+                      : "Full mode is set, but live reply autonomy is still off until you enable it in Automation."
                     : "Autopilot mode not available."}
             </div>
 

@@ -757,7 +757,9 @@ export function SalesHqClient({
                         ? "Off mode means drafts only for this channel."
                         : selectedItem.autopilot.channelMode === "partial"
                           ? "Partial mode means follow-ups can automate, but live replies still wait for approval."
-                          : "Full mode allows live autopilot behavior on this channel."}
+                          : selectedItem.autopilot.liveReplyAutonomyEnabled
+                            ? "Full mode allows live autopilot behavior on this channel once the normal guardrails pass."
+                            : "Full mode is set, but live reply autonomy is still off until you enable it in Automation."}
                     </div>
                   ) : null}
                 </div>

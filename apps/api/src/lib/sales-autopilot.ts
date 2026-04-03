@@ -1013,7 +1013,7 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
   const isAutoFirstTouch = meta?.["autoFirstTouch"] === true;
 
   const policy = await getSalesAutopilotPolicy(db);
-  const liveAutosendAllowed = isAutoFirstTouch ? policy.mode === "full" : isSalesAutopilotLiveReplyEnabled(policy, row.channel);
+  const liveAutosendAllowed = isSalesAutopilotLiveReplyEnabled(policy, row.channel);
   if (!liveAutosendAllowed) {
     return { status: "processed" };
   }
