@@ -41,6 +41,7 @@ import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
 import { loadQuoteAccuracyOutcomeSummary } from "@/lib/quote-accuracy-outcomes";
+import { loadQuoteHotWindowOutcomeSummary } from "@/lib/quote-hot-window-outcomes";
 import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 
@@ -182,6 +183,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
   const quoteAccuracyOutcomeSummary = await loadQuoteAccuracyOutcomeSummary(db);
+  const quoteHotWindowOutcomeSummary = await loadQuoteHotWindowOutcomeSummary(db);
   const quoteCloseOutcomeSummary = await loadQuoteCloseOutcomeSummary(db);
   const quoteFollowupOutcomeSummary = await loadQuoteFollowupOutcomeSummary(db);
   const reactivationOutcomeSummary = await loadReactivationOutcomeSummary(db);
@@ -659,6 +661,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           objectionSaveOutcomeSummary,
           mediaOutcomeSummary,
           quoteAccuracyOutcomeSummary,
+          quoteHotWindowOutcomeSummary,
           quoteCloseOutcomeSummary,
           reactivationOutcomeSummary,
           quoteFollowupOutcomeSummary,

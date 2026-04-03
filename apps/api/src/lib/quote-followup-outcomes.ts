@@ -6,6 +6,7 @@ type DbExecutor = ReturnType<typeof getDb>;
 type FollowupChannel = "sms" | "dm" | "email";
 type TimingBucket = "fast" | "delayed";
 type DepthBucket = "first" | "second" | "third_plus";
+type StyleBucket = "short" | "long" | "single_ask" | "multi_ask" | "photo_ask" | "booking_ask";
 type ServiceFamily = "junk" | "demo" | "brush" | "unknown";
 type SourceFamily = "facebook" | "public_site" | "other" | "unknown";
 
@@ -14,6 +15,7 @@ type QuoteFollowupOutcomeRow = {
   quoteCreatedAt: Date;
   channel: FollowupChannel;
   touchAt: Date;
+  body: string;
   hasBookedAppointment: boolean;
   followupDepth: number;
   serviceFamily: ServiceFamily;
@@ -37,12 +39,17 @@ type QuoteFollowupOutcomeSlice = {
   byChannel: Record<FollowupChannel, OutcomeBucket>;
   byTiming: Record<TimingBucket, OutcomeBucket>;
   byDepth: Record<DepthBucket, OutcomeBucket>;
+  byStyle: Record<StyleBucket, OutcomeBucket>;
   learned: {
     preferredChannel: "sms" | "dm" | null;
     preferFast: boolean;
     secondTouchStillWorthwhile: boolean;
     thirdPlusWorthwhile: boolean;
     keepDepthLight: boolean;
+    keepShort: boolean;
+    keepSingleAsk: boolean;
+    openWithPhotoAsk: boolean;
+    avoidHardBookingAsk: boolean;
   };
 };
 
@@ -85,6 +92,41 @@ function getDepthBucket(row: QuoteFollowupOutcomeRow): DepthBucket {
   if (row.followupDepth >= 3) return "third_plus";
   if (row.followupDepth === 2) return "second";
   return "first";
+}
+
+function isShortFollowup(body: string): boolean {
+  return body.trim().length > 0 && body.trim().length <= 240;
+}
+
+function countQuestionMarks(body: string): number {
+  const matches = body.match(/\?/g);
+  return matches ? matches.length : 0;
+}
+
+function isSingleAskFollowup(body: string): boolean {
+  const questionCount = countQuestionMarks(body);
+  if (questionCount === 1) return true;
+  if (questionCount >= 2) return false;
+  const normalized = body.toLowerCase();
+  const askHits = [
+    "can you",
+    "could you",
+    "let me know",
+    "does that work",
+    "want me to",
+    "would you like",
+    "what day works",
+    "what time works",
+  ].filter((phrase) => normalized.includes(phrase)).length;
+  return askHits === 1;
+}
+
+function isPhotoAskFollowup(body: string): boolean {
+  return /\b(photo|photos|picture|pictures|pic|pics|video|walkthrough)\b/i.test(body);
+}
+
+function isBookingAskFollowup(body: string): boolean {
+  return /\b(book|schedule|get (you )?on the schedule|lock (it )?in|set up (a |the )?(time|appointment))\b/i.test(body);
 }
 
 function getPreferredChannel(
@@ -134,6 +176,42 @@ function shouldKeepDepthLight(summary: QuoteFollowupOutcomeSlice): boolean {
   return false;
 }
 
+function shouldKeepShort(summary: QuoteFollowupOutcomeSlice): boolean {
+  const short = summary.byStyle.short;
+  const long = summary.byStyle.long;
+  if (short.quotes < 5) return false;
+  if (long.quotes < 3) return short.bookRate > 0;
+  return short.bookRate >= long.bookRate + 0.05;
+}
+
+function shouldKeepSingleAsk(summary: QuoteFollowupOutcomeSlice): boolean {
+  const singleAsk = summary.byStyle.single_ask;
+  const multiAsk = summary.byStyle.multi_ask;
+  if (singleAsk.quotes < 5) return false;
+  if (multiAsk.quotes < 3) return singleAsk.bookRate > 0;
+  return singleAsk.bookRate >= multiAsk.bookRate + 0.05;
+}
+
+function shouldOpenWithPhotoAsk(summary: QuoteFollowupOutcomeSlice): boolean {
+  const photoAsk = summary.byStyle.photo_ask;
+  const noPhotoAskQuotes = Math.max(0, summary.quotesWithFollowup - photoAsk.quotes);
+  const noPhotoAskBooked = Math.max(0, summary.bookedQuotes - photoAsk.bookedQuotes);
+  const noPhotoAskBookRate = toRate(noPhotoAskBooked, noPhotoAskQuotes);
+  if (photoAsk.quotes < 5) return false;
+  if (noPhotoAskQuotes < 3) return photoAsk.bookRate > 0;
+  return photoAsk.bookRate >= noPhotoAskBookRate + 0.05;
+}
+
+function shouldAvoidHardBookingAsk(summary: QuoteFollowupOutcomeSlice): boolean {
+  const bookingAsk = summary.byStyle.booking_ask;
+  const noBookingAskQuotes = Math.max(0, summary.quotesWithFollowup - bookingAsk.quotes);
+  const noBookingAskBooked = Math.max(0, summary.bookedQuotes - bookingAsk.bookedQuotes);
+  const noBookingAskBookRate = toRate(noBookingAskBooked, noBookingAskQuotes);
+  if (bookingAsk.quotes < 5) return false;
+  if (noBookingAskQuotes < 3) return bookingAsk.bookRate < 0.05;
+  return bookingAsk.bookRate + 0.03 <= noBookingAskBookRate;
+}
+
 function buildSlice(rows: QuoteFollowupOutcomeRow[]): QuoteFollowupOutcomeSlice {
   const smsRows = rows.filter((row) => row.channel === "sms");
   const dmRows = rows.filter((row) => row.channel === "dm");
@@ -143,6 +221,12 @@ function buildSlice(rows: QuoteFollowupOutcomeRow[]): QuoteFollowupOutcomeSlice 
   const firstRows = rows.filter((row) => getDepthBucket(row) === "first");
   const secondRows = rows.filter((row) => getDepthBucket(row) === "second");
   const thirdPlusRows = rows.filter((row) => getDepthBucket(row) === "third_plus");
+  const shortRows = rows.filter((row) => isShortFollowup(row.body));
+  const longRows = rows.filter((row) => !isShortFollowup(row.body));
+  const singleAskRows = rows.filter((row) => isSingleAskFollowup(row.body));
+  const multiAskRows = rows.filter((row) => !isSingleAskFollowup(row.body));
+  const photoAskRows = rows.filter((row) => isPhotoAskFollowup(row.body));
+  const bookingAskRows = rows.filter((row) => isBookingAskFollowup(row.body));
   const bookedQuotes = rows.filter((row) => row.hasBookedAppointment).length;
 
   const slice: QuoteFollowupOutcomeSlice = {
@@ -162,12 +246,24 @@ function buildSlice(rows: QuoteFollowupOutcomeRow[]): QuoteFollowupOutcomeSlice 
       second: summarizeBucket(secondRows),
       third_plus: summarizeBucket(thirdPlusRows),
     },
+    byStyle: {
+      short: summarizeBucket(shortRows),
+      long: summarizeBucket(longRows),
+      single_ask: summarizeBucket(singleAskRows),
+      multi_ask: summarizeBucket(multiAskRows),
+      photo_ask: summarizeBucket(photoAskRows),
+      booking_ask: summarizeBucket(bookingAskRows),
+    },
     learned: {
       preferredChannel: null,
       preferFast: false,
       secondTouchStillWorthwhile: true,
       thirdPlusWorthwhile: true,
       keepDepthLight: false,
+      keepShort: false,
+      keepSingleAsk: false,
+      openWithPhotoAsk: false,
+      avoidHardBookingAsk: false,
     },
   };
 
@@ -176,6 +272,10 @@ function buildSlice(rows: QuoteFollowupOutcomeRow[]): QuoteFollowupOutcomeSlice 
   slice.learned.secondTouchStillWorthwhile = isSecondTouchStillWorthwhile(slice);
   slice.learned.thirdPlusWorthwhile = isThirdPlusWorthwhile(slice);
   slice.learned.keepDepthLight = shouldKeepDepthLight(slice);
+  slice.learned.keepShort = shouldKeepShort(slice);
+  slice.learned.keepSingleAsk = shouldKeepSingleAsk(slice);
+  slice.learned.openWithPhotoAsk = shouldOpenWithPhotoAsk(slice);
+  slice.learned.avoidHardBookingAsk = shouldAvoidHardBookingAsk(slice);
   return slice;
 }
 
@@ -276,6 +376,7 @@ export async function loadQuoteFollowupOutcomeSummary(
       quoteCreatedAt: instantQuotes.createdAt,
       channel: sql<FollowupChannel>`${conversationMessages.channel}`,
       touchAt: touchAtExpr,
+      body: sql<string>`coalesce(${conversationMessages.body}, '')`,
       hasBookedAppointment: sql<boolean>`
         exists(
           select 1
@@ -313,6 +414,7 @@ export async function loadQuoteFollowupOutcomeSummary(
       quoteCreatedAt: row.quoteCreatedAt,
       channel: row.channel,
       touchAt: row.touchAt,
+      body: row.body,
       hasBookedAppointment: row.hasBookedAppointment,
       followupDepth: nextDepth,
       serviceFamily: classifyServiceFamily(
@@ -361,4 +463,32 @@ export function shouldKeepQuoteFollowupDepthLight(
   scope?: QuoteFollowupLearningScope | null,
 ): boolean {
   return resolveScopedSummary(summary, scope).learned.keepDepthLight;
+}
+
+export function shouldKeepQuoteFollowupShort(
+  summary: QuoteFollowupOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.keepShort;
+}
+
+export function shouldKeepQuoteFollowupSingleAsk(
+  summary: QuoteFollowupOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.keepSingleAsk;
+}
+
+export function shouldOpenQuoteFollowupWithPhotoAsk(
+  summary: QuoteFollowupOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.openWithPhotoAsk;
+}
+
+export function shouldAvoidHardQuoteBookingAsk(
+  summary: QuoteFollowupOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.avoidHardBookingAsk;
 }

@@ -197,12 +197,24 @@ type FollowupSliceDto = {
     second: FollowupBucketDto;
     third_plus: FollowupBucketDto;
   };
+  byStyle: {
+    short: FollowupBucketDto;
+    long: FollowupBucketDto;
+    single_ask: FollowupBucketDto;
+    multi_ask: FollowupBucketDto;
+    photo_ask: FollowupBucketDto;
+    booking_ask: FollowupBucketDto;
+  };
   learned: {
     preferredChannel: "sms" | "dm" | null;
     preferFast: boolean;
     secondTouchStillWorthwhile: boolean;
     thirdPlusWorthwhile: boolean;
     keepDepthLight: boolean;
+    keepShort: boolean;
+    keepSingleAsk: boolean;
+    openWithPhotoAsk: boolean;
+    avoidHardBookingAsk: boolean;
   };
 };
 
@@ -372,9 +384,66 @@ type AppointmentPreservationSummaryDto = {
     reminder: AppointmentPreservationBucketDto;
     other: AppointmentPreservationBucketDto;
   };
+  byAppointmentType: {
+    estimate: AppointmentPreservationBucketDto;
+    in_person_quote: AppointmentPreservationBucketDto;
+    job: AppointmentPreservationBucketDto;
+    other: AppointmentPreservationBucketDto;
+  };
+  byServiceFamily: {
+    junk: AppointmentPreservationBucketDto;
+    demo: AppointmentPreservationBucketDto;
+    brush: AppointmentPreservationBucketDto;
+    unknown: AppointmentPreservationBucketDto;
+  };
+  bySourceFamily: {
+    facebook: AppointmentPreservationBucketDto;
+    public_site: AppointmentPreservationBucketDto;
+    other: AppointmentPreservationBucketDto;
+    unknown: AppointmentPreservationBucketDto;
+  };
   learned: {
     strongestTouchKind: "requested" | "rescheduled" | "reminder" | "other" | null;
     needsHumanBackup: boolean;
+  };
+};
+
+type QuoteHotWindowBucketDto = {
+  quotes: number;
+  bookedQuotes: number;
+  bookRate: number;
+};
+
+type QuoteHotWindowSliceDto = {
+  quotes: number;
+  bookedQuotes: number;
+  bookRate: number;
+  byWindow: {
+    under_6h: QuoteHotWindowBucketDto;
+    same_day: QuoteHotWindowBucketDto;
+    day_1_3: QuoteHotWindowBucketDto;
+    after_3d: QuoteHotWindowBucketDto;
+  };
+  learned: {
+    hotWindow: "under_6h" | "same_day" | "day_1_3" | "slow_burn" | null;
+    urgencyDecayFast: boolean;
+    sameDayStillStrong: boolean;
+  };
+};
+
+type QuoteHotWindowSummaryDto = QuoteHotWindowSliceDto & {
+  windowStart: string;
+  byServiceFamily: {
+    junk: QuoteHotWindowSliceDto;
+    demo: QuoteHotWindowSliceDto;
+    brush: QuoteHotWindowSliceDto;
+    unknown: QuoteHotWindowSliceDto;
+  };
+  bySourceFamily: {
+    facebook: QuoteHotWindowSliceDto;
+    public_site: QuoteHotWindowSliceDto;
+    other: QuoteHotWindowSliceDto;
+    unknown: QuoteHotWindowSliceDto;
   };
 };
 
@@ -556,6 +625,23 @@ function renderFollowupLearning(label: string, summary: FollowupSliceDto): React
           ? "Later-stage follow-ups should stay light."
           : "No strong late-stage softness warning yet."}
       </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        Short {formatPercent(summary.byStyle.short.bookRate)} | Single ask {formatPercent(summary.byStyle.single_ask.bookRate)} |
+        Photo ask {formatPercent(summary.byStyle.photo_ask.bookRate)} | Booking ask {formatPercent(summary.byStyle.booking_ask.bookRate)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        {summary.learned.keepShort ? "Short quote nudges are working better." : "No strong short-follow-up edge yet."}
+        {" | "}
+        {summary.learned.keepSingleAsk ? "One clear ask is performing better." : "No strong single-ask edge yet."}
+        {" | "}
+        {summary.learned.openWithPhotoAsk
+          ? "Photo-first follow-ups are converting better."
+          : "No strong photo-first follow-up edge yet."}
+        {" | "}
+        {summary.learned.avoidHardBookingAsk
+          ? "Hard booking asks are underperforming on follow-up."
+          : "No strong hard-booking warning yet."}
+      </div>
     </div>
   );
 }
@@ -658,6 +744,44 @@ function renderObjectionLearning(
   );
 }
 
+function renderQuoteHotWindowLearning(
+  label: string,
+  summary: QuoteHotWindowSliceDto,
+): React.ReactElement {
+  const hotWindow =
+    summary.learned.hotWindow === "under_6h"
+      ? "Under 6 hours"
+      : summary.learned.hotWindow === "same_day"
+        ? "Same day"
+        : summary.learned.hotWindow === "day_1_3"
+          ? "1 to 3 days"
+          : summary.learned.hotWindow === "slow_burn"
+            ? "Slow burn"
+            : null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="font-semibold text-slate-900">{label}</div>
+      <div className="mt-1 text-[11px] text-slate-600">
+        Quotes: {summary.quotes} | Booked: {summary.bookedQuotes} ({formatPercent(summary.bookRate)})
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        Under 6h {formatPercent(summary.byWindow.under_6h.bookRate)} | Same day {formatPercent(summary.byWindow.same_day.bookRate)}
+      </div>
+      <div className="text-[11px] text-slate-500">
+        1 to 3 days {formatPercent(summary.byWindow.day_1_3.bookRate)} | After 3 days {formatPercent(summary.byWindow.after_3d.bookRate)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        {hotWindow ? `Learned hot window: ${hotWindow}` : "Learned hot window: not strong enough yet"}
+        {" | "}
+        {summary.learned.urgencyDecayFast ? "Urgency decays fast after the hot window." : "No strong urgency-decay warning yet."}
+        {" | "}
+        {summary.learned.sameDayStillStrong ? "Same-day quotes are still closing strongly." : "No strong same-day hold yet."}
+      </div>
+    </div>
+  );
+}
+
 export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const res = await callAdminApi("/api/admin/instant-quotes?limit=25");
   if (!res.ok) {
@@ -673,6 +797,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
     missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
     quoteAccuracySummary?: QuoteAccuracySummaryDto;
+    quoteHotWindowSummary?: QuoteHotWindowSummaryDto;
     quoteCloseSummary?: QuoteCloseSummaryDto;
     followupSummary?: FollowupSummaryDto;
     reactivationSummary?: ReactivationSummaryDto;
@@ -686,6 +811,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
   const quoteAccuracySummary = data.quoteAccuracySummary;
+  const quoteHotWindowSummary = data.quoteHotWindowSummary;
   const quoteCloseSummary = data.quoteCloseSummary;
   const followupSummary = data.followupSummary;
   const reactivationSummary = data.reactivationSummary;
@@ -741,6 +867,22 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {renderFollowupLearning("Brush quotes", followupSummary.byServiceFamily.brush)}
             {renderFollowupLearning("Facebook-sourced", followupSummary.bySourceFamily.facebook)}
             {renderFollowupLearning("Public-site sourced", followupSummary.bySourceFamily.public_site)}
+          </div>
+        </div>
+      ) : null}
+      {quoteHotWindowSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Quote hot-window learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks how long different quote segments stay hot before booking rates fall off, so the planner can tune urgency instead of using one generic pace.
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {renderQuoteHotWindowLearning("Overall", quoteHotWindowSummary)}
+            {renderQuoteHotWindowLearning("Junk quotes", quoteHotWindowSummary.byServiceFamily.junk)}
+            {renderQuoteHotWindowLearning("Demo quotes", quoteHotWindowSummary.byServiceFamily.demo)}
+            {renderQuoteHotWindowLearning("Brush quotes", quoteHotWindowSummary.byServiceFamily.brush)}
+            {renderQuoteHotWindowLearning("Facebook-sourced", quoteHotWindowSummary.bySourceFamily.facebook)}
+            {renderQuoteHotWindowLearning("Public-site sourced", quoteHotWindowSummary.bySourceFamily.public_site)}
           </div>
         </div>
       ) : null}
@@ -1035,6 +1177,20 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             Initial confirmation preserve {formatPercent(appointmentPreservationSummary.byKind.requested.preservedRate)} | Reschedule confirmation preserve{" "}
             {formatPercent(appointmentPreservationSummary.byKind.rescheduled.preservedRate)} | Reminder preserve{" "}
             {formatPercent(appointmentPreservationSummary.byKind.reminder.preservedRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Estimate preserve {formatPercent(appointmentPreservationSummary.byAppointmentType.estimate.preservedRate)} | In person quote{" "}
+            {formatPercent(appointmentPreservationSummary.byAppointmentType.in_person_quote.preservedRate)} | Job{" "}
+            {formatPercent(appointmentPreservationSummary.byAppointmentType.job.preservedRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Junk preserve {formatPercent(appointmentPreservationSummary.byServiceFamily.junk.preservedRate)} | Demo{" "}
+            {formatPercent(appointmentPreservationSummary.byServiceFamily.demo.preservedRate)} | Brush{" "}
+            {formatPercent(appointmentPreservationSummary.byServiceFamily.brush.preservedRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Facebook preserve {formatPercent(appointmentPreservationSummary.bySourceFamily.facebook.preservedRate)} | Public-site{" "}
+            {formatPercent(appointmentPreservationSummary.bySourceFamily.public_site.preservedRate)}
           </div>
           <div className="mt-1 text-[11px] text-slate-500">
             {appointmentPreservationSummary.learned.strongestTouchKind === "requested"

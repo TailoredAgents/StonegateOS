@@ -45,6 +45,12 @@ import {
   type QuoteAccuracyOutcomeSummary,
 } from "@/lib/quote-accuracy-outcomes";
 import {
+  doesQuoteUrgencyDecayFast,
+  getLearnedQuoteHotWindow,
+  isSameDayQuoteWindowStillStrong,
+  type QuoteHotWindowOutcomeSummary,
+} from "@/lib/quote-hot-window-outcomes";
+import {
   getPreferredQuoteCloseChannel,
   shouldUseSofterQuoteClose,
   type QuoteCloseOutcomeSummary,
@@ -54,7 +60,11 @@ import {
   getPreferredQuoteFollowupChannel,
   isSecondQuoteFollowupStillWorthwhile,
   isThirdPlusQuoteFollowupWorthwhile,
+  shouldAvoidHardQuoteBookingAsk,
   shouldKeepQuoteFollowupDepthLight,
+  shouldKeepQuoteFollowupShort,
+  shouldKeepQuoteFollowupSingleAsk,
+  shouldOpenQuoteFollowupWithPhotoAsk,
   shouldPreferFastQuoteFollowup,
   type QuoteFollowupOutcomeSummary,
 } from "@/lib/quote-followup-outcomes";
@@ -102,6 +112,15 @@ function pickLatestDate(values: Array<string | null | undefined>): Date | null {
 
 function dedupe(items: Array<string | null | undefined>): string[] {
   return [...new Set(items.filter((item): item is string => typeof item === "string" && item.trim().length > 0))];
+}
+
+function formatFactLabel(value: string | null | undefined): string {
+  if (typeof value !== "string" || value.trim().length === 0) return "Unknown";
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function extractPreferredMissingAngle(memory: SalesAgentMemoryRecord): string | null {
@@ -230,6 +249,7 @@ export function buildSalesAgentNextAction(input: {
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
   mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
   quoteAccuracyOutcomeSummary?: QuoteAccuracyOutcomeSummary | null;
+  quoteHotWindowOutcomeSummary?: QuoteHotWindowOutcomeSummary | null;
   quoteCloseOutcomeSummary?: QuoteCloseOutcomeSummary | null;
   reactivationOutcomeSummary?: ReactivationOutcomeSummary | null;
   quoteFollowupOutcomeSummary?: QuoteFollowupOutcomeSummary | null;
@@ -321,9 +341,37 @@ export function buildSalesAgentNextAction(input: {
     input.quoteFollowupOutcomeSummary,
     quoteFollowupLearningScope,
   );
+  const keepQuoteFollowupShort = shouldKeepQuoteFollowupShort(
+    input.quoteFollowupOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
+  const keepQuoteFollowupSingleAsk = shouldKeepQuoteFollowupSingleAsk(
+    input.quoteFollowupOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
+  const openQuoteFollowupWithPhotoAsk = shouldOpenQuoteFollowupWithPhotoAsk(
+    input.quoteFollowupOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
+  const avoidHardQuoteBookingAsk = shouldAvoidHardQuoteBookingAsk(
+    input.quoteFollowupOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
   const keepSofterQuoteClose = shouldUseSofterQuoteClose(input.quoteCloseOutcomeSummary);
   const keepQuoteEstimateProvisional = shouldKeepQuoteEstimateProvisional(
     input.quoteAccuracyOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
+  const learnedQuoteHotWindow = getLearnedQuoteHotWindow(
+    input.quoteHotWindowOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
+  const quoteUrgencyDecaysFast = doesQuoteUrgencyDecayFast(
+    input.quoteHotWindowOutcomeSummary,
+    quoteFollowupLearningScope,
+  );
+  const sameDayQuoteWindowStillStrong = isSameDayQuoteWindowStillStrong(
+    input.quoteHotWindowOutcomeSummary,
     quoteFollowupLearningScope,
   );
   const keepSofterReactivation = shouldUseSofterReactivation(input.reactivationOutcomeSummary);
@@ -469,6 +517,14 @@ export function buildSalesAgentNextAction(input: {
   if (hasUpcomingAppointment) {
     const preservationLearning = input.appointmentPreservationOutcomeSummary;
     const reminderLearning = input.appointmentReminderOutcomeSummary;
+    const appointmentTypeKey =
+      context.nextAppointment?.type === "estimate" ||
+      context.nextAppointment?.type === "in_person_quote" ||
+      context.nextAppointment?.type === "job"
+        ? context.nextAppointment.type
+        : "other";
+    const appointmentTypeRisk =
+      preservationLearning?.byAppointmentType?.[appointmentTypeKey] ?? null;
     const preferredReminderWindow =
       reminderLearning?.learned.preferredWindow === "24h"
         ? "24 hour"
@@ -497,6 +553,11 @@ export function buildSalesAgentNextAction(input: {
         strongestTouchKind ? `Recent booked jobs are being preserved best after ${strongestTouchKind}.` : null,
         reminderLearning?.learned.rescheduleSavesWorking
           ? "Recent reschedule requests are turning back into kept appointments often enough that keeping the reschedule path easy is paying off."
+          : null,
+        appointmentTypeRisk && appointmentTypeRisk.attempts >= 4
+          ? `${formatFactLabel(appointmentTypeKey)} appointments are currently canceling or no-showing ${Math.round(
+              (appointmentTypeRisk.canceledRate + appointmentTypeRisk.noShowRate) * 100,
+            )}% of the time after confirmation touches.`
           : null,
         preservationLearning?.learned.needsHumanBackup
           ? "Recent booked jobs are still slipping into cancellations or no-shows often enough that shakier appointments may need a human backup touch."
@@ -792,6 +853,9 @@ export function buildSalesAgentNextAction(input: {
 
   if ((hasInstantQuote || hasFormalQuote) && context.derived.bookingReadiness !== "low") {
     const effectiveQuoteFollowupChannel = dormantQuoteLead ? reactivationChannel : quoteCloseChannel;
+    const quoteAgeHours =
+      latestQuoteCreatedAt ? (now.getTime() - latestQuoteCreatedAt.getTime()) / 3_600_000 : null;
+    const quoteStillHot = sameDayQuoteWindowStillStrong && quoteAgeHours !== null && quoteAgeHours <= 24;
     return {
       actionType: "follow_up_quote",
       channel: effectiveQuoteFollowupChannel,
@@ -803,6 +867,8 @@ export function buildSalesAgentNextAction(input: {
             ? "low"
             : currentFollowupDepth >= 2 && !secondQuoteFollowupStillWorthwhile
               ? "normal"
+              : quoteStillHot && !lowConfidenceQuoteAccuracyRisk
+                ? "high"
           : context.derived.bookingReadiness === "high" && !lowConfidenceQuoteAccuracyRisk
             ? "high"
             : "normal",
@@ -832,6 +898,15 @@ export function buildSalesAgentNextAction(input: {
             ? "Recent completed jobs are finishing above the original instant range often enough that this quote should stay framed as a working estimate until tightened."
             : "Recent completed jobs are landing outside the original instant range often enough that this quote should stay framed as a working estimate, not a locked-in price."
           : null,
+        learnedQuoteHotWindow
+          ? `Recent ${learnedQuoteHotWindow === "slow_burn" ? "quote bookings are arriving later than same day" : `quote bookings are hottest in the ${learnedQuoteHotWindow.replace(/_/g, " ")}`} .`.replace(" .", ".")
+          : null,
+        quoteUrgencyDecaysFast
+          ? "Recent quote booking rates are dropping off quickly after the early hot window."
+          : null,
+        quoteStillHot
+          ? "This quote is still inside the segment's strong same-day booking window."
+          : null,
         currentFollowupDepth >= 2 && !secondQuoteFollowupStillWorthwhile
           ? "Recent second-touch quote follow-ups are not outperforming enough to justify repeated pushes."
           : null,
@@ -840,6 +915,18 @@ export function buildSalesAgentNextAction(input: {
           : null,
         keepQuoteFollowupDepthLight
           ? "Recent later-stage quote follow-ups are performing better when they stay light instead of stacking repeated pushes."
+          : null,
+        keepQuoteFollowupShort
+          ? "Recent quote follow-ups are booking better when they stay short."
+          : null,
+        keepQuoteFollowupSingleAsk
+          ? "Recent quote follow-ups are booking better with one clear ask."
+          : null,
+        openQuoteFollowupWithPhotoAsk
+          ? "Recent quote follow-ups are booking better when they lead with one quick photo or walkthrough ask."
+          : null,
+        avoidHardQuoteBookingAsk
+          ? "Recent quote follow-ups are underperforming when they push too hard for booking."
           : null,
         dormantQuoteLead && keepSofterReactivation
           ? "Recent dormant lead reactivations are reopening weakly overall, so a softer reopen is safer than a hard booking push."

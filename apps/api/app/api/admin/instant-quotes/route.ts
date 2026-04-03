@@ -10,6 +10,7 @@ import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteFollowupOutcomeSummary } from "@/lib/quote-followup-outcomes";
 import { loadQuoteAccuracyOutcomeSummary } from "@/lib/quote-accuracy-outcomes";
+import { loadQuoteHotWindowOutcomeSummary } from "@/lib/quote-hot-window-outcomes";
 import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
 import { isAdminRequest } from "../../web/admin";
@@ -36,6 +37,7 @@ export async function GET(request: NextRequest) {
   const missingInfoSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSummary = await loadObjectionSaveOutcomeSummary(db);
   const quoteAccuracySummary = await loadQuoteAccuracyOutcomeSummary(db);
+  const quoteHotWindowSummary = await loadQuoteHotWindowOutcomeSummary(db);
   const quoteCloseSummary = await loadQuoteCloseOutcomeSummary(db);
   const followupSummary = await loadQuoteFollowupOutcomeSummary(db);
   const reactivationSummary = await loadReactivationOutcomeSummary(db);
@@ -86,6 +88,7 @@ export async function GET(request: NextRequest) {
       missingInfoSummary,
       objectionSummary,
       quoteAccuracySummary,
+      quoteHotWindowSummary,
       quoteCloseSummary,
       followupSummary,
       reactivationSummary,
@@ -175,6 +178,7 @@ export async function GET(request: NextRequest) {
     missingInfoSummary,
     objectionSummary,
     quoteAccuracySummary,
+    quoteHotWindowSummary,
     quoteCloseSummary,
     followupSummary,
     reactivationSummary,
