@@ -4,6 +4,7 @@ import { getDb } from "@/db";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
+import { loadChannelHandoffOutcomeSummary } from "@/lib/channel-handoff-outcomes";
 import { loadFirstResponseOutcomeSummary } from "@/lib/first-response-outcomes";
 import {
   buildSalesAgentNextAction,
@@ -77,6 +78,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
   const db = getDb();
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
   const appointmentPreservationOutcomeSummary = await loadAppointmentPreservationOutcomeSummary(db);
+  const channelHandoffOutcomeSummary = await loadChannelHandoffOutcomeSummary(db);
   const firstResponseOutcomeSummary = await loadFirstResponseOutcomeSummary(db);
   const liveContext = await loadOmniLeadContext(db, {
     contactId: contactIdTrimmed,
@@ -121,6 +123,7 @@ export async function POST(request: NextRequest, context: RouteContext): Promise
       }),
       appointmentPreservationOutcomeSummary,
       appointmentReminderOutcomeSummary,
+      channelHandoffOutcomeSummary,
       firstResponseOutcomeSummary,
       missingInfoOutcomeSummary,
       objectionSaveOutcomeSummary,

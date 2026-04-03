@@ -3,6 +3,12 @@ import { getDb, salesAgentNextActions } from "@/db";
 import type { AppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import type { AppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import {
+  isDmSmsHandoffWorthwhile,
+  isDmSmsTransitionHealthy,
+  shouldKeepDmSmsHandoffLight,
+  type ChannelHandoffOutcomeSummary,
+} from "@/lib/channel-handoff-outcomes";
+import {
   getFirstResponseLearningScope,
   getPreferredFirstResponseChannel,
   shouldPreferFastFirstResponse,
@@ -211,6 +217,7 @@ export function buildSalesAgentNextAction(input: {
   memory: SalesAgentMemoryRecord;
   appointmentPreservationOutcomeSummary?: AppointmentPreservationOutcomeSummary | null;
   appointmentReminderOutcomeSummary?: AppointmentReminderOutcomeSummary | null;
+  channelHandoffOutcomeSummary?: ChannelHandoffOutcomeSummary | null;
   firstResponseOutcomeSummary?: FirstResponseOutcomeSummary | null;
   missingInfoOutcomeSummary?: MissingInfoOutcomeSummary | null;
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
@@ -320,6 +327,9 @@ export function buildSalesAgentNextAction(input: {
     input.quoteAccuracyOutcomeSummary,
     quoteFollowupLearningScope,
   );
+  const dmSmsHandoffWorthwhile = isDmSmsHandoffWorthwhile(input.channelHandoffOutcomeSummary);
+  const keepDmSmsHandoffLight = shouldKeepDmSmsHandoffLight(input.channelHandoffOutcomeSummary);
+  const dmSmsTransitionHealthy = isDmSmsTransitionHealthy(input.channelHandoffOutcomeSummary);
   const latestQuoteCreatedAt = getLatestQuoteCreatedAt(context);
   const latestInboundAt = pickLatestDate(context.channelSummary.map((row) => row.lastInboundAt));
   const lowConfidenceQuoteAccuracyRisk = Boolean(
@@ -557,14 +567,25 @@ export function buildSalesAgentNextAction(input: {
       actionType: "dm_sms_handoff",
       channel: "sms",
       status: "open",
-      priority: "high",
-      confidence: "medium",
-      summary: "Move this lead from Messenger to text and keep the conversation going there.",
+      priority: dmSmsHandoffWorthwhile ? "high" : "normal",
+      confidence: keepDmSmsHandoffLight ? "low" : "medium",
+      summary: keepDmSmsHandoffLight
+        ? "Move this lead from Messenger to text with a light handoff, not a hard push."
+        : "Move this lead from Messenger to text and keep the conversation going there.",
       reason: dmFollowupStrategy.summary,
       facts: dedupe([
         ...dmFollowupStrategy.facts,
         context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
+        dmSmsTransitionHealthy
+          ? "Recent Messenger to text handoffs are carrying over into SMS replies often enough to keep using when DM goes quiet."
+          : null,
+        keepDmSmsHandoffLight
+          ? "Recent Messenger to text handoffs are often not carrying over into SMS replies, so keep the handoff light and only use it on more qualified quiet leads."
+          : null,
+        !dmSmsHandoffWorthwhile
+          ? "Recent Messenger to text handoffs are not reopening strongly enough to justify a hard handoff push."
+          : null,
       ]),
       dueAt: now.toISOString(),
       source: "rules_v1",

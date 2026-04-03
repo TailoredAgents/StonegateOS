@@ -142,6 +142,24 @@ type FirstResponseSummaryDto = FirstResponseSliceDto & {
   };
 };
 
+type ChannelHandoffSummaryDto = {
+  windowStart: string;
+  attempts: number;
+  reopened: number;
+  reopenRate: number;
+  transitionedToSms: number;
+  smsTransitionRate: number;
+  stayedInDm: number;
+  stayDmRate: number;
+  booked: number;
+  bookRate: number;
+  learned: {
+    worthHandoff: boolean;
+    keepLighter: boolean;
+    smsTransitionHealthy: boolean;
+  };
+};
+
 type ObjectionBucketDto = {
   attempts: number;
   reopened: number;
@@ -600,6 +618,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
     summary?: InstantQuoteSummaryDto;
     appointmentPreservationSummary?: AppointmentPreservationSummaryDto;
     appointmentReminderSummary?: AppointmentReminderSummaryDto;
+    channelHandoffSummary?: ChannelHandoffSummaryDto;
     firstResponseSummary?: FirstResponseSummaryDto;
     missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
@@ -612,6 +631,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const summary = data.summary;
   const appointmentPreservationSummary = data.appointmentPreservationSummary;
   const appointmentReminderSummary = data.appointmentReminderSummary;
+  const channelHandoffSummary = data.channelHandoffSummary;
   const firstResponseSummary = data.firstResponseSummary;
   const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
@@ -687,6 +707,36 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {renderFirstResponseLearning("Brush leads", firstResponseSummary.byServiceFamily.brush)}
             {renderFirstResponseLearning("Facebook-sourced", firstResponseSummary.bySourceFamily.facebook)}
             {renderFirstResponseLearning("Public-site sourced", firstResponseSummary.bySourceFamily.public_site)}
+          </div>
+        </div>
+      ) : null}
+      {channelHandoffSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Messenger handoff learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks real Messenger to SMS handoffs and whether they reopened the lead, actually shifted the conversation into text, and still booked.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-600">
+            Attempts: {channelHandoffSummary.attempts} | Reopened: {channelHandoffSummary.reopened} (
+            {formatPercent(channelHandoffSummary.reopenRate)}) | Booked later: {channelHandoffSummary.booked} (
+            {formatPercent(channelHandoffSummary.bookRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            Shifted into SMS {formatPercent(channelHandoffSummary.smsTransitionRate)} | Stayed in Messenger{" "}
+            {formatPercent(channelHandoffSummary.stayDmRate)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {channelHandoffSummary.learned.smsTransitionHealthy
+              ? "Messenger to SMS handoffs are carrying into text reliably enough right now."
+              : "No strong SMS-transition health signal yet."}
+            {" | "}
+            {channelHandoffSummary.learned.keepLighter
+              ? "Keep handoffs light. Hard transitions are stalling too often."
+              : "No strong keep-it-light warning yet."}
+            {" | "}
+            {channelHandoffSummary.learned.worthHandoff
+              ? "Messenger to SMS handoff is still worth using on the right quiet leads."
+              : "Messenger to SMS handoff is underperforming enough that it should stay selective."}
           </div>
         </div>
       ) : null}
