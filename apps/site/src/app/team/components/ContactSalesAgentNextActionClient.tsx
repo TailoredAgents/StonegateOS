@@ -38,6 +38,7 @@ type NextActionPayload = {
     } | null;
     derived?: {
       dmEntrySource?: "facebook_ad_lead" | "organic_messenger" | "unknown" | null;
+      exceptionSignals?: string[] | null;
     } | null;
     automation?: Array<{
       channel?: string | null;
@@ -172,6 +173,11 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
   const executionState = payload?.executionState ?? null;
   const autopilot = payload?.autopilot ?? null;
   const dmEntrySource = payload?.liveContext?.derived?.dmEntrySource ?? null;
+  const exceptionSignals = Array.isArray(payload?.liveContext?.derived?.exceptionSignals)
+    ? payload?.liveContext?.derived?.exceptionSignals.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : [];
 
   const runControl = React.useCallback(
     async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
@@ -214,6 +220,11 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             {learningSignalFact ? (
               <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
                 {learningSignalFact}
+              </div>
+            ) : null}
+            {exceptionSignals.length > 0 ? (
+              <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-800">
+                Human review: {exceptionSignals.map((signal) => formatLabel(signal)).join(", ")}
               </div>
             ) : null}
           </>
@@ -384,6 +395,12 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             {learningSignalFact ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
                 Learned signal: {learningSignalFact}
+              </div>
+            ) : null}
+
+            {exceptionSignals.length > 0 ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-800">
+                Human review reason: {exceptionSignals.map((signal) => formatLabel(signal)).join(", ")}
               </div>
             ) : null}
 

@@ -255,12 +255,19 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
           tone: "warn" as const,
         }
       : automationState?.paused
-        ? {
-        code: "paused",
-        label: "Paused",
-        detail: "Automation is paused on the current planner channel.",
-        tone: "warn" as const,
+      ? {
+          code: "paused",
+          label: "Paused",
+          detail: "Automation is paused on the current planner channel.",
+          tone: "warn" as const,
       }
+        : nextAction?.actionType === "human_follow_up" && (liveContext.derived.exceptionSignals?.length ?? 0) > 0
+          ? {
+              code: "human_review",
+              label: "Needs human review",
+              detail: nextAction.summary ?? "This lead should not be auto-handled until a human reviews the risk.",
+              tone: "bad" as const,
+            }
         : channelMode === "off"
           ? {
               code: "mode_off",

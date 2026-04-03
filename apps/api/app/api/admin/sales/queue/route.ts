@@ -936,10 +936,10 @@ export async function GET(request: NextRequest): Promise<Response> {
                 }
               : nextAction?.actionType === "human_follow_up"
                 ? {
-                    code: "human_takeover",
-                    label: "Human takeover",
-                    detail: nextAction?.summary ?? "Automation is blocked for this lead.",
-                    tone: "warn" as const,
+                    code: "human_review",
+                    label: "Needs human review",
+                    detail: nextAction?.summary ?? "This lead should not be auto-handled until a human reviews it.",
+                    tone: "bad" as const,
                   }
                 : nextAction?.actionType === "do_not_contact"
                   ? {
