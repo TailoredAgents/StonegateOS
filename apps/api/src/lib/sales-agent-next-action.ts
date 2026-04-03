@@ -10,6 +10,7 @@ import {
 } from "@/lib/missing-info-outcomes";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 import {
+  getObjectionSaveLearningScope,
   getPreferredObjectionSaveChannel,
   shouldUseSofterObjectionSave,
   type ObjectionSaveOutcomeSummary,
@@ -250,8 +251,14 @@ export function buildSalesAgentNextAction(input: {
     input.quoteFollowupOutcomeSummary,
     quoteFollowupLearningScope,
   );
+  const objectionSaveLearningScope = getObjectionSaveLearningScope({
+    objections: context.derived.objections,
+  });
   const objectionSaveChannel = (() => {
-    const learned = getPreferredObjectionSaveChannel(input.objectionSaveOutcomeSummary);
+    const learned = getPreferredObjectionSaveChannel(
+      input.objectionSaveOutcomeSummary,
+      objectionSaveLearningScope,
+    );
     if (learned === "sms" && hasChannelAvailable(context, "sms")) return "sms";
     if (learned === "dm" && hasChannelAvailable(context, "dm")) return "dm";
     return quoteFollowupChannel;
@@ -279,7 +286,10 @@ export function buildSalesAgentNextAction(input: {
   const reactivationWorthwhile = isReactivationWorthwhile(input.reactivationOutcomeSummary);
   const keepSingleMissingInfoAsk = shouldKeepSingleMissingInfoAsk(input.missingInfoOutcomeSummary);
   const leanIntoMissingInfoRequests = shouldLeanIntoMissingInfoRequests(input.missingInfoOutcomeSummary);
-  const keepSofterObjectionSave = shouldUseSofterObjectionSave(input.objectionSaveOutcomeSummary);
+  const keepSofterObjectionSave = shouldUseSofterObjectionSave(
+    input.objectionSaveOutcomeSummary,
+    objectionSaveLearningScope,
+  );
   const tightenLowConfidenceQuoteEstimates = shouldTightenLowConfidenceQuoteEstimates(
     input.quoteAccuracyOutcomeSummary,
     quoteFollowupLearningScope,
@@ -533,11 +543,14 @@ export function buildSalesAgentNextAction(input: {
       facts: dedupe([
         memory.pricingContext,
         "Known objection: price",
+        objectionSaveLearningScope.objectionType
+          ? `Objection type: ${objectionSaveLearningScope.objectionType.replace(/_/g, " ")}`
+          : null,
         objectionSaveChannel && objectionSaveChannel !== quoteFollowupChannel
-          ? `Recent objection-save attempts are reopening better on ${objectionSaveChannel.toUpperCase()}.`
+          ? `Recent ${objectionSaveLearningScope.objectionType ? objectionSaveLearningScope.objectionType.replace(/_/g, " ") : "objection"} saves are reopening better on ${objectionSaveChannel.toUpperCase()}.`
           : null,
         keepSofterObjectionSave
-          ? "Recent objection saves are reopening weakly overall, so a short low-pressure reopen is safer than a hard push."
+          ? `Recent ${objectionSaveLearningScope.objectionType ? objectionSaveLearningScope.objectionType.replace(/_/g, " ") : "objection"} saves are reopening weakly, so a short low-pressure reopen is safer than a hard push.`
           : null,
         quoteFollowupChannel && quoteFollowupChannel !== preferredChannel
           ? `Recent quote follow-ups are booking better on ${quoteFollowupChannel.toUpperCase()}.`

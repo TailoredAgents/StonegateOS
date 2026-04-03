@@ -3,6 +3,7 @@ import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 
 type DbExecutor = ReturnType<typeof getDb>;
 type ObjectionChannel = "sms" | "dm" | "email";
+type ObjectionType = "price" | "comparison_shopping" | "decision_maker" | "timing";
 
 type OutcomeBucket = {
   attempts: number;
@@ -12,8 +13,7 @@ type OutcomeBucket = {
   bookRate: number;
 };
 
-export type ObjectionSaveOutcomeSummary = {
-  windowStart: string;
+type ObjectionOutcomeSlice = {
   attempts: number;
   reopened: number;
   reopenRate: number;
@@ -26,8 +26,18 @@ export type ObjectionSaveOutcomeSummary = {
   };
 };
 
+export type ObjectionSaveLearningScope = {
+  objectionType?: ObjectionType | null;
+};
+
+export type ObjectionSaveOutcomeSummary = ObjectionOutcomeSlice & {
+  windowStart: string;
+  byType: Record<ObjectionType, ObjectionOutcomeSlice>;
+};
+
 type ObjectionOutcomeRow = {
   channel: ObjectionChannel;
+  objectionType: ObjectionType;
   reopened: boolean;
   booked: boolean;
 };
@@ -50,7 +60,7 @@ function summarize(rows: ObjectionOutcomeRow[]): OutcomeBucket {
 }
 
 function getPreferredChannel(
-  summary: ObjectionSaveOutcomeSummary,
+  summary: ObjectionOutcomeSlice,
 ): "sms" | "dm" | null {
   const sms = summary.byChannel.sms;
   const dm = summary.byChannel.dm;
@@ -63,9 +73,73 @@ function getPreferredChannel(
   return null;
 }
 
-function shouldKeepSofter(summary: ObjectionSaveOutcomeSummary): boolean {
+function shouldKeepSofter(summary: ObjectionOutcomeSlice): boolean {
   if (summary.attempts < 6) return false;
   return summary.reopenRate < 0.25;
+}
+
+function buildSlice(rows: ObjectionOutcomeRow[]): ObjectionOutcomeSlice {
+  const overall = summarize(rows);
+  const slice: ObjectionOutcomeSlice = {
+    attempts: overall.attempts,
+    reopened: overall.reopened,
+    reopenRate: overall.reopenRate,
+    booked: overall.booked,
+    bookRate: overall.bookRate,
+    byChannel: {
+      sms: summarize(rows.filter((row) => row.channel === "sms")),
+      dm: summarize(rows.filter((row) => row.channel === "dm")),
+      email: summarize(rows.filter((row) => row.channel === "email")),
+    },
+    learned: {
+      preferredChannel: null,
+      keepSofter: false,
+    },
+  };
+  slice.learned.preferredChannel = getPreferredChannel(slice);
+  slice.learned.keepSofter = shouldKeepSofter(slice);
+  return slice;
+}
+
+function emptySlice(): ObjectionOutcomeSlice {
+  return buildSlice([]);
+}
+
+function resolveScopedSummary(
+  summary: ObjectionSaveOutcomeSummary | null | undefined,
+  scope?: ObjectionSaveLearningScope | null,
+): ObjectionOutcomeSlice {
+  if (!summary) return emptySlice();
+  if (scope?.objectionType && summary.byType[scope.objectionType].attempts >= 4) {
+    return summary.byType[scope.objectionType];
+  }
+  return summary;
+}
+
+export function getObjectionSaveLearningScope(input: {
+  objections?: string[] | null;
+}): ObjectionSaveLearningScope {
+  const objections = new Set(
+    (Array.isArray(input.objections) ? input.objections : []).filter(
+      (item): item is string => typeof item === "string" && item.trim().length > 0,
+    ),
+  );
+  if (objections.has("comparison_shopping")) return { objectionType: "comparison_shopping" };
+  if (objections.has("decision_maker")) return { objectionType: "decision_maker" };
+  if (objections.has("timing")) return { objectionType: "timing" };
+  if (objections.has("price")) return { objectionType: "price" };
+  return { objectionType: null };
+}
+
+function classifyObjectionType(input: {
+  comparisonShopping: boolean;
+  decisionMaker: boolean;
+  timing: boolean;
+}): ObjectionType {
+  if (input.comparisonShopping) return "comparison_shopping";
+  if (input.decisionMaker) return "decision_maker";
+  if (input.timing) return "timing";
+  return "price";
 }
 
 export async function loadObjectionSaveOutcomeSummary(
@@ -78,6 +152,39 @@ export async function loadObjectionSaveOutcomeSummary(
   const rows = await db
     .select({
       channel: sql<ObjectionChannel>`${conversationMessages.channel}`,
+      comparisonShopping: sql<boolean>`
+        exists(
+          select 1
+          from ${conversationMessages} inbound
+          where inbound.thread_id = ${conversationMessages.threadId}
+            and inbound.direction = 'inbound'
+            and coalesce(inbound.received_at, inbound.created_at) <= ${sentAtExpr}
+            and coalesce(inbound.received_at, inbound.created_at) >= ${sentAtExpr} - interval '7 days'
+            and lower(coalesce(inbound.body, '')) ~ '(shopping around|other companies|another company|another quote|other quote|comparing quotes|someone else)'
+        )
+      `,
+      decisionMaker: sql<boolean>`
+        exists(
+          select 1
+          from ${conversationMessages} inbound
+          where inbound.thread_id = ${conversationMessages.threadId}
+            and inbound.direction = 'inbound'
+            and coalesce(inbound.received_at, inbound.created_at) <= ${sentAtExpr}
+            and coalesce(inbound.received_at, inbound.created_at) >= ${sentAtExpr} - interval '7 days'
+            and lower(coalesce(inbound.body, '')) ~ '(need to talk to|need to check with|check with|ask my husband|ask my wife|ask my partner|talk to my partner|talk to the homeowner|check with the owner|landlord|owner)'
+        )
+      `,
+      timing: sql<boolean>`
+        exists(
+          select 1
+          from ${conversationMessages} inbound
+          where inbound.thread_id = ${conversationMessages.threadId}
+            and inbound.direction = 'inbound'
+            and coalesce(inbound.received_at, inbound.created_at) <= ${sentAtExpr}
+            and coalesce(inbound.received_at, inbound.created_at) >= ${sentAtExpr} - interval '7 days'
+            and lower(coalesce(inbound.body, '')) ~ '(not ready|later|next week|next month|not sure yet|still deciding|thinking about it|let me think|need to think|maybe later|hold off for now)'
+        )
+      `,
       reopened: sql<boolean>`
         exists(
           select 1
@@ -113,40 +220,43 @@ export async function loadObjectionSaveOutcomeSummary(
     .orderBy(desc(sentAtExpr))
     .limit(1000);
 
-  const overall = summarize(rows);
-  const byChannel = {
-    sms: summarize(rows.filter((row) => row.channel === "sms")),
-    dm: summarize(rows.filter((row) => row.channel === "dm")),
-    email: summarize(rows.filter((row) => row.channel === "email")),
-  };
+  const normalizedRows: ObjectionOutcomeRow[] = rows.map((row) => ({
+    channel: row.channel,
+    objectionType: classifyObjectionType({
+      comparisonShopping: row.comparisonShopping,
+      decisionMaker: row.decisionMaker,
+      timing: row.timing,
+    }),
+    reopened: row.reopened,
+    booked: row.booked,
+  }));
 
   const summary: ObjectionSaveOutcomeSummary = {
     windowStart: windowStart.toISOString(),
-    attempts: overall.attempts,
-    reopened: overall.reopened,
-    reopenRate: overall.reopenRate,
-    booked: overall.booked,
-    bookRate: overall.bookRate,
-    byChannel,
-    learned: {
-      preferredChannel: null,
-      keepSofter: false,
+    ...buildSlice(normalizedRows),
+    byType: {
+      price: buildSlice(normalizedRows.filter((row) => row.objectionType === "price")),
+      comparison_shopping: buildSlice(
+        normalizedRows.filter((row) => row.objectionType === "comparison_shopping"),
+      ),
+      decision_maker: buildSlice(normalizedRows.filter((row) => row.objectionType === "decision_maker")),
+      timing: buildSlice(normalizedRows.filter((row) => row.objectionType === "timing")),
     },
   };
 
-  summary.learned.preferredChannel = getPreferredChannel(summary);
-  summary.learned.keepSofter = shouldKeepSofter(summary);
   return summary;
 }
 
 export function getPreferredObjectionSaveChannel(
   summary: ObjectionSaveOutcomeSummary | null | undefined,
+  scope?: ObjectionSaveLearningScope | null,
 ): "sms" | "dm" | null {
-  return summary?.learned.preferredChannel ?? null;
+  return resolveScopedSummary(summary, scope).learned.preferredChannel;
 }
 
 export function shouldUseSofterObjectionSave(
   summary: ObjectionSaveOutcomeSummary | null | undefined,
+  scope?: ObjectionSaveLearningScope | null,
 ): boolean {
-  return summary?.learned.keepSofter === true;
+  return resolveScopedSummary(summary, scope).learned.keepSofter;
 }

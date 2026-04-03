@@ -151,6 +151,27 @@ type ObjectionSummaryDto = {
     dm: ObjectionBucketDto;
     email: ObjectionBucketDto;
   };
+  byType: {
+    price: {
+      attempts: number;
+      reopened: number;
+      reopenRate: number;
+      booked: number;
+      bookRate: number;
+      byChannel: {
+        sms: ObjectionBucketDto;
+        dm: ObjectionBucketDto;
+        email: ObjectionBucketDto;
+      };
+      learned: {
+        preferredChannel: "sms" | "dm" | null;
+        keepSofter: boolean;
+      };
+    };
+    comparison_shopping: ObjectionSummaryDto["byType"]["price"];
+    decision_maker: ObjectionSummaryDto["byType"]["price"];
+    timing: ObjectionSummaryDto["byType"]["price"];
+  };
   learned: {
     preferredChannel: "sms" | "dm" | null;
     keepSofter: boolean;
@@ -464,6 +485,36 @@ function renderQuoteAccuracyLearning(
   );
 }
 
+function renderObjectionLearning(
+  label: string,
+  summary: ObjectionSummaryDto["byType"]["price"],
+): React.ReactElement {
+  const preferredChannel =
+    summary.learned.preferredChannel === "sms"
+      ? "SMS"
+      : summary.learned.preferredChannel === "dm"
+        ? "Messenger"
+        : null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="font-semibold text-slate-900">{label}</div>
+      <div className="mt-1 text-[11px] text-slate-600">
+        Attempts: {summary.attempts} | Reopened: {summary.reopened} ({formatPercent(summary.reopenRate)})
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        SMS reopen {formatPercent(summary.byChannel.sms.reopenRate)} | Messenger reopen{" "}
+        {formatPercent(summary.byChannel.dm.reopenRate)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        {preferredChannel ? `Learned channel lean: ${preferredChannel}` : "Learned channel lean: not strong enough yet"}
+        {" | "}
+        {summary.learned.keepSofter ? "Softer save is safer." : "No strong softer-save warning yet."}
+      </div>
+    </div>
+  );
+}
+
 export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const res = await callAdminApi("/api/admin/instant-quotes?limit=25");
   if (!res.ok) {
@@ -689,6 +740,12 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {objectionSummary.learned.keepSofter
               ? "Low-pressure reopens are safer right now."
               : "No strong softer-save warning yet."}
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {renderObjectionLearning("Price only", objectionSummary.byType.price)}
+            {renderObjectionLearning("Comparison shopping", objectionSummary.byType.comparison_shopping)}
+            {renderObjectionLearning("Decision maker", objectionSummary.byType.decision_maker)}
+            {renderObjectionLearning("Timing hesitation", objectionSummary.byType.timing)}
           </div>
         </div>
       ) : null}
