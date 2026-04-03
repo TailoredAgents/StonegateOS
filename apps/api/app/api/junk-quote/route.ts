@@ -234,6 +234,7 @@ function buildQuoteRequestOmniContext(body: z.infer<typeof RequestSchema>): Omni
     openTasks: [],
     recentNotes: [],
     latestCall: null,
+    mediaAnalysis: null,
     channelSummary: [],
     recentMessages: trimmedNotes
       ? [
@@ -276,6 +277,7 @@ function buildQuoteRequestOmniContext(body: z.infer<typeof RequestSchema>): Omni
       bookingReadiness: "low",
       quoteConfidence: Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0 ? "medium" : "low",
       missingFields: [],
+      exceptionSignals: [],
     },
   };
 }

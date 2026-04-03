@@ -238,6 +238,53 @@ function getLatestQuoteCreatedAt(context: OmniLeadContext): Date | null {
   return pickLatestDate([context.instantQuote?.createdAt ?? null, context.formalQuote?.createdAt ?? null]);
 }
 
+function buildExceptionRouting(context: OmniLeadContext): {
+  summary: string;
+  reason: string;
+  facts: string[];
+} | null {
+  const signals = Array.isArray(context.derived.exceptionSignals) ? context.derived.exceptionSignals : [];
+  if (signals.length === 0) return null;
+
+  if (signals.includes("hazardous_scope")) {
+    return {
+      summary: "Human review needed before replying because the scope may be hazardous or unsupported.",
+      reason: "Hazardous or unsupported scope signals were found in the recent lead context.",
+      facts: dedupe([
+        "Possible hazardous or unsupported material is mentioned in the lead context.",
+        context.mediaAnalysis?.riskFlags.length ? `Media risk flags: ${context.mediaAnalysis.riskFlags.join(", ")}.` : null,
+        context.pipeline.notes,
+      ]),
+    };
+  }
+
+  if (signals.includes("high_risk_demo_scope")) {
+    return {
+      summary: "Human review needed before replying because this demolition scope looks high risk.",
+      reason: "The lead appears to involve a larger or structural demolition job that should not be auto-handled.",
+      facts: dedupe([
+        "High-risk demolition wording was found in the recent lead context.",
+        context.latestLead?.notes,
+        context.instantQuote?.notes,
+      ]),
+    };
+  }
+
+  if (signals.includes("frustrated_or_dispute")) {
+    return {
+      summary: "Human review needed before the next touch because the lead appears frustrated or in dispute.",
+      reason: "Recent language suggests frustration, complaint risk, or a dispute.",
+      facts: dedupe([
+        "Frustration or dispute wording was found in recent inbound context.",
+        context.derived.lastHumanSummary,
+        context.pipeline.notes,
+      ]),
+    };
+  }
+
+  return null;
+}
+
 export function buildSalesAgentNextAction(input: {
   context: OmniLeadContext;
   memory: SalesAgentMemoryRecord;
@@ -510,6 +557,22 @@ export function buildSalesAgentNextAction(input: {
         memory.lastHumanSummary,
       ]),
       dueAt: nextAutomationFollowup?.toISOString() ?? null,
+      source: "rules_v1",
+    };
+  }
+
+  const exceptionRouting = buildExceptionRouting(context);
+  if (exceptionRouting) {
+    return {
+      actionType: "human_follow_up",
+      channel: preferredChannel,
+      status: "blocked",
+      priority: "urgent",
+      confidence: "high",
+      summary: exceptionRouting.summary,
+      reason: exceptionRouting.reason,
+      facts: exceptionRouting.facts,
+      dueAt: now.toISOString(),
       source: "rules_v1",
     };
   }

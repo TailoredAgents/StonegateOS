@@ -12,6 +12,7 @@ import {
   instantQuotes,
   leadAutomationStates,
   leads,
+  mediaJobAnalyses,
   properties,
   quotes,
 } from "@/db";
@@ -125,6 +126,62 @@ function detectObjections(messages: Array<{ direction: string; body: string }>):
   if (/(don't call|stop|unsubscribe|leave me alone)/.test(text)) {
     results.add("do_not_contact");
   }
+  return [...results];
+}
+
+function detectExceptionSignals(input: {
+  recentMessages: Array<{ direction: string; body: string }>;
+  latestLeadNotes?: string | null;
+  instantQuoteNotes?: string | null;
+  pipelineNotes?: string | null;
+  latestCallSummary?: string | null;
+  serviceHints: string[];
+  mediaRiskFlags?: string[] | null;
+}): string[] {
+  const inboundText = input.recentMessages
+    .filter((message) => message.direction === "inbound")
+    .map((message) => message.body.toLowerCase())
+    .join("\n");
+  const contextText = [
+    inboundText,
+    input.latestLeadNotes,
+    input.instantQuoteNotes,
+    input.pipelineNotes,
+    input.latestCallSummary,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n")
+    .toLowerCase();
+  const serviceText = input.serviceHints.join(" ").toLowerCase();
+  const riskText = (Array.isArray(input.mediaRiskFlags) ? input.mediaRiskFlags : []).join(" ").toLowerCase();
+  const results = new Set<string>();
+
+  if (
+    /(frustrat|upset|angry|ridiculous|unacceptable|terrible|awful|annoyed|disappointed|still waiting|no one called|nobody called|why didn't|why havent|scam|refund|chargeback|bbb|attorney|lawyer|complaint)/.test(
+      contextText,
+    )
+  ) {
+    results.add("frustrated_or_dispute");
+  }
+
+  if (
+    /(asbestos|biohazard|hazmat|hazardous|medical waste|needles?|sharps|feces|urine|dead animal|carcass|fuel|gasoline|diesel|propane|chemical|solvent|oil spill|mold remediation)/.test(
+      contextText,
+    ) ||
+    /(hazard|unsafe|unknown material)/.test(riskText)
+  ) {
+    results.add("hazardous_scope");
+  }
+
+  if (
+    /demo/.test(serviceText) &&
+    /(full house|whole house|entire house|commercial building|commercial demo|warehouse|load-bearing|load bearing|structural wall|roof removal|foundation|gut renovation|two story structure)/.test(
+      contextText,
+    )
+  ) {
+    results.add("high_risk_demo_scope");
+  }
+
   return [...results];
 }
 
@@ -243,6 +300,13 @@ export type OmniLeadContext = {
     transcript: string | null;
     extracted: Record<string, unknown> | null;
   } | null;
+  mediaAnalysis: {
+    confidence: "low" | "medium" | "high" | null;
+    riskFlags: string[];
+    missingViews: string[];
+    summary: string | null;
+    source: string | null;
+  } | null;
   channelSummary: Array<{
     channel: string;
     threadCount: number;
@@ -276,6 +340,7 @@ export type OmniLeadContext = {
     bookingReadiness: "booked" | "high" | "medium" | "low";
     quoteConfidence: "high" | "medium" | "low";
     missingFields: string[];
+    exceptionSignals: string[];
   };
 };
 
@@ -306,7 +371,7 @@ export async function loadOmniLeadContext(
 
   if (!contact?.id) return null;
 
-  const [pipeline, recentProperties, recentOpenTasks, recentNotes, latestLeadRow, latestCallRow, recentThreadRows, recentMessageRows, latestFormalQuoteRow] =
+  const [pipeline, recentProperties, recentOpenTasks, recentNotes, latestLeadRow, latestCallRow, recentThreadRows, recentMessageRows, latestFormalQuoteRow, latestMediaAnalysisRow] =
     await Promise.all([
       db
         .select({ stage: crmPipeline.stage, notes: crmPipeline.notes })
@@ -423,6 +488,18 @@ export async function loadOmniLeadContext(
         .from(quotes)
         .where(eq(quotes.contactId, contactId))
         .orderBy(desc(quotes.createdAt), desc(quotes.updatedAt))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+      db
+        .select({
+          confidence: mediaJobAnalyses.confidence,
+          riskFlags: mediaJobAnalyses.riskFlags,
+          missingViews: mediaJobAnalyses.missingViews,
+          summary: mediaJobAnalyses.summary,
+          source: mediaJobAnalyses.source,
+        })
+        .from(mediaJobAnalyses)
+        .where(eq(mediaJobAnalyses.contactId, contactId))
         .limit(1)
         .then((rows) => rows[0] ?? null),
     ]);
@@ -629,10 +706,34 @@ export async function loadOmniLeadContext(
     normalizePostalCode(recentProperties[0]?.postalCode ?? null) ??
     (latestInstantQuoteRow ? normalizePostalCode(latestInstantQuoteRow.zip) : null);
   const instantQuoteMediaAnalysis = extractMediaAnalysis(latestInstantQuoteRow?.aiResult);
+  const mediaConfidenceRaw = latestMediaAnalysisRow?.confidence;
+  const mediaConfidence: "low" | "medium" | "high" | null =
+    mediaConfidenceRaw === "low" || mediaConfidenceRaw === "medium" || mediaConfidenceRaw === "high"
+      ? mediaConfidenceRaw
+      : null;
+  const mediaAnalysis = latestMediaAnalysisRow
+    ? {
+        confidence: mediaConfidence,
+        riskFlags: coerceStringArray(latestMediaAnalysisRow.riskFlags),
+        missingViews: coerceStringArray(latestMediaAnalysisRow.missingViews),
+        summary: cleanText(latestMediaAnalysisRow.summary),
+        source: cleanText(latestMediaAnalysisRow.source),
+      }
+    : null;
+  const serviceHints = [
+    ...(latestLead?.servicesRequested ?? []),
+    ...(latestInstantQuoteRow ? coerceStringArray(latestInstantQuoteRow.jobTypes) : []),
+    ...(latestFormalQuoteRow
+      ? Array.isArray(latestFormalQuoteRow.services)
+        ? latestFormalQuoteRow.services.filter((item): item is string => typeof item === "string")
+        : []
+      : []),
+  ];
   const missingFields = Array.from(
     new Set([
       ...omniFacts.missingFields,
       ...(instantQuoteMediaAnalysis.missingViews.length > 0 ? ["one better photo angle"] : []),
+      ...(mediaAnalysis?.missingViews.length ? ["one better photo angle"] : []),
       ...(contact.phoneE164 || contact.phone ? [] : ["phone"]),
       ...(contact.email ? [] : ["email"]),
     ]),
@@ -662,6 +763,15 @@ export async function loadOmniLeadContext(
     cleanText(latestCallRow?.summary) ??
     cleanText(recentNotes[0]?.notes) ??
     cleanText(recentNotes[0]?.title);
+  const exceptionSignals = detectExceptionSignals({
+    recentMessages: recentMessages.map((message) => ({ direction: message.direction, body: message.body })),
+    latestLeadNotes: latestLead?.notes ?? null,
+    instantQuoteNotes: latestInstantQuoteRow?.notes ?? null,
+    pipelineNotes: pipeline?.notes ?? null,
+    latestCallSummary: latestCallRow?.summary ?? null,
+    serviceHints,
+    mediaRiskFlags: mediaAnalysis?.riskFlags ?? [],
+  });
 
   return {
     contact: {
@@ -761,6 +871,7 @@ export async function loadOmniLeadContext(
               : null,
         }
       : null,
+    mediaAnalysis,
     channelSummary,
     recentMessages,
     omniFacts,
@@ -776,6 +887,7 @@ export async function loadOmniLeadContext(
       bookingReadiness,
       quoteConfidence,
       missingFields,
+      exceptionSignals,
     },
   };
 }

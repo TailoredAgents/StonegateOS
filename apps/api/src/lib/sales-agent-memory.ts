@@ -54,6 +54,9 @@ export function buildSalesAgentMemory(context: OmniLeadContext): SalesAgentMemor
     context.latestCall?.summary ? `Latest call: ${compactText(context.latestCall.summary, 240)}` : null,
     context.recentNotes[0]?.notes ? `Latest note: ${compactText(context.recentNotes[0].notes, 180)}` : null,
     context.derived.objections.length ? `Known objections: ${context.derived.objections.join(", ")}.` : null,
+    context.derived.exceptionSignals.length
+      ? `Needs human review for: ${context.derived.exceptionSignals.map((item) => item.replace(/_/g, " ")).join(", ")}.`
+      : null,
     context.derived.missingFields.length ? `Missing info: ${context.derived.missingFields.join(", ")}.` : null,
   ]);
 
