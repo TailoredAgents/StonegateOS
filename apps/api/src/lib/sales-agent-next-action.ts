@@ -11,6 +11,10 @@ import {
 import {
   getFirstResponseLearningScope,
   getPreferredFirstResponseChannel,
+  shouldAvoidHardBookingAskInFirstResponse,
+  shouldKeepFirstResponseShort,
+  shouldKeepFirstResponseSingleAsk,
+  shouldOpenFirstResponseWithPhotoAsk,
   shouldPreferFastFirstResponse,
   type FirstResponseOutcomeSummary,
 } from "@/lib/first-response-outcomes";
@@ -323,6 +327,22 @@ export function buildSalesAgentNextAction(input: {
     input.firstResponseOutcomeSummary,
     firstResponseLearningScope,
   );
+  const keepFirstResponseShort = shouldKeepFirstResponseShort(
+    input.firstResponseOutcomeSummary,
+    firstResponseLearningScope,
+  );
+  const keepFirstResponseSingleAsk = shouldKeepFirstResponseSingleAsk(
+    input.firstResponseOutcomeSummary,
+    firstResponseLearningScope,
+  );
+  const openFirstResponseWithPhotoAsk = shouldOpenFirstResponseWithPhotoAsk(
+    input.firstResponseOutcomeSummary,
+    firstResponseLearningScope,
+  );
+  const avoidHardBookingAskInFirstResponse = shouldAvoidHardBookingAskInFirstResponse(
+    input.firstResponseOutcomeSummary,
+    firstResponseLearningScope,
+  );
   const tightenLowConfidenceQuoteEstimates = shouldTightenLowConfidenceQuoteEstimates(
     input.quoteAccuracyOutcomeSummary,
     quoteFollowupLearningScope,
@@ -544,6 +564,18 @@ export function buildSalesAgentNextAction(input: {
           : null,
         preferFastFirstResponse
           ? "Recent first responses are performing better when they go out within 30 minutes."
+          : null,
+        keepFirstResponseShort
+          ? "Recent first responses are converting better when the opener stays short."
+          : null,
+        keepFirstResponseSingleAsk
+          ? "Recent first responses are converting better when there is one clear ask."
+          : null,
+        openFirstResponseWithPhotoAsk
+          ? "Recent first responses are converting better when the opener quickly asks for photos or a walkthrough."
+          : null,
+        avoidHardBookingAskInFirstResponse
+          ? "Recent first responses are underperforming when they push too hard for booking right away."
           : null,
       ]),
       dueAt: now.toISOString(),

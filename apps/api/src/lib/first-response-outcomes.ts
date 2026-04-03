@@ -10,12 +10,14 @@ type ResponseChannel = "sms" | "dm" | "email";
 type TimingBucket = "fast" | "delayed";
 type ServiceFamily = "junk" | "demo" | "brush" | "unknown";
 type SourceFamily = "facebook" | "public_site" | "other" | "unknown";
+type StyleBucket = "short" | "long" | "single_ask" | "multi_ask" | "photo_ask" | "booking_ask";
 
 type FirstResponseOutcomeRow = {
   leadId: string;
   leadCreatedAt: Date;
   channel: ResponseChannel;
   touchAt: Date;
+  body: string;
   replied: boolean;
   booked: boolean;
   serviceFamily: ServiceFamily;
@@ -38,9 +40,14 @@ type FirstResponseOutcomeSlice = {
   bookRate: number;
   byChannel: Record<ResponseChannel, OutcomeBucket>;
   byTiming: Record<TimingBucket, OutcomeBucket>;
+  byStyle: Record<StyleBucket, OutcomeBucket>;
   learned: {
     preferredChannel: "sms" | "dm" | null;
     preferFast: boolean;
+    keepShort: boolean;
+    keepSingleAsk: boolean;
+    openWithPhotoAsk: boolean;
+    avoidHardBookingAsk: boolean;
   };
 };
 
@@ -114,6 +121,91 @@ function shouldPreferFast(summary: FirstResponseOutcomeSlice): boolean {
   return fast.replyRate >= delayed.replyRate + 0.05;
 }
 
+function isShortOpening(body: string): boolean {
+  return body.trim().length > 0 && body.trim().length <= 220;
+}
+
+function countQuestionMarks(body: string): number {
+  const matches = body.match(/\?/g);
+  return matches ? matches.length : 0;
+}
+
+function isSingleAskOpening(body: string): boolean {
+  const questionCount = countQuestionMarks(body);
+  if (questionCount === 1) return true;
+  if (questionCount >= 2) return false;
+  const normalized = body.toLowerCase();
+  const askHits = [
+    "can you",
+    "could you",
+    "send over",
+    "send a",
+    "text me",
+    "let me know",
+    "what zip",
+    "what day",
+  ].filter((phrase) => normalized.includes(phrase)).length;
+  return askHits === 1;
+}
+
+function isPhotoAskOpening(body: string): boolean {
+  const normalized = body.toLowerCase();
+  return /\b(photo|photos|picture|pictures|pic|pics|video|walkthrough)\b/.test(normalized);
+}
+
+function isBookingAskOpening(body: string): boolean {
+  const normalized = body.toLowerCase();
+  return /\b(book|schedule|get (you )?on the schedule|lock (it )?in|set up (a |the )?(time|appointment))\b/.test(
+    normalized,
+  );
+}
+
+function shouldKeepShort(summary: FirstResponseOutcomeSlice): boolean {
+  const short = summary.byStyle.short;
+  const long = summary.byStyle.long;
+  if (short.attempts < 5) return false;
+  if (long.attempts < 3) return short.replyRate > 0;
+  return short.replyRate >= long.replyRate + 0.05;
+}
+
+function shouldKeepSingleAsk(summary: FirstResponseOutcomeSlice): boolean {
+  const singleAsk = summary.byStyle.single_ask;
+  const multiAsk = summary.byStyle.multi_ask;
+  if (singleAsk.attempts < 5) return false;
+  if (multiAsk.attempts < 3) return singleAsk.replyRate > 0;
+  return singleAsk.replyRate >= multiAsk.replyRate + 0.05;
+}
+
+function shouldOpenWithPhotoAsk(summary: FirstResponseOutcomeSlice): boolean {
+  const photoAsk = summary.byStyle.photo_ask;
+  const noPhotoAskAttempts = Math.max(0, summary.attempts - photoAsk.attempts);
+  const noPhotoAskReplied = Math.max(0, summary.replied - photoAsk.replied);
+  const noPhotoAskBooked = Math.max(0, summary.booked - photoAsk.booked);
+  const noPhotoAskReplyRate = toRate(noPhotoAskReplied, noPhotoAskAttempts);
+  const noPhotoAskBookRate = toRate(noPhotoAskBooked, noPhotoAskAttempts);
+  if (photoAsk.attempts < 5) return false;
+  if (noPhotoAskAttempts < 3) return photoAsk.replyRate > 0;
+  return (
+    photoAsk.replyRate >= noPhotoAskReplyRate + 0.05 ||
+    (photoAsk.replyRate >= noPhotoAskReplyRate && photoAsk.bookRate >= noPhotoAskBookRate + 0.03)
+  );
+}
+
+function shouldAvoidHardBookingAsk(summary: FirstResponseOutcomeSlice): boolean {
+  const bookingAsk = summary.byStyle.booking_ask;
+  const noBookingAskAttempts = Math.max(0, summary.attempts - bookingAsk.attempts);
+  const noBookingAskReplied = Math.max(0, summary.replied - bookingAsk.replied);
+  const noBookingAskBooked = Math.max(0, summary.booked - bookingAsk.booked);
+  const noBookingAskReplyRate = toRate(noBookingAskReplied, noBookingAskAttempts);
+  const noBookingAskBookRate = toRate(noBookingAskBooked, noBookingAskAttempts);
+  if (bookingAsk.attempts < 5) return false;
+  if (noBookingAskAttempts < 3) return bookingAsk.replyRate < 0.15;
+  return (
+    bookingAsk.replyRate + 0.05 <= noBookingAskReplyRate ||
+    bookingAsk.bookRate + 0.03 <= noBookingAskBookRate
+  );
+}
+
 function buildSlice(rows: FirstResponseOutcomeRow[]): FirstResponseOutcomeSlice {
   const replied = rows.filter((row) => row.replied).length;
   const booked = rows.filter((row) => row.booked).length;
@@ -132,13 +224,29 @@ function buildSlice(rows: FirstResponseOutcomeRow[]): FirstResponseOutcomeSlice 
       fast: summarizeBucket(rows.filter((row) => getTimingBucket(row) === "fast")),
       delayed: summarizeBucket(rows.filter((row) => getTimingBucket(row) === "delayed")),
     },
+    byStyle: {
+      short: summarizeBucket(rows.filter((row) => isShortOpening(row.body))),
+      long: summarizeBucket(rows.filter((row) => !isShortOpening(row.body))),
+      single_ask: summarizeBucket(rows.filter((row) => isSingleAskOpening(row.body))),
+      multi_ask: summarizeBucket(rows.filter((row) => !isSingleAskOpening(row.body))),
+      photo_ask: summarizeBucket(rows.filter((row) => isPhotoAskOpening(row.body))),
+      booking_ask: summarizeBucket(rows.filter((row) => isBookingAskOpening(row.body))),
+    },
     learned: {
       preferredChannel: null,
       preferFast: false,
+      keepShort: false,
+      keepSingleAsk: false,
+      openWithPhotoAsk: false,
+      avoidHardBookingAsk: false,
     },
   };
   slice.learned.preferredChannel = getPreferredChannel(slice);
   slice.learned.preferFast = shouldPreferFast(slice);
+  slice.learned.keepShort = shouldKeepShort(slice);
+  slice.learned.keepSingleAsk = shouldKeepSingleAsk(slice);
+  slice.learned.openWithPhotoAsk = shouldOpenWithPhotoAsk(slice);
+  slice.learned.avoidHardBookingAsk = shouldAvoidHardBookingAsk(slice);
   return slice;
 }
 
@@ -197,6 +305,7 @@ export async function loadFirstResponseOutcomeSummary(
       leadCreatedAt: leads.createdAt,
       channel: sql<ResponseChannel>`${conversationMessages.channel}`,
       touchAt: touchAtExpr,
+      body: sql<string>`coalesce(${conversationMessages.body}, '')`,
       replied: sql<boolean>`
         exists(
           select 1
@@ -241,6 +350,7 @@ export async function loadFirstResponseOutcomeSummary(
       leadCreatedAt: row.leadCreatedAt,
       channel: row.channel,
       touchAt: row.touchAt,
+      body: row.body,
       replied: row.replied,
       booked: row.booked,
       serviceFamily: classifyServiceFamily(
@@ -282,6 +392,34 @@ export function shouldPreferFastFirstResponse(
   scope?: QuoteFollowupLearningScope | null,
 ): boolean {
   return resolveScopedSummary(summary, scope).learned.preferFast;
+}
+
+export function shouldKeepFirstResponseShort(
+  summary: FirstResponseOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.keepShort;
+}
+
+export function shouldKeepFirstResponseSingleAsk(
+  summary: FirstResponseOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.keepSingleAsk;
+}
+
+export function shouldOpenFirstResponseWithPhotoAsk(
+  summary: FirstResponseOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.openWithPhotoAsk;
+}
+
+export function shouldAvoidHardBookingAskInFirstResponse(
+  summary: FirstResponseOutcomeSummary | null | undefined,
+  scope?: QuoteFollowupLearningScope | null,
+): boolean {
+  return resolveScopedSummary(summary, scope).learned.avoidHardBookingAsk;
 }
 
 export function getFirstResponseLearningScope(input: {

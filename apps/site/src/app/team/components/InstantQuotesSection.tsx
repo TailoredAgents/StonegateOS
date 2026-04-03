@@ -120,9 +120,21 @@ type FirstResponseSliceDto = {
     fast: FirstResponseBucketDto;
     delayed: FirstResponseBucketDto;
   };
+  byStyle: {
+    short: FirstResponseBucketDto;
+    long: FirstResponseBucketDto;
+    single_ask: FirstResponseBucketDto;
+    multi_ask: FirstResponseBucketDto;
+    photo_ask: FirstResponseBucketDto;
+    booking_ask: FirstResponseBucketDto;
+  };
   learned: {
     preferredChannel: "sms" | "dm" | null;
     preferFast: boolean;
+    keepShort: boolean;
+    keepSingleAsk: boolean;
+    openWithPhotoAsk: boolean;
+    avoidHardBookingAsk: boolean;
   };
 };
 
@@ -548,6 +560,19 @@ function renderFirstResponseLearning(label: string, summary: FirstResponseSliceD
         {preferredChannel ? `Learned channel lean: ${preferredChannel}` : "Learned channel lean: not strong enough yet"}
         {" | "}
         {summary.learned.preferFast ? "Fast first response is outperforming." : "No strong fast-first-touch edge yet."}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        Short opener {formatPercent(summary.byStyle.short.replyRate)} | Single ask {formatPercent(summary.byStyle.single_ask.replyRate)} |
+        Photo ask {formatPercent(summary.byStyle.photo_ask.replyRate)} | Booking ask {formatPercent(summary.byStyle.booking_ask.replyRate)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        {summary.learned.keepShort ? "Short openers are winning." : "No strong short-opener edge yet."}
+        {" | "}
+        {summary.learned.keepSingleAsk ? "One clear ask is performing better." : "No strong single-ask edge yet."}
+        {" | "}
+        {summary.learned.openWithPhotoAsk ? "Photo-first openers are working better." : "No strong photo-first edge yet."}
+        {" | "}
+        {summary.learned.avoidHardBookingAsk ? "Hard booking asks are underperforming on first touch." : "No strong hard-booking warning yet."}
       </div>
     </div>
   );
