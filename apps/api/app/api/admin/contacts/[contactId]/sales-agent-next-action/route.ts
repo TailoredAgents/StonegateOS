@@ -10,6 +10,7 @@ import {
 } from "@/lib/sales-agent-next-action";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
+import { loadFirstResponseOutcomeSummary } from "@/lib/first-response-outcomes";
 import {
   buildSalesAgentMemory,
   getSalesAgentMemory,
@@ -124,6 +125,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   const autopilotPolicy = await getSalesAutopilotPolicy(db);
   const appointmentPreservationOutcomeSummary = await loadAppointmentPreservationOutcomeSummary(db);
   const appointmentReminderOutcomeSummary = await loadAppointmentReminderOutcomeSummary(db);
+  const firstResponseOutcomeSummary = await loadFirstResponseOutcomeSummary(db);
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSaveOutcomeSummary = await loadObjectionSaveOutcomeSummary(db);
@@ -151,6 +153,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
         memory: toMemoryRecord(memory),
         appointmentPreservationOutcomeSummary,
         appointmentReminderOutcomeSummary,
+        firstResponseOutcomeSummary,
         missingInfoOutcomeSummary,
         objectionSaveOutcomeSummary,
         mediaOutcomeSummary,

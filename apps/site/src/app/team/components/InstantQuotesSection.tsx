@@ -97,6 +97,51 @@ type FollowupBucketDto = {
   bookRate: number;
 };
 
+type FirstResponseBucketDto = {
+  attempts: number;
+  replied: number;
+  replyRate: number;
+  booked: number;
+  bookRate: number;
+};
+
+type FirstResponseSliceDto = {
+  attempts: number;
+  replied: number;
+  replyRate: number;
+  booked: number;
+  bookRate: number;
+  byChannel: {
+    sms: FirstResponseBucketDto;
+    dm: FirstResponseBucketDto;
+    email: FirstResponseBucketDto;
+  };
+  byTiming: {
+    fast: FirstResponseBucketDto;
+    delayed: FirstResponseBucketDto;
+  };
+  learned: {
+    preferredChannel: "sms" | "dm" | null;
+    preferFast: boolean;
+  };
+};
+
+type FirstResponseSummaryDto = FirstResponseSliceDto & {
+  windowStart: string;
+  byServiceFamily: {
+    junk: FirstResponseSliceDto;
+    demo: FirstResponseSliceDto;
+    brush: FirstResponseSliceDto;
+    unknown: FirstResponseSliceDto;
+  };
+  bySourceFamily: {
+    facebook: FirstResponseSliceDto;
+    public_site: FirstResponseSliceDto;
+    other: FirstResponseSliceDto;
+    unknown: FirstResponseSliceDto;
+  };
+};
+
 type ObjectionBucketDto = {
   attempts: number;
   reopened: number;
@@ -460,6 +505,36 @@ function renderFollowupLearning(label: string, summary: FollowupSliceDto): React
   );
 }
 
+function renderFirstResponseLearning(label: string, summary: FirstResponseSliceDto): React.ReactElement {
+  const preferredChannel =
+    summary.learned.preferredChannel === "sms"
+      ? "SMS"
+      : summary.learned.preferredChannel === "dm"
+        ? "Messenger"
+        : null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="font-semibold text-slate-900">{label}</div>
+      <div className="mt-1 text-[11px] text-slate-600">
+        First touches: {summary.attempts} | Replied: {summary.replied} ({formatPercent(summary.replyRate)})
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        SMS reply {formatPercent(summary.byChannel.sms.replyRate)} | Messenger reply {formatPercent(summary.byChannel.dm.replyRate)} |
+        Email reply {formatPercent(summary.byChannel.email.replyRate)}
+      </div>
+      <div className="text-[11px] text-slate-500">
+        Fast first touch {formatPercent(summary.byTiming.fast.replyRate)} | Delayed {formatPercent(summary.byTiming.delayed.replyRate)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        {preferredChannel ? `Learned channel lean: ${preferredChannel}` : "Learned channel lean: not strong enough yet"}
+        {" | "}
+        {summary.learned.preferFast ? "Fast first response is outperforming." : "No strong fast-first-touch edge yet."}
+      </div>
+    </div>
+  );
+}
+
 function renderQuoteAccuracyLearning(
   label: string,
   summary: QuoteAccuracySliceDto,
@@ -525,6 +600,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
     summary?: InstantQuoteSummaryDto;
     appointmentPreservationSummary?: AppointmentPreservationSummaryDto;
     appointmentReminderSummary?: AppointmentReminderSummaryDto;
+    firstResponseSummary?: FirstResponseSummaryDto;
     missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
     quoteAccuracySummary?: QuoteAccuracySummaryDto;
@@ -536,6 +612,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const summary = data.summary;
   const appointmentPreservationSummary = data.appointmentPreservationSummary;
   const appointmentReminderSummary = data.appointmentReminderSummary;
+  const firstResponseSummary = data.firstResponseSummary;
   const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
   const quoteAccuracySummary = data.quoteAccuracySummary;
@@ -594,6 +671,22 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {renderFollowupLearning("Brush quotes", followupSummary.byServiceFamily.brush)}
             {renderFollowupLearning("Facebook-sourced", followupSummary.bySourceFamily.facebook)}
             {renderFollowupLearning("Public-site sourced", followupSummary.bySourceFamily.public_site)}
+          </div>
+        </div>
+      ) : null}
+      {firstResponseSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">First-response learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks the first real outbound touch after a new lead arrives and measures whether it turns into a live conversation and eventually books.
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {renderFirstResponseLearning("Overall", firstResponseSummary)}
+            {renderFirstResponseLearning("Junk leads", firstResponseSummary.byServiceFamily.junk)}
+            {renderFirstResponseLearning("Demo leads", firstResponseSummary.byServiceFamily.demo)}
+            {renderFirstResponseLearning("Brush leads", firstResponseSummary.byServiceFamily.brush)}
+            {renderFirstResponseLearning("Facebook-sourced", firstResponseSummary.bySourceFamily.facebook)}
+            {renderFirstResponseLearning("Public-site sourced", firstResponseSummary.bySourceFamily.public_site)}
           </div>
         </div>
       ) : null}

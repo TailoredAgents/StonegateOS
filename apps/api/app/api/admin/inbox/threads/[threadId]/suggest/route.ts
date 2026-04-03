@@ -19,6 +19,7 @@ import { buildSalesAgentMemory, upsertSalesAgentMemory } from "@/lib/sales-agent
 import { buildSalesAgentNextAction, getSalesAgentNextAction, upsertSalesAgentNextAction } from "@/lib/sales-agent-next-action";
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 import { getDmOpeningStrategy } from "@/lib/dm-autopilot";
+import { loadFirstResponseOutcomeSummary } from "@/lib/first-response-outcomes";
 import { getMediaJobAnalysis } from "@/lib/media-job-analysis";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
@@ -776,6 +777,7 @@ export async function POST(
   const builtSalesAgentMemory = leadContext ? buildSalesAgentMemory(leadContext) : null;
   const appointmentPreservationOutcomeSummary = leadContext ? await loadAppointmentPreservationOutcomeSummary(db) : null;
   const appointmentReminderOutcomeSummary = leadContext ? await loadAppointmentReminderOutcomeSummary(db) : null;
+  const firstResponseOutcomeSummary = leadContext ? await loadFirstResponseOutcomeSummary(db) : null;
   const mediaOutcomeSummary = leadContext ? await loadMediaQuoteOutcomeSummary(db) : null;
   const missingInfoOutcomeSummary = leadContext ? await loadMissingInfoOutcomeSummary(db) : null;
   const objectionSaveOutcomeSummary = leadContext ? await loadObjectionSaveOutcomeSummary(db) : null;
@@ -801,6 +803,7 @@ export async function POST(
             memory: builtSalesAgentMemory,
             appointmentPreservationOutcomeSummary,
             appointmentReminderOutcomeSummary,
+            firstResponseOutcomeSummary,
             missingInfoOutcomeSummary,
             objectionSaveOutcomeSummary,
             mediaOutcomeSummary,

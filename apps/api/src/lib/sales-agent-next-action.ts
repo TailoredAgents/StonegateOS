@@ -3,6 +3,12 @@ import { getDb, salesAgentNextActions } from "@/db";
 import type { AppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import type { AppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import {
+  getFirstResponseLearningScope,
+  getPreferredFirstResponseChannel,
+  shouldPreferFastFirstResponse,
+  type FirstResponseOutcomeSummary,
+} from "@/lib/first-response-outcomes";
+import {
   getPreferredMissingInfoChannel,
   shouldKeepSingleMissingInfoAsk,
   shouldLeanIntoMissingInfoRequests,
@@ -205,6 +211,7 @@ export function buildSalesAgentNextAction(input: {
   memory: SalesAgentMemoryRecord;
   appointmentPreservationOutcomeSummary?: AppointmentPreservationOutcomeSummary | null;
   appointmentReminderOutcomeSummary?: AppointmentReminderOutcomeSummary | null;
+  firstResponseOutcomeSummary?: FirstResponseOutcomeSummary | null;
   missingInfoOutcomeSummary?: MissingInfoOutcomeSummary | null;
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
   mediaOutcomeSummary?: MediaQuoteOutcomeSummary | null;
@@ -238,6 +245,12 @@ export function buildSalesAgentNextAction(input: {
     dmObjectionFollowupDelayMinutes: 360,
   };
   const preferredChannel = chooseChannel(context);
+  const firstResponseLearningScope = getFirstResponseLearningScope({
+    latestLeadSource: context.latestLead?.source ?? null,
+    contactSource: context.contact.source ?? null,
+    dmEntrySource: context.derived.dmEntrySource ?? null,
+    latestLeadServices: context.latestLead?.servicesRequested ?? [],
+  });
   const quoteFollowupLearningScope = getQuoteFollowupLearningScope({
     latestLeadSource: context.latestLead?.source ?? null,
     contactSource: context.contact.source ?? null,
@@ -245,6 +258,15 @@ export function buildSalesAgentNextAction(input: {
     latestLeadServices: context.latestLead?.servicesRequested ?? [],
     instantQuoteJobTypes: context.instantQuote?.jobTypes ?? [],
   });
+  const preferredFirstResponseChannel = (() => {
+    const learned = getPreferredFirstResponseChannel(
+      input.firstResponseOutcomeSummary,
+      firstResponseLearningScope,
+    );
+    if (learned === "sms" && hasChannelAvailable(context, "sms")) return "sms";
+    if (learned === "dm" && hasChannelAvailable(context, "dm")) return "dm";
+    return preferredChannel;
+  })();
   const quoteFollowupChannel = chooseQuoteFollowupChannel(
     context,
     preferredChannel,
@@ -289,6 +311,10 @@ export function buildSalesAgentNextAction(input: {
   const keepSofterObjectionSave = shouldUseSofterObjectionSave(
     input.objectionSaveOutcomeSummary,
     objectionSaveLearningScope,
+  );
+  const preferFastFirstResponse = shouldPreferFastFirstResponse(
+    input.firstResponseOutcomeSummary,
+    firstResponseLearningScope,
   );
   const tightenLowConfidenceQuoteEstimates = shouldTightenLowConfidenceQuoteEstimates(
     input.quoteAccuracyOutcomeSummary,
@@ -483,18 +509,32 @@ export function buildSalesAgentNextAction(input: {
     now.getTime() - latestLeadCreatedAt.getTime() <= 30 * 60 * 1000 &&
     !hasRecentOutbound(context, now, 20)
   ) {
+    const firstResponseChannel = preferredFirstResponseChannel ?? preferredChannel;
+    const firstResponseIsMessagingChannel =
+      firstResponseChannel === "dm" || firstResponseChannel === "email";
     return {
-      actionType: "call_now",
-      channel: context.contact.phoneE164 || context.contact.phone ? "sms" : preferredChannel,
+      actionType: firstResponseIsMessagingChannel ? "reply_now" : "call_now",
+      channel:
+        firstResponseChannel === "sms" && (context.contact.phoneE164 || context.contact.phone)
+          ? "sms"
+          : firstResponseChannel,
       status: "open",
       priority: "urgent",
       confidence: "high",
-      summary: "Fast follow-up window is open. Call this lead now.",
+      summary: firstResponseIsMessagingChannel
+        ? "Fast first-response window is open. Message this lead now."
+        : "Fast first-response window is open. Reach out to this lead now.",
       reason: "The lead is fresh and there has not been a recent outbound touch.",
       facts: dedupe([
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
         context.derived.knownZip ? `ZIP: ${context.derived.knownZip}` : null,
         memory.pricingContext,
+        firstResponseChannel && firstResponseChannel !== preferredChannel
+          ? `Recent first responses are converting better on ${firstResponseChannel.toUpperCase()}.`
+          : null,
+        preferFastFirstResponse
+          ? "Recent first responses are performing better when they go out within 30 minutes."
+          : null,
       ]),
       dueAt: now.toISOString(),
       source: "rules_v1",

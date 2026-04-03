@@ -3,6 +3,7 @@ import { getDb, instantQuotes } from "@/db";
 import { desc, eq, sql } from "drizzle-orm";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
+import { loadFirstResponseOutcomeSummary } from "@/lib/first-response-outcomes";
 import { loadMediaQuoteOutcomeSummary, loadQuoteInsightMap } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
@@ -29,6 +30,7 @@ export async function GET(request: NextRequest) {
   const summary = await loadMediaQuoteOutcomeSummary(db);
   const appointmentPreservationSummary = await loadAppointmentPreservationOutcomeSummary(db);
   const appointmentReminderSummary = await loadAppointmentReminderOutcomeSummary(db);
+  const firstResponseSummary = await loadFirstResponseOutcomeSummary(db);
   const missingInfoSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSummary = await loadObjectionSaveOutcomeSummary(db);
   const quoteAccuracySummary = await loadQuoteAccuracyOutcomeSummary(db);
@@ -77,6 +79,7 @@ export async function GET(request: NextRequest) {
       summary,
       appointmentPreservationSummary,
       appointmentReminderSummary,
+      firstResponseSummary,
       missingInfoSummary,
       objectionSummary,
       quoteAccuracySummary,
@@ -164,6 +167,7 @@ export async function GET(request: NextRequest) {
     summary,
     appointmentPreservationSummary,
     appointmentReminderSummary,
+    firstResponseSummary,
     missingInfoSummary,
     objectionSummary,
     quoteAccuracySummary,
