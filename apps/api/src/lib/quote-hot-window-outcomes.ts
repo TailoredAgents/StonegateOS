@@ -161,8 +161,9 @@ export async function loadQuoteHotWindowOutcomeSummary(
         lead.services_requested as "leadServices",
         (
           select min(appt.created_at)
-          from appointments appt
-          where appt.instant_quote_id = iq.id
+          from leads lead_for_appt
+          join appointments appt on appt.lead_id = lead_for_appt.id
+          where lead_for_appt.instant_quote_id = iq.id
             and appt.status <> 'canceled'
         ) as "bookedAt"
       from instant_quotes iq

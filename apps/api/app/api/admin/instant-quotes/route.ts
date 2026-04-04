@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, instantQuotes } from "@/db";
+import { getDb, instantQuotes, leads } from "@/db";
 import { desc, eq, sql } from "drizzle-orm";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
@@ -46,8 +46,9 @@ export async function GET(request: NextRequest) {
   const bookedFromQuoteExpr = sql<boolean>`
     exists(
       select 1
-      from appointments appt
-      where appt.instant_quote_id = ${instantQuotes.id}
+      from ${leads} lead
+      join appointments appt on appt.lead_id = lead.id
+      where lead.instant_quote_id = ${instantQuotes.id}
         and appt.status <> 'canceled'
     )
   `;

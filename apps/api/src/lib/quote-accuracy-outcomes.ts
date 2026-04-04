@@ -214,8 +214,8 @@ export async function loadQuoteAccuracyOutcomeSummary(
         iq.job_types as "jobTypes",
         lead.services_requested as "leadServices"
       from appointments appt
-      join instant_quotes iq on iq.id = appt.instant_quote_id
-      left join leads lead on lead.instant_quote_id = iq.id
+      join leads lead on lead.id = appt.lead_id
+      join instant_quotes iq on iq.id = lead.instant_quote_id
       where appt.status = 'completed'
         and appt.final_total_cents is not null
         and coalesce(appt.completed_at, appt.created_at) >= ${windowStart}

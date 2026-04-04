@@ -389,8 +389,9 @@ export async function loadQuoteFollowupOutcomeSummary(
       hasBookedAppointment: sql<boolean>`
         exists(
           select 1
-          from appointments appt
-          where appt.instant_quote_id = ${instantQuotes.id}
+          from leads lead_for_appt
+          join appointments appt on appt.lead_id = lead_for_appt.id
+          where lead_for_appt.instant_quote_id = ${instantQuotes.id}
             and appt.status <> 'canceled'
         )
       `,
