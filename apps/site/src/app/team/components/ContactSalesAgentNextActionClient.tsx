@@ -70,6 +70,48 @@ function formatLabel(value: string | null | undefined): string {
     .join(" ");
 }
 
+function formatActionLabel(value: string | null | undefined): string {
+  switch (value) {
+    case "appointment_checkin":
+      return "Pre-appointment check in";
+    case "appointment_support":
+      return "Appointment support";
+    case "post_job_checkin":
+      return "Post-job check in";
+    case "wait_for_appointment":
+      return "Appointment on the books";
+    case "human_follow_up":
+      return "Needs human review";
+    default:
+      return formatLabel(value);
+  }
+}
+
+function getLifecycleStageSummary(actionType: string | null | undefined): {
+  label: string;
+  detail: string;
+} | null {
+  switch (actionType) {
+    case "appointment_checkin":
+      return {
+        label: "Pre-appointment protection",
+        detail: "The agent wants to send a light reassurance touch before the booked appointment.",
+      };
+    case "appointment_support":
+      return {
+        label: "Booked-job support",
+        detail: "The customer is already booked and the next move is handling timing, logistics, or a light reschedule-save reply.",
+      };
+    case "post_job_checkin":
+      return {
+        label: "Post-job follow-up",
+        detail: "The job is done and the next move is a short human-style satisfaction check-in.",
+      };
+    default:
+      return null;
+  }
+}
+
 function formatTimestamp(value: string | null | undefined): string | null {
   if (typeof value !== "string" || value.trim().length === 0) return null;
   const parsed = new Date(value);
@@ -238,6 +280,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
   const isHumanReviewHold =
     nextAction?.actionType === "human_follow_up" || executionState?.code === "human_review" || exceptionSummary !== null;
   const canResumeToAgent = canControlAutomation && (isPaused || isHumanTakeover);
+  const lifecycleStage = getLifecycleStageSummary(nextAction?.actionType);
 
   const runControl = React.useCallback(
     async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
@@ -285,6 +328,12 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
           <>
             <div className="font-semibold uppercase tracking-wide">{executionState.label}</div>
             {executionState.detail ? <div className="mt-1 text-[11px] opacity-90">{executionState.detail}</div> : null}
+            {lifecycleStage ? (
+              <div className="mt-2 rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
+                <div className="font-medium">{lifecycleStage.label}</div>
+                <div className="mt-1">{lifecycleStage.detail}</div>
+              </div>
+            ) : null}
             {learningSignalFact ? (
               <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
                 {learningSignalFact}
@@ -384,6 +433,13 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             {nextAction.summary ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
                 {nextAction.summary}
+              </div>
+            ) : null}
+
+            {lifecycleStage ? (
+              <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] text-sky-900">
+                <div className="font-semibold uppercase tracking-wide text-sky-700">{lifecycleStage.label}</div>
+                <div className="mt-1">{lifecycleStage.detail}</div>
               </div>
             ) : null}
 
@@ -493,7 +549,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               </div>
               <div>
                 <div className="font-semibold text-slate-700">Action</div>
-                <div>{formatLabel(nextAction.actionType)}</div>
+                <div>{formatActionLabel(nextAction.actionType)}</div>
               </div>
               <div>
                 <div className="font-semibold text-slate-700">Channel</div>

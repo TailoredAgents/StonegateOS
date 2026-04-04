@@ -86,6 +86,9 @@ function parseIso(value: string | null | undefined): Date | null {
 function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
   return (
     actionType === "missed_call_recovery" ||
+    actionType === "appointment_checkin" ||
+    actionType === "appointment_support" ||
+    actionType === "post_job_checkin" ||
     actionType === "dm_sms_handoff" ||
     actionType === "reply_now" ||
     actionType === "follow_up_quote" ||

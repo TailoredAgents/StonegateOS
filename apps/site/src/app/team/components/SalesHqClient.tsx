@@ -145,12 +145,25 @@ function compactText(value: string | null | undefined, maxLen = 160): string | n
 }
 
 function formatActionLabel(value: string | null | undefined): string {
-  if (!value) return "Unknown";
-  return value
-    .split("_")
-    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : ""))
-    .join(" ")
-    .trim();
+  switch (value) {
+    case "appointment_checkin":
+      return "Pre-appointment check in";
+    case "appointment_support":
+      return "Appointment support";
+    case "post_job_checkin":
+      return "Post-job check in";
+    case "wait_for_appointment":
+      return "Appointment on the books";
+    case "human_follow_up":
+      return "Needs human review";
+    default:
+      if (!value) return "Unknown";
+      return value
+        .split("_")
+        .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : ""))
+        .join(" ")
+        .trim();
+  }
 }
 
 function nextActionTone(value: string | null | undefined): "good" | "warn" | "bad" | "neutral" {
