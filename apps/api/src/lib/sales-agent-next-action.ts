@@ -9,6 +9,13 @@ import {
   type ChannelHandoffOutcomeSummary,
 } from "@/lib/channel-handoff-outcomes";
 import {
+  areAppointmentCheckinsWorthwhile,
+  arePostJobCheckinsWorthwhile,
+  isAppointmentSupportWorthwhile,
+  shouldKeepAppointmentSupportLight,
+  type CloseLoopOutcomeSummary,
+} from "@/lib/close-loop-outcomes";
+import {
   getFirstResponseLearningScope,
   getPreferredFirstResponseChannel,
   shouldAvoidHardBookingAskInFirstResponse,
@@ -422,6 +429,7 @@ export function buildSalesAgentNextAction(input: {
   appointmentPreservationOutcomeSummary?: AppointmentPreservationOutcomeSummary | null;
   appointmentReminderOutcomeSummary?: AppointmentReminderOutcomeSummary | null;
   channelHandoffOutcomeSummary?: ChannelHandoffOutcomeSummary | null;
+  closeLoopOutcomeSummary?: CloseLoopOutcomeSummary | null;
   firstResponseOutcomeSummary?: FirstResponseOutcomeSummary | null;
   missingInfoOutcomeSummary?: MissingInfoOutcomeSummary | null;
   objectionSaveOutcomeSummary?: ObjectionSaveOutcomeSummary | null;
@@ -711,6 +719,10 @@ export function buildSalesAgentNextAction(input: {
   if (hasUpcomingAppointment) {
     const preservationLearning = input.appointmentPreservationOutcomeSummary;
     const reminderLearning = input.appointmentReminderOutcomeSummary;
+    const closeLoopLearning = input.closeLoopOutcomeSummary;
+    const appointmentCheckinsWorthwhile = areAppointmentCheckinsWorthwhile(closeLoopLearning);
+    const appointmentSupportWorthwhile = isAppointmentSupportWorthwhile(closeLoopLearning);
+    const keepAppointmentSupportLight = shouldKeepAppointmentSupportLight(closeLoopLearning);
     const appointmentStart = parseIso(context.nextAppointment?.startAt ?? null);
     const minutesUntilAppointment =
       appointmentStart ? Math.round((appointmentStart.getTime() - now.getTime()) / (60 * 1000)) : null;
@@ -799,6 +811,12 @@ export function buildSalesAgentNextAction(input: {
           reminderLearning?.learned.rescheduleSavesWorking
             ? "Recent reschedule requests are turning back into kept appointments often enough that it is worth trying to save the booking first."
             : null,
+          appointmentSupportWorthwhile
+            ? "Recent booked-job support replies are resolving cleanly enough to keep using on low-risk timing and logistics questions."
+            : null,
+          keepAppointmentSupportLight
+            ? "Recent booked-job support replies are going colder, so keep the reply practical and low pressure."
+            : null,
           memory.lastPromisedNextStep,
         ]),
         dueAt: now.toISOString(),
@@ -833,6 +851,9 @@ export function buildSalesAgentNextAction(input: {
           reminderLearning && !reminderLearning.learned.confirmationLoopHealthy
             ? "Recent reminder acknowledgements are still soft overall, so an extra check-in may keep this appointment healthier."
             : null,
+          appointmentCheckinsWorthwhile
+            ? "Recent pre-appointment check-ins are getting enough replies or preserved jobs to keep using on shakier bookings."
+            : "Recent pre-appointment check-ins do not have a strong positive signal yet, so keep this extra touch light.",
           memory.lastPromisedNextStep,
         ]),
         dueAt: buildAppointmentCheckinDueAt(appointmentStart, now),
@@ -898,11 +919,12 @@ export function buildSalesAgentNextAction(input: {
   ) {
     const postJobChannel = hasChannelAvailable(context, "sms") ? "sms" : preferredChannel;
     if (postJobChannel && hasChannelAvailable(context, postJobChannel)) {
+      const postJobCheckinsWorthwhile = arePostJobCheckinsWorthwhile(input.closeLoopOutcomeSummary);
       return {
         actionType: "post_job_checkin",
         channel: postJobChannel,
         status: "open",
-        priority: hoursSinceCompletedAppointment <= 24 ? "normal" : "low",
+        priority: postJobCheckinsWorthwhile && hoursSinceCompletedAppointment <= 24 ? "normal" : "low",
         confidence: "medium",
         summary: "Send a short post-job check-in while the completed job is still fresh.",
         reason: "The latest appointment was completed recently and there has not been a human-style follow-up after the work.",
@@ -915,6 +937,9 @@ export function buildSalesAgentNextAction(input: {
             ? `Final total: $${(latestCompletedAppointment.finalTotalCents / 100).toFixed(2)}.`
             : null,
           "Use a simple satisfaction follow-up, not a formal review-request blast.",
+          postJobCheckinsWorthwhile
+            ? "Recent post-job check-ins are reopening customers or helping create repeat bookings often enough to keep using."
+            : "Recent post-job check-ins do not have a strong positive outcome signal yet, so keep this touch short and optional.",
           memory.lastPromisedNextStep,
         ]),
         dueAt: buildPostJobCheckinDueAt(completedAppointmentAt, now),

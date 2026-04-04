@@ -408,6 +408,46 @@ type AppointmentPreservationSummaryDto = {
   };
 };
 
+type CloseLoopOutcomeBucketDto = {
+  attempts: number;
+  replied: number;
+  replyRate: number;
+  preserved: number;
+  preservedRate: number;
+  completed: number;
+  completedRate: number;
+  rescheduled: number;
+  rescheduleRate: number;
+  repeatBooked: number;
+  repeatBookRate: number;
+};
+
+type CloseLoopSummaryDto = {
+  windowStart: string;
+  attempts: number;
+  replied: number;
+  replyRate: number;
+  preserved: number;
+  preservedRate: number;
+  completed: number;
+  completedRate: number;
+  rescheduled: number;
+  rescheduleRate: number;
+  repeatBooked: number;
+  repeatBookRate: number;
+  byAction: {
+    appointment_checkin: CloseLoopOutcomeBucketDto;
+    appointment_support: CloseLoopOutcomeBucketDto;
+    post_job_checkin: CloseLoopOutcomeBucketDto;
+  };
+  learned: {
+    appointmentCheckinWorthwhile: boolean;
+    appointmentSupportWorthwhile: boolean;
+    appointmentSupportNeedsLightTouch: boolean;
+    postJobCheckinWorthwhile: boolean;
+  };
+};
+
 type QuoteHotWindowBucketDto = {
   quotes: number;
   bookedQuotes: number;
@@ -782,6 +822,34 @@ function renderQuoteHotWindowLearning(
   );
 }
 
+function renderCloseLoopLearning(
+  label: string,
+  summary: CloseLoopOutcomeBucketDto,
+  options?: { kind?: "support" | "post_job" },
+): React.ReactElement {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="font-semibold text-slate-900">{label}</div>
+      <div className="mt-1 text-[11px] text-slate-600">
+        Attempts: {summary.attempts} | Replied: {summary.replied} ({formatPercent(summary.replyRate)})
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        Preserved {formatPercent(summary.preservedRate)} | Completed {formatPercent(summary.completedRate)}
+      </div>
+      {options?.kind === "support" ? (
+        <div className="mt-1 text-[11px] text-slate-500">
+          Reschedule saves {formatPercent(summary.rescheduleRate)}
+        </div>
+      ) : null}
+      {options?.kind === "post_job" ? (
+        <div className="mt-1 text-[11px] text-slate-500">
+          Repeat booked {formatPercent(summary.repeatBookRate)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const res = await callAdminApi("/api/admin/instant-quotes?limit=25");
   if (!res.ok) {
@@ -793,6 +861,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
     appointmentPreservationSummary?: AppointmentPreservationSummaryDto;
     appointmentReminderSummary?: AppointmentReminderSummaryDto;
     channelHandoffSummary?: ChannelHandoffSummaryDto;
+    closeLoopSummary?: CloseLoopSummaryDto;
     firstResponseSummary?: FirstResponseSummaryDto;
     missingInfoSummary?: MissingInfoSummaryDto;
     objectionSummary?: ObjectionSummaryDto;
@@ -807,6 +876,7 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
   const appointmentPreservationSummary = data.appointmentPreservationSummary;
   const appointmentReminderSummary = data.appointmentReminderSummary;
   const channelHandoffSummary = data.channelHandoffSummary;
+  const closeLoopSummary = data.closeLoopSummary;
   const firstResponseSummary = data.firstResponseSummary;
   const missingInfoSummary = data.missingInfoSummary;
   const objectionSummary = data.objectionSummary;
@@ -1204,6 +1274,45 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {appointmentPreservationSummary.learned.needsHumanBackup
               ? "Booked jobs still need human backup on shakier appointments."
               : "No strong human-backup warning yet."}
+          </div>
+        </div>
+      ) : null}
+      {closeLoopSummary ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+          <div className="font-semibold text-slate-900">Close-loop learning</div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            This tracks the newer pre-appointment, booked-job support, and post-job touches so those lifecycle actions can start learning from real outcomes too.
+          </div>
+          <div className="mt-2 text-[11px] text-slate-600">
+            Attempts: {closeLoopSummary.attempts} | Replied: {closeLoopSummary.replied} ({formatPercent(closeLoopSummary.replyRate)})
+            {" | "}Preserved: {closeLoopSummary.preserved} ({formatPercent(closeLoopSummary.preservedRate)})
+            {" | "}Completed: {closeLoopSummary.completed} ({formatPercent(closeLoopSummary.completedRate)})
+          </div>
+          <div className="mt-1 text-[11px] text-slate-500">
+            {closeLoopSummary.learned.appointmentCheckinWorthwhile
+              ? "Pre-appointment check-ins are showing enough lift to keep using on shakier bookings."
+              : "No strong pre-appointment check-in lift yet."}
+            {" | "}
+            {closeLoopSummary.learned.appointmentSupportWorthwhile
+              ? "Booked-job support replies are resolving well enough to keep using."
+              : "No strong booked-job support edge yet."}
+            {" | "}
+            {closeLoopSummary.learned.appointmentSupportNeedsLightTouch
+              ? "Booked-job support should stay especially light right now."
+              : "No strong light-touch warning on booked-job support yet."}
+            {" | "}
+            {closeLoopSummary.learned.postJobCheckinWorthwhile
+              ? "Post-job check-ins are creating enough response or repeat-booking signal to keep using."
+              : "No strong post-job check-in edge yet."}
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {renderCloseLoopLearning("Pre-appointment check in", closeLoopSummary.byAction.appointment_checkin)}
+            {renderCloseLoopLearning("Booked-job support", closeLoopSummary.byAction.appointment_support, {
+              kind: "support",
+            })}
+            {renderCloseLoopLearning("Post-job check in", closeLoopSummary.byAction.post_job_checkin, {
+              kind: "post_job",
+            })}
           </div>
         </div>
       ) : null}

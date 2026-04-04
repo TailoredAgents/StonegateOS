@@ -20,6 +20,7 @@ import { buildSalesAgentNextAction, getSalesAgentNextAction, upsertSalesAgentNex
 import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 import { getDmOpeningStrategy } from "@/lib/dm-autopilot";
 import { loadChannelHandoffOutcomeSummary } from "@/lib/channel-handoff-outcomes";
+import { loadCloseLoopOutcomeSummary } from "@/lib/close-loop-outcomes";
 import { loadFirstResponseOutcomeSummary } from "@/lib/first-response-outcomes";
 import { getMediaJobAnalysis } from "@/lib/media-job-analysis";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
@@ -800,6 +801,7 @@ export async function POST(
   const appointmentPreservationOutcomeSummary = leadContext ? await loadAppointmentPreservationOutcomeSummary(db) : null;
   const appointmentReminderOutcomeSummary = leadContext ? await loadAppointmentReminderOutcomeSummary(db) : null;
   const channelHandoffOutcomeSummary = leadContext ? await loadChannelHandoffOutcomeSummary(db) : null;
+  const closeLoopOutcomeSummary = leadContext ? await loadCloseLoopOutcomeSummary(db) : null;
   const firstResponseOutcomeSummary = leadContext ? await loadFirstResponseOutcomeSummary(db) : null;
   const mediaOutcomeSummary = leadContext ? await loadMediaQuoteOutcomeSummary(db) : null;
   const missingInfoOutcomeSummary = leadContext ? await loadMissingInfoOutcomeSummary(db) : null;
@@ -828,6 +830,7 @@ export async function POST(
             appointmentPreservationOutcomeSummary,
             appointmentReminderOutcomeSummary,
             channelHandoffOutcomeSummary,
+            closeLoopOutcomeSummary,
             firstResponseOutcomeSummary,
             missingInfoOutcomeSummary,
             objectionSaveOutcomeSummary,

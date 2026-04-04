@@ -4,6 +4,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import { loadChannelHandoffOutcomeSummary } from "@/lib/channel-handoff-outcomes";
+import { loadCloseLoopOutcomeSummary } from "@/lib/close-loop-outcomes";
 import { loadFirstResponseOutcomeSummary } from "@/lib/first-response-outcomes";
 import { loadMediaQuoteOutcomeSummary, loadQuoteInsightMap } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
@@ -33,6 +34,7 @@ export async function GET(request: NextRequest) {
   const appointmentPreservationSummary = await loadAppointmentPreservationOutcomeSummary(db);
   const appointmentReminderSummary = await loadAppointmentReminderOutcomeSummary(db);
   const channelHandoffSummary = await loadChannelHandoffOutcomeSummary(db);
+  const closeLoopSummary = await loadCloseLoopOutcomeSummary(db);
   const firstResponseSummary = await loadFirstResponseOutcomeSummary(db);
   const missingInfoSummary = await loadMissingInfoOutcomeSummary(db);
   const objectionSummary = await loadObjectionSaveOutcomeSummary(db);
@@ -84,6 +86,7 @@ export async function GET(request: NextRequest) {
       appointmentPreservationSummary,
       appointmentReminderSummary,
       channelHandoffSummary,
+      closeLoopSummary,
       firstResponseSummary,
       missingInfoSummary,
       objectionSummary,
@@ -174,6 +177,7 @@ export async function GET(request: NextRequest) {
     appointmentPreservationSummary,
     appointmentReminderSummary,
     channelHandoffSummary,
+    closeLoopSummary,
     firstResponseSummary,
     missingInfoSummary,
     objectionSummary,

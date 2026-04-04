@@ -36,6 +36,7 @@ import { ensureInboxThreadForContactChannel } from "@/lib/inbox";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
 import { loadAppointmentReminderOutcomeSummary } from "@/lib/appointment-reminder-outcomes";
 import { loadChannelHandoffOutcomeSummary } from "@/lib/channel-handoff-outcomes";
+import { loadCloseLoopOutcomeSummary } from "@/lib/close-loop-outcomes";
 import { loadFirstResponseOutcomeSummary } from "@/lib/first-response-outcomes";
 import { loadMediaQuoteOutcomeSummary } from "@/lib/media-quote-outcomes";
 import { loadMissingInfoOutcomeSummary } from "@/lib/missing-info-outcomes";
@@ -215,6 +216,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const appointmentPreservationOutcomeSummary = await loadAppointmentPreservationOutcomeSummary(db);
   const appointmentReminderOutcomeSummary = await loadAppointmentReminderOutcomeSummary(db);
   const channelHandoffOutcomeSummary = await loadChannelHandoffOutcomeSummary(db);
+  const closeLoopOutcomeSummary = await loadCloseLoopOutcomeSummary(db);
   const firstResponseOutcomeSummary = await loadFirstResponseOutcomeSummary(db);
   const mediaOutcomeSummary = await loadMediaQuoteOutcomeSummary(db);
   const missingInfoOutcomeSummary = await loadMissingInfoOutcomeSummary(db);
@@ -701,6 +703,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           appointmentPreservationOutcomeSummary,
           appointmentReminderOutcomeSummary,
           channelHandoffOutcomeSummary,
+          closeLoopOutcomeSummary,
           firstResponseOutcomeSummary,
           missingInfoOutcomeSummary,
           objectionSaveOutcomeSummary,
