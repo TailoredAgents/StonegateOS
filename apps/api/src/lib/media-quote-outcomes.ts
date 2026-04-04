@@ -71,6 +71,15 @@ type QuoteInsightRow = {
   currentMissingViewCount: number;
 };
 
+function normalizeDate(value: Date | string | null | undefined): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function mediaInformedExpr() {
   return sql<boolean>`coalesce(${instantQuotes.aiResult} -> 'mediaAnalysis' ->> 'source', '') like 'vision%'`;
 }
@@ -117,6 +126,8 @@ function isWeakOriginalMedia(input: {
 function computeTightenedAfterMoreMedia(row: QuoteInsightRow): boolean {
   const originalConfidence = normalizeConfidence(row.originalConfidence);
   const currentConfidence = normalizeConfidence(row.currentAnalysisConfidence);
+  const createdAt = normalizeDate(row.createdAt);
+  const currentAnalysisUpdatedAt = normalizeDate(row.currentAnalysisUpdatedAt);
   if (
     !isWeakOriginalMedia({
       isMediaInformed: row.isMediaInformed,
@@ -126,7 +137,7 @@ function computeTightenedAfterMoreMedia(row: QuoteInsightRow): boolean {
   ) {
     return false;
   }
-  if (!(row.currentAnalysisUpdatedAt instanceof Date) || row.currentAnalysisUpdatedAt.getTime() <= row.createdAt.getTime()) {
+  if (!createdAt || !currentAnalysisUpdatedAt || currentAnalysisUpdatedAt.getTime() <= createdAt.getTime()) {
     return false;
   }
   if (row.currentMissingViewCount > 0) return false;

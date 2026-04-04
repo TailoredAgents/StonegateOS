@@ -38,6 +38,15 @@ export type QuoteHotWindowOutcomeSummary = QuoteHotWindowSlice & {
   bySourceFamily: Record<SourceFamily, QuoteHotWindowSlice>;
 };
 
+function normalizeDate(value: Date | string | null | undefined): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function toRate(numerator: number, denominator: number): number {
   return denominator > 0 ? Number((numerator / denominator).toFixed(4)) : 0;
 }
@@ -184,12 +193,14 @@ export async function loadQuoteHotWindowOutcomeSummary(
   }>;
 
   const normalizedRows: HotWindowRow[] = rows
-    .filter((row) => row.quoteCreatedAt instanceof Date)
     .map((row) => {
-      const booked = row.bookedAt instanceof Date;
+      const quoteCreatedAt = normalizeDate(row.quoteCreatedAt);
+      if (!quoteCreatedAt) return null;
+      const bookedAt = normalizeDate(row.bookedAt);
+      const booked = Boolean(bookedAt);
       const ageHours =
-        booked && row.bookedAt && row.quoteCreatedAt
-          ? (row.bookedAt.getTime() - row.quoteCreatedAt.getTime()) / 3_600_000
+        booked && bookedAt
+          ? (bookedAt.getTime() - quoteCreatedAt.getTime()) / 3_600_000
           : null;
       const bookingWindow: BookingWindow | null =
         ageHours == null
@@ -213,7 +224,8 @@ export async function loadQuoteHotWindowOutcomeSummary(
         ),
         sourceFamily: classifySourceFamily(row.leadSource ?? row.quoteSource ?? null),
       };
-    });
+    })
+    .filter((row): row is HotWindowRow => Boolean(row));
 
   return {
     windowStart: windowStart.toISOString(),
