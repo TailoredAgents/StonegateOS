@@ -93,6 +93,44 @@ function getLearningSignalFact(facts: string[]): string | null {
   );
 }
 
+function summarizeExceptionSignals(signals: string[]): { headline: string; details: string[] } | null {
+  if (signals.length === 0) return null;
+
+  const details: string[] = [];
+  if (signals.includes("frustrated_or_dispute")) {
+    details.push("Customer tone suggests frustration, dispute risk, or a complaint path.");
+  }
+  if (signals.includes("hazardous_scope")) {
+    details.push("Scope may involve hazardous or unsupported material.");
+  }
+  if (signals.includes("high_risk_demo_scope")) {
+    details.push("Demolition scope looks larger or riskier than the normal auto-handled jobs.");
+  }
+  if (signals.includes("scope_pricing_contradiction")) {
+    details.push("Photos, stated scope, and quote signals disagree too much to trust the next pricing touch.");
+  }
+  if (signals.includes("schedule_urgency_contradiction")) {
+    details.push("Requested timing conflicts with the current appointment or quote assumptions.");
+  }
+  if (signals.includes("operational_scope_contradiction")) {
+    details.push("Access, carry, or multi-area scope looks more complex than the current estimate assumptions.");
+  }
+  if (signals.includes("out_of_area")) {
+    details.push("Known ZIP appears outside the current service-area policy.");
+  }
+  if (signals.includes("unsupported_service_scope")) {
+    details.push("Requested work may fall outside the supported junk, brush, or approved demo scope.");
+  }
+
+  return {
+    headline:
+      details.length === 1
+        ? "Held for human review because one material risk was detected."
+        : `Held for human review because ${details.length} separate risk signals were detected.`,
+    details,
+  };
+}
+
 export function ContactSalesAgentNextActionClient({ contactId, compact = false }: Props): React.ReactElement {
   const [payload, setPayload] = React.useState<NextActionPayload | null>(null);
   const [status, setStatus] = React.useState<"idle" | "loading" | "error">("loading");
@@ -178,6 +216,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
         (value): value is string => typeof value === "string" && value.trim().length > 0,
       )
     : [];
+  const exceptionSummary = summarizeExceptionSignals(exceptionSignals);
 
   const runControl = React.useCallback(
     async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
@@ -222,9 +261,15 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                 {learningSignalFact}
               </div>
             ) : null}
-            {exceptionSignals.length > 0 ? (
+            {exceptionSummary ? (
               <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-800">
-                Human review: {exceptionSignals.map((signal) => formatLabel(signal)).join(", ")}
+                <div className="font-medium">Human review hold</div>
+                <div className="mt-1">{exceptionSummary.headline}</div>
+                {exceptionSummary.details.slice(0, 2).map((detail) => (
+                  <div key={detail} className="mt-1">
+                    {detail}
+                  </div>
+                ))}
               </div>
             ) : null}
           </>
@@ -398,9 +443,15 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               </div>
             ) : null}
 
-            {exceptionSignals.length > 0 ? (
+            {exceptionSummary ? (
               <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-800">
-                Human review reason: {exceptionSignals.map((signal) => formatLabel(signal)).join(", ")}
+                <div className="font-semibold">Human review summary</div>
+                <div className="mt-1">{exceptionSummary.headline}</div>
+                {exceptionSummary.details.map((detail) => (
+                  <div key={detail} className="mt-1">
+                    {detail}
+                  </div>
+                ))}
               </div>
             ) : null}
 
