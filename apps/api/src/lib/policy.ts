@@ -1319,6 +1319,7 @@ export function getSalesPlannerActionClass(
     case "follow_up_quote":
     case "collect_missing_info":
       return "follow_up";
+    case "appointment_support":
     case "reply_now":
     case "handle_price_objection":
       return "live_reply";

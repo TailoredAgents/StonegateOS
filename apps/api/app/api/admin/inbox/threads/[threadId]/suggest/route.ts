@@ -403,6 +403,8 @@ function buildPlannerInstruction(
       return "Write a short missed-call recovery text that gets the lead talking again without overcomplicating it.";
     case "appointment_checkin":
       return "Write a short pre-appointment check-in that reassures the customer, keeps the booking warm, and makes it easy for them to flag any issue before the appointment.";
+    case "appointment_support":
+      return "Reply like a calm human handling a booked appointment question. Make it easy to keep the appointment if possible, and make rescheduling feel easy if timing really needs to move.";
     case "dm_sms_handoff":
       return "Write a short SMS that naturally picks up the earlier Messenger conversation and moves the lead into texting without sounding robotic.";
     case "call_now":
@@ -444,6 +446,10 @@ function buildChannelStyleInstruction(
 
   if (actionType === "appointment_checkin") {
     return "Messenger tone: keep the check-in light and reassuring. Do not sound like an automated reminder blast or re-sell the job.";
+  }
+
+  if (actionType === "appointment_support") {
+    return "Messenger tone: keep the appointment reply calm and practical. Answer the timing or logistics question directly and do not sound like a canned reminder workflow.";
   }
 
   if (actionType === "reply_now" || actionType === "handle_price_objection") {

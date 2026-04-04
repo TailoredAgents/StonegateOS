@@ -243,6 +243,38 @@ function buildAppointmentCheckinDueAt(appointmentStart: Date, now: Date): string
   return (target.getTime() <= now.getTime() ? now : target).toISOString();
 }
 
+function classifyAppointmentSupportIntent(
+  context: OmniLeadContext,
+): "reschedule" | "logistics" | "confirmation" | null {
+  const latestInbound = [...context.recentMessages]
+    .reverse()
+    .find((message) => message.direction === "inbound");
+  if (!latestInbound?.body) return null;
+  const text = latestInbound.body.toLowerCase();
+
+  if (
+    /\b(reschedule|move it|move this|push it|push this|push back|another time|different time|later today|later this|tomorrow instead|need to change|need to move|need to push|can't make it|cannot make it|won't make it|running late|late today)\b/.test(
+      text,
+    )
+  ) {
+    return "reschedule";
+  }
+
+  if (
+    /\b(what time|what's the time|still coming|still on|still good|confirm|confirmed|see you then|gate code|parking|address|eta|on the way|on your way)\b/.test(
+      text,
+    )
+  ) {
+    return "logistics";
+  }
+
+  if (/\b(okay|sounds good|works for me|perfect|got it|see you|thank you)\b/.test(text)) {
+    return "confirmation";
+  }
+
+  return null;
+}
+
 function buildExceptionRouting(context: OmniLeadContext): {
   summary: string;
   reason: string;
@@ -677,6 +709,7 @@ export function buildSalesAgentNextAction(input: {
     const appointmentStart = parseIso(context.nextAppointment?.startAt ?? null);
     const minutesUntilAppointment =
       appointmentStart ? Math.round((appointmentStart.getTime() - now.getTime()) / (60 * 1000)) : null;
+    const appointmentSupportIntent = classifyAppointmentSupportIntent(context);
     const appointmentTypeKey =
       context.nextAppointment?.type === "estimate" ||
       context.nextAppointment?.type === "in_person_quote" ||
@@ -717,6 +750,56 @@ export function buildSalesAgentNextAction(input: {
       hasChannelAvailable(context, appointmentCheckinChannel) &&
       appointmentLooksShaky &&
       !hasRecentOutbound(context, now, 10 * 60);
+
+    const appointmentSupportChannel = preferredChannel;
+    const appointmentSupportEligible =
+      appointmentSupportIntent !== null &&
+      hasRecentInboundWithoutReply(context, now) &&
+      Boolean(appointmentStart) &&
+      minutesUntilAppointment !== null &&
+      minutesUntilAppointment >= -60 &&
+      minutesUntilAppointment <= 48 * 60 &&
+      Boolean(appointmentSupportChannel) &&
+      hasChannelAvailable(context, appointmentSupportChannel);
+
+    if (appointmentStart && appointmentSupportEligible) {
+      const supportSummary =
+        appointmentSupportIntent === "reschedule"
+          ? "Reply now and try to save the booked appointment before it fully slips."
+          : appointmentSupportIntent === "logistics"
+            ? "Reply now and clear up the appointment logistics so the booking stays healthy."
+            : "Reply now and keep the booked appointment warm with a short reassuring confirmation.";
+      const supportReason =
+        appointmentSupportIntent === "reschedule"
+          ? "The customer is signaling a timing issue on an upcoming appointment."
+          : appointmentSupportIntent === "logistics"
+            ? "The customer asked a timing or logistics question about the upcoming appointment."
+            : "The customer sent a light confirmation-style message about the upcoming appointment that should get a short human reply.";
+      return {
+        actionType: "appointment_support",
+        channel: appointmentSupportChannel,
+        status: "open",
+        priority: minutesUntilAppointment !== null && minutesUntilAppointment <= 6 * 60 ? "high" : "normal",
+        confidence: appointmentSupportIntent === "reschedule" ? "high" : "medium",
+        summary: supportSummary,
+        reason: supportReason,
+        facts: dedupe([
+          `Appointment at ${appointmentStart.toISOString()}`,
+          context.nextAppointment?.type ? `Appointment type: ${formatFactLabel(context.nextAppointment.type)}.` : null,
+          appointmentSupportIntent === "reschedule"
+            ? "Recent inbound message suggests the customer may need to move the appointment."
+            : appointmentSupportIntent === "logistics"
+              ? "Recent inbound message asks about appointment timing or logistics."
+              : "Recent inbound message looks like a light appointment confirmation or reassurance touch.",
+          reminderLearning?.learned.rescheduleSavesWorking
+            ? "Recent reschedule requests are turning back into kept appointments often enough that it is worth trying to save the booking first."
+            : null,
+          memory.lastPromisedNextStep,
+        ]),
+        dueAt: now.toISOString(),
+        source: "rules_v1",
+      };
+    }
 
     if (appointmentStart && appointmentCheckinEligible) {
       return {

@@ -51,6 +51,7 @@ const SALES_AGENT_AUTOSEND_ACTIONS = [
 ];
 
 const SALES_AGENT_LIVE_REPLY_ACTIONS = [
+  { value: "appointment_support", label: "Appointment support or reschedule save (Full only)" },
   { value: "handle_price_objection", label: "Price objection save (Full only)" },
   { value: "reply_now", label: "Immediate reply (Full only)" },
 ] as const;
