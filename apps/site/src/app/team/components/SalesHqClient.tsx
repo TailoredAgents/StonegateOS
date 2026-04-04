@@ -445,6 +445,12 @@ export function SalesHqClient({
     window.location.assign(buildInboxHrefForQueue(item));
   }
 
+  function openNextHumanReview() {
+    const item = humanReviewItems[0] ?? null;
+    if (!item) return;
+    window.location.assign(buildInboxHrefForQueue(item));
+  }
+
   React.useEffect(() => {
     if (activeDraftPrepCandidates.length === 0) return;
     const prepKey = activeDraftPrepCandidates
@@ -577,19 +583,32 @@ export function SalesHqClient({
           </div>
           <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-600">
             <span>
-              {activeReadyDraftItems.length} ready draft{activeReadyDraftItems.length === 1 ? "" : "s"} in this queue.
-              {activeDraftPrepCandidates.length > 0
+              {activeQueue === "human_review"
+                ? `${humanReviewItems.length} lead${humanReviewItems.length === 1 ? "" : "s"} currently held for human review.`
+                : `${activeReadyDraftItems.length} ready draft${activeReadyDraftItems.length === 1 ? "" : "s"} in this queue.`}
+              {activeQueue !== "human_review" && activeDraftPrepCandidates.length > 0
                 ? ` Preparing ${Math.min(activeDraftPrepCandidates.length, 3)} more in the background.`
                 : ""}
             </span>
-            <button
-              type="button"
-              className={teamButtonClass(activeReadyDraftItems.length > 0 ? "primary" : "secondary", "sm")}
-              onClick={openNextReadyDraft}
-              disabled={activeReadyDraftItems.length === 0}
-            >
-              Open next ready draft
-            </button>
+            {activeQueue === "human_review" ? (
+              <button
+                type="button"
+                className={teamButtonClass(humanReviewItems.length > 0 ? "primary" : "secondary", "sm")}
+                onClick={openNextHumanReview}
+                disabled={humanReviewItems.length === 0}
+              >
+                Open next human review
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={teamButtonClass(activeReadyDraftItems.length > 0 ? "primary" : "secondary", "sm")}
+                onClick={openNextReadyDraft}
+                disabled={activeReadyDraftItems.length === 0}
+              >
+                Open next ready draft
+              </button>
+            )}
           </div>
 
           <div className="mt-4 space-y-2">
