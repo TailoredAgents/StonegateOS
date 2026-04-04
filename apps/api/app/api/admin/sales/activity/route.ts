@@ -195,6 +195,29 @@ function buildSupervisorWins(input: {
     completedRate: number;
     strongestTouchKind: string | null;
   };
+  closeLoopOutcomes: {
+    byAction: {
+      appointment_checkin: {
+        attempts: number;
+        preservedRate: number;
+        completedRate: number;
+      };
+      appointment_support: {
+        attempts: number;
+        replyRate: number;
+        rescheduleRate: number;
+        preservedRate: number;
+      };
+      post_job_checkin: {
+        attempts: number;
+        replyRate: number;
+        repeatBookRate: number;
+      };
+    };
+    appointmentCheckinWorthwhile: boolean;
+    appointmentSupportWorthwhile: boolean;
+    postJobCheckinWorthwhile: boolean;
+  };
   agentAutosendCount: number;
 }): WinSignal[] {
   const wins: WinSignal[] = [];
@@ -226,6 +249,52 @@ function buildSupervisorWins(input: {
     });
   }
 
+  const preAppointment = input.closeLoopOutcomes.byAction.appointment_checkin;
+  const bookedSupport = input.closeLoopOutcomes.byAction.appointment_support;
+  const postJob = input.closeLoopOutcomes.byAction.post_job_checkin;
+
+  if (
+    preAppointment.attempts >= 4 &&
+    input.closeLoopOutcomes.appointmentCheckinWorthwhile &&
+    (preAppointment.preservedRate >= 0.75 || preAppointment.completedRate >= 0.55)
+  ) {
+    wins.push({
+      label: "Pre-appointment check-ins are protecting bookings",
+      detail:
+        preAppointment.preservedRate >= preAppointment.completedRate
+          ? `${formatRatePercent(preAppointment.preservedRate)} of recent pre-appointment check-ins are preserving booked work on shakier appointments.`
+          : `${formatRatePercent(preAppointment.completedRate)} of recent pre-appointment check-ins are still making it through to completion.`,
+    });
+  }
+
+  if (
+    bookedSupport.attempts >= 4 &&
+    input.closeLoopOutcomes.appointmentSupportWorthwhile &&
+    (bookedSupport.replyRate >= 0.2 || bookedSupport.rescheduleRate >= 0.2 || bookedSupport.preservedRate >= 0.75)
+  ) {
+    wins.push({
+      label: "Booked-job support is saving momentum",
+      detail:
+        bookedSupport.rescheduleRate >= bookedSupport.replyRate && bookedSupport.rescheduleRate >= 0.2
+          ? `${formatRatePercent(bookedSupport.rescheduleRate)} of recent booked-job support touches are successfully saving reschedules.`
+          : `${formatRatePercent(bookedSupport.replyRate)} of recent booked-job support touches are getting a customer response without needing heavier intervention.`,
+    });
+  }
+
+  if (
+    postJob.attempts >= 4 &&
+    input.closeLoopOutcomes.postJobCheckinWorthwhile &&
+    (postJob.repeatBookRate >= 0.05 || postJob.replyRate >= 0.12)
+  ) {
+    wins.push({
+      label: "Post-job follow-up is creating repeat demand",
+      detail:
+        postJob.repeatBookRate >= 0.05
+          ? `${formatRatePercent(postJob.repeatBookRate)} of recent post-job check-ins are leading to repeat booked work or a strong repeat-booking signal.`
+          : `${formatRatePercent(postJob.replyRate)} of recent post-job check-ins are getting a customer response without creating extra noise.`,
+    });
+  }
+
   if (input.agentAutosendCount >= 3) {
     wins.push({
       label: "Autonomous follow-up volume is active",
@@ -249,6 +318,27 @@ function buildSupervisorAttention(input: {
     attempts: number;
     reopenRate: number;
     keepSofter: boolean;
+  };
+  closeLoopOutcomes: {
+    byAction: {
+      appointment_checkin: {
+        attempts: number;
+        preservedRate: number;
+      };
+      appointment_support: {
+        attempts: number;
+        replyRate: number;
+        rescheduleRate: number;
+      };
+      post_job_checkin: {
+        attempts: number;
+        replyRate: number;
+        repeatBookRate: number;
+      };
+    };
+    appointmentCheckinWorthwhile: boolean;
+    appointmentSupportNeedsLightTouch: boolean;
+    postJobCheckinWorthwhile: boolean;
   };
   appointmentPreservation: {
     attempts: number;
@@ -301,6 +391,46 @@ function buildSupervisorAttention(input: {
         input.objectionSave.reopenRate,
       )} of recent objection saves are reopening. Use lower-pressure saves or human review on tougher objections.`,
       tone: input.objectionSave.reopenRate < 0.15 ? "bad" : "warn",
+    });
+  }
+
+  const preAppointment = input.closeLoopOutcomes.byAction.appointment_checkin;
+  const bookedSupport = input.closeLoopOutcomes.byAction.appointment_support;
+  const postJob = input.closeLoopOutcomes.byAction.post_job_checkin;
+
+  if (
+    preAppointment.attempts >= 6 &&
+    !input.closeLoopOutcomes.appointmentCheckinWorthwhile &&
+    preAppointment.preservedRate < 0.65
+  ) {
+    items.push({
+      label: "Pre-appointment protection may be too noisy",
+      detail: `Recent pre-appointment check-ins are not preserving enough booked work to justify broad use. Keep them narrow and only on shakier bookings.`,
+      tone: "warn",
+    });
+  }
+
+  if (
+    bookedSupport.attempts >= 6 &&
+    input.closeLoopOutcomes.appointmentSupportNeedsLightTouch &&
+    bookedSupport.replyRate < 0.15
+  ) {
+    items.push({
+      label: "Booked-job support is getting noisy",
+      detail: `Recent booked-job support replies are not resolving strongly enough. Keep those touches extra light and avoid over-handling simple appointment chatter.`,
+      tone: bookedSupport.replyRate < 0.1 && bookedSupport.rescheduleRate < 0.08 ? "bad" : "warn",
+    });
+  }
+
+  if (
+    postJob.attempts >= 6 &&
+    !input.closeLoopOutcomes.postJobCheckinWorthwhile &&
+    postJob.repeatBookRate < 0.03
+  ) {
+    items.push({
+      label: "Post-job follow-up is creating more noise than lift",
+      detail: `Recent post-job check-ins are not generating enough repeat-booking signal. Keep them low pressure and avoid turning them into unnecessary extra chatter.`,
+      tone: postJob.replyRate < 0.08 ? "bad" : "warn",
     });
   }
 
@@ -492,6 +622,29 @@ export async function GET(request: NextRequest): Promise<Response> {
       completedRate: appointmentPreservationSummary.completedRate,
       strongestTouchKind: appointmentPreservationSummary.learned.strongestTouchKind,
     },
+    closeLoopOutcomes: {
+      byAction: {
+        appointment_checkin: {
+          attempts: closeLoopOutcomeSummary.byAction.appointment_checkin.attempts,
+          preservedRate: closeLoopOutcomeSummary.byAction.appointment_checkin.preservedRate,
+          completedRate: closeLoopOutcomeSummary.byAction.appointment_checkin.completedRate,
+        },
+        appointment_support: {
+          attempts: closeLoopOutcomeSummary.byAction.appointment_support.attempts,
+          replyRate: closeLoopOutcomeSummary.byAction.appointment_support.replyRate,
+          rescheduleRate: closeLoopOutcomeSummary.byAction.appointment_support.rescheduleRate,
+          preservedRate: closeLoopOutcomeSummary.byAction.appointment_support.preservedRate,
+        },
+        post_job_checkin: {
+          attempts: closeLoopOutcomeSummary.byAction.post_job_checkin.attempts,
+          replyRate: closeLoopOutcomeSummary.byAction.post_job_checkin.replyRate,
+          repeatBookRate: closeLoopOutcomeSummary.byAction.post_job_checkin.repeatBookRate,
+        },
+      },
+      appointmentCheckinWorthwhile: closeLoopOutcomeSummary.learned.appointmentCheckinWorthwhile,
+      appointmentSupportWorthwhile: closeLoopOutcomeSummary.learned.appointmentSupportWorthwhile,
+      postJobCheckinWorthwhile: closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
+    },
     agentAutosendCount,
   });
   const attentionItems = buildSupervisorAttention({
@@ -507,6 +660,27 @@ export async function GET(request: NextRequest): Promise<Response> {
       attempts: objectionSaveSummary.attempts,
       reopenRate: objectionSaveSummary.reopenRate,
       keepSofter: objectionSaveSummary.learned.keepSofter,
+    },
+    closeLoopOutcomes: {
+      byAction: {
+        appointment_checkin: {
+          attempts: closeLoopOutcomeSummary.byAction.appointment_checkin.attempts,
+          preservedRate: closeLoopOutcomeSummary.byAction.appointment_checkin.preservedRate,
+        },
+        appointment_support: {
+          attempts: closeLoopOutcomeSummary.byAction.appointment_support.attempts,
+          replyRate: closeLoopOutcomeSummary.byAction.appointment_support.replyRate,
+          rescheduleRate: closeLoopOutcomeSummary.byAction.appointment_support.rescheduleRate,
+        },
+        post_job_checkin: {
+          attempts: closeLoopOutcomeSummary.byAction.post_job_checkin.attempts,
+          replyRate: closeLoopOutcomeSummary.byAction.post_job_checkin.replyRate,
+          repeatBookRate: closeLoopOutcomeSummary.byAction.post_job_checkin.repeatBookRate,
+        },
+      },
+      appointmentCheckinWorthwhile: closeLoopOutcomeSummary.learned.appointmentCheckinWorthwhile,
+      appointmentSupportNeedsLightTouch: closeLoopOutcomeSummary.learned.appointmentSupportNeedsLightTouch,
+      postJobCheckinWorthwhile: closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
     },
     appointmentPreservation: {
       attempts: appointmentPreservationSummary.attempts,
