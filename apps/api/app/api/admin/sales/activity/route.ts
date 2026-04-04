@@ -40,6 +40,21 @@ const DEFAULT_ACTIONS = [
 type ReasonCount = { label: string; count: number };
 type WinSignal = { label: string; detail: string };
 type AttentionSignal = { label: string; detail: string; tone: "warn" | "bad" };
+type CloseLoopActivitySummary = {
+  total: number;
+  draftCount: number;
+  autosendCount: number;
+  preAppointmentCount: number;
+  bookedSupportCount: number;
+  postJobCount: number;
+};
+
+const CLOSE_LOOP_ACTION_TYPES = ["appointment_checkin", "appointment_support", "post_job_checkin"] as const;
+const CLOSE_LOOP_AUDIT_ACTIONS = [
+  "sales.agent.draft.prepared",
+  "sales.agent.draft.reused",
+  "sales.agent.autosend.queued",
+] as const;
 
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
@@ -130,6 +145,37 @@ function formatTouchKindLabel(value: string | null | undefined): string | null {
   if (value === "reminder") return "Reminder";
   if (value === "other") return "Other touch";
   return null;
+}
+
+function summarizeCloseLoopActivity(
+  rows: Array<{ action: string; meta: Record<string, unknown> | null }>,
+): CloseLoopActivitySummary {
+  const summary: CloseLoopActivitySummary = {
+    total: 0,
+    draftCount: 0,
+    autosendCount: 0,
+    preAppointmentCount: 0,
+    bookedSupportCount: 0,
+    postJobCount: 0,
+  };
+
+  for (const row of rows) {
+    const actionType = typeof row.meta?.["actionType"] === "string" ? row.meta["actionType"].trim() : "";
+    if (!CLOSE_LOOP_ACTION_TYPES.includes(actionType as (typeof CLOSE_LOOP_ACTION_TYPES)[number])) continue;
+
+    summary.total += 1;
+    if (row.action === "sales.agent.autosend.queued") {
+      summary.autosendCount += 1;
+    } else {
+      summary.draftCount += 1;
+    }
+
+    if (actionType === "appointment_checkin") summary.preAppointmentCount += 1;
+    if (actionType === "appointment_support") summary.bookedSupportCount += 1;
+    if (actionType === "post_job_checkin") summary.postJobCount += 1;
+  }
+
+  return summary;
 }
 
 function buildSupervisorWins(input: {
@@ -286,6 +332,20 @@ export async function GET(request: NextRequest): Promise<Response> {
     loadObjectionSaveOutcomeSummary(db, { windowStart: since }),
     loadAppointmentPreservationOutcomeSummary(db, { windowStart: since }),
   ]);
+  const closeLoopActivityRows = await db
+    .select({
+      action: auditLogs.action,
+      meta: auditLogs.meta,
+    })
+    .from(auditLogs)
+    .where(
+      and(
+        gte(auditLogs.createdAt, since),
+        inArray(auditLogs.action, [...CLOSE_LOOP_AUDIT_ACTIONS]),
+        sql`coalesce(${auditLogs.meta} ->> 'actionType', '') in ('appointment_checkin', 'appointment_support', 'post_job_checkin')`,
+      ),
+    )
+    .limit(2000);
   const rows = await db
     .select({
       id: auditLogs.id,
@@ -405,6 +465,12 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const agentDraftCount = rows.filter((row) => row.action.startsWith("sales.autopilot.") || row.action.startsWith("sales.agent.draft.")).length;
   const agentAutosendCount = rows.filter((row) => row.action === "message.retry" || row.action.startsWith("sales.agent.autosend.")).length;
+  const closeLoopActivity = summarizeCloseLoopActivity(
+    closeLoopActivityRows.map((row) => ({
+      action: row.action,
+      meta: (row.meta as Record<string, unknown> | null) ?? null,
+    })),
+  );
   const topHoldReasons = topReasonCounts(holdReasonCounts);
   const topLostReasons = topReasonCounts(lostReasonCounts);
   const topWins = buildSupervisorWins({
@@ -461,6 +527,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       recentlyReviewedCount: Number(recentlyReviewedResult[0]?.count ?? 0),
       agentDraftCount,
       agentAutosendCount,
+      closeLoopActivity,
       attentionItems,
       topWins,
       topHoldReasons,

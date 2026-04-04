@@ -116,6 +116,14 @@ export type SalesSupervisorPayload = {
   recentlyReviewedCount: number;
   agentDraftCount: number;
   agentAutosendCount: number;
+  closeLoopActivity: {
+    total: number;
+    draftCount: number;
+    autosendCount: number;
+    preAppointmentCount: number;
+    bookedSupportCount: number;
+    postJobCount: number;
+  };
   attentionItems: Array<{
     label: string;
     detail: string;

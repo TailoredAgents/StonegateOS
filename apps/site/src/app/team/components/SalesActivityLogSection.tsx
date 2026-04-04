@@ -244,6 +244,10 @@ function formatTouchKindLabel(value: SalesSupervisorPayload["appointmentPreserva
   return "Other";
 }
 
+function formatCloseLoopCount(value: number): string {
+  return `${value}`;
+}
+
 export async function SalesActivityLogSection({ memberId }: { memberId?: string }): Promise<React.ReactElement> {
   const qs = new URLSearchParams({ limit: "150", rangeDays: "7" });
   if (memberId) qs.set("memberId", memberId);
@@ -426,6 +430,46 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
               {supervisor.appointmentPreservation.needsHumanBackup ? (
                 <p className="mt-2 text-xs font-semibold text-amber-700">Booked jobs are slipping. Human backup is recommended on shaky appointments.</p>
               ) : null}
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-800">Close-loop handling</div>
+                <div className="mt-1 text-sm text-sky-950">
+                  Pre-appointment, booked-job support, and post-job follow-up volume on the agent stack.
+                </div>
+              </div>
+              <div className="text-xs text-sky-800">
+                Total handled: {formatCloseLoopCount(supervisor.closeLoopActivity.total)}
+              </div>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-4">
+              <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Pre-appointment</div>
+                <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.preAppointmentCount)}</div>
+                <div className="mt-1 text-xs text-sky-800">Check-ins queued or drafted</div>
+              </div>
+              <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Booked-job support</div>
+                <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.bookedSupportCount)}</div>
+                <div className="mt-1 text-xs text-sky-800">Timing, reassurance, or reschedule-save replies</div>
+              </div>
+              <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Post-job</div>
+                <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.postJobCount)}</div>
+                <div className="mt-1 text-xs text-sky-800">Satisfaction follow-ups after completion</div>
+              </div>
+              <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Execution mix</div>
+                <div className="mt-2 text-sm font-semibold text-sky-950">
+                  Drafts: {formatCloseLoopCount(supervisor.closeLoopActivity.draftCount)}
+                </div>
+                <div className="mt-1 text-sm font-semibold text-sky-950">
+                  Autosends: {formatCloseLoopCount(supervisor.closeLoopActivity.autosendCount)}
+                </div>
+              </div>
             </div>
           </div>
 

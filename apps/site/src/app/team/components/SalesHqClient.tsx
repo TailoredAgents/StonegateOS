@@ -202,6 +202,10 @@ function closeLoopSummaryTone(
   return value.tone;
 }
 
+function formatCloseLoopCount(value: number): string {
+  return `${value}`;
+}
+
 function buildInboxHrefForQueue(item: QueueItem): string {
   const params = new URLSearchParams();
   params.set("tab", "inbox");
@@ -698,7 +702,7 @@ export function SalesHqClient({
           ) : null}
 
           {supervisor.topWins.length ? (
-            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Agent Wins Right Now</div>
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 {supervisor.topWins.map((item) => (
@@ -710,6 +714,46 @@ export function SalesHqClient({
               </div>
             </div>
           ) : null}
+
+          <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-800">Close-loop handling</div>
+                <div className="mt-1 text-sm text-sky-950">
+                  Pre-appointment, booked-job support, and post-job activity already flowing through the agent stack.
+                </div>
+              </div>
+              <div className="text-xs text-sky-800">
+                Total handled: {formatCloseLoopCount(supervisor.closeLoopActivity.total)}
+              </div>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-4">
+              <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Pre-appointment</div>
+                <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.preAppointmentCount)}</div>
+                <div className="mt-1 text-xs text-sky-800">Check-ins drafted or queued</div>
+              </div>
+              <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Booked-job support</div>
+                <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.bookedSupportCount)}</div>
+                <div className="mt-1 text-xs text-sky-800">Timing and reassurance replies</div>
+              </div>
+              <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Post-job</div>
+                <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.postJobCount)}</div>
+                <div className="mt-1 text-xs text-sky-800">Follow-up after completed jobs</div>
+              </div>
+              <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
+                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Execution mix</div>
+                <div className="mt-2 text-sm font-semibold text-sky-950">
+                  Drafts: {formatCloseLoopCount(supervisor.closeLoopActivity.draftCount)}
+                </div>
+                <div className="mt-1 text-sm font-semibold text-sky-950">
+                  Autosends: {formatCloseLoopCount(supervisor.closeLoopActivity.autosendCount)}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
 
