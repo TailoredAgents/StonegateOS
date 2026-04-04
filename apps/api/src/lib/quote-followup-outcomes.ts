@@ -59,6 +59,15 @@ export type QuoteFollowupOutcomeSummary = QuoteFollowupOutcomeSlice & {
   bySourceFamily: Record<SourceFamily, QuoteFollowupOutcomeSlice>;
 };
 
+function normalizeDate(value: Date | string | null | undefined): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function toRate(booked: number, total: number): number {
   return total > 0 ? Number((booked / total).toFixed(4)) : 0;
 }
@@ -406,26 +415,31 @@ export async function loadQuoteFollowupOutcomeSummary(
     )
     .orderBy(asc(instantQuotes.id), asc(touchAtExpr));
   const depthByQuoteId = new Map<string, number>();
-  const mappedRows = rows.map((row) => {
-    const nextDepth = (depthByQuoteId.get(row.quoteId) ?? 0) + 1;
-    depthByQuoteId.set(row.quoteId, nextDepth);
-    return {
-      quoteId: row.quoteId,
-      quoteCreatedAt: row.quoteCreatedAt,
-      channel: row.channel,
-      touchAt: row.touchAt,
-      body: row.body,
-      hasBookedAppointment: row.hasBookedAppointment,
-      followupDepth: nextDepth,
-      serviceFamily: classifyServiceFamily(
-        [
-          ...(Array.isArray(row.jobTypes) ? row.jobTypes : []),
-          ...(Array.isArray(row.leadServices) ? row.leadServices : []),
-        ].filter((item): item is string => typeof item === "string" && item.trim().length > 0),
-      ),
-      sourceFamily: classifySourceFamily(row.leadSource ?? row.source ?? null),
-    };
-  });
+  const mappedRows = rows
+    .map((row) => {
+      const quoteCreatedAt = normalizeDate(row.quoteCreatedAt);
+      const touchAt = normalizeDate(row.touchAt);
+      if (!quoteCreatedAt || !touchAt) return null;
+      const nextDepth = (depthByQuoteId.get(row.quoteId) ?? 0) + 1;
+      depthByQuoteId.set(row.quoteId, nextDepth);
+      return {
+        quoteId: row.quoteId,
+        quoteCreatedAt,
+        channel: row.channel,
+        touchAt,
+        body: row.body,
+        hasBookedAppointment: row.hasBookedAppointment,
+        followupDepth: nextDepth,
+        serviceFamily: classifyServiceFamily(
+          [
+            ...(Array.isArray(row.jobTypes) ? row.jobTypes : []),
+            ...(Array.isArray(row.leadServices) ? row.leadServices : []),
+          ].filter((item): item is string => typeof item === "string" && item.trim().length > 0),
+        ),
+        sourceFamily: classifySourceFamily(row.leadSource ?? row.source ?? null),
+      };
+    })
+    .filter((row): row is QuoteFollowupOutcomeRow => Boolean(row));
 
   return buildSummary(mappedRows, windowStart);
 }

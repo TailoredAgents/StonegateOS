@@ -57,6 +57,15 @@ export type FirstResponseOutcomeSummary = FirstResponseOutcomeSlice & {
   bySourceFamily: Record<SourceFamily, FirstResponseOutcomeSlice>;
 };
 
+function normalizeDate(value: Date | string | null | undefined): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function toRate(numerator: number, denominator: number): number {
   return denominator > 0 ? Number((numerator / denominator).toFixed(4)) : 0;
 }
@@ -345,21 +354,28 @@ export async function loadFirstResponseOutcomeSummary(
     .orderBy(asc(leads.id), asc(touchAtExpr));
 
   const deduped = dedupeFirstTouches(
-    rows.map((row) => ({
-      leadId: row.leadId,
-      leadCreatedAt: row.leadCreatedAt,
-      channel: row.channel,
-      touchAt: row.touchAt,
-      body: row.body,
-      replied: row.replied,
-      booked: row.booked,
-      serviceFamily: classifyServiceFamily(
-        (Array.isArray(row.leadServices) ? row.leadServices : []).filter(
-          (item): item is string => typeof item === "string" && item.trim().length > 0,
-        ),
-      ),
-      sourceFamily: classifySourceFamily(row.leadSource ?? null),
-    })),
+    rows
+      .map((row) => {
+        const leadCreatedAt = normalizeDate(row.leadCreatedAt);
+        const touchAt = normalizeDate(row.touchAt);
+        if (!leadCreatedAt || !touchAt) return null;
+        return {
+          leadId: row.leadId,
+          leadCreatedAt,
+          channel: row.channel,
+          touchAt,
+          body: row.body,
+          replied: row.replied,
+          booked: row.booked,
+          serviceFamily: classifyServiceFamily(
+            (Array.isArray(row.leadServices) ? row.leadServices : []).filter(
+              (item): item is string => typeof item === "string" && item.trim().length > 0,
+            ),
+          ),
+          sourceFamily: classifySourceFamily(row.leadSource ?? null),
+        };
+      })
+      .filter((row): row is FirstResponseOutcomeRow => Boolean(row)),
   );
 
   return {
