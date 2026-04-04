@@ -39,6 +39,7 @@ const DEFAULT_ACTIONS = [
 
 type ReasonCount = { label: string; count: number };
 type WinSignal = { label: string; detail: string };
+type AttentionSignal = { label: string; detail: string; tone: "warn" | "bad" };
 
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
@@ -188,6 +189,77 @@ function buildSupervisorWins(input: {
   return wins.slice(0, 3);
 }
 
+function buildSupervisorAttention(input: {
+  activeHumanReviewCount: number;
+  topHoldReasons: ReasonCount[];
+  topLostReasons: ReasonCount[];
+  quoteClose: {
+    attempts: number;
+    lostRate: number;
+    keepSofter: boolean;
+  };
+  objectionSave: {
+    attempts: number;
+    reopenRate: number;
+    keepSofter: boolean;
+  };
+  appointmentPreservation: {
+    attempts: number;
+    canceledRate: number;
+    noShowRate: number;
+    needsHumanBackup: boolean;
+  };
+}): AttentionSignal[] {
+  const items: AttentionSignal[] = [];
+
+  if (input.activeHumanReviewCount > 0) {
+    const topReason = input.topHoldReasons[0] ?? null;
+    items.push({
+      label: "Human-review queue needs attention",
+      detail: topReason
+        ? `${input.activeHumanReviewCount} leads are held right now, led by ${topReason.label.toLowerCase()}.`
+        : `${input.activeHumanReviewCount} leads are being held back for human review right now.`,
+      tone: input.activeHumanReviewCount >= 5 ? "bad" : "warn",
+    });
+  }
+
+  if (input.quoteClose.attempts >= 4 && (input.quoteClose.keepSofter || input.quoteClose.lostRate >= 0.2)) {
+    const topLost = input.topLostReasons[0] ?? null;
+    items.push({
+      label: "Quote follow-up pressure needs adjustment",
+      detail: topLost
+        ? `Recent quote nudges are shedding too many leads. Biggest current lost reason: ${topLost.label.toLowerCase()}.`
+        : "Recent quote nudges are ending in losses often enough that the close pressure should stay softer.",
+      tone: input.quoteClose.lostRate >= 0.3 ? "bad" : "warn",
+    });
+  }
+
+  if (input.appointmentPreservation.attempts >= 6 && input.appointmentPreservation.needsHumanBackup) {
+    items.push({
+      label: "Booked jobs need backup protection",
+      detail: `Recent cancellation and no-show pressure is ${formatRatePercent(
+        input.appointmentPreservation.canceledRate + input.appointmentPreservation.noShowRate,
+      )}. Watch shaky appointments more closely.`,
+      tone:
+        input.appointmentPreservation.canceledRate + input.appointmentPreservation.noShowRate >= 0.25
+          ? "bad"
+          : "warn",
+    });
+  }
+
+  if (input.objectionSave.attempts >= 4 && input.objectionSave.keepSofter && input.objectionSave.reopenRate < 0.25) {
+    items.push({
+      label: "Price-save messaging is going cold",
+      detail: `Only ${formatRatePercent(
+        input.objectionSave.reopenRate,
+      )} of recent objection saves are reopening. Use lower-pressure saves or human review on tougher objections.`,
+      tone: input.objectionSave.reopenRate < 0.15 ? "bad" : "warn",
+    });
+  }
+
+  return items.slice(0, 3);
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -333,6 +405,8 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const agentDraftCount = rows.filter((row) => row.action.startsWith("sales.autopilot.") || row.action.startsWith("sales.agent.draft.")).length;
   const agentAutosendCount = rows.filter((row) => row.action === "message.retry" || row.action.startsWith("sales.agent.autosend.")).length;
+  const topHoldReasons = topReasonCounts(holdReasonCounts);
+  const topLostReasons = topReasonCounts(lostReasonCounts);
   const topWins = buildSupervisorWins({
     quoteClose: {
       attempts: quoteCloseSummary.attempts,
@@ -351,6 +425,27 @@ export async function GET(request: NextRequest): Promise<Response> {
     },
     agentAutosendCount,
   });
+  const attentionItems = buildSupervisorAttention({
+    activeHumanReviewCount: Number(activeHumanReviewResult[0]?.count ?? 0),
+    topHoldReasons,
+    topLostReasons,
+    quoteClose: {
+      attempts: quoteCloseSummary.attempts,
+      lostRate: quoteCloseSummary.lostRate,
+      keepSofter: quoteCloseSummary.learned.keepSofter,
+    },
+    objectionSave: {
+      attempts: objectionSaveSummary.attempts,
+      reopenRate: objectionSaveSummary.reopenRate,
+      keepSofter: objectionSaveSummary.learned.keepSofter,
+    },
+    appointmentPreservation: {
+      attempts: appointmentPreservationSummary.attempts,
+      canceledRate: appointmentPreservationSummary.canceledRate,
+      noShowRate: appointmentPreservationSummary.noShowRate,
+      needsHumanBackup: appointmentPreservationSummary.learned.needsHumanBackup,
+    },
+  });
 
   return NextResponse.json({
     ok: true,
@@ -366,9 +461,10 @@ export async function GET(request: NextRequest): Promise<Response> {
       recentlyReviewedCount: Number(recentlyReviewedResult[0]?.count ?? 0),
       agentDraftCount,
       agentAutosendCount,
+      attentionItems,
       topWins,
-      topHoldReasons: topReasonCounts(holdReasonCounts),
-      topLostReasons: topReasonCounts(lostReasonCounts),
+      topHoldReasons,
+      topLostReasons,
       quoteClose: {
         attempts: quoteCloseSummary.attempts,
         bookRate: quoteCloseSummary.bookRate,

@@ -652,6 +652,31 @@ export function SalesHqClient({
             </div>
           </div>
 
+          {supervisor.attentionItems.length ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-800">Needs Attention</div>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                {supervisor.attentionItems.map((item) => (
+                  <div
+                    key={`${item.label}:${item.detail}`}
+                    className={`rounded-2xl border p-3 ${
+                      item.tone === "bad"
+                        ? "border-rose-200 bg-rose-50/80"
+                        : "border-amber-200 bg-white/80"
+                    }`}
+                  >
+                    <div className={`text-sm font-semibold ${item.tone === "bad" ? "text-rose-900" : "text-amber-950"}`}>
+                      {item.label}
+                    </div>
+                    <div className={`mt-1 text-xs ${item.tone === "bad" ? "text-rose-800" : "text-amber-900"}`}>
+                      {item.detail}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           {supervisor.topWins.length ? (
             <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Agent Wins Right Now</div>

@@ -110,6 +110,11 @@ export type SalesSupervisorPayload = {
   recentlyReviewedCount: number;
   agentDraftCount: number;
   agentAutosendCount: number;
+  attentionItems: Array<{
+    label: string;
+    detail: string;
+    tone: "warn" | "bad";
+  }>;
   topWins: Array<{
     label: string;
     detail: string;
