@@ -22,7 +22,7 @@ type Props = {
   isOwnerSession: boolean;
 };
 
-type QueueKind = "speed_to_lead" | "follow_up";
+type QueueKind = "speed_to_lead" | "follow_up" | "human_review";
 type QueueItem = QueuePayload["items"][number];
 
 type ContactSummaryResponse = {
@@ -198,10 +198,23 @@ export function SalesHqClient({
   const allItems = queue?.items ?? [];
   const speedItems = React.useMemo(() => allItems.filter((item) => item.kind === "speed_to_lead"), [allItems]);
   const followupItems = React.useMemo(() => allItems.filter((item) => item.kind === "follow_up"), [allItems]);
+  const humanReviewItems = React.useMemo(
+    () =>
+      allItems.filter(
+        (item) => item.agentState?.code === "human_review" || item.nextAction?.actionType === "human_follow_up",
+      ),
+    [allItems],
+  );
 
   const selectedTaskId = searchParams.get("taskId");
   const selectedKindParam = searchParams.get("queue") as QueueKind | null;
-  const [activeQueue, setActiveQueue] = React.useState<QueueKind>(() => (selectedKindParam === "follow_up" ? "follow_up" : "speed_to_lead"));
+  const [activeQueue, setActiveQueue] = React.useState<QueueKind>(() =>
+    selectedKindParam === "follow_up"
+      ? "follow_up"
+      : selectedKindParam === "human_review"
+        ? "human_review"
+        : "speed_to_lead",
+  );
 
   const [selectedItem, setSelectedItem] = React.useState<QueueItem | null>(null);
   const [contactSummary, setContactSummary] = React.useState<ContactSummary | null>(null);
@@ -213,13 +226,18 @@ export function SalesHqClient({
   const draftPrepKeyRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
-    if (selectedKindParam === "follow_up" || selectedKindParam === "speed_to_lead") {
+    if (
+      selectedKindParam === "follow_up" ||
+      selectedKindParam === "speed_to_lead" ||
+      selectedKindParam === "human_review"
+    ) {
       setActiveQueue(selectedKindParam);
     }
   }, [selectedKindParam]);
 
   React.useEffect(() => {
-    const list = activeQueue === "follow_up" ? followupItems : speedItems;
+    const list =
+      activeQueue === "follow_up" ? followupItems : activeQueue === "human_review" ? humanReviewItems : speedItems;
     const found = selectedTaskId ? list.find((item) => item.id === selectedTaskId) : null;
     if (found) {
       setSelectedItem(found);
@@ -230,7 +248,7 @@ export function SalesHqClient({
       return;
     }
     setSelectedItem(null);
-  }, [activeQueue, followupItems, speedItems, selectedTaskId]);
+  }, [activeQueue, followupItems, humanReviewItems, speedItems, selectedTaskId]);
 
   React.useEffect(() => {
     async function loadContact() {
@@ -404,7 +422,8 @@ export function SalesHqClient({
   const viewingLabel = memberLabel ? `Viewing: ${memberLabel}` : null;
   const trackingLabel = trackingStartAt ? `Tracking since: ${formatTimestamp(trackingStartAt)}` : null;
 
-  const activeList = activeQueue === "follow_up" ? followupItems : speedItems;
+  const activeList =
+    activeQueue === "follow_up" ? followupItems : activeQueue === "human_review" ? humanReviewItems : speedItems;
   const activeReadyDraftItems = React.useMemo(
     () => activeList.filter((item) => item.draft?.ready),
     [activeList],
@@ -536,13 +555,25 @@ export function SalesHqClient({
                   {followupItems.length}
                 </span>
               </button>
+              <button
+                type="button"
+                className={teamButtonClass(activeQueue === "human_review" ? "primary" : "secondary", "sm")}
+                onClick={() => applySelection("human_review", humanReviewItems[0] ?? null)}
+              >
+                Needs human review{" "}
+                <span className="ml-2 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-semibold">
+                  {humanReviewItems.length}
+                </span>
+              </button>
             </div>
           </div>
 
           <div className="mt-3 text-xs text-slate-600">
             {activeQueue === "speed_to_lead"
               ? "Requires a call attempt within 5 minutes when a phone exists."
-              : "On-time = completed by due time + 10 minutes."}
+              : activeQueue === "follow_up"
+                ? "On-time = completed by due time + 10 minutes."
+                : "These are the leads the agent deliberately held back for a human."}
           </div>
           <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-600">
             <span>
@@ -564,7 +595,11 @@ export function SalesHqClient({
           <div className="mt-4 space-y-2">
             {activeList.length === 0 ? (
               <div className={TEAM_EMPTY_STATE}>
-                {activeQueue === "speed_to_lead" ? "No active speed-to-lead tasks." : "No follow-ups scheduled yet."}
+                {activeQueue === "speed_to_lead"
+                  ? "No active speed-to-lead tasks."
+                  : activeQueue === "follow_up"
+                    ? "No follow-ups scheduled yet."
+                    : "No leads are currently held for human review."}
               </div>
             ) : (
               <div className="max-h-[560px] space-y-2 overflow-auto pr-1">
