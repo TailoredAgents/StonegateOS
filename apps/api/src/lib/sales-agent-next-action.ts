@@ -270,6 +270,34 @@ function buildExceptionRouting(context: OmniLeadContext): {
     };
   }
 
+  if (signals.includes("out_of_area")) {
+    return {
+      summary: "Human review needed before replying because this lead looks outside the current service area.",
+      reason: "The known ZIP does not match the current service-area policy, so the next touch should be reviewed by a human.",
+      facts: dedupe([
+        context.derived.knownZip ? `Known ZIP: ${context.derived.knownZip}.` : null,
+        context.contact.source ? `Lead source: ${formatFactLabel(context.contact.source)}.` : null,
+        context.latestLead?.notes,
+        context.pipeline.notes,
+      ]),
+    };
+  }
+
+  if (signals.includes("unsupported_service_scope")) {
+    return {
+      summary: "Human review needed before replying because the requested work may fall outside the current supported services.",
+      reason: "Recent lead context suggests service requests that do not fit the normal junk, brush, or supported demo flow.",
+      facts: dedupe([
+        context.latestLead?.servicesRequested?.length
+          ? `Requested services: ${context.latestLead.servicesRequested.join(", ")}.`
+          : null,
+        context.instantQuote?.jobTypes.length ? `Quote job types: ${context.instantQuote.jobTypes.join(", ")}.` : null,
+        context.latestLead?.notes,
+        context.instantQuote?.notes,
+      ]),
+    };
+  }
+
   if (signals.includes("schedule_urgency_contradiction")) {
     return {
       summary: "Human review needed before replying because the requested timing conflicts with the current schedule assumptions.",

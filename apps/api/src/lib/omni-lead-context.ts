@@ -17,7 +17,7 @@ import {
   quotes,
 } from "@/db";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
-import { normalizePostalCode } from "@/lib/policy";
+import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor =
@@ -183,6 +183,8 @@ function detectExceptionSignals(input: {
   pipelineNotes?: string | null;
   latestCallSummary?: string | null;
   serviceHints: string[];
+  knownZip?: string | null;
+  serviceAreaAllowed?: boolean | null;
   instantQuoteTimeframe?: string | null;
   instantQuotePerceivedSize?: string | null;
   nextAppointmentStartAt?: string | null;
@@ -233,6 +235,18 @@ function detectExceptionSignals(input: {
     )
   ) {
     results.add("high_risk_demo_scope");
+  }
+
+  if (input.knownZip && input.serviceAreaAllowed === false) {
+    results.add("out_of_area");
+  }
+
+  if (
+    /\b(tree removal|cut down trees?|stump grinding|stump removal|grading|excavation|land grading|concrete pour|concrete slab|foundation work|roof replacement|roofing crew|plumbing|electrical work|hvac work|moving service|deep cleaning|house cleaning|maid service|pest control)\b/.test(
+      contextText,
+    )
+  ) {
+    results.add("unsupported_service_scope");
   }
 
   const urgencyRequested =
@@ -613,6 +627,7 @@ export async function loadOmniLeadContext(
         .limit(1)
         .then((rows) => rows[0] ?? null),
     ]);
+  const serviceAreaPolicy = await getServiceAreaPolicy(db);
 
   const omniFacts = await loadOmniThreadFacts(db, {
     threadId: ZERO_UUID,
@@ -815,6 +830,7 @@ export async function loadOmniLeadContext(
     omniFacts.knownZip ??
     normalizePostalCode(recentProperties[0]?.postalCode ?? null) ??
     (latestInstantQuoteRow ? normalizePostalCode(latestInstantQuoteRow.zip) : null);
+  const serviceAreaAllowed = knownZip ? isPostalCodeAllowed(knownZip, serviceAreaPolicy) : null;
   const instantQuoteMediaAnalysis = extractMediaAnalysis(latestInstantQuoteRow?.aiResult);
   const mediaConfidenceRaw = latestMediaAnalysisRow?.confidence;
   const mediaConfidence: "low" | "medium" | "high" | null =
@@ -882,6 +898,8 @@ export async function loadOmniLeadContext(
     pipelineNotes: pipeline?.notes ?? null,
     latestCallSummary: latestCallRow?.summary ?? null,
     serviceHints,
+    knownZip,
+    serviceAreaAllowed,
     instantQuoteTimeframe: latestInstantQuoteRow?.timeframe ?? null,
     instantQuotePerceivedSize: latestInstantQuoteRow?.perceivedSize ?? null,
     nextAppointmentStartAt: toIso(upcomingAppointment?.startAt ?? null),
