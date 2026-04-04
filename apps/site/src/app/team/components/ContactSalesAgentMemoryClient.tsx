@@ -20,6 +20,12 @@ type SalesAgentMemoryPayload = {
     updatedAt?: string | null;
   } | null;
   liveContext?: {
+    recentNotes?: Array<{
+      id?: string | null;
+      title?: string | null;
+      notes?: string | null;
+      updatedAt?: string | null;
+    }> | null;
     derived?: {
       dmEntrySource?: "facebook_ad_lead" | "organic_messenger" | "unknown" | null;
     } | null;
@@ -57,6 +63,14 @@ function formatTimestamp(value: string | null | undefined): string | null {
     hour: "numeric",
     minute: "2-digit",
   }).format(parsed);
+}
+
+function compactText(value: string | null | undefined, maxLen = 220): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLen - 3))}...`;
 }
 
 export function ContactSalesAgentMemoryClient({ contactId }: Props): React.ReactElement {
@@ -116,6 +130,13 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
   const memory = payload?.memory ?? null;
   const updatedAt = formatTimestamp(memory?.updatedAt);
   const dmEntrySource = payload?.liveContext?.derived?.dmEntrySource ?? null;
+  const latestReviewNote =
+    (payload?.liveContext?.recentNotes ?? []).find((note) => {
+      const title = typeof note?.title === "string" ? note.title.trim().toLowerCase() : "";
+      return title.startsWith("agent review");
+    }) ?? null;
+  const latestReviewNoteBody = compactText(latestReviewNote?.notes, 280);
+  const latestReviewNoteUpdatedAt = formatTimestamp(latestReviewNote?.updatedAt);
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3">
@@ -183,6 +204,16 @@ export function ContactSalesAgentMemoryClient({ contactId }: Props): React.React
               <div>
                 <div className="font-semibold text-slate-700">Last promised next step</div>
                 <div>{memory.lastPromisedNextStep}</div>
+              </div>
+            ) : null}
+
+            {latestReviewNoteBody ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                <div className="font-semibold uppercase tracking-wide">Latest operator review note</div>
+                <div className="mt-1 text-sm font-normal leading-6">{latestReviewNoteBody}</div>
+                {latestReviewNoteUpdatedAt ? (
+                  <div className="mt-1 text-[11px] text-amber-800">Saved {latestReviewNoteUpdatedAt}</div>
+                ) : null}
               </div>
             ) : null}
 
