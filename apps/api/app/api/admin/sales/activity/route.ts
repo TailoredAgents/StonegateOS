@@ -41,6 +41,33 @@ const DEFAULT_ACTIONS = [
 type ReasonCount = { label: string; count: number };
 type WinSignal = { label: string; detail: string };
 type AttentionSignal = { label: string; detail: string; tone: "warn" | "bad" };
+type CloseLoopSegmentSlice = {
+  attempts: number;
+  byAction: {
+    appointment_checkin: {
+      attempts: number;
+      preservedRate: number;
+      completedRate: number;
+    };
+    appointment_support: {
+      attempts: number;
+      replyRate: number;
+      rescheduleRate: number;
+      preservedRate: number;
+    };
+    post_job_checkin: {
+      attempts: number;
+      replyRate: number;
+      repeatBookRate: number;
+    };
+  };
+  learned: {
+    appointmentCheckinWorthwhile: boolean;
+    appointmentSupportWorthwhile: boolean;
+    appointmentSupportNeedsLightTouch: boolean;
+    postJobCheckinWorthwhile: boolean;
+  };
+};
 type CloseLoopActivitySummary = {
   total: number;
   draftCount: number;
@@ -437,6 +464,123 @@ function buildSupervisorAttention(input: {
   return items.slice(0, 3);
 }
 
+function buildCloseLoopSegmentSignals(input: {
+  byServiceFamily: Record<"junk" | "demo" | "brush", CloseLoopSegmentSlice>;
+  bySourceFamily: Record<"facebook" | "public_site", CloseLoopSegmentSlice>;
+}): {
+  helping: WinSignal[];
+  attention: AttentionSignal[];
+} {
+  const helpingCandidates: Array<WinSignal & { score: number }> = [];
+  const attentionCandidates: Array<AttentionSignal & { score: number }> = [];
+  const segments: Array<{ label: string; slice: CloseLoopSegmentSlice }> = [
+    { label: "Junk jobs", slice: input.byServiceFamily.junk },
+    { label: "Demo jobs", slice: input.byServiceFamily.demo },
+    { label: "Brush jobs", slice: input.byServiceFamily.brush },
+    { label: "Facebook leads", slice: input.bySourceFamily.facebook },
+    { label: "Public-site leads", slice: input.bySourceFamily.public_site },
+  ];
+
+  for (const segment of segments) {
+    if (segment.slice.attempts < 4) continue;
+    const preAppointment = segment.slice.byAction.appointment_checkin;
+    const bookedSupport = segment.slice.byAction.appointment_support;
+    const postJob = segment.slice.byAction.post_job_checkin;
+
+    if (
+      segment.slice.learned.appointmentCheckinWorthwhile &&
+      (preAppointment.preservedRate >= 0.75 || preAppointment.completedRate >= 0.55)
+    ) {
+      helpingCandidates.push({
+        label: `${segment.label} respond well to pre-appointment protection`,
+        detail:
+          preAppointment.preservedRate >= preAppointment.completedRate
+            ? `${formatRatePercent(preAppointment.preservedRate)} of recent pre-appointment touches are preserving booked work in this segment.`
+            : `${formatRatePercent(preAppointment.completedRate)} of recent pre-appointment touches are still carrying through to completion in this segment.`,
+        score: Math.max(preAppointment.preservedRate, preAppointment.completedRate),
+      });
+    }
+
+    if (
+      segment.slice.learned.appointmentSupportWorthwhile &&
+      (bookedSupport.replyRate >= 0.2 || bookedSupport.rescheduleRate >= 0.2 || bookedSupport.preservedRate >= 0.75)
+    ) {
+      helpingCandidates.push({
+        label: `${segment.label} are responding well to booked-job support`,
+        detail:
+          bookedSupport.rescheduleRate >= bookedSupport.replyRate && bookedSupport.rescheduleRate >= 0.2
+            ? `${formatRatePercent(bookedSupport.rescheduleRate)} of recent support touches are saving reschedules in this segment.`
+            : `${formatRatePercent(bookedSupport.replyRate)} of recent support touches are getting a reply while preserving momentum in this segment.`,
+        score: Math.max(bookedSupport.replyRate, bookedSupport.rescheduleRate, bookedSupport.preservedRate),
+      });
+    }
+
+    if (
+      segment.slice.learned.postJobCheckinWorthwhile &&
+      (postJob.repeatBookRate >= 0.05 || postJob.replyRate >= 0.12)
+    ) {
+      helpingCandidates.push({
+        label: `${segment.label} are generating post-job lift`,
+        detail:
+          postJob.repeatBookRate >= 0.05
+            ? `${formatRatePercent(postJob.repeatBookRate)} of recent post-job touches are showing repeat-booking lift in this segment.`
+            : `${formatRatePercent(postJob.replyRate)} of recent post-job touches are getting useful response in this segment.`,
+        score: Math.max(postJob.repeatBookRate, postJob.replyRate),
+      });
+    }
+
+    if (
+      preAppointment.attempts >= 4 &&
+      !segment.slice.learned.appointmentCheckinWorthwhile &&
+      preAppointment.preservedRate < 0.65
+    ) {
+      attentionCandidates.push({
+        label: `${segment.label} do not need broad pre-appointment chasing`,
+        detail: `Pre-appointment touches are not preserving enough booked work in this segment, so keep them selective.`,
+        tone: preAppointment.preservedRate < 0.5 ? "bad" : "warn",
+        score: 1 - preAppointment.preservedRate,
+      });
+    }
+
+    if (
+      bookedSupport.attempts >= 4 &&
+      segment.slice.learned.appointmentSupportNeedsLightTouch &&
+      bookedSupport.replyRate < 0.15
+    ) {
+      attentionCandidates.push({
+        label: `${segment.label} need lighter booked-job support`,
+        detail: `Booked-job support is getting noisy in this segment, so keep those replies practical and low pressure.`,
+        tone: bookedSupport.replyRate < 0.1 && bookedSupport.rescheduleRate < 0.08 ? "bad" : "warn",
+        score: 1 - Math.max(bookedSupport.replyRate, bookedSupport.rescheduleRate),
+      });
+    }
+
+    if (
+      postJob.attempts >= 4 &&
+      !segment.slice.learned.postJobCheckinWorthwhile &&
+      postJob.repeatBookRate < 0.03
+    ) {
+      attentionCandidates.push({
+        label: `${segment.label} are not getting much from post-job follow-up`,
+        detail: `Post-job touches are creating limited response or repeat demand in this segment, so keep them low pressure.`,
+        tone: postJob.replyRate < 0.08 ? "bad" : "warn",
+        score: 1 - Math.max(postJob.repeatBookRate, postJob.replyRate),
+      });
+    }
+  }
+
+  return {
+    helping: helpingCandidates
+      .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.label.localeCompare(b.label)))
+      .slice(0, 3)
+      .map(({ score: _score, ...rest }) => rest),
+    attention: attentionCandidates
+      .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.label.localeCompare(b.label)))
+      .slice(0, 3)
+      .map(({ score: _score, ...rest }) => rest),
+  };
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -689,6 +833,17 @@ export async function GET(request: NextRequest): Promise<Response> {
       needsHumanBackup: appointmentPreservationSummary.learned.needsHumanBackup,
     },
   });
+  const closeLoopSegmentSignals = buildCloseLoopSegmentSignals({
+    byServiceFamily: {
+      junk: closeLoopOutcomeSummary.byServiceFamily.junk,
+      demo: closeLoopOutcomeSummary.byServiceFamily.demo,
+      brush: closeLoopOutcomeSummary.byServiceFamily.brush,
+    },
+    bySourceFamily: {
+      facebook: closeLoopOutcomeSummary.bySourceFamily.facebook,
+      public_site: closeLoopOutcomeSummary.bySourceFamily.public_site,
+    },
+  });
 
   return NextResponse.json({
     ok: true,
@@ -717,6 +872,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         appointmentSupportNeedsLightTouch: closeLoopOutcomeSummary.learned.appointmentSupportNeedsLightTouch,
         postJobCheckinWorthwhile: closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
       },
+      closeLoopSegmentSignals,
       attentionItems,
       topWins,
       topHoldReasons,

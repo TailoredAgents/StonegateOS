@@ -781,6 +781,47 @@ export function SalesHqClient({
                     : "Post-job check-ins are still early and should stay low pressure."}
                 </div>
               </div>
+              {supervisor.closeLoopSegmentSignals.helping.length || supervisor.closeLoopSegmentSignals.attention.length ? (
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {supervisor.closeLoopSegmentSignals.helping.length ? (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 text-xs">
+                      <div className="font-semibold uppercase tracking-[0.18em] text-emerald-700">Helping By Segment</div>
+                      <div className="mt-3 space-y-2">
+                        {supervisor.closeLoopSegmentSignals.helping.map((item) => (
+                          <div key={`${item.label}:${item.detail}`} className="rounded-2xl border border-emerald-200 bg-white/80 p-3">
+                            <div className="text-sm font-semibold text-emerald-950">{item.label}</div>
+                            <div className="mt-1 text-xs text-emerald-900">{item.detail}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {supervisor.closeLoopSegmentSignals.attention.length ? (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-3 text-xs">
+                      <div className="font-semibold uppercase tracking-[0.18em] text-amber-800">Slipping By Segment</div>
+                      <div className="mt-3 space-y-2">
+                        {supervisor.closeLoopSegmentSignals.attention.map((item) => (
+                          <div
+                            key={`${item.label}:${item.detail}`}
+                            className={`rounded-2xl border p-3 ${
+                              item.tone === "bad"
+                                ? "border-rose-200 bg-rose-50/80"
+                                : "border-amber-200 bg-white/80"
+                            }`}
+                          >
+                            <div className={`text-sm font-semibold ${item.tone === "bad" ? "text-rose-900" : "text-amber-950"}`}>
+                              {item.label}
+                            </div>
+                            <div className={`mt-1 text-xs ${item.tone === "bad" ? "text-rose-800" : "text-amber-900"}`}>
+                              {item.detail}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

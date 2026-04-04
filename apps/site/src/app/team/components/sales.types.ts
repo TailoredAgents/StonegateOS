@@ -136,6 +136,17 @@ export type SalesSupervisorPayload = {
     appointmentSupportNeedsLightTouch: boolean;
     postJobCheckinWorthwhile: boolean;
   };
+  closeLoopSegmentSignals: {
+    helping: Array<{
+      label: string;
+      detail: string;
+    }>;
+    attention: Array<{
+      label: string;
+      detail: string;
+      tone: "warn" | "bad";
+    }>;
+  };
   attentionItems: Array<{
     label: string;
     detail: string;
