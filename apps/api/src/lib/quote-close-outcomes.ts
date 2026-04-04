@@ -93,7 +93,7 @@ export async function loadQuoteCloseOutcomeSummary(
           select 1
           from ${auditLogs} audit
           where audit.entity_type = 'contact'
-            and audit.entity_id = ${conversationThreads.contactId}
+            and audit.entity_id = ${conversationThreads.contactId}::text
             and audit.action = 'sales.disposition.set'
             and coalesce(audit.meta ->> 'markLost', 'false') = 'true'
             and audit.created_at >= ${sentAtExpr}
