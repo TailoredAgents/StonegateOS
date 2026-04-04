@@ -63,6 +63,11 @@ export type QueuePayload = {
       createdAt: string;
       ready: true;
     } | null;
+    latestReviewNote?: {
+      title: string | null;
+      body: string | null;
+      updatedAt: string;
+    } | null;
     draftTarget?: {
       threadId: string;
       channel: string;

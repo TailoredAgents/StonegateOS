@@ -116,6 +116,14 @@ function formatTimestamp(value: string | null): string {
   }).format(parsed);
 }
 
+function compactText(value: string | null | undefined, maxLen = 160): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLen - 3))}...`;
+}
+
 function formatActionLabel(value: string | null | undefined): string {
   if (!value) return "Unknown";
   return value
@@ -626,6 +634,7 @@ export function SalesHqClient({
                   const selected = selectedItem?.id === item.id;
                   const dueTone = item.overdue ? "bad" : item.minutesUntilDue !== null && item.minutesUntilDue <= 2 ? "warn" : "neutral";
                   const phoneLabel = item.contact.phone ? item.contact.phone : "Phone not on file yet";
+                  const reviewNotePreview = compactText(item.latestReviewNote?.body ?? null, 120);
                   return (
                     <button
                       key={item.id}
@@ -657,6 +666,11 @@ export function SalesHqClient({
                           {item.draft?.bodyPreview ? (
                             <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] text-emerald-800">
                               Draft ready: {item.draft.bodyPreview}
+                            </div>
+                          ) : null}
+                          {activeQueue === "human_review" && reviewNotePreview ? (
+                            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+                              <span className="font-medium text-amber-800">Review note:</span> {reviewNotePreview}
                             </div>
                           ) : null}
                         </div>
@@ -790,6 +804,17 @@ export function SalesHqClient({
                   <div className="mt-2 text-[11px] text-slate-500">
                     {formatTimestamp(selectedItem.lastAgentActivity.createdAt)}
                   </div>
+                </div>
+              ) : null}
+
+              {selectedItem.latestReviewNote?.body ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">Latest operator review note</div>
+                    {selectedItem.latestReviewNote.title ? <Pill tone="warn">{selectedItem.latestReviewNote.title}</Pill> : null}
+                  </div>
+                  <div className="mt-2 whitespace-pre-wrap">{selectedItem.latestReviewNote.body}</div>
+                  <div className="mt-2 text-[11px] text-amber-800">{formatTimestamp(selectedItem.latestReviewNote.updatedAt)}</div>
                 </div>
               ) : null}
 

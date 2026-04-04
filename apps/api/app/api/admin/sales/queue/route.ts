@@ -586,6 +586,14 @@ export async function GET(request: NextRequest): Promise<Response> {
       }
     | null
   >();
+  const latestReviewNoteByContactId = new Map<
+    string,
+    {
+      title: string | null;
+      body: string | null;
+      updatedAt: string;
+    } | null
+  >();
   const threadByContactId = new Map<
     string,
     {
@@ -686,6 +694,34 @@ export async function GET(request: NextRequest): Promise<Response> {
   );
 
   if (contactIds.length > 0) {
+    const reviewNoteRows = await db
+      .select({
+        contactId: crmTasks.contactId,
+        title: crmTasks.title,
+        notes: crmTasks.notes,
+        updatedAt: crmTasks.updatedAt,
+      })
+      .from(crmTasks)
+      .where(
+        and(
+          inArray(crmTasks.contactId, contactIds),
+          eq(crmTasks.status, "completed"),
+          isNull(crmTasks.dueAt),
+          ilike(crmTasks.title, "Agent review%")
+        )
+      )
+      .orderBy(desc(crmTasks.updatedAt))
+      .limit(500);
+
+    for (const row of reviewNoteRows) {
+      if (!row.contactId || latestReviewNoteByContactId.has(row.contactId)) continue;
+      latestReviewNoteByContactId.set(row.contactId, {
+        title: row.title ?? null,
+        body: row.notes ?? null,
+        updatedAt: row.updatedAt.toISOString(),
+      });
+    }
+
     const threadRows = await db
       .select({
         contactId: conversationThreads.contactId,
@@ -964,6 +1000,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         ...item,
         nextAction,
         draft,
+        latestReviewNote: latestReviewNoteByContactId.get(item.contact.id) ?? null,
         draftTarget: draftTarget
           ? {
               threadId: draftTarget.threadId,
