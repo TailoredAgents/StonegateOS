@@ -13,6 +13,7 @@ export type ServiceAreaPolicy = {
   homeBase?: string;
   radiusMiles?: number;
   zipAllowlist: string[];
+  cityAllowlist: string[];
   notes?: string;
 };
 
@@ -189,15 +190,15 @@ export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
   primaryPhone: "(404) 777-2631",
   discountPercent: 0.15,
   serviceAreaSummary:
-    "We serve Georgia (primarily north and central Georgia). Share your ZIP code and we will confirm availability.",
+    "We serve north and central Georgia. If you are in one of our core service cities, city alone is enough to get moving. Otherwise share your city or ZIP and we will confirm availability.",
   trailerAndPricingSummary:
     "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume. Minimum pickup starts at $150; quarter load $175; half load $350; 3/4 load $525; full load $700. Photos help us estimate quickly.",
   whatWeDo: "Junk removal and hauling for household and light commercial items.",
   whatWeDontDo: "We do not take hazmat, oils, or paints. Ask if unsure.",
   bookingStyle:
-    "Offer 2 concrete options and move to booking. Ask for zip code first, then items and timing. If photos are available, request them. If we have enough info, propose a time and book it.",
+    "Offer 2 concrete options and move to booking. If the customer already gave a core service city, do not stop on ZIP first. Ask only for the location detail needed to confirm service area, then get items and timing. If photos are available, request them. If we have enough info, propose a time and book it.",
   agentNotes:
-    "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If ZIP is outside our service area, politely say we can't serve that area.",
+    "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If the customer gives a city that is one of our core service cities, do not keep asking for ZIP before moving the sale forward. Only ask for ZIP when the city is missing, ambiguous, or outside the core-city coverage.",
   outboundCallRecordingNotice:
     "This call may be recorded for quality and training."
 };
@@ -258,9 +259,10 @@ export const DEFAULT_CONVERSATION_PERSONA_POLICY: ConversationPersonaPolicy = {
     "- Be concise and specific; avoid filler.",
     "- Do NOT use bullet points, numbered lists, or hyphen/dash characters of any kind in the customer message.",
     '- Do NOT include any links, URLs, domains, or paths (including "/book").',
-    "- Ask only for what you still need to move forward: items, timing, ZIP/address, and photos when helpful.",
+    "- Ask only for what you still need to move forward: items, timing, city or ZIP/address, and photos when helpful.",
     "- Do NOT mention internal systems, databases, webhooks, or that you're an AI.",
     "- If the ZIP is outside Georgia, politely say we currently serve Georgia only.",
+    "- If the customer gives a city that is one of our core service cities, do not keep asking for ZIP before moving the conversation forward.",
     "- If the ZIP is in Georgia but outside the usual service area, do not reject. Confirm location and proceed if reasonable."
   ].join("\n")
 };
@@ -586,6 +588,18 @@ export const DEFAULT_SERVICE_AREA_POLICY: ServiceAreaPolicy = {
     "31198",
     "31199"
   ],
+  cityAllowlist: [
+    "Acworth",
+    "Alpharetta",
+    "Canton",
+    "Holly Springs",
+    "Johns Creek",
+    "Kennesaw",
+    "Marietta",
+    "Milton",
+    "Roswell",
+    "Woodstock"
+  ],
   notes: "Georgia above Macon (approx. ZIPs < 31200)."
 };
 
@@ -623,12 +637,12 @@ export const DEFAULT_ITEM_POLICIES: ItemPoliciesPolicy = {
 
 export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
   first_touch: {
-    sms: "Hey, this is Stonegate Junk Removal. What all do you need removed and when would you like us to come out? If you can, send a couple photos. If you have not shared your ZIP code yet, please include it.",
+    sms: "Hey, this is Stonegate Junk Removal. What all do you need removed and when would you like us to come out? If you can, send a couple photos. If you have not shared your city or ZIP yet, please include it.",
     email:
-      "Thanks for contacting Stonegate Junk Removal. What items do you need removed and what timeframe are you aiming for? Photos help us quote quickly. If you have not shared your ZIP code yet, please include it.",
-    dm: "Hey, this is Stonegate Junk Removal. What all do you need removed and when do you need it gone? Photos help. If you have not shared your ZIP code yet, please include it.",
-    call: "Sorry we missed you. Text back what you need removed, when you want it gone, and any photos you have. If you have not shared your ZIP code yet, please include it so we can confirm availability.",
-    web: "Hey, this is Stonegate Junk Removal. What all do you need removed and when do you need it gone? Photos help. If you have not shared your ZIP code yet, please include it."
+      "Thanks for contacting Stonegate Junk Removal. What items do you need removed and what timeframe are you aiming for? Photos help us quote quickly. If you have not shared your city or ZIP yet, please include it.",
+    dm: "Hey, this is Stonegate Junk Removal. What all do you need removed and when do you need it gone? Photos help. If you have not shared your city or ZIP yet, please include it.",
+    call: "Sorry we missed you. Text back what you need removed, when you want it gone, and any photos you have. If you have not shared your city or ZIP yet, please include it so we can confirm availability.",
+    web: "Hey, this is Stonegate Junk Removal. What all do you need removed and when do you need it gone? Photos help. If you have not shared your city or ZIP yet, please include it."
   },
   follow_up: {
     sms: "Just checking in. Do you want to lock in a time for your junk removal?",
@@ -653,6 +667,17 @@ export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+export function normalizeCityName(input: string | null | undefined): string | null {
+  if (typeof input !== "string") return null;
+  const normalized = input
+    .replace(/['’]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  return normalized.length > 0 ? normalized : null;
 }
 
 function parseTimeString(value: unknown): { hour: number; minute: number } | null {
@@ -725,6 +750,33 @@ export function isPostalCodeAllowed(postalCode: string, policy: ServiceAreaPolic
   return list.includes(normalized);
 }
 
+export function isCityAllowed(city: string, policy: ServiceAreaPolicy): boolean {
+  const normalized = normalizeCityName(city);
+  if (!normalized) return false;
+  const list = Array.isArray(policy.cityAllowlist) ? policy.cityAllowlist : [];
+  return list
+    .map((value) => normalizeCityName(value))
+    .filter((value): value is string => Boolean(value))
+    .includes(normalized);
+}
+
+export function findAllowedCityInText(
+  text: string | null | undefined,
+  policy: ServiceAreaPolicy,
+): string | null {
+  const normalizedText = normalizeCityName(text);
+  if (!normalizedText) return null;
+  const padded = ` ${normalizedText} `;
+  for (const city of Array.isArray(policy.cityAllowlist) ? policy.cityAllowlist : []) {
+    const normalizedCity = normalizeCityName(city);
+    if (!normalizedCity) continue;
+    if (padded.includes(` ${normalizedCity} `)) {
+      return city;
+    }
+  }
+  return null;
+}
+
 export function isGeorgiaPostalCode(postalCode: string): boolean {
   const normalized = normalizePostalCode(postalCode);
   if (!normalized) return false;
@@ -784,6 +836,10 @@ export async function getServiceAreaPolicy(db: DbExecutor = getDb()): Promise<Se
   const zipAllowlist = Array.isArray(zipAllowlistRaw)
     ? zipAllowlistRaw.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     : DEFAULT_SERVICE_AREA_POLICY.zipAllowlist;
+  const cityAllowlistRaw = stored["cityAllowlist"];
+  const cityAllowlist = Array.isArray(cityAllowlistRaw)
+    ? cityAllowlistRaw.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : DEFAULT_SERVICE_AREA_POLICY.cityAllowlist;
 
   return {
     mode,
@@ -793,6 +849,7 @@ export async function getServiceAreaPolicy(db: DbExecutor = getDb()): Promise<Se
         ? stored["radiusMiles"]
         : DEFAULT_SERVICE_AREA_POLICY.radiusMiles,
     zipAllowlist,
+    cityAllowlist,
     notes: typeof stored["notes"] === "string" ? stored["notes"] : DEFAULT_SERVICE_AREA_POLICY.notes
   };
 }

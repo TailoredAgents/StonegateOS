@@ -1,6 +1,6 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import { appointments, conversationThreads, crmPipeline, getDb, instantQuotes, leads } from "@/db";
-import { normalizePostalCode } from "@/lib/policy";
+import { getServiceAreaPolicy, isCityAllowed, normalizeCityName, normalizePostalCode } from "@/lib/policy";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
@@ -52,6 +52,7 @@ export type OmniThreadFacts = {
     lastMessagePreview: string | null;
   }>;
   knownZip: string | null;
+  knownCity: string | null;
   hasKnownJob: boolean;
   hasPhotos: boolean;
   missingFields: string[];
@@ -86,6 +87,7 @@ export async function loadOmniThreadFacts(
   }
 ): Promise<OmniThreadFacts> {
   const includeQuotePrice = input.includeQuotePrice === true;
+  const serviceAreaPolicy = await getServiceAreaPolicy(db);
 
   let pipelineStage: string | null = null;
   let pipelineNotes: string | null = null;
@@ -220,14 +222,29 @@ export async function loadOmniThreadFacts(
     })()
   ].filter((value): value is string => typeof value === "string" && value.length > 0);
 
+  const cityCandidates = [
+    (() => {
+      const city = latestLead?.formPayload?.["city"];
+      return typeof city === "string" && city.trim().length > 0 ? city.trim() : null;
+    })(),
+    (() => {
+      const property = latestLead?.formPayload?.["property"];
+      if (!property || typeof property !== "object" || Array.isArray(property)) return null;
+      const city = (property as Record<string, unknown>)["city"];
+      return typeof city === "string" && city.trim().length > 0 ? city.trim() : null;
+    })(),
+  ].filter((value): value is string => typeof value === "string" && value.length > 0);
+
   const knownZip = zipCandidates[0] ?? null;
+  const knownCity = cityCandidates[0] ?? null;
+  const cityClearsServiceArea = knownCity ? isCityAllowed(knownCity, serviceAreaPolicy) : false;
   const hasKnownJob =
     Boolean(instantQuote && (instantQuote.jobTypes.length > 0 || instantQuote.perceivedSize.trim().length > 0)) ||
     Boolean(latestLead && latestLead.servicesRequested.length > 0);
   const hasPhotos = Boolean(instantQuote && instantQuote.photoUrls.length > 0);
 
   const missingFields: string[] = [];
-  if (!knownZip) missingFields.push("zip");
+  if (!knownZip && !cityClearsServiceArea) missingFields.push("zip");
   if (!hasKnownJob) missingFields.push("items");
   if (!nextAppointment) {
     const tf =
@@ -248,6 +265,7 @@ export async function loadOmniThreadFacts(
     nextAppointment,
     otherChannelThreads,
     knownZip,
+    knownCity,
     hasKnownJob,
     hasPhotos,
     missingFields

@@ -17,7 +17,14 @@ import {
   quotes,
 } from "@/db";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
-import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import {
+  findAllowedCityInText,
+  getServiceAreaPolicy,
+  isCityAllowed,
+  isPostalCodeAllowed,
+  normalizeCityName,
+  normalizePostalCode,
+} from "@/lib/policy";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor =
@@ -451,6 +458,7 @@ export type OmniLeadContext = {
   }>;
   omniFacts: Awaited<ReturnType<typeof loadOmniThreadFacts>>;
   derived: {
+    knownCity: string | null;
     knownZip: string | null;
     objections: string[];
     channelPreference: string | null;
@@ -830,7 +838,32 @@ export async function loadOmniLeadContext(
     omniFacts.knownZip ??
     normalizePostalCode(recentProperties[0]?.postalCode ?? null) ??
     (latestInstantQuoteRow ? normalizePostalCode(latestInstantQuoteRow.zip) : null);
-  const serviceAreaAllowed = knownZip ? isPostalCodeAllowed(knownZip, serviceAreaPolicy) : null;
+  const messageCityMatch = findAllowedCityInText(
+    recentMessages
+      .filter((message) => message.direction === "inbound")
+      .map((message) => message.body)
+      .join("\n"),
+    serviceAreaPolicy,
+  );
+  const knownCity =
+    messageCityMatch ??
+    omniFacts.knownCity ??
+    cleanText(recentProperties[0]?.city) ??
+    (() => {
+      const city = latestLead?.formPayload?.["city"];
+      return typeof city === "string" ? cleanText(city) : null;
+    })() ??
+    (() => {
+      const property = latestLead?.formPayload?.["property"];
+      if (!property || typeof property !== "object" || Array.isArray(property)) return null;
+      const city = (property as Record<string, unknown>)["city"];
+      return typeof city === "string" ? cleanText(city) : null;
+    })();
+  const serviceAreaAllowed = knownZip
+    ? isPostalCodeAllowed(knownZip, serviceAreaPolicy)
+    : knownCity
+      ? isCityAllowed(knownCity, serviceAreaPolicy)
+      : null;
   const instantQuoteMediaAnalysis = extractMediaAnalysis(latestInstantQuoteRow?.aiResult);
   const mediaConfidenceRaw = latestMediaAnalysisRow?.confidence;
   const mediaConfidence: "low" | "medium" | "high" | null =
@@ -862,6 +895,7 @@ export async function loadOmniLeadContext(
       ...omniFacts.missingFields,
       ...(instantQuoteMediaAnalysis.missingViews.length > 0 ? ["one better photo angle"] : []),
       ...(mediaAnalysis?.missingViews.length ? ["one better photo angle"] : []),
+      ...(knownZip || (knownCity && isCityAllowed(knownCity, serviceAreaPolicy)) ? [] : ["zip"]),
       ...(contact.phoneE164 || contact.phone ? [] : ["phone"]),
       ...(contact.email ? [] : ["email"]),
     ]),
@@ -1013,6 +1047,7 @@ export async function loadOmniLeadContext(
     omniFacts,
     derived: {
       knownZip,
+      knownCity,
       objections,
       channelPreference,
       dmEntrySource,

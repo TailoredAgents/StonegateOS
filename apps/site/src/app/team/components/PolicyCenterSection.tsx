@@ -68,7 +68,7 @@ const POLICY_LABELS: Record<PolicyKey, { title: string; description: string }> =
   },
   service_area: {
     title: "Service area",
-    description: "Define ZIP codes and boundaries for service coverage."
+    description: "Define core service cities plus ZIP and boundary rules for service coverage."
   },
   company_profile: {
     title: "Company profile",
@@ -248,6 +248,9 @@ export async function PolicyCenterSection({
   const zipAllowlist = Array.isArray(serviceValue["zipAllowlist"])
     ? serviceValue["zipAllowlist"].filter((zip): zip is string => typeof zip === "string")
     : [];
+  const cityAllowlist = Array.isArray(serviceValue["cityAllowlist"])
+    ? serviceValue["cityAllowlist"].filter((city): city is string => typeof city === "string")
+    : [];
 
   const companySetting = settingsByKey.get("company_profile");
   const companyValue = isRecord(companySetting?.value) ? companySetting!.value : {};
@@ -268,7 +271,7 @@ export async function PolicyCenterSection({
   const companyServiceAreaSummary =
     typeof companyValue["serviceAreaSummary"] === "string" && companyValue["serviceAreaSummary"].trim().length > 0
       ? companyValue["serviceAreaSummary"]
-      : "North Metro Atlanta within about 50 miles of Woodstock, Georgia (ZIP allowlist).";
+      : "North Metro Atlanta within about 50 miles of Woodstock, Georgia. Core service cities can move forward on city alone, while other areas may still need ZIP confirmation.";
   const companyTrailerAndPricingSummary =
     typeof companyValue["trailerAndPricingSummary"] === "string" && companyValue["trailerAndPricingSummary"].trim().length > 0
       ? companyValue["trailerAndPricingSummary"]
@@ -284,11 +287,11 @@ export async function PolicyCenterSection({
   const companyBookingStyle =
     typeof companyValue["bookingStyle"] === "string" && companyValue["bookingStyle"].trim().length > 0
       ? companyValue["bookingStyle"]
-      : "Offer 2 concrete options and move to booking. Ask for ZIP, item details, and preferred timing. If photos are available, request them.";
+      : "Offer 2 concrete options and move to booking. If the customer already gave a core service city, do not stop on ZIP first. Ask for the location detail you still need, then item details and preferred timing. If photos are available, request them.";
   const companyAgentNotes =
     typeof companyValue["agentNotes"] === "string" && companyValue["agentNotes"].trim().length > 0
       ? companyValue["agentNotes"]
-      : "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links.";
+      : "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If the customer already gave a core service city, do not keep asking for ZIP before moving the sale forward.";
   const companyOutboundCallRecordingNotice =
     typeof companyValue["outboundCallRecordingNotice"] === "string"
       ? (companyValue["outboundCallRecordingNotice"] as string)
@@ -521,6 +524,18 @@ export async function PolicyCenterSection({
                   className={INPUT_CLASS}
                 />
               </div>
+            </div>
+            <div>
+              <label className={LABEL_CLASS}>Core service cities</label>
+              <textarea
+                name="cityAllowlist"
+                rows={3}
+                defaultValue={cityAllowlist.join(", ")}
+                className={TEXTAREA_CLASS}
+              />
+              <p className="mt-2 text-[11px] text-slate-500">
+                If a customer gives one of these cities, the agent can proceed without asking for ZIP first.
+              </p>
             </div>
             <div>
               <label className={LABEL_CLASS}>ZIP allowlist</label>

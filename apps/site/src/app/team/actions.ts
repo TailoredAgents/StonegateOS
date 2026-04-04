@@ -2539,6 +2539,7 @@ export async function updateServiceAreaPolicyAction(formData: FormData) {
     mode === "ga_only" || mode === "ga_above_macon"
       ? []
       : parseZipListField(formData.get("zipAllowlist"));
+  const cityAllowlist = parseListField(formData.get("cityAllowlist"));
   const notesRaw = formData.get("notes");
   const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
 
@@ -2550,6 +2551,7 @@ export async function updateServiceAreaPolicyAction(formData: FormData) {
       homeBase: homeBase.length > 0 ? homeBase : undefined,
       radiusMiles,
       zipAllowlist,
+      cityAllowlist,
       notes: notes.length > 0 ? notes : undefined,
     },
     "Service area updated",

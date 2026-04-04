@@ -10,7 +10,19 @@ import {
   properties
 } from "@/db";
 import { requirePermission } from "@/lib/permissions";
-import { getBusinessHoursPolicy, getCompanyProfilePolicy, getConversationPersonaPolicy, getSalesAutopilotPolicy, getServiceAreaPolicy, getTemplatesPolicy, isGeorgiaPostalCode, isPostalCodeAllowed, normalizePostalCode, resolveTemplateForChannel } from "@/lib/policy";
+import {
+  getBusinessHoursPolicy,
+  getCompanyProfilePolicy,
+  getConversationPersonaPolicy,
+  getSalesAutopilotPolicy,
+  getServiceAreaPolicy,
+  getTemplatesPolicy,
+  isCityAllowed,
+  isGeorgiaPostalCode,
+  isPostalCodeAllowed,
+  normalizePostalCode,
+  resolveTemplateForChannel,
+} from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { loadOmniLeadContext } from "@/lib/omni-lead-context";
@@ -780,11 +792,6 @@ export async function POST(
     getSalesAutopilotPolicy(db),
   ]);
 
- const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
-  const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
-  const outsideUsualArea =
-    normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
-
   const omni = await loadOmniThreadFacts(db, {
     threadId,
     contactId: threadContext.contactId,
@@ -797,6 +804,16 @@ export async function POST(
         includeQuotePrice: didCustomerAskAboutPrice(messages),
       })
     : null;
+  const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
+  const knownCity =
+    leadContext?.derived.knownCity ??
+    omni.knownCity ??
+    threadContext.propertyCity ??
+    null;
+  const cityClearsServiceArea = knownCity ? isCityAllowed(knownCity, serviceArea) : false;
+  const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
+  const outsideUsualArea =
+    normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
   const builtSalesAgentMemory = leadContext ? buildSalesAgentMemory(leadContext) : null;
   const appointmentPreservationOutcomeSummary = leadContext ? await loadAppointmentPreservationOutcomeSummary(db) : null;
   const appointmentReminderOutcomeSummary = leadContext ? await loadAppointmentReminderOutcomeSummary(db) : null;
@@ -1088,11 +1105,14 @@ export async function POST(
     threadContext.contactPhoneE164 || threadContext.contactPhone ? `Customer phone: ${threadContext.contactPhoneE164 ?? threadContext.contactPhone}` : null,
     threadContext.contactEmail ? `Customer email: ${threadContext.contactEmail}` : null,
     threadContext.propertyAddressLine1 ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}` : null,
+    knownCity ? `Known city: ${knownCity}` : null,
     normalizedPostal ? `ZIP: ${normalizedPostal}` : null,
     inGeorgia === false
       ? `Location: OUT OF STATE (Georgia only)`
       : outsideUsualArea === true
         ? `Location: outside usual area (confirm)`
+        : cityClearsServiceArea
+          ? `Location: core service city confirmed. Do not ask for ZIP before moving the sale forward.`
         : outsideUsualArea === false
           ? `Location: OK`
           : `Location: unknown (ask for ZIP)`,
