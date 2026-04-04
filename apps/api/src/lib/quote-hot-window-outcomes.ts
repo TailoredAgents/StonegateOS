@@ -150,6 +150,7 @@ export async function loadQuoteHotWindowOutcomeSummary(
   input?: { windowStart?: Date },
 ): Promise<QuoteHotWindowOutcomeSummary> {
   const windowStart = input?.windowStart ?? new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+  const windowStartIso = windowStart.toISOString();
   const rows = (await db.execute(
     sql`
       select
@@ -168,7 +169,7 @@ export async function loadQuoteHotWindowOutcomeSummary(
         ) as "bookedAt"
       from instant_quotes iq
       left join leads lead on lead.instant_quote_id = iq.id
-      where iq.created_at >= ${windowStart}
+      where iq.created_at >= ${windowStartIso}
       order by iq.created_at desc
       limit 2000
     `,

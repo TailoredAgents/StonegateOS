@@ -202,6 +202,7 @@ export async function loadQuoteAccuracyOutcomeSummary(
   input?: { windowStart?: Date },
 ): Promise<QuoteAccuracyOutcomeSummary> {
   const windowStart = input?.windowStart ?? new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+  const windowStartIso = windowStart.toISOString();
   const rows = (await db.execute(
     sql`
       select
@@ -218,7 +219,7 @@ export async function loadQuoteAccuracyOutcomeSummary(
       join instant_quotes iq on iq.id = lead.instant_quote_id
       where appt.status = 'completed'
         and appt.final_total_cents is not null
-        and coalesce(appt.completed_at, appt.created_at) >= ${windowStart}
+        and coalesce(appt.completed_at, appt.created_at) >= ${windowStartIso}
       order by coalesce(appt.completed_at, appt.created_at) desc
       limit 1000
     `,
