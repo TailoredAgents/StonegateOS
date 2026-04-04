@@ -3,7 +3,13 @@ import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE, getAdminKey } from "@/lib/admin-session";
 import { callAdminApi } from "../lib/api";
 import { SalesHqClient } from "./SalesHqClient";
-import type { CallCoachingPayload, QueuePayload, ScorecardPayload, TeamMemberPayload } from "./sales.types";
+import type {
+  CallCoachingPayload,
+  QueuePayload,
+  SalesSupervisorPayload,
+  ScorecardPayload,
+  TeamMemberPayload,
+} from "./sales.types";
 
 export async function SalesScorecardSection(): Promise<React.ReactElement> {
   const rangeDays = 7;
@@ -11,6 +17,7 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
   let queue: QueuePayload | null = null;
   let teamMembers: TeamMemberPayload["members"] = [];
   let callCoaching: CallCoachingPayload | null = null;
+  let supervisor: SalesSupervisorPayload | null = null;
   let error: string | null = null;
 
   const adminKey = getAdminKey();
@@ -40,11 +47,18 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
   const activeMemberId = scorecard?.memberId ?? queue?.memberId ?? null;
   if (!error && activeMemberId) {
     try {
-      const coachingRes = await callAdminApi(
-        `/api/admin/calls/coaching?rangeDays=${rangeDays}&memberId=${encodeURIComponent(activeMemberId)}`
-      );
-      if (coachingRes.ok) {
-        callCoaching = (await coachingRes.json()) as CallCoachingPayload;
+      const [coachingRes, activityRes] = await Promise.all([
+        callAdminApi(
+          `/api/admin/calls/coaching?rangeDays=${rangeDays}&memberId=${encodeURIComponent(activeMemberId)}`
+        ),
+        callAdminApi(
+          `/api/admin/sales/activity?rangeDays=${rangeDays}&limit=50&memberId=${encodeURIComponent(activeMemberId)}`
+        ),
+      ]);
+      if (coachingRes.ok) callCoaching = (await coachingRes.json()) as CallCoachingPayload;
+      if (activityRes.ok) {
+        const payload = (await activityRes.json()) as { supervisor?: SalesSupervisorPayload };
+        supervisor = payload.supervisor ?? null;
       }
     } catch {
       // optional
@@ -67,9 +81,9 @@ export async function SalesScorecardSection(): Promise<React.ReactElement> {
       queue={queue}
       teamMembers={teamMembers}
       callCoaching={callCoaching}
+      supervisor={supervisor}
       error={error}
       isOwnerSession={isOwnerSession}
     />
   );
 }
-

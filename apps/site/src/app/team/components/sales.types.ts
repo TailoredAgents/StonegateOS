@@ -105,6 +105,35 @@ export type TeamMemberPayload = {
   members?: Array<{ id: string; name: string; active: boolean }>;
 };
 
+export type SalesSupervisorPayload = {
+  activeHumanReviewCount: number;
+  recentlyReviewedCount: number;
+  agentDraftCount: number;
+  agentAutosendCount: number;
+  quoteClose: {
+    attempts: number;
+    bookRate: number;
+    lostRate: number;
+    preferredChannel: "sms" | "dm" | null;
+    keepSofter: boolean;
+  };
+  objectionSave: {
+    attempts: number;
+    reopenRate: number;
+    bookRate: number;
+    preferredChannel: "sms" | "dm" | null;
+    keepSofter: boolean;
+  };
+  appointmentPreservation: {
+    attempts: number;
+    completedRate: number;
+    canceledRate: number;
+    noShowRate: number;
+    strongestTouchKind: "requested" | "rescheduled" | "reminder" | "other" | null;
+    needsHumanBackup: boolean;
+  };
+};
+
 export type CallCoachingPayload = {
   ok: true;
   memberId: string;

@@ -8,7 +8,13 @@ import type { ContactReminderSummary, ContactSummary } from "./contacts.types";
 import { InboxContactNotesClient } from "./InboxContactNotesClient";
 import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
 import { ContactSalesAgentNextActionClient } from "./ContactSalesAgentNextActionClient";
-import type { CallCoachingPayload, QueuePayload, ScorecardPayload, TeamMemberPayload } from "./sales.types";
+import type {
+  CallCoachingPayload,
+  QueuePayload,
+  SalesSupervisorPayload,
+  ScorecardPayload,
+  TeamMemberPayload,
+} from "./sales.types";
 
 type Props = {
   rangeDays: number;
@@ -18,6 +24,7 @@ type Props = {
   queue: QueuePayload | null;
   teamMembers: TeamMemberPayload["members"];
   callCoaching: CallCoachingPayload | null;
+  supervisor: SalesSupervisorPayload | null;
   error: string | null;
   isOwnerSession: boolean;
 };
@@ -116,6 +123,19 @@ function formatTimestamp(value: string | null): string {
   }).format(parsed);
 }
 
+function formatPercent(value: number | null | undefined): string {
+  const numeric = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return `${Math.round(numeric * 100)}%`;
+}
+
+function formatTouchKindLabel(value: SalesSupervisorPayload["appointmentPreservation"]["strongestTouchKind"]): string | null {
+  if (!value) return null;
+  if (value === "requested") return "Initial confirmation";
+  if (value === "rescheduled") return "Reschedule confirmation";
+  if (value === "reminder") return "Reminder";
+  return "Other";
+}
+
 function compactText(value: string | null | undefined, maxLen = 160): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -197,6 +217,7 @@ export function SalesHqClient({
   queue,
   teamMembers,
   callCoaching,
+  supervisor,
   error,
   isOwnerSession
 }: Props): React.ReactElement {
@@ -542,6 +563,77 @@ export function SalesHqClient({
 
       {actionError ? (
         <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{actionError}</div>
+      ) : null}
+
+      {supervisor ? (
+        <div className="mt-6 rounded-3xl border border-slate-200 bg-white/90 p-5 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <div className="text-sm font-semibold text-slate-900">Supervisor Snapshot</div>
+              <div className="mt-1 text-xs text-slate-600">
+                Agent health, held leads, and revenue-protection signals for the current operator view.
+              </div>
+            </div>
+            <div className="text-xs text-slate-500">Last {rangeDays} days</div>
+          </div>
+
+          <div className="mt-4 grid gap-3 xl:grid-cols-5">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Held</div>
+              <div className="mt-2 text-2xl font-semibold text-amber-950">{supervisor.activeHumanReviewCount}</div>
+              <div className="mt-2 text-sm text-amber-900">Need human review now</div>
+              <div className="mt-1 text-xs text-amber-800">Recently reviewed: {supervisor.recentlyReviewedCount}</div>
+            </div>
+
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Agent Throughput</div>
+              <div className="mt-2 text-2xl font-semibold text-emerald-950">{supervisor.agentAutosendCount}</div>
+              <div className="mt-2 text-sm text-emerald-900">Autosends queued</div>
+              <div className="mt-1 text-xs text-emerald-800">Drafts prepared/reused: {supervisor.agentDraftCount}</div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Quote Close</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(supervisor.quoteClose.bookRate)}</div>
+              <div className="mt-2 text-sm text-slate-700">Booked after quote nudges</div>
+              <div className="mt-1 text-xs text-slate-500">
+                Lost: {formatPercent(supervisor.quoteClose.lostRate)}
+                {supervisor.quoteClose.preferredChannel ? ` | Lean: ${supervisor.quoteClose.preferredChannel.toUpperCase()}` : ""}
+              </div>
+              {supervisor.quoteClose.keepSofter ? (
+                <div className="mt-2 text-xs font-semibold text-amber-700">Close pressure is too hot. Softer quote nudges are safer right now.</div>
+              ) : null}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Objection Saves</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(supervisor.objectionSave.reopenRate)}</div>
+              <div className="mt-2 text-sm text-slate-700">Reopened after save attempt</div>
+              <div className="mt-1 text-xs text-slate-500">
+                Booked later: {formatPercent(supervisor.objectionSave.bookRate)}
+                {supervisor.objectionSave.preferredChannel ? ` | Lean: ${supervisor.objectionSave.preferredChannel.toUpperCase()}` : ""}
+              </div>
+              {supervisor.objectionSave.keepSofter ? (
+                <div className="mt-2 text-xs font-semibold text-amber-700">Objection saves are responding better to lower-pressure language.</div>
+              ) : null}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Booked Revenue</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(supervisor.appointmentPreservation.completedRate)}</div>
+              <div className="mt-2 text-sm text-slate-700">Completed after booking touches</div>
+              <div className="mt-1 text-xs text-slate-500">
+                Cancel/no-show: {formatPercent(supervisor.appointmentPreservation.canceledRate + supervisor.appointmentPreservation.noShowRate)}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                Best touch: {formatTouchKindLabel(supervisor.appointmentPreservation.strongestTouchKind) ?? "Still learning"}
+              </div>
+              {supervisor.appointmentPreservation.needsHumanBackup ? (
+                <div className="mt-2 text-xs font-semibold text-amber-700">Booked jobs are slipping. Human backup is recommended on shaky appointments.</div>
+              ) : null}
+            </div>
+          </div>
+        </div>
       ) : null}
 
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[420px,1fr]">
