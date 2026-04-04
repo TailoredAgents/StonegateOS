@@ -42,6 +42,7 @@ const AUTOSEND_CHANNELS = new Set(["sms", "email", "dm"]);
 const AUTOSEND_ACTIONS = new Set([
   "missed_call_recovery",
   "appointment_checkin",
+  "post_job_checkin",
   "appointment_support",
   "dm_sms_handoff",
   "reply_now",

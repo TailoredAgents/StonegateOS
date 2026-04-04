@@ -45,6 +45,7 @@ const SALES_AGENT_AUTOSEND_CHANNELS = [
 const SALES_AGENT_AUTOSEND_ACTIONS = [
   { value: "missed_call_recovery", label: "Missed call recovery" },
   { value: "appointment_checkin", label: "Appointment check in" },
+  { value: "post_job_checkin", label: "Post-job check in" },
   { value: "dm_sms_handoff", label: "Messenger to SMS handoff" },
   { value: "follow_up_quote", label: "Quote follow up" },
   { value: "collect_missing_info", label: "Collect missing info" },
@@ -257,6 +258,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                 </p>
                 <p className="text-xs text-slate-500">
                   Appointment check-ins use the same planner path. They are separate from the core transactional confirmations and reminders, so you can keep those working while deciding whether the agent is allowed to send extra pre-appointment reassurance touches.
+                </p>
+                <p className="text-xs text-slate-500">
+                  Post-job check-ins also stay separate from the existing review-request automation. Use them if you want the agent to send a human-style satisfaction follow-up without replacing the current Google review request flow.
                 </p>
               </div>
 

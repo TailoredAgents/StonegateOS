@@ -243,6 +243,11 @@ function buildAppointmentCheckinDueAt(appointmentStart: Date, now: Date): string
   return (target.getTime() <= now.getTime() ? now : target).toISOString();
 }
 
+function buildPostJobCheckinDueAt(completedAt: Date, now: Date): string {
+  const target = new Date(completedAt.getTime() + 2 * 60 * 60 * 1000);
+  return (target.getTime() <= now.getTime() ? now : target).toISOString();
+}
+
 function classifyAppointmentSupportIntent(
   context: OmniLeadContext,
 ): "reschedule" | "logistics" | "confirmation" | null {
@@ -866,6 +871,56 @@ export function buildSalesAgentNextAction(input: {
       dueAt: context.nextAppointment?.startAt ?? null,
       source: "rules_v1",
     };
+  }
+
+  const latestCompletedAppointment =
+    context.nextAppointment?.status === "completed" && context.nextAppointment.startAt
+      ? {
+          type: context.nextAppointment.type,
+          startAt: context.nextAppointment.startAt,
+          finalTotalCents: context.nextAppointment.finalTotalCents,
+        }
+      : null;
+  const completedAppointmentAt = parseIso(latestCompletedAppointment?.startAt ?? null);
+  const hoursSinceCompletedAppointment =
+    completedAppointmentAt ? (now.getTime() - completedAppointmentAt.getTime()) / (60 * 60 * 1000) : null;
+  const hasRecentInboundAfterCompletion =
+    Boolean(latestInboundAt && completedAppointmentAt && latestInboundAt.getTime() > completedAppointmentAt.getTime());
+
+  if (
+    latestCompletedAppointment &&
+    completedAppointmentAt &&
+    hoursSinceCompletedAppointment !== null &&
+    hoursSinceCompletedAppointment >= 1 &&
+    hoursSinceCompletedAppointment <= 72 &&
+    !hasRecentInboundAfterCompletion &&
+    !hasRecentOutbound(context, now, 12 * 60)
+  ) {
+    const postJobChannel = hasChannelAvailable(context, "sms") ? "sms" : preferredChannel;
+    if (postJobChannel && hasChannelAvailable(context, postJobChannel)) {
+      return {
+        actionType: "post_job_checkin",
+        channel: postJobChannel,
+        status: "open",
+        priority: hoursSinceCompletedAppointment <= 24 ? "normal" : "low",
+        confidence: "medium",
+        summary: "Send a short post-job check-in while the completed job is still fresh.",
+        reason: "The latest appointment was completed recently and there has not been a human-style follow-up after the work.",
+        facts: dedupe([
+          `Completed appointment at ${completedAppointmentAt.toISOString()}`,
+          latestCompletedAppointment.type
+            ? `Appointment type: ${formatFactLabel(latestCompletedAppointment.type)}.`
+            : null,
+          typeof latestCompletedAppointment.finalTotalCents === "number"
+            ? `Final total: $${(latestCompletedAppointment.finalTotalCents / 100).toFixed(2)}.`
+            : null,
+          "Use a simple satisfaction follow-up, not a formal review-request blast.",
+          memory.lastPromisedNextStep,
+        ]),
+        dueAt: buildPostJobCheckinDueAt(completedAppointmentAt, now),
+        source: "rules_v1",
+      };
+    }
   }
 
   if (hasRecentInboundWithoutReply(context, now)) {

@@ -90,6 +90,7 @@ function isSafePlannerFollowupAction(actionType: string | null | undefined): boo
   return (
     actionType === "missed_call_recovery" ||
     actionType === "appointment_checkin" ||
+    actionType === "post_job_checkin" ||
     actionType === "dm_sms_handoff" ||
     actionType === "follow_up_quote" ||
     actionType === "collect_missing_info" ||
@@ -403,6 +404,8 @@ function buildPlannerInstruction(
       return "Write a short missed-call recovery text that gets the lead talking again without overcomplicating it.";
     case "appointment_checkin":
       return "Write a short pre-appointment check-in that reassures the customer, keeps the booking warm, and makes it easy for them to flag any issue before the appointment.";
+    case "post_job_checkin":
+      return "Write a short post-job check-in that thanks the customer, confirms the job went well, and makes it easy for them to mention any issue or ask for anything else.";
     case "appointment_support":
       return "Reply like a calm human handling a booked appointment question. Make it easy to keep the appointment if possible, and make rescheduling feel easy if timing really needs to move.";
     case "dm_sms_handoff":
@@ -446,6 +449,10 @@ function buildChannelStyleInstruction(
 
   if (actionType === "appointment_checkin") {
     return "Messenger tone: keep the check-in light and reassuring. Do not sound like an automated reminder blast or re-sell the job.";
+  }
+
+  if (actionType === "post_job_checkin") {
+    return "Messenger tone: keep the post-job check-in warm and short. Thank them, make sure everything is good, and do not turn it into a formal review-request blast.";
   }
 
   if (actionType === "appointment_support") {
