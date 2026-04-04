@@ -88,6 +88,15 @@ function draftReadinessScore(item: {
   return actionPriorityScore(item.nextAction?.priority);
 }
 
+function shouldApplyRecentReviewCooldown(item: {
+  nextAction?: { actionType?: string | null; priority?: string | null } | null;
+  recentHumanReview?: { active?: boolean | null } | null;
+}): boolean {
+  if (item.recentHumanReview?.active !== true) return false;
+  if (item.nextAction?.actionType === "human_follow_up") return false;
+  return item.nextAction?.priority !== "urgent";
+}
+
 function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
   return (
     actionType === "missed_call_recovery" ||
@@ -1046,6 +1055,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     .sort((a, b) => {
       const priorityDiff = draftReadinessScore(a) - draftReadinessScore(b);
       if (priorityDiff !== 0) return priorityDiff;
+      const aRecentReviewCooldown = shouldApplyRecentReviewCooldown(a) ? 1 : 0;
+      const bRecentReviewCooldown = shouldApplyRecentReviewCooldown(b) ? 1 : 0;
+      if (aRecentReviewCooldown !== bRecentReviewCooldown) {
+        return aRecentReviewCooldown - bRecentReviewCooldown;
+      }
       const aDue = a.dueAt ? Date.parse(a.dueAt) : Number.POSITIVE_INFINITY;
       const bDue = b.dueAt ? Date.parse(b.dueAt) : Number.POSITIVE_INFINITY;
       return aDue - bDue;
