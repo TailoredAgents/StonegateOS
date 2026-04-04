@@ -422,8 +422,7 @@ type CloseLoopOutcomeBucketDto = {
   repeatBookRate: number;
 };
 
-type CloseLoopSummaryDto = {
-  windowStart: string;
+type CloseLoopOutcomeSliceDto = {
   attempts: number;
   replied: number;
   replyRate: number;
@@ -445,6 +444,22 @@ type CloseLoopSummaryDto = {
     appointmentSupportWorthwhile: boolean;
     appointmentSupportNeedsLightTouch: boolean;
     postJobCheckinWorthwhile: boolean;
+  };
+};
+
+type CloseLoopSummaryDto = CloseLoopOutcomeSliceDto & {
+  windowStart: string;
+  byServiceFamily: {
+    junk: CloseLoopOutcomeSliceDto;
+    demo: CloseLoopOutcomeSliceDto;
+    brush: CloseLoopOutcomeSliceDto;
+    unknown: CloseLoopOutcomeSliceDto;
+  };
+  bySourceFamily: {
+    facebook: CloseLoopOutcomeSliceDto;
+    public_site: CloseLoopOutcomeSliceDto;
+    other: CloseLoopOutcomeSliceDto;
+    unknown: CloseLoopOutcomeSliceDto;
   };
 };
 
@@ -846,6 +861,38 @@ function renderCloseLoopLearning(
           Repeat booked {formatPercent(summary.repeatBookRate)}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function renderCloseLoopSliceLearning(
+  label: string,
+  summary: CloseLoopOutcomeSliceDto,
+): React.ReactElement {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="font-semibold text-slate-900">{label}</div>
+      <div className="mt-1 text-[11px] text-slate-600">
+        Attempts: {summary.attempts} | Replied: {summary.replied} ({formatPercent(summary.replyRate)})
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        Pre-appointment preserve {formatPercent(summary.byAction.appointment_checkin.preservedRate)} | Support preserve{" "}
+        {formatPercent(summary.byAction.appointment_support.preservedRate)} | Post-job repeat{" "}
+        {formatPercent(summary.byAction.post_job_checkin.repeatBookRate)}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">
+        {summary.learned.appointmentCheckinWorthwhile
+          ? "Pre-appointment check-ins are helping."
+          : "No strong pre-appointment lift yet."}
+        {" | "}
+        {summary.learned.appointmentSupportWorthwhile
+          ? "Booked-job support is helping."
+          : "No strong booked-job support edge yet."}
+        {" | "}
+        {summary.learned.postJobCheckinWorthwhile
+          ? "Post-job follow-up is creating useful response."
+          : "No strong post-job edge yet."}
+      </div>
     </div>
   );
 }
@@ -1313,6 +1360,13 @@ export async function InstantQuotesSection(): Promise<React.ReactElement> {
             {renderCloseLoopLearning("Post-job check in", closeLoopSummary.byAction.post_job_checkin, {
               kind: "post_job",
             })}
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {renderCloseLoopSliceLearning("Junk jobs", closeLoopSummary.byServiceFamily.junk)}
+            {renderCloseLoopSliceLearning("Demo jobs", closeLoopSummary.byServiceFamily.demo)}
+            {renderCloseLoopSliceLearning("Brush jobs", closeLoopSummary.byServiceFamily.brush)}
+            {renderCloseLoopSliceLearning("Facebook-sourced", closeLoopSummary.bySourceFamily.facebook)}
+            {renderCloseLoopSliceLearning("Public-site sourced", closeLoopSummary.bySourceFamily.public_site)}
           </div>
         </div>
       ) : null}

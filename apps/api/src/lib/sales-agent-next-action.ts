@@ -11,6 +11,7 @@ import {
 import {
   areAppointmentCheckinsWorthwhile,
   arePostJobCheckinsWorthwhile,
+  getCloseLoopLearningScope,
   isAppointmentSupportWorthwhile,
   shouldKeepAppointmentSupportLight,
   type CloseLoopOutcomeSummary,
@@ -478,6 +479,13 @@ export function buildSalesAgentNextAction(input: {
     latestLeadServices: context.latestLead?.servicesRequested ?? [],
     instantQuoteJobTypes: context.instantQuote?.jobTypes ?? [],
   });
+  const closeLoopLearningScope = getCloseLoopLearningScope({
+    latestLeadSource: context.latestLead?.source ?? null,
+    contactSource: context.contact.source ?? null,
+    dmEntrySource: context.derived.dmEntrySource ?? null,
+    latestLeadServices: context.latestLead?.servicesRequested ?? [],
+    instantQuoteJobTypes: context.instantQuote?.jobTypes ?? [],
+  });
   const preferredFirstResponseChannel = (() => {
     const learned = getPreferredFirstResponseChannel(
       input.firstResponseOutcomeSummary,
@@ -720,9 +728,18 @@ export function buildSalesAgentNextAction(input: {
     const preservationLearning = input.appointmentPreservationOutcomeSummary;
     const reminderLearning = input.appointmentReminderOutcomeSummary;
     const closeLoopLearning = input.closeLoopOutcomeSummary;
-    const appointmentCheckinsWorthwhile = areAppointmentCheckinsWorthwhile(closeLoopLearning);
-    const appointmentSupportWorthwhile = isAppointmentSupportWorthwhile(closeLoopLearning);
-    const keepAppointmentSupportLight = shouldKeepAppointmentSupportLight(closeLoopLearning);
+    const appointmentCheckinsWorthwhile = areAppointmentCheckinsWorthwhile(
+      closeLoopLearning,
+      closeLoopLearningScope,
+    );
+    const appointmentSupportWorthwhile = isAppointmentSupportWorthwhile(
+      closeLoopLearning,
+      closeLoopLearningScope,
+    );
+    const keepAppointmentSupportLight = shouldKeepAppointmentSupportLight(
+      closeLoopLearning,
+      closeLoopLearningScope,
+    );
     const appointmentStart = parseIso(context.nextAppointment?.startAt ?? null);
     const minutesUntilAppointment =
       appointmentStart ? Math.round((appointmentStart.getTime() - now.getTime()) / (60 * 1000)) : null;
@@ -919,7 +936,10 @@ export function buildSalesAgentNextAction(input: {
   ) {
     const postJobChannel = hasChannelAvailable(context, "sms") ? "sms" : preferredChannel;
     if (postJobChannel && hasChannelAvailable(context, postJobChannel)) {
-      const postJobCheckinsWorthwhile = arePostJobCheckinsWorthwhile(input.closeLoopOutcomeSummary);
+      const postJobCheckinsWorthwhile = arePostJobCheckinsWorthwhile(
+        input.closeLoopOutcomeSummary,
+        closeLoopLearningScope,
+      );
       return {
         actionType: "post_job_checkin",
         channel: postJobChannel,
