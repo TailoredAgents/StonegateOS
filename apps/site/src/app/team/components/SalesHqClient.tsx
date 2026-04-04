@@ -583,6 +583,15 @@ export function SalesHqClient({
               <div className="mt-2 text-2xl font-semibold text-amber-950">{supervisor.activeHumanReviewCount}</div>
               <div className="mt-2 text-sm text-amber-900">Need human review now</div>
               <div className="mt-1 text-xs text-amber-800">Recently reviewed: {supervisor.recentlyReviewedCount}</div>
+              {supervisor.topHoldReasons.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {supervisor.topHoldReasons.map((item) => (
+                    <span key={item.label} className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-900">
+                      {item.label}: {item.count}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4">
@@ -602,6 +611,15 @@ export function SalesHqClient({
               </div>
               {supervisor.quoteClose.keepSofter ? (
                 <div className="mt-2 text-xs font-semibold text-amber-700">Close pressure is too hot. Softer quote nudges are safer right now.</div>
+              ) : null}
+              {supervisor.topLostReasons.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {supervisor.topLostReasons.map((item) => (
+                    <span key={item.label} className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
+                      Lost: {item.label} ({item.count})
+                    </span>
+                  ))}
+                </div>
               ) : null}
             </div>
 

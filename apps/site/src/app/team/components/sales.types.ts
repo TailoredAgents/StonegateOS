@@ -110,6 +110,14 @@ export type SalesSupervisorPayload = {
   recentlyReviewedCount: number;
   agentDraftCount: number;
   agentAutosendCount: number;
+  topHoldReasons: Array<{
+    label: string;
+    count: number;
+  }>;
+  topLostReasons: Array<{
+    label: string;
+    count: number;
+  }>;
   quoteClose: {
     attempts: number;
     bookRate: number;

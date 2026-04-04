@@ -37,6 +37,8 @@ const DEFAULT_ACTIONS = [
   "crm.reminder.failed"
 ];
 
+type ReasonCount = { label: string; count: number };
+
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
   const parsed = Number(value);
@@ -62,6 +64,58 @@ function parseActionList(value: string | null): string[] {
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function incrementReason(map: Map<string, number>, label: string | null | undefined) {
+  if (typeof label !== "string") return;
+  const normalized = label.trim();
+  if (!normalized) return;
+  map.set(normalized, (map.get(normalized) ?? 0) + 1);
+}
+
+function topReasonCounts(map: Map<string, number>, limit = 3): ReasonCount[] {
+  return [...map.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => (b.count !== a.count ? b.count - a.count : a.label.localeCompare(b.label)))
+    .slice(0, limit);
+}
+
+function summarizeHumanReviewReason(input: {
+  summary: string | null;
+  reason: string | null;
+  facts: string[] | null;
+}): string {
+  const combined = [input.summary, input.reason, ...(Array.isArray(input.facts) ? input.facts : [])]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  if (combined.includes("hazard") || combined.includes("unsupported material")) return "Hazardous or unsupported material";
+  if (combined.includes("high risk") && combined.includes("demo")) return "High-risk demo scope";
+  if (combined.includes("outside the current service area") || combined.includes("known zip")) return "Out of area";
+  if (combined.includes("supported services") || combined.includes("unsupported services")) return "Unsupported service scope";
+  if (combined.includes("timing conflicts") || combined.includes("faster turnaround") || combined.includes("schedule assumptions")) {
+    return "Scheduling conflict";
+  }
+  if (combined.includes("access or scope complexity") || combined.includes("multiple areas") || combined.includes("difficult access")) {
+    return "Access or scope complexity";
+  }
+  if (combined.includes("photos, stated scope, and quote signals disagree") || combined.includes("conflict strongly enough")) {
+    return "Pricing or scope mismatch";
+  }
+  if (combined.includes("frustrated") || combined.includes("dispute") || combined.includes("complaint risk")) {
+    return "Frustrated or dispute risk";
+  }
+  return "Other human review";
+}
+
+function formatDispositionLabel(value: string | null | undefined): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -161,6 +215,52 @@ export async function GET(request: NextRequest): Promise<Response> {
       .where(and(...reviewFilters)),
   ]);
 
+  const holdReasonRows = await db
+    .select({
+      summary: salesAgentNextActions.summary,
+      reason: salesAgentNextActions.reason,
+      facts: salesAgentNextActions.facts,
+    })
+    .from(salesAgentNextActions)
+    .innerJoin(contacts, eq(salesAgentNextActions.contactId, contacts.id))
+    .where(and(...holdFilters))
+    .limit(200);
+
+  const lostReasonFilters = [
+    gte(auditLogs.createdAt, since),
+    eq(auditLogs.action, "sales.disposition.set"),
+    sql`coalesce(${auditLogs.meta} ->> 'markLost', 'false') = 'true'`,
+  ];
+  if (actorId) {
+    lostReasonFilters.push(eq(contacts.salespersonMemberId, actorId));
+  }
+
+  const lostReasonRows = await db
+    .select({
+      disposition: sql<string>`coalesce(${auditLogs.meta} ->> 'disposition', '')`,
+    })
+    .from(auditLogs)
+    .leftJoin(contacts, sql`${auditLogs.entityType} = 'contact' and ${auditLogs.entityId} = ${contacts.id}::text`)
+    .where(and(...lostReasonFilters))
+    .limit(500);
+
+  const holdReasonCounts = new Map<string, number>();
+  for (const row of holdReasonRows) {
+    incrementReason(
+      holdReasonCounts,
+      summarizeHumanReviewReason({
+        summary: row.summary ?? null,
+        reason: row.reason ?? null,
+        facts: Array.isArray(row.facts) ? row.facts : null,
+      }),
+    );
+  }
+
+  const lostReasonCounts = new Map<string, number>();
+  for (const row of lostReasonRows) {
+    incrementReason(lostReasonCounts, formatDispositionLabel(row.disposition));
+  }
+
   const agentDraftCount = rows.filter((row) => row.action.startsWith("sales.autopilot.") || row.action.startsWith("sales.agent.draft.")).length;
   const agentAutosendCount = rows.filter((row) => row.action === "message.retry" || row.action.startsWith("sales.agent.autosend.")).length;
 
@@ -178,6 +278,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       recentlyReviewedCount: Number(recentlyReviewedResult[0]?.count ?? 0),
       agentDraftCount,
       agentAutosendCount,
+      topHoldReasons: topReasonCounts(holdReasonCounts),
+      topLostReasons: topReasonCounts(lostReasonCounts),
       quoteClose: {
         attempts: quoteCloseSummary.attempts,
         bookRate: quoteCloseSummary.bookRate,

@@ -1,6 +1,7 @@
 import React from "react";
 import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE, formatDayKey } from "../lib/timezone";
+import type { SalesSupervisorPayload } from "./sales.types";
 
 type TeamMember = { id: string; name: string; active: boolean };
 
@@ -18,35 +19,6 @@ type ActivityEvent = {
     name?: string | null;
   };
   meta?: Record<string, unknown> | null;
-};
-
-type ActivitySupervisorSummary = {
-  activeHumanReviewCount: number;
-  recentlyReviewedCount: number;
-  agentDraftCount: number;
-  agentAutosendCount: number;
-  quoteClose: {
-    attempts: number;
-    bookRate: number;
-    lostRate: number;
-    preferredChannel: "sms" | "dm" | null;
-    keepSofter: boolean;
-  };
-  objectionSave: {
-    attempts: number;
-    reopenRate: number;
-    bookRate: number;
-    preferredChannel: "sms" | "dm" | null;
-    keepSofter: boolean;
-  };
-  appointmentPreservation: {
-    attempts: number;
-    completedRate: number;
-    canceledRate: number;
-    noShowRate: number;
-    strongestTouchKind: "requested" | "rescheduled" | "reminder" | "other" | null;
-    needsHumanBackup: boolean;
-  };
 };
 
 type ActivityRow = {
@@ -264,7 +236,7 @@ function formatPercent(value: number | null | undefined): string {
   return `${Math.round(numeric * 100)}%`;
 }
 
-function formatTouchKindLabel(value: ActivitySupervisorSummary["appointmentPreservation"]["strongestTouchKind"]): string | null {
+function formatTouchKindLabel(value: SalesSupervisorPayload["appointmentPreservation"]["strongestTouchKind"]): string | null {
   if (!value) return null;
   if (value === "requested") return "Initial confirmation";
   if (value === "rescheduled") return "Reschedule confirmation";
@@ -288,7 +260,7 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
   const activityPayload = (await activityRes.json()) as {
     events?: ActivityEvent[];
     memberId?: string | null;
-    supervisor?: ActivitySupervisorSummary;
+    supervisor?: SalesSupervisorPayload;
   };
   const events = activityPayload.events ?? [];
   const supervisor = activityPayload.supervisor ?? null;
@@ -388,6 +360,15 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
               <p className="mt-2 text-2xl font-semibold text-amber-950">{supervisor.activeHumanReviewCount}</p>
               <p className="mt-2 text-sm text-amber-900">Need human review right now</p>
               <p className="mt-1 text-xs text-amber-800">Reviewed in last 24h: {supervisor.recentlyReviewedCount}</p>
+              {supervisor.topHoldReasons.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {supervisor.topHoldReasons.map((item) => (
+                    <span key={item.label} className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-900">
+                      {item.label}: {item.count}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4">
@@ -407,6 +388,15 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
               </p>
               {supervisor.quoteClose.keepSofter ? (
                 <p className="mt-2 text-xs font-semibold text-amber-700">Recent close pushes are running hot. Softer nudges are safer right now.</p>
+              ) : null}
+              {supervisor.topLostReasons.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {supervisor.topLostReasons.map((item) => (
+                    <span key={item.label} className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
+                      Lost: {item.label} ({item.count})
+                    </span>
+                  ))}
+                </div>
               ) : null}
             </div>
 
