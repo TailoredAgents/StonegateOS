@@ -217,6 +217,9 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
       )
     : [];
   const exceptionSummary = summarizeExceptionSignals(exceptionSignals);
+  const isHumanReviewHold =
+    nextAction?.actionType === "human_follow_up" || executionState?.code === "human_review" || exceptionSummary !== null;
+  const canResumeToAgent = canControlAutomation && (isPaused || isHumanTakeover);
 
   const runControl = React.useCallback(
     async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
@@ -272,6 +275,28 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                 ))}
               </div>
             ) : null}
+            {isHumanReviewHold ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={teamButtonClass("secondary", "sm")}
+                  onClick={() => void runControl("dismiss")}
+                  disabled={actionPending !== null || isDismissed}
+                >
+                  {actionPending === "dismiss" ? "Clearing..." : isDismissed ? "Hold cleared" : "Mark reviewed"}
+                </button>
+                {canResumeToAgent ? (
+                  <button
+                    type="button"
+                    className={teamButtonClass("primary", "sm")}
+                    onClick={() => void runControl("resume")}
+                    disabled={actionPending !== null}
+                  >
+                    {actionPending === "resume" ? "Saving..." : "Hand back to agent"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </>
         ) : nextAction?.summary ? (
           <div>{nextAction.summary}</div>
@@ -316,6 +341,35 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             {nextAction.summary ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
                 {nextAction.summary}
+              </div>
+            ) : null}
+
+            {isHumanReviewHold ? (
+              <div className="space-y-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Human review resolution</div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className={teamButtonClass("secondary", "sm")}
+                    onClick={() => void runControl("dismiss")}
+                    disabled={actionPending !== null || isDismissed}
+                  >
+                    {actionPending === "dismiss" ? "Clearing..." : isDismissed ? "Hold cleared" : "Mark reviewed"}
+                  </button>
+                  {canResumeToAgent ? (
+                    <button
+                      type="button"
+                      className={teamButtonClass("primary", "sm")}
+                      onClick={() => void runControl("resume")}
+                      disabled={actionPending !== null}
+                    >
+                      {actionPending === "resume" ? "Saving..." : "Hand back to agent"}
+                    </button>
+                  ) : null}
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                  Mark reviewed clears the current human-review hold from the queue. Hand back to agent also resumes normal automation if this lead was manually paused.
+                </div>
               </div>
             ) : null}
 
