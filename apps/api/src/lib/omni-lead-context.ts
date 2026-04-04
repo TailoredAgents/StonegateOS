@@ -63,6 +63,28 @@ function mediaRangeRank(value: string | null | undefined): number {
   }
 }
 
+function perceivedSizeRank(value: string | null | undefined): number {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "single_item":
+    case "few_items":
+      return 1;
+    case "min_pickup":
+      return 2;
+    case "small_area":
+      return 3;
+    case "half_trailer":
+      return 4;
+    case "one_room_or_half_garage":
+      return 5;
+    case "three_quarter_trailer":
+      return 6;
+    case "big_cleanout":
+      return 7;
+    default:
+      return 0;
+  }
+}
+
 function extractQuotePrice(aiResult: unknown): { priceLow: number | null; priceHigh: number | null } {
   if (!aiResult || typeof aiResult !== "object") return { priceLow: null, priceHigh: null };
   const record = aiResult as Record<string, unknown>;
@@ -161,6 +183,9 @@ function detectExceptionSignals(input: {
   pipelineNotes?: string | null;
   latestCallSummary?: string | null;
   serviceHints: string[];
+  instantQuoteTimeframe?: string | null;
+  instantQuotePerceivedSize?: string | null;
+  nextAppointmentStartAt?: string | null;
   mediaRiskFlags?: string[] | null;
   mediaVisibleRange?: string | null;
   mediaMergedRange?: string | null;
@@ -210,7 +235,44 @@ function detectExceptionSignals(input: {
     results.add("high_risk_demo_scope");
   }
 
+  const urgencyRequested =
+    /\b(today|same day|asap|as soon as possible|right away|this morning|this afternoon|tonight|within an hour|as early as possible)\b/.test(
+      contextText,
+    );
+  const instantQuoteTimeframe = (input.instantQuoteTimeframe ?? "").trim().toLowerCase();
+  const nextAppointmentAt =
+    typeof input.nextAppointmentStartAt === "string" && input.nextAppointmentStartAt.trim().length > 0
+      ? new Date(input.nextAppointmentStartAt)
+      : null;
+  const appointmentFarBeyondUrgency =
+    nextAppointmentAt instanceof Date &&
+    Number.isFinite(nextAppointmentAt.getTime()) &&
+    nextAppointmentAt.getTime() - Date.now() > 36 * 60 * 60 * 1000;
+  if (
+    urgencyRequested &&
+    ((instantQuoteTimeframe.length > 0 && !["today", "tomorrow"].includes(instantQuoteTimeframe)) || appointmentFarBeyondUrgency)
+  ) {
+    results.add("schedule_urgency_contradiction");
+  }
+
   const mediaRiskFlags = Array.isArray(input.mediaRiskFlags) ? input.mediaRiskFlags : [];
+  const accessOrComplexityHints =
+    /\b(upstairs|downstairs|stairs|steps|basement|attic|backyard|back yard|rear yard|shed|garage|fence|gate|multiple rooms|other room|another room|long carry|long walk|carry distance)\b/.test(
+      contextText,
+    ) ||
+    /\b(piano|gun safe|safe\b|pool table|hot tub|spa|treadmill)\b/.test(contextText);
+  const simpleScopeAssumption =
+    (perceivedSizeRank(input.instantQuotePerceivedSize) > 0 && perceivedSizeRank(input.instantQuotePerceivedSize) <= 3) ||
+    (mediaRangeRank(input.mediaVisibleRange) > 0 && mediaRangeRank(input.mediaVisibleRange) <= 4);
+  if (
+    accessOrComplexityHints &&
+    (simpleScopeAssumption ||
+      mediaRiskFlags.includes("stated_scope_exceeds_visible_media") ||
+      input.mediaConfidence === "low")
+  ) {
+    results.add("operational_scope_contradiction");
+  }
+
   const contradictionFromRiskFlags =
     mediaRiskFlags.includes("stated_scope_exceeds_visible_media") &&
     mediaRiskFlags.includes("text_add_on_hints_exceed_visible_counts");
@@ -820,6 +882,9 @@ export async function loadOmniLeadContext(
     pipelineNotes: pipeline?.notes ?? null,
     latestCallSummary: latestCallRow?.summary ?? null,
     serviceHints,
+    instantQuoteTimeframe: latestInstantQuoteRow?.timeframe ?? null,
+    instantQuotePerceivedSize: latestInstantQuoteRow?.perceivedSize ?? null,
+    nextAppointmentStartAt: toIso(upcomingAppointment?.startAt ?? null),
     mediaRiskFlags: mediaAnalysis?.riskFlags ?? [],
     mediaVisibleRange: mediaAnalysis?.visibleVolumeRange ?? null,
     mediaMergedRange: mediaAnalysis?.mergedVolumeRange ?? null,

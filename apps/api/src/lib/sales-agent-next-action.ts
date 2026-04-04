@@ -270,6 +270,46 @@ function buildExceptionRouting(context: OmniLeadContext): {
     };
   }
 
+  if (signals.includes("schedule_urgency_contradiction")) {
+    return {
+      summary: "Human review needed before replying because the requested timing conflicts with the current schedule assumptions.",
+      reason: "The lead is asking for a faster turnaround than the current quote or appointment context supports cleanly.",
+      facts: dedupe([
+        context.instantQuote?.timeframe
+          ? `Requested timeframe on the quote: ${context.instantQuote.timeframe.replace(/_/g, " ")}.`
+          : null,
+        context.nextAppointment?.startAt
+          ? `Current scheduled appointment: ${new Date(context.nextAppointment.startAt).toLocaleString("en-US", {
+              dateStyle: "medium",
+              timeStyle: "short",
+            })}.`
+          : "No appointment is currently scheduled.",
+        context.latestLead?.notes,
+        context.pipeline.notes,
+      ]),
+    };
+  }
+
+  if (signals.includes("operational_scope_contradiction")) {
+    return {
+      summary: "Human review needed before replying because the access or scope complexity looks heavier than the current quote assumptions.",
+      reason: "The lead context suggests multiple areas, difficult access, or heavy-item handling that should be reviewed before the next pricing or scheduling touch.",
+      facts: dedupe([
+        context.instantQuote?.perceivedSize
+          ? `Customer-selected size: ${context.instantQuote.perceivedSize.replace(/_/g, " ")}.`
+          : null,
+        context.mediaAnalysis?.visibleVolumeRange
+          ? `Visible media estimate: ${context.mediaAnalysis.visibleVolumeRange.replace(/_/g, " ")}.`
+          : null,
+        context.mediaAnalysis?.riskFlags.length
+          ? `Media risk flags: ${context.mediaAnalysis.riskFlags.join(", ")}.`
+          : null,
+        context.latestLead?.notes,
+        context.instantQuote?.notes,
+      ]),
+    };
+  }
+
   if (signals.includes("scope_pricing_contradiction")) {
     return {
       summary: "Human review needed before replying because the photos, stated scope, and quote signals disagree too much.",
