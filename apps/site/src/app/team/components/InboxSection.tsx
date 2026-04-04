@@ -774,6 +774,18 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
             ? "Blocked for review"
             : null;
   const agentGateDetail = agentCloseLoopPolicy?.detail ?? null;
+  const agentDraftFooterInstruction =
+    agentCloseLoopMode === "suggest_only"
+      ? "Use the Agent card above to review, edit, or send this suggestion."
+      : agentCloseLoopMode === "autosend_allowed"
+        ? agentAutoSendDue
+          ? "Use the Agent card above to send it now, or leave it alone and let autosend handle it."
+          : "Use the Agent card above to review it first, or leave it in place for autosend once it is due."
+        : agentCloseLoopMode === "live_autonomy_allowed"
+          ? "Use the Agent card above to send it manually now, or keep it as a live-autonomy-capable reply."
+          : agentCloseLoopMode === "blocked"
+            ? "Use the Agent card above to resolve the human-review hold before this draft moves forward."
+            : "Use the Agent card above to send or refresh this draft.";
   const agentMediaAnalysis = mediaAnalysisSummary?.analysis ?? null;
   const agentMediaUsesVision =
     typeof agentMediaAnalysis?.source === "string" && agentMediaAnalysis.source.toLowerCase().includes("vision");
@@ -1740,7 +1752,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                           {managedByAgentCard ? (
                             <div className="mt-3 text-right text-[11px] font-medium text-slate-500">
                               {draftGateLabel
-                                ? `${draftGateLabel}. Use the Agent card above to send or refresh this draft.`
+                                ? `${draftGateLabel}. ${agentDraftFooterInstruction}`
                                 : "Use the Agent card above to send or refresh this draft."}
                             </div>
                           ) : isOutbound && isDraft ? (
