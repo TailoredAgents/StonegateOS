@@ -136,6 +136,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
   const [status, setStatus] = React.useState<"idle" | "loading" | "error">("loading");
   const [refreshing, setRefreshing] = React.useState(false);
   const [actionPending, setActionPending] = React.useState<string | null>(null);
+  const [reviewNote, setReviewNote] = React.useState("");
 
   const requestUrl = `/api/team/contacts/sales-agent-next-action?contactId=${encodeURIComponent(contactId)}&includeQuotePrice=1`;
 
@@ -225,12 +226,17 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
     async (action: "dismiss" | "pause" | "human_takeover" | "resume") => {
       setActionPending(action);
       try {
+        const trimmedReviewNote = reviewNote.trim();
         const response = await fetch(requestUrl, {
           method: "PATCH",
           headers: { Accept: "application/json", "Content-Type": "application/json" },
           body: JSON.stringify({
             action,
             channel: nextAction?.channel ?? null,
+            reviewNote:
+              action === "dismiss" || action === "resume"
+                ? trimmedReviewNote || null
+                : null,
           }),
         });
         const data = (await response.json().catch(() => null)) as NextActionPayload | null;
@@ -239,13 +245,16 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
         }
         setPayload(data);
         setStatus("idle");
+        if (action === "dismiss" || action === "resume") {
+          setReviewNote("");
+        }
       } catch {
         setStatus("error");
       } finally {
         setActionPending(null);
       }
     },
-    [requestUrl, nextAction?.channel],
+    [requestUrl, nextAction?.channel, reviewNote],
   );
 
   if (compact) {
@@ -276,25 +285,35 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               </div>
             ) : null}
             {isHumanReviewHold ? (
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className={teamButtonClass("secondary", "sm")}
-                  onClick={() => void runControl("dismiss")}
-                  disabled={actionPending !== null || isDismissed}
-                >
-                  {actionPending === "dismiss" ? "Clearing..." : isDismissed ? "Hold cleared" : "Mark reviewed"}
-                </button>
-                {canResumeToAgent ? (
+              <div className="mt-2 space-y-2">
+                <textarea
+                  value={reviewNote}
+                  onChange={(event) => setReviewNote(event.target.value.slice(0, 1000))}
+                  rows={2}
+                  placeholder="Optional review note for the agent"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none transition focus:border-slate-400"
+                  disabled={actionPending !== null}
+                />
+                <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    className={teamButtonClass("primary", "sm")}
-                    onClick={() => void runControl("resume")}
-                    disabled={actionPending !== null}
+                    className={teamButtonClass("secondary", "sm")}
+                    onClick={() => void runControl("dismiss")}
+                    disabled={actionPending !== null || isDismissed}
                   >
-                    {actionPending === "resume" ? "Saving..." : "Hand back to agent"}
+                    {actionPending === "dismiss" ? "Clearing..." : isDismissed ? "Hold cleared" : "Mark reviewed"}
                   </button>
-                ) : null}
+                  {canResumeToAgent ? (
+                    <button
+                      type="button"
+                      className={teamButtonClass("primary", "sm")}
+                      onClick={() => void runControl("resume")}
+                      disabled={actionPending !== null}
+                    >
+                      {actionPending === "resume" ? "Saving..." : "Hand back to agent"}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : null}
           </>
@@ -347,6 +366,14 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             {isHumanReviewHold ? (
               <div className="space-y-2">
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Human review resolution</div>
+                <textarea
+                  value={reviewNote}
+                  onChange={(event) => setReviewNote(event.target.value.slice(0, 1000))}
+                  rows={3}
+                  placeholder="Optional review note for the agent"
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-slate-400"
+                  disabled={actionPending !== null}
+                />
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -368,7 +395,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
                   ) : null}
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                  Mark reviewed clears the current human-review hold from the queue. Hand back to agent also resumes normal automation if this lead was manually paused.
+                  Mark reviewed clears the current human-review hold from the queue. Hand back to agent also resumes normal automation if this lead was manually paused. Any note you add here is saved into the contact notes the agent already reads.
                 </div>
               </div>
             ) : null}

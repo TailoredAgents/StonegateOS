@@ -5,6 +5,41 @@ function readContactId(url: URL): string {
   return url.searchParams.get("contactId")?.trim() ?? "";
 }
 
+function readReviewNote(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 1000) : null;
+}
+
+function buildReviewNoteTitle(action: string): string {
+  return action === "resume" ? "Agent review handoff" : "Agent review note";
+}
+
+async function createReviewNote(input: {
+  contactId: string;
+  action: string;
+  reviewNote: string;
+}): Promise<Response | null> {
+  const noteResponse = await callAdminApi("/api/admin/crm/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      contactId: input.contactId,
+      title: buildReviewNoteTitle(input.action),
+      notes: input.reviewNote,
+      status: "completed",
+    }),
+    headers: { Accept: "application/json" },
+  });
+
+  if (noteResponse.ok) return null;
+
+  const noteBody = await noteResponse.json().catch(() => null);
+  return NextResponse.json(
+    noteBody ?? { ok: false, error: "review_note_create_failed" },
+    { status: noteResponse.status || 502 },
+  );
+}
+
 type NextActionProxyPayload = {
   ok?: boolean;
   nextAction?: {
@@ -93,9 +128,10 @@ export async function PATCH(request: Request): Promise<Response> {
   }
 
   const payload = (await request.json().catch(() => null)) as
-    | { action?: string; channel?: string | null }
+    | { action?: string; channel?: string | null; reviewNote?: string | null }
     | null;
   const action = typeof payload?.action === "string" ? payload.action.trim() : "";
+  const reviewNote = readReviewNote(payload?.reviewNote);
   if (!action) {
     return NextResponse.json({ ok: false, error: "action_required" }, { status: 400 });
   }
@@ -115,6 +151,11 @@ export async function PATCH(request: Request): Promise<Response> {
         currentBody ?? { ok: false, error: "next_action_unavailable" },
         { status: currentRes.status || 502 },
       );
+    }
+
+    if (reviewNote) {
+      const reviewNoteError = await createReviewNote({ contactId, action, reviewNote });
+      if (reviewNoteError) return reviewNoteError;
     }
 
     const upstream = await callAdminApi(
@@ -173,6 +214,11 @@ export async function PATCH(request: Request): Promise<Response> {
   }
   if (!channel) {
     return NextResponse.json({ ok: false, error: "channel_unavailable" }, { status: 400 });
+  }
+
+  if (reviewNote && action === "resume") {
+    const reviewNoteError = await createReviewNote({ contactId, action, reviewNote });
+    if (reviewNoteError) return reviewNoteError;
   }
 
   const existingState =
