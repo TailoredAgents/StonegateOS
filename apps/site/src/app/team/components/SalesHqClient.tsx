@@ -673,6 +673,12 @@ export function SalesHqClient({
                               <span className="font-medium text-amber-800">Review note:</span> {reviewNotePreview}
                             </div>
                           ) : null}
+                          {item.recentHumanReview?.active ? (
+                            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+                              <span className="font-medium text-amber-800">{item.recentHumanReview.label}:</span>{" "}
+                              {compactText(item.recentHumanReview.detail ?? null, 120) ?? "A human just cleared this lead."}
+                            </div>
+                          ) : null}
                         </div>
                         <div className="flex flex-col items-end gap-2">
                           {item.minutesUntilDue !== null ? (
@@ -702,6 +708,7 @@ export function SalesHqClient({
                           {item.contact.serviceAreaStatus === "potentially_out_of_area" ? (
                             <Pill tone="warn">Check ZIP</Pill>
                           ) : null}
+                          {item.recentHumanReview?.active ? <Pill tone="warn">Recently reviewed</Pill> : null}
                         </div>
                       </div>
                     </button>
@@ -804,6 +811,21 @@ export function SalesHqClient({
                   <div className="mt-2 text-[11px] text-slate-500">
                     {formatTimestamp(selectedItem.lastAgentActivity.createdAt)}
                   </div>
+                </div>
+              ) : null}
+
+              {selectedItem.recentHumanReview?.active ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">{selectedItem.recentHumanReview.label}</div>
+                    <Pill tone="warn">Fresh operator decision</Pill>
+                  </div>
+                  <div className="mt-2">
+                    {selectedItem.recentHumanReview.detail ?? "A human just reviewed this lead and handed it back."}
+                  </div>
+                  {selectedItem.recentHumanReview.updatedAt ? (
+                    <div className="mt-2 text-[11px] text-amber-800">{formatTimestamp(selectedItem.recentHumanReview.updatedAt)}</div>
+                  ) : null}
                 </div>
               ) : null}
 

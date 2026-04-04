@@ -102,6 +102,28 @@ function isPlannerActionDue(value: { dueAt?: string | Date | null } | null | und
   return dueAt.getTime() <= now.getTime();
 }
 
+function deriveRecentHumanReview(
+  recentNotes: Array<{ title: string | null; notes: string | null; updatedAt: string }> | null | undefined,
+  now: Date,
+): { active: true; label: string; detail: string | null; updatedAt: string } | null {
+  const latestReviewNote =
+    (recentNotes ?? []).find((note) => {
+      const title = typeof note?.title === "string" ? note.title.trim().toLowerCase() : "";
+      return title.startsWith("agent review");
+    }) ?? null;
+  if (!latestReviewNote?.updatedAt) return null;
+  const updatedAt = parseIso(latestReviewNote.updatedAt);
+  if (!updatedAt) return null;
+  const ageMs = now.getTime() - updatedAt.getTime();
+  if (ageMs < 0 || ageMs > 24 * 60 * 60 * 1000) return null;
+  return {
+    active: true,
+    label: "Recently reviewed",
+    detail: latestReviewNote.notes ?? null,
+    updatedAt: latestReviewNote.updatedAt,
+  };
+}
+
 export async function GET(request: NextRequest, context: RouteContext): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -332,11 +354,13 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
                         tone: nextAction.priority === "urgent" ? ("bad" as const) : ("neutral" as const),
                       }
                     : null;
+  const recentHumanReview = deriveRecentHumanReview(liveContext.recentNotes, now);
 
   return NextResponse.json({
     ok: true,
     nextAction,
     liveContext,
+    recentHumanReview,
     executionState,
     autopilot: {
       mode: autopilotPolicy.mode,

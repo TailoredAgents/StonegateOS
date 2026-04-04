@@ -68,6 +68,12 @@ export type QueuePayload = {
       body: string | null;
       updatedAt: string;
     } | null;
+    recentHumanReview?: {
+      active: true;
+      label: string;
+      detail: string | null;
+      updatedAt: string;
+    } | null;
     draftTarget?: {
       threadId: string;
       channel: string;

@@ -157,6 +157,30 @@ function parseIso(value: string | null | undefined): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function deriveRecentHumanReview(
+  note:
+    | {
+        title: string | null;
+        body: string | null;
+        updatedAt: string;
+      }
+    | null
+    | undefined,
+  now: Date,
+): { active: true; label: string; detail: string | null; updatedAt: string } | null {
+  if (!note?.updatedAt) return null;
+  const updatedAt = parseIso(note.updatedAt);
+  if (!updatedAt) return null;
+  const ageMs = now.getTime() - updatedAt.getTime();
+  if (ageMs < 0 || ageMs > 24 * 60 * 60 * 1000) return null;
+  return {
+    active: true,
+    label: "Recently reviewed",
+    detail: note.body ?? null,
+    updatedAt: note.updatedAt,
+  };
+}
+
 function isPlannerActionDue(value: { dueAt?: string | null } | null | undefined, now: Date): boolean {
   if (!value) return false;
   const dueAt = parseIso(value.dueAt ?? null);
@@ -1001,6 +1025,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         nextAction,
         draft,
         latestReviewNote: latestReviewNoteByContactId.get(item.contact.id) ?? null,
+        recentHumanReview: deriveRecentHumanReview(latestReviewNoteByContactId.get(item.contact.id) ?? null, now),
         draftTarget: draftTarget
           ? {
               threadId: draftTarget.threadId,

@@ -24,6 +24,12 @@ type NextActionPayload = {
     detail?: string | null;
     tone?: "good" | "warn" | "bad" | "neutral" | null;
   } | null;
+  recentHumanReview?: {
+    active?: boolean;
+    label?: string | null;
+    detail?: string | null;
+    updatedAt?: string | null;
+  } | null;
   autopilot?: {
     mode?: "off" | "partial" | "full" | null;
     channelMode?: "off" | "partial" | "full" | null;
@@ -131,6 +137,14 @@ function summarizeExceptionSignals(signals: string[]): { headline: string; detai
   };
 }
 
+function compactText(value: string | null | undefined, maxLen = 220): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLen - 3))}...`;
+}
+
 export function ContactSalesAgentNextActionClient({ contactId, compact = false }: Props): React.ReactElement {
   const [payload, setPayload] = React.useState<NextActionPayload | null>(null);
   const [status, setStatus] = React.useState<"idle" | "loading" | "error">("loading");
@@ -210,6 +224,9 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
       : [];
   const learningSignalFact = getLearningSignalFact(facts);
   const executionState = payload?.executionState ?? null;
+  const recentHumanReview = payload?.recentHumanReview ?? null;
+  const recentHumanReviewUpdatedAt = formatTimestamp(recentHumanReview?.updatedAt);
+  const recentHumanReviewDetail = compactText(recentHumanReview?.detail, compact ? 140 : 260);
   const autopilot = payload?.autopilot ?? null;
   const dmEntrySource = payload?.liveContext?.derived?.dmEntrySource ?? null;
   const exceptionSignals = Array.isArray(payload?.liveContext?.derived?.exceptionSignals)
@@ -271,6 +288,13 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             {learningSignalFact ? (
               <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
                 {learningSignalFact}
+              </div>
+            ) : null}
+            {recentHumanReview?.active ? (
+              <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+                <div className="font-medium">{recentHumanReview.label ?? "Recently reviewed"}</div>
+                {recentHumanReviewDetail ? <div className="mt-1">{recentHumanReviewDetail}</div> : null}
+                {recentHumanReviewUpdatedAt ? <div className="mt-1 text-amber-800">{recentHumanReviewUpdatedAt}</div> : null}
               </div>
             ) : null}
             {exceptionSummary ? (
@@ -521,6 +545,16 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
             {learningSignalFact ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
                 Learned signal: {learningSignalFact}
+              </div>
+            ) : null}
+
+            {recentHumanReview?.active ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                <div className="font-semibold">{recentHumanReview.label ?? "Recently reviewed"}</div>
+                {recentHumanReviewDetail ? <div className="mt-1">{recentHumanReviewDetail}</div> : null}
+                {recentHumanReviewUpdatedAt ? (
+                  <div className="mt-1 text-amber-800">Saved {recentHumanReviewUpdatedAt}</div>
+                ) : null}
               </div>
             ) : null}
 
