@@ -119,6 +119,8 @@ function mapAutosendPolicyReason(
       return "channel_not_allowed";
     case "live_reply_channel_not_allowed":
       return "live_reply_channel_not_allowed";
+    case "human_review_required":
+      return "human_review_required";
     case "action_requires_full_mode":
       return "action_requires_full_mode";
     case "action_not_allowed":
@@ -189,6 +191,7 @@ export async function prepareDueSalesQueueDrafts(input?: {
         const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
           channel,
           actionType: item?.nextAction?.actionType ?? null,
+          humanReviewRequired: item?.nextAction?.actionType === "human_follow_up",
         });
         const autoSendEligible =
           (overrideAutoSendEnabled ?? autosendPolicy.allowed) &&
@@ -299,6 +302,7 @@ export async function prepareDueSalesQueueDrafts(input?: {
       const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
         channel,
         actionType: candidate.nextAction?.actionType ?? null,
+        humanReviewRequired: candidate.nextAction?.actionType === "human_follow_up",
       });
       const dmLiveAutopilotState =
         channel === "dm" && candidate.draftTarget?.threadId

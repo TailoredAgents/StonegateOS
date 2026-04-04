@@ -860,6 +860,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
         channel: effectiveChannel,
         actionType: nextAction?.actionType ?? null,
+        humanReviewRequired: nextAction?.actionType === "human_follow_up",
       });
       const autosendPolicyAllowed = autosendPolicy.allowed;
       const actionClass = getSalesPlannerActionClass(nextAction?.actionType ?? null);
@@ -888,6 +889,8 @@ export async function GET(request: NextRequest): Promise<Response> {
           ? "Live reply autonomy off"
         : autosendPolicy.reason === "live_reply_channel_not_allowed"
           ? "Live reply channel blocked"
+          : autosendPolicy.reason === "human_review_required"
+            ? "Human review required"
           : dmLiveAutopilotBlocked
             ? `Messenger warm-up: ${dmLiveAutopilotState?.meaningfulInboundCount ?? 0} meaningful inbound message${(dmLiveAutopilotState?.meaningfulInboundCount ?? 0) === 1 ? "" : "s"}`
           : autosendPolicy.reason === "action_requires_full_mode"

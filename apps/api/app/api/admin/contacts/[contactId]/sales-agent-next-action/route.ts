@@ -205,6 +205,8 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
   const autosendPolicy = evaluateSalesPlannerAutosendPolicy(autopilotPolicy, {
     channel: nextAction?.channel ?? latestDraft?.channel ?? null,
     actionType: nextAction?.actionType ?? null,
+    humanReviewRequired:
+      nextAction?.actionType === "human_follow_up" || (liveContext.derived.exceptionSignals?.length ?? 0) > 0,
   });
   const autosendPolicyAllowed = autosendPolicy.allowed;
   const actionClass = getSalesPlannerActionClass(nextAction?.actionType ?? null);
@@ -233,6 +235,8 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       ? "Live reply autonomy is still off. This draft can be suggested, but it will not auto-send until you enable live reply autonomy in Automation."
     : autosendPolicy.reason === "live_reply_channel_not_allowed"
       ? "Live reply autonomy is enabled, but this channel is not allowed to auto-send live replies yet."
+    : autosendPolicy.reason === "human_review_required"
+      ? "This lead is flagged for human review, so autosend stays blocked even if live autonomy is enabled."
     : autosendPolicy.reason === "action_requires_full_mode"
       ? "Partial mode keeps this kind of live reply approval-only."
       : autosendPolicy.reason === "channel_not_allowed" || autosendPolicy.reason === "action_not_allowed"

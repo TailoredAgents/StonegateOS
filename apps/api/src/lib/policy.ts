@@ -1304,7 +1304,7 @@ export function isSalesAutopilotLiveReplyEnabled(
 
 export function isSalesPlannerAutosendAllowed(
   policy: SalesAutopilotPolicy,
-  input: { channel?: string | null; actionType?: string | null },
+  input: { channel?: string | null; actionType?: string | null; humanReviewRequired?: boolean },
 ): boolean {
   return evaluateSalesPlannerAutosendPolicy(policy, input).allowed;
 }
@@ -1328,7 +1328,7 @@ export function getSalesPlannerActionClass(
 
 export function evaluateSalesPlannerAutosendPolicy(
   policy: SalesAutopilotPolicy,
-  input: { channel?: string | null; actionType?: string | null },
+  input: { channel?: string | null; actionType?: string | null; humanReviewRequired?: boolean },
 ): {
   allowed: boolean;
   channelMode: SalesAutopilotMode;
@@ -1341,12 +1341,17 @@ export function evaluateSalesPlannerAutosendPolicy(
     | "live_reply_channel_not_allowed"
     | "action_not_allowed"
     | "action_requires_full_mode"
+    | "human_review_required"
     | null;
 } {
   const channelMode = getSalesAutopilotChannelMode(policy, input.channel);
   const channel = typeof input.channel === "string" ? input.channel.trim() : "";
   const actionType = typeof input.actionType === "string" ? input.actionType.trim() : "";
   const actionClass = getSalesPlannerActionClass(actionType);
+
+  if (input.humanReviewRequired) {
+    return { allowed: false, channelMode, actionClass, reason: "human_review_required" };
+  }
 
   if (!policy.plannerAutoSendEnabled) {
     return { allowed: false, channelMode, actionClass, reason: "planner_autosend_disabled" };
