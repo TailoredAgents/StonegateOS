@@ -38,6 +38,7 @@ const DEFAULT_ACTIONS = [
 ];
 
 type ReasonCount = { label: string; count: number };
+type WinSignal = { label: string; detail: string };
 
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
@@ -116,6 +117,75 @@ function formatDispositionLabel(value: string | null | undefined): string | null
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function formatRatePercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatTouchKindLabel(value: string | null | undefined): string | null {
+  if (value === "requested") return "Initial confirmation";
+  if (value === "rescheduled") return "Reschedule confirmation";
+  if (value === "reminder") return "Reminder";
+  if (value === "other") return "Other touch";
+  return null;
+}
+
+function buildSupervisorWins(input: {
+  quoteClose: {
+    attempts: number;
+    bookRate: number;
+    preferredChannel: "sms" | "dm" | null;
+  };
+  objectionSave: {
+    attempts: number;
+    reopenRate: number;
+    preferredChannel: "sms" | "dm" | null;
+  };
+  appointmentPreservation: {
+    attempts: number;
+    completedRate: number;
+    strongestTouchKind: string | null;
+  };
+  agentAutosendCount: number;
+}): WinSignal[] {
+  const wins: WinSignal[] = [];
+
+  if (input.quoteClose.attempts >= 4 && input.quoteClose.bookRate >= 0.12) {
+    wins.push({
+      label: "Quote nudges are closing revenue",
+      detail: input.quoteClose.preferredChannel
+        ? `${input.quoteClose.preferredChannel.toUpperCase()} is the current close leader at ${formatRatePercent(input.quoteClose.bookRate)} booked.`
+        : `${formatRatePercent(input.quoteClose.bookRate)} of recent quote follow-ups are booking.`,
+    });
+  }
+
+  if (input.objectionSave.attempts >= 4 && input.objectionSave.reopenRate >= 0.25) {
+    wins.push({
+      label: "Objection saves are reopening leads",
+      detail: input.objectionSave.preferredChannel
+        ? `${input.objectionSave.preferredChannel.toUpperCase()} is reopening more objections at ${formatRatePercent(input.objectionSave.reopenRate)}.`
+        : `${formatRatePercent(input.objectionSave.reopenRate)} of recent objection saves are reopening the conversation.`,
+    });
+  }
+
+  if (input.appointmentPreservation.attempts >= 6 && input.appointmentPreservation.completedRate >= 0.5) {
+    wins.push({
+      label: "Booked jobs are being protected",
+      detail: input.appointmentPreservation.strongestTouchKind
+        ? `${formatTouchKindLabel(input.appointmentPreservation.strongestTouchKind) ?? "Current confirmation"} is the strongest touch at ${formatRatePercent(input.appointmentPreservation.completedRate)} completed.`
+        : `${formatRatePercent(input.appointmentPreservation.completedRate)} of recent confirmation-loop touches stayed on track to completion.`,
+    });
+  }
+
+  if (input.agentAutosendCount >= 3) {
+    wins.push({
+      label: "Autonomous follow-up volume is active",
+      detail: `${input.agentAutosendCount} planner autosends were queued in this window without needing manual send work.`,
+    });
+  }
+
+  return wins.slice(0, 3);
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -263,6 +333,24 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const agentDraftCount = rows.filter((row) => row.action.startsWith("sales.autopilot.") || row.action.startsWith("sales.agent.draft.")).length;
   const agentAutosendCount = rows.filter((row) => row.action === "message.retry" || row.action.startsWith("sales.agent.autosend.")).length;
+  const topWins = buildSupervisorWins({
+    quoteClose: {
+      attempts: quoteCloseSummary.attempts,
+      bookRate: quoteCloseSummary.bookRate,
+      preferredChannel: quoteCloseSummary.learned.preferredChannel,
+    },
+    objectionSave: {
+      attempts: objectionSaveSummary.attempts,
+      reopenRate: objectionSaveSummary.reopenRate,
+      preferredChannel: objectionSaveSummary.learned.preferredChannel,
+    },
+    appointmentPreservation: {
+      attempts: appointmentPreservationSummary.attempts,
+      completedRate: appointmentPreservationSummary.completedRate,
+      strongestTouchKind: appointmentPreservationSummary.learned.strongestTouchKind,
+    },
+    agentAutosendCount,
+  });
 
   return NextResponse.json({
     ok: true,
@@ -278,6 +366,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       recentlyReviewedCount: Number(recentlyReviewedResult[0]?.count ?? 0),
       agentDraftCount,
       agentAutosendCount,
+      topWins,
       topHoldReasons: topReasonCounts(holdReasonCounts),
       topLostReasons: topReasonCounts(lostReasonCounts),
       quoteClose: {

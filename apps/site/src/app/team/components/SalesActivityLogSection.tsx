@@ -428,6 +428,20 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
               ) : null}
             </div>
           </div>
+
+          {supervisor.topWins.length ? (
+            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Agent Wins Right Now</div>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                {supervisor.topWins.map((item) => (
+                  <div key={`${item.label}:${item.detail}`} className="rounded-2xl border border-emerald-200 bg-white/80 p-3">
+                    <div className="text-sm font-semibold text-emerald-950">{item.label}</div>
+                    <div className="mt-1 text-xs text-emerald-900">{item.detail}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
