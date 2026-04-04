@@ -1,9 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
-import { getDb, auditLogs, teamMembers } from "@/db";
+import { and, desc, eq, gte, ilike, inArray, sql } from "drizzle-orm";
+import { getDb, auditLogs, contacts, crmTasks, salesAgentNextActions, teamMembers } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
+import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
+import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
+import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -82,6 +85,11 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const db = getDb();
+  const [quoteCloseSummary, objectionSaveSummary, appointmentPreservationSummary] = await Promise.all([
+    loadQuoteCloseOutcomeSummary(db, { windowStart: since }),
+    loadObjectionSaveOutcomeSummary(db, { windowStart: since }),
+    loadAppointmentPreservationOutcomeSummary(db, { windowStart: since }),
+  ]);
   const rows = await db
     .select({
       id: auditLogs.id,
@@ -124,6 +132,38 @@ export async function GET(request: NextRequest): Promise<Response> {
     .where(and(...filters));
   const total = Number(totalResult[0]?.count ?? 0);
 
+  const holdFilters = [
+    eq(salesAgentNextActions.actionType, "human_follow_up"),
+    sql`${salesAgentNextActions.status} <> 'dismissed'`,
+  ];
+  const reviewFilters = [
+    eq(crmTasks.status, "completed"),
+    sql`${crmTasks.dueAt} is null`,
+    ilike(crmTasks.title, "Agent review%"),
+    gte(crmTasks.updatedAt, new Date(Date.now() - 24 * 60 * 60 * 1000)),
+  ];
+
+  if (actorId) {
+    holdFilters.push(eq(contacts.salespersonMemberId, actorId));
+    reviewFilters.push(eq(contacts.salespersonMemberId, actorId));
+  }
+
+  const [activeHumanReviewResult, recentlyReviewedResult] = await Promise.all([
+    db
+      .select({ count: sql<number>`count(*)` })
+      .from(salesAgentNextActions)
+      .innerJoin(contacts, eq(salesAgentNextActions.contactId, contacts.id))
+      .where(and(...holdFilters)),
+    db
+      .select({ count: sql<number>`count(*)` })
+      .from(crmTasks)
+      .innerJoin(contacts, eq(crmTasks.contactId, contacts.id))
+      .where(and(...reviewFilters)),
+  ]);
+
+  const agentDraftCount = rows.filter((row) => row.action.startsWith("sales.autopilot.") || row.action.startsWith("sales.agent.draft.")).length;
+  const agentAutosendCount = rows.filter((row) => row.action === "message.retry" || row.action.startsWith("sales.agent.autosend.")).length;
+
   return NextResponse.json({
     ok: true,
     rangeDays,
@@ -132,6 +172,34 @@ export async function GET(request: NextRequest): Promise<Response> {
     total,
     memberId: actorId,
     actions,
-    events
+    events,
+    supervisor: {
+      activeHumanReviewCount: Number(activeHumanReviewResult[0]?.count ?? 0),
+      recentlyReviewedCount: Number(recentlyReviewedResult[0]?.count ?? 0),
+      agentDraftCount,
+      agentAutosendCount,
+      quoteClose: {
+        attempts: quoteCloseSummary.attempts,
+        bookRate: quoteCloseSummary.bookRate,
+        lostRate: quoteCloseSummary.lostRate,
+        preferredChannel: quoteCloseSummary.learned.preferredChannel,
+        keepSofter: quoteCloseSummary.learned.keepSofter,
+      },
+      objectionSave: {
+        attempts: objectionSaveSummary.attempts,
+        reopenRate: objectionSaveSummary.reopenRate,
+        bookRate: objectionSaveSummary.bookRate,
+        preferredChannel: objectionSaveSummary.learned.preferredChannel,
+        keepSofter: objectionSaveSummary.learned.keepSofter,
+      },
+      appointmentPreservation: {
+        attempts: appointmentPreservationSummary.attempts,
+        completedRate: appointmentPreservationSummary.completedRate,
+        canceledRate: appointmentPreservationSummary.canceledRate,
+        noShowRate: appointmentPreservationSummary.noShowRate,
+        strongestTouchKind: appointmentPreservationSummary.learned.strongestTouchKind,
+        needsHumanBackup: appointmentPreservationSummary.learned.needsHumanBackup,
+      },
+    },
   });
 }

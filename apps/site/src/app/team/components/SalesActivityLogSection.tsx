@@ -20,6 +20,35 @@ type ActivityEvent = {
   meta?: Record<string, unknown> | null;
 };
 
+type ActivitySupervisorSummary = {
+  activeHumanReviewCount: number;
+  recentlyReviewedCount: number;
+  agentDraftCount: number;
+  agentAutosendCount: number;
+  quoteClose: {
+    attempts: number;
+    bookRate: number;
+    lostRate: number;
+    preferredChannel: "sms" | "dm" | null;
+    keepSofter: boolean;
+  };
+  objectionSave: {
+    attempts: number;
+    reopenRate: number;
+    bookRate: number;
+    preferredChannel: "sms" | "dm" | null;
+    keepSofter: boolean;
+  };
+  appointmentPreservation: {
+    attempts: number;
+    completedRate: number;
+    canceledRate: number;
+    noShowRate: number;
+    strongestTouchKind: "requested" | "rescheduled" | "reminder" | "other" | null;
+    needsHumanBackup: boolean;
+  };
+};
+
 type ActivityRow = {
   id: string;
   whenIso: string;
@@ -230,6 +259,19 @@ function buildRow(event: ActivityEvent): ActivityRow {
   };
 }
 
+function formatPercent(value: number | null | undefined): string {
+  const numeric = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return `${Math.round(numeric * 100)}%`;
+}
+
+function formatTouchKindLabel(value: ActivitySupervisorSummary["appointmentPreservation"]["strongestTouchKind"]): string | null {
+  if (!value) return null;
+  if (value === "requested") return "Initial confirmation";
+  if (value === "rescheduled") return "Reschedule confirmation";
+  if (value === "reminder") return "Reminder";
+  return "Other";
+}
+
 export async function SalesActivityLogSection({ memberId }: { memberId?: string }): Promise<React.ReactElement> {
   const qs = new URLSearchParams({ limit: "150", rangeDays: "7" });
   if (memberId) qs.set("memberId", memberId);
@@ -243,8 +285,13 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
     throw new Error("Failed to load sales activity");
   }
 
-  const activityPayload = (await activityRes.json()) as { events?: ActivityEvent[]; memberId?: string | null };
+  const activityPayload = (await activityRes.json()) as {
+    events?: ActivityEvent[];
+    memberId?: string | null;
+    supervisor?: ActivitySupervisorSummary;
+  };
   const events = activityPayload.events ?? [];
+  const supervisor = activityPayload.supervisor ?? null;
   const rows = events.map(buildRow);
 
   let members: TeamMember[] = [];
@@ -322,6 +369,77 @@ export async function SalesActivityLogSection({ memberId }: { memberId?: string 
           </form>
         </div>
       </header>
+
+      {supervisor ? (
+        <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/50 backdrop-blur">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">Supervisor Overview</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Fast read on what the agent handled automatically, what it held back, and where follow-up performance is helping or hurting.
+              </p>
+            </div>
+            <div className="text-xs text-slate-500">Last {selectedLabel ? "filtered" : "team-wide"} {qs.get("rangeDays")} days</div>
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-5">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">Held Back</p>
+              <p className="mt-2 text-2xl font-semibold text-amber-950">{supervisor.activeHumanReviewCount}</p>
+              <p className="mt-2 text-sm text-amber-900">Need human review right now</p>
+              <p className="mt-1 text-xs text-amber-800">Reviewed in last 24h: {supervisor.recentlyReviewedCount}</p>
+            </div>
+
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Agent Handled</p>
+              <p className="mt-2 text-2xl font-semibold text-emerald-950">{supervisor.agentAutosendCount}</p>
+              <p className="mt-2 text-sm text-emerald-900">Autosends queued this period</p>
+              <p className="mt-1 text-xs text-emerald-800">Drafts prepared/reused: {supervisor.agentDraftCount}</p>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Quote Close</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(supervisor.quoteClose.bookRate)}</p>
+              <p className="mt-2 text-sm text-slate-700">Booked after quote follow-up</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Lost: {formatPercent(supervisor.quoteClose.lostRate)}
+                {supervisor.quoteClose.preferredChannel ? ` | Lean: ${supervisor.quoteClose.preferredChannel.toUpperCase()}` : ""}
+              </p>
+              {supervisor.quoteClose.keepSofter ? (
+                <p className="mt-2 text-xs font-semibold text-amber-700">Recent close pushes are running hot. Softer nudges are safer right now.</p>
+              ) : null}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Objection Saves</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(supervisor.objectionSave.reopenRate)}</p>
+              <p className="mt-2 text-sm text-slate-700">Reopened after objection follow-up</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Booked later: {formatPercent(supervisor.objectionSave.bookRate)}
+                {supervisor.objectionSave.preferredChannel ? ` | Lean: ${supervisor.objectionSave.preferredChannel.toUpperCase()}` : ""}
+              </p>
+              {supervisor.objectionSave.keepSofter ? (
+                <p className="mt-2 text-xs font-semibold text-amber-700">Objection saves are softening. Lower-pressure follow-ups are winning more.</p>
+              ) : null}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/90 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Booked Revenue Protection</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{formatPercent(supervisor.appointmentPreservation.completedRate)}</p>
+              <p className="mt-2 text-sm text-slate-700">Completed after confirmation touches</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Cancel/no-show: {formatPercent(supervisor.appointmentPreservation.canceledRate + supervisor.appointmentPreservation.noShowRate)}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Strongest touch: {formatTouchKindLabel(supervisor.appointmentPreservation.strongestTouchKind) ?? "Still learning"}
+              </p>
+              {supervisor.appointmentPreservation.needsHumanBackup ? (
+                <p className="mt-2 text-xs font-semibold text-amber-700">Booked jobs are slipping. Human backup is recommended on shaky appointments.</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-6">
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm shadow-slate-200/40 backdrop-blur">
