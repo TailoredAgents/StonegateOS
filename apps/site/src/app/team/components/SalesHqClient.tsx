@@ -727,7 +727,7 @@ export function SalesHqClient({
                 Total handled: {formatCloseLoopCount(supervisor.closeLoopActivity.total)}
               </div>
             </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-4">
+              <div className="mt-3 grid gap-3 md:grid-cols-4">
               <div className="rounded-2xl border border-sky-200 bg-white/80 p-3">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-700">Pre-appointment</div>
                 <div className="mt-2 text-2xl font-semibold text-sky-950">{formatCloseLoopCount(supervisor.closeLoopActivity.preAppointmentCount)}</div>
@@ -750,6 +750,35 @@ export function SalesHqClient({
                 </div>
                 <div className="mt-1 text-sm font-semibold text-sky-950">
                   Autosends: {formatCloseLoopCount(supervisor.closeLoopActivity.autosendCount)}
+                </div>
+              </div>
+              <div className="mt-3 rounded-2xl border border-sky-200 bg-white/80 p-3 text-xs text-sky-900">
+                <div className="font-semibold uppercase tracking-[0.18em] text-sky-700">Close-loop outcomes</div>
+                <div className="mt-2">
+                  Reply {formatPercent(supervisor.closeLoopOutcomes.replyRate)} | Preserved{" "}
+                  {formatPercent(supervisor.closeLoopOutcomes.preservedRate)} | Completed{" "}
+                  {formatPercent(supervisor.closeLoopOutcomes.completedRate)}
+                </div>
+                <div className="mt-1">
+                  Reschedule saves {formatPercent(supervisor.closeLoopOutcomes.rescheduleRate)} | Repeat booked{" "}
+                  {formatPercent(supervisor.closeLoopOutcomes.repeatBookRate)}
+                </div>
+                <div className="mt-2 text-[11px] text-sky-800">
+                  {supervisor.closeLoopOutcomes.appointmentCheckinWorthwhile
+                    ? "Pre-appointment check-ins are earning their keep."
+                    : "Pre-appointment check-ins are still a light-touch, still-learning action."}
+                  {" | "}
+                  {supervisor.closeLoopOutcomes.appointmentSupportWorthwhile
+                    ? "Booked-job support is preserving momentum."
+                    : "Booked-job support has no strong win signal yet."}
+                  {" | "}
+                  {supervisor.closeLoopOutcomes.appointmentSupportNeedsLightTouch
+                    ? "Keep booked-job support extra light right now."
+                    : "No strong light-touch warning on booked-job support."}
+                  {" | "}
+                  {supervisor.closeLoopOutcomes.postJobCheckinWorthwhile
+                    ? "Post-job check-ins are generating healthy response or repeat-booking signal."
+                    : "Post-job check-ins are still early and should stay low pressure."}
                 </div>
               </div>
             </div>

@@ -124,6 +124,18 @@ export type SalesSupervisorPayload = {
     bookedSupportCount: number;
     postJobCount: number;
   };
+  closeLoopOutcomes: {
+    attempts: number;
+    replyRate: number;
+    preservedRate: number;
+    completedRate: number;
+    rescheduleRate: number;
+    repeatBookRate: number;
+    appointmentCheckinWorthwhile: boolean;
+    appointmentSupportWorthwhile: boolean;
+    appointmentSupportNeedsLightTouch: boolean;
+    postJobCheckinWorthwhile: boolean;
+  };
   attentionItems: Array<{
     label: string;
     detail: string;

@@ -5,6 +5,7 @@ import { getDb, auditLogs, contacts, crmTasks, salesAgentNextActions, teamMember
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { loadAppointmentPreservationOutcomeSummary } from "@/lib/appointment-preservation-outcomes";
+import { loadCloseLoopOutcomeSummary } from "@/lib/close-loop-outcomes";
 import { loadObjectionSaveOutcomeSummary } from "@/lib/objection-save-outcomes";
 import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 
@@ -327,11 +328,13 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const db = getDb();
-  const [quoteCloseSummary, objectionSaveSummary, appointmentPreservationSummary] = await Promise.all([
-    loadQuoteCloseOutcomeSummary(db, { windowStart: since }),
-    loadObjectionSaveOutcomeSummary(db, { windowStart: since }),
-    loadAppointmentPreservationOutcomeSummary(db, { windowStart: since }),
-  ]);
+  const [closeLoopOutcomeSummary, quoteCloseSummary, objectionSaveSummary, appointmentPreservationSummary] =
+    await Promise.all([
+      loadCloseLoopOutcomeSummary(db, { windowStart: since }),
+      loadQuoteCloseOutcomeSummary(db, { windowStart: since }),
+      loadObjectionSaveOutcomeSummary(db, { windowStart: since }),
+      loadAppointmentPreservationOutcomeSummary(db, { windowStart: since }),
+    ]);
   const closeLoopActivityRows = await db
     .select({
       action: auditLogs.action,
@@ -528,6 +531,18 @@ export async function GET(request: NextRequest): Promise<Response> {
       agentDraftCount,
       agentAutosendCount,
       closeLoopActivity,
+      closeLoopOutcomes: {
+        attempts: closeLoopOutcomeSummary.attempts,
+        replyRate: closeLoopOutcomeSummary.replyRate,
+        preservedRate: closeLoopOutcomeSummary.preservedRate,
+        completedRate: closeLoopOutcomeSummary.completedRate,
+        rescheduleRate: closeLoopOutcomeSummary.rescheduleRate,
+        repeatBookRate: closeLoopOutcomeSummary.repeatBookRate,
+        appointmentCheckinWorthwhile: closeLoopOutcomeSummary.learned.appointmentCheckinWorthwhile,
+        appointmentSupportWorthwhile: closeLoopOutcomeSummary.learned.appointmentSupportWorthwhile,
+        appointmentSupportNeedsLightTouch: closeLoopOutcomeSummary.learned.appointmentSupportNeedsLightTouch,
+        postJobCheckinWorthwhile: closeLoopOutcomeSummary.learned.postJobCheckinWorthwhile,
+      },
       attentionItems,
       topWins,
       topHoldReasons,
