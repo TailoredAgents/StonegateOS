@@ -44,6 +44,7 @@ const SALES_AGENT_AUTOSEND_CHANNELS = [
 
 const SALES_AGENT_AUTOSEND_ACTIONS = [
   { value: "missed_call_recovery", label: "Missed call recovery" },
+  { value: "appointment_checkin", label: "Appointment check in" },
   { value: "dm_sms_handoff", label: "Messenger to SMS handoff" },
   { value: "follow_up_quote", label: "Quote follow up" },
   { value: "collect_missing_info", label: "Collect missing info" },
@@ -252,6 +253,9 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                 <h4 className="text-sm font-semibold text-slate-900">Planner follow-up auto-send</h4>
                 <p className="text-xs text-slate-500">
                   Controls the newer Sales HQ and Inbox planner drafts for scheduled follow-up behavior. This matters in Partial and Full modes. Off mode still drafts, but nothing sends automatically.
+                </p>
+                <p className="text-xs text-slate-500">
+                  Appointment check-ins use the same planner path. They are separate from the core transactional confirmations and reminders, so you can keep those working while deciding whether the agent is allowed to send extra pre-appointment reassurance touches.
                 </p>
               </div>
 

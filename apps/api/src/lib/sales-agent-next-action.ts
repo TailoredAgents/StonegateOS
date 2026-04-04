@@ -238,6 +238,11 @@ function getLatestQuoteCreatedAt(context: OmniLeadContext): Date | null {
   return pickLatestDate([context.instantQuote?.createdAt ?? null, context.formalQuote?.createdAt ?? null]);
 }
 
+function buildAppointmentCheckinDueAt(appointmentStart: Date, now: Date): string {
+  const target = new Date(appointmentStart.getTime() - 6 * 60 * 60 * 1000);
+  return (target.getTime() <= now.getTime() ? now : target).toISOString();
+}
+
 function buildExceptionRouting(context: OmniLeadContext): {
   summary: string;
   reason: string;
@@ -669,6 +674,9 @@ export function buildSalesAgentNextAction(input: {
   if (hasUpcomingAppointment) {
     const preservationLearning = input.appointmentPreservationOutcomeSummary;
     const reminderLearning = input.appointmentReminderOutcomeSummary;
+    const appointmentStart = parseIso(context.nextAppointment?.startAt ?? null);
+    const minutesUntilAppointment =
+      appointmentStart ? Math.round((appointmentStart.getTime() - now.getTime()) / (60 * 1000)) : null;
     const appointmentTypeKey =
       context.nextAppointment?.type === "estimate" ||
       context.nextAppointment?.type === "in_person_quote" ||
@@ -691,6 +699,59 @@ export function buildSalesAgentNextAction(input: {
           : preservationLearning?.learned.strongestTouchKind === "reminder"
             ? "pre-job reminders"
             : null;
+    const appointmentCheckinChannel = hasChannelAvailable(context, "sms") ? "sms" : preferredChannel;
+    const appointmentLooksShaky =
+      Boolean(preservationLearning?.learned.needsHumanBackup) ||
+      Boolean(reminderLearning && !reminderLearning.learned.confirmationLoopHealthy) ||
+      Boolean(
+        appointmentTypeRisk &&
+          appointmentTypeRisk.attempts >= 4 &&
+          appointmentTypeRisk.canceledRate + appointmentTypeRisk.noShowRate >= 0.18,
+      );
+    const appointmentCheckinEligible =
+      Boolean(appointmentStart) &&
+      minutesUntilAppointment !== null &&
+      minutesUntilAppointment >= 90 &&
+      minutesUntilAppointment <= 18 * 60 &&
+      Boolean(appointmentCheckinChannel) &&
+      hasChannelAvailable(context, appointmentCheckinChannel) &&
+      appointmentLooksShaky &&
+      !hasRecentOutbound(context, now, 10 * 60);
+
+    if (appointmentStart && appointmentCheckinEligible) {
+      return {
+        actionType: "appointment_checkin",
+        channel: appointmentCheckinChannel,
+        status: "open",
+        priority: minutesUntilAppointment !== null && minutesUntilAppointment <= 4 * 60 ? "high" : "normal",
+        confidence: "medium",
+        summary: "Send a light pre-appointment check-in to protect this booking before the appointment.",
+        reason: "The appointment is coming up and recent reminder results suggest this one would benefit from an extra reassurance touch.",
+        facts: dedupe([
+          `Appointment at ${appointmentStart.toISOString()}`,
+          context.nextAppointment?.type ? `Appointment type: ${formatFactLabel(context.nextAppointment.type)}.` : null,
+          preferredReminderWindow
+            ? `Recent acknowledgement performance is strongest around the ${preferredReminderWindow} reminder.`
+            : null,
+          strongestTouchKind ? `Booked jobs are being preserved best after ${strongestTouchKind}.` : null,
+          appointmentTypeRisk && appointmentTypeRisk.attempts >= 4
+            ? `${formatFactLabel(appointmentTypeKey)} appointments are currently canceling or no-showing ${Math.round(
+                (appointmentTypeRisk.canceledRate + appointmentTypeRisk.noShowRate) * 100,
+              )}% of the time after confirmation touches.`
+            : null,
+          preservationLearning?.learned.needsHumanBackup
+            ? "Recent booked jobs are still slipping into cancellations or no-shows often enough that this appointment should get an extra light check-in."
+            : null,
+          reminderLearning && !reminderLearning.learned.confirmationLoopHealthy
+            ? "Recent reminder acknowledgements are still soft overall, so an extra check-in may keep this appointment healthier."
+            : null,
+          memory.lastPromisedNextStep,
+        ]),
+        dueAt: buildAppointmentCheckinDueAt(appointmentStart, now),
+        source: "rules_v1",
+      };
+    }
+
     return {
       actionType: "wait_for_appointment",
       channel: preferredChannel,

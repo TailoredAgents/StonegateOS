@@ -1314,6 +1314,7 @@ export function getSalesPlannerActionClass(
 ): SalesPlannerActionClass | null {
   switch (typeof actionType === "string" ? actionType.trim() : "") {
     case "missed_call_recovery":
+    case "appointment_checkin":
     case "dm_sms_handoff":
     case "follow_up_quote":
     case "collect_missing_info":

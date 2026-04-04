@@ -41,6 +41,7 @@ const POLICY_KEY = "sales_autopilot" as const;
 const AUTOSEND_CHANNELS = new Set(["sms", "email", "dm"]);
 const AUTOSEND_ACTIONS = new Set([
   "missed_call_recovery",
+  "appointment_checkin",
   "dm_sms_handoff",
   "reply_now",
   "follow_up_quote",

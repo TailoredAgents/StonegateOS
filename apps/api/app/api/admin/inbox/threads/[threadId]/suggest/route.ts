@@ -89,6 +89,7 @@ function parseIsoDate(value: string | null | undefined): Date | null {
 function isSafePlannerFollowupAction(actionType: string | null | undefined): boolean {
   return (
     actionType === "missed_call_recovery" ||
+    actionType === "appointment_checkin" ||
     actionType === "dm_sms_handoff" ||
     actionType === "follow_up_quote" ||
     actionType === "collect_missing_info" ||
@@ -400,6 +401,8 @@ function buildPlannerInstruction(
         : "Reply promptly, keep momentum, and answer the latest inbound directly.";
     case "missed_call_recovery":
       return "Write a short missed-call recovery text that gets the lead talking again without overcomplicating it.";
+    case "appointment_checkin":
+      return "Write a short pre-appointment check-in that reassures the customer, keeps the booking warm, and makes it easy for them to flag any issue before the appointment.";
     case "dm_sms_handoff":
       return "Write a short SMS that naturally picks up the earlier Messenger conversation and moves the lead into texting without sounding robotic.";
     case "call_now":
@@ -437,6 +440,10 @@ function buildChannelStyleInstruction(
 
   if (actionType === "collect_missing_info") {
     return "Messenger tone: ask for one thing only, keep it conversational, and make the request feel low-friction, like a quick reply or photo.";
+  }
+
+  if (actionType === "appointment_checkin") {
+    return "Messenger tone: keep the check-in light and reassuring. Do not sound like an automated reminder blast or re-sell the job.";
   }
 
   if (actionType === "reply_now" || actionType === "handle_price_objection") {
