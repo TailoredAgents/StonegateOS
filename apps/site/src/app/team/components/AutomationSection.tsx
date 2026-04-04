@@ -44,17 +44,35 @@ const SALES_AGENT_AUTOSEND_CHANNELS = [
 
 const SALES_AGENT_AUTOSEND_ACTIONS = [
   { value: "missed_call_recovery", label: "Missed call recovery" },
-  { value: "appointment_checkin", label: "Appointment check in" },
-  { value: "post_job_checkin", label: "Post-job check in" },
   { value: "dm_sms_handoff", label: "Messenger to SMS handoff" },
   { value: "follow_up_quote", label: "Quote follow up" },
   { value: "collect_missing_info", label: "Collect missing info" },
 ];
 
 const SALES_AGENT_LIVE_REPLY_ACTIONS = [
-  { value: "appointment_support", label: "Appointment support or reschedule save (Full only)" },
   { value: "handle_price_objection", label: "Price objection save (Full only)" },
   { value: "reply_now", label: "Immediate reply (Full only)" },
+] as const;
+
+const CLOSE_LOOP_FOLLOWUP_ACTIONS = [
+  {
+    value: "appointment_checkin",
+    label: "Pre-appointment check in",
+    detail: "Light reassurance touch before a booked appointment when the booking looks shaky.",
+  },
+  {
+    value: "post_job_checkin",
+    label: "Post-job check in",
+    detail: "Human-style satisfaction follow-up after the completed job, separate from review requests.",
+  },
+] as const;
+
+const CLOSE_LOOP_LIVE_REPLY_ACTIONS = [
+  {
+    value: "appointment_support",
+    label: "Booked-job support or reschedule save",
+    detail: "Handles low-risk timing, logistics, and light reschedule-save conversations on booked jobs.",
+  },
 ] as const;
 
 const AUTOPILOT_MODE_OPTIONS = [
@@ -81,6 +99,8 @@ export async function AutomationSection(): Promise<React.ReactElement> {
   if (!autopilot) {
     throw new Error("Missing Sales Autopilot policy");
   }
+  const selectedPlannerActions = new Set(autopilot.plannerAutoSendActions);
+  const selectedLiveReplyActions = new Set(autopilot.liveReplyAutonomyActions);
 
   return (
     <section className="space-y-6">
@@ -320,6 +340,36 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     ))}
                   </div>
                 </div>
+
+                <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
+                  <div className="space-y-1">
+                    <h5 className="text-sm font-semibold text-slate-900">Close-loop follow-up actions</h5>
+                    <p className="text-xs text-slate-600">
+                      These are the post-booking and post-job planner touches. They still use the same autosend path above, but this grouping makes it easier to turn appointment and after-job behavior on intentionally.
+                    </p>
+                  </div>
+
+                  <div className="mt-3 space-y-3">
+                    {CLOSE_LOOP_FOLLOWUP_ACTIONS.map((option) => (
+                      <label
+                        key={option.value}
+                        className="flex items-start gap-3 rounded-2xl border border-sky-200 bg-white/80 px-3 py-3"
+                      >
+                        <input
+                          type="checkbox"
+                          name="plannerAutoSendActions"
+                          value={option.value}
+                          defaultChecked={selectedPlannerActions.has(option.value)}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                        />
+                        <span className="space-y-1">
+                          <span className="block text-sm font-semibold text-slate-900">{option.label}</span>
+                          <span className="block text-xs text-slate-600">{option.detail}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
@@ -373,6 +423,36 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                             className="h-4 w-4 rounded border-slate-300"
                           />
                           {option.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
+                    <div className="space-y-1">
+                      <h5 className="text-sm font-semibold text-slate-900">Close-loop live-reply actions</h5>
+                      <p className="text-xs text-slate-600">
+                        This is the booked-job side of autonomy. Keep it off until you trust the agent with real appointment timing and light reschedule-save conversations.
+                      </p>
+                    </div>
+
+                    <div className="mt-3 space-y-3">
+                      {CLOSE_LOOP_LIVE_REPLY_ACTIONS.map((option) => (
+                        <label
+                          key={option.value}
+                          className="flex items-start gap-3 rounded-2xl border border-sky-200 bg-white/80 px-3 py-3"
+                        >
+                          <input
+                            type="checkbox"
+                            name="liveReplyAutonomyActions"
+                            value={option.value}
+                            defaultChecked={selectedLiveReplyActions.has(option.value)}
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                          />
+                          <span className="space-y-1">
+                            <span className="block text-sm font-semibold text-slate-900">{option.label}</span>
+                            <span className="block text-xs text-slate-600">{option.detail}</span>
+                          </span>
                         </label>
                       ))}
                     </div>
