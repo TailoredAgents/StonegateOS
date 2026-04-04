@@ -144,6 +144,12 @@ type NextActionSummaryResponse = {
     detail?: string | null;
     tone?: "good" | "warn" | "bad" | "neutral" | null;
   } | null;
+  closeLoopPolicySummary?: {
+    mode?: "suggest_only" | "autosend_allowed" | "live_autonomy_allowed" | "blocked" | null;
+    label?: string | null;
+    detail?: string | null;
+    tone?: "good" | "warn" | "bad" | "neutral" | null;
+  } | null;
 };
 
 type MediaAnalysisSummaryResponse = {
@@ -247,6 +253,19 @@ function providerStatusClasses(value: ProviderHealth["status"]): string {
       return "border-amber-200 bg-amber-50 text-amber-700";
     default:
       return "border-slate-200 bg-slate-100 text-slate-500";
+  }
+}
+
+function tonePanelClasses(value: "good" | "warn" | "bad" | "neutral" | null | undefined): string {
+  switch (value) {
+    case "good":
+      return "border-emerald-200 bg-emerald-50 text-emerald-900";
+    case "warn":
+      return "border-amber-200 bg-amber-50 text-amber-900";
+    case "bad":
+      return "border-rose-200 bg-rose-50 text-rose-900";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
   }
 }
 
@@ -669,6 +688,8 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
   const agentExecutionState = nextActionSummary?.executionState ?? null;
   const agentExecutionCode = agentExecutionState?.code ?? null;
   const agentNextAction = nextActionSummary?.nextAction ?? null;
+  const agentCloseLoopPolicy = nextActionSummary?.closeLoopPolicySummary ?? null;
+  const agentCloseLoopMode = agentCloseLoopPolicy?.mode ?? null;
   const agentTargetChannel = isSupportedChannel(agentNextAction?.channel) ? agentNextAction.channel : requestedChannel;
   const agentIsChannelHandoff = agentTargetChannel !== requestedChannel;
   const agentLatestDraft = nextActionSummary?.latestDraft ?? null;
@@ -685,6 +706,14 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
   const agentDraftPending = agentExecutionCode === "draft_pending" && !currentThreadAiDraft;
   const agentPrimaryTitle = agentAutoSendDue
     ? "Next move: send now or let autosend handle it"
+    : currentThreadAiDraft && agentCloseLoopMode === "suggest_only"
+      ? "Next move: review the suggestion"
+    : currentThreadAiDraft && agentCloseLoopMode === "live_autonomy_allowed"
+      ? "Next move: this reply is live-autonomy capable"
+    : !currentThreadAiDraft && agentCloseLoopMode === "autosend_allowed"
+      ? "Next move: prepare the autosend draft"
+    : !currentThreadAiDraft && agentCloseLoopMode === "live_autonomy_allowed"
+      ? "Next move: prepare the live-autonomy reply"
     : agentExternalDraft
       ? `Next move: open ${agentExternalDraft.channel === "sms" ? "SMS" : agentExternalDraft.channel.toUpperCase()} draft`
     : agentIsChannelHandoff && !currentThreadAiDraft
@@ -696,6 +725,14 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         : "Next move: prepare the reply";
   const agentPrimaryDescription = agentAutoSendDue
     ? "This follow-up is already due and eligible for autosend. Send it now if you want to move first, or leave it alone and let the worker handle it."
+    : currentThreadAiDraft && agentCloseLoopMode === "suggest_only"
+      ? "This close-loop action is still approval-first under your current settings. Review the drafted suggestion and send it manually if you want to move now."
+    : currentThreadAiDraft && agentCloseLoopMode === "live_autonomy_allowed"
+      ? "This close-loop reply is already allowed for live autonomy on this channel, but you can still review and send it manually here."
+    : !currentThreadAiDraft && agentCloseLoopMode === "autosend_allowed"
+      ? "This close-loop follow-up is approved for autosend once a draft exists. Prepare it here if you want to inspect or send it yourself first."
+    : !currentThreadAiDraft && agentCloseLoopMode === "live_autonomy_allowed"
+      ? "This close-loop reply is allowed for live autonomy on this channel. Prepare it here if you want to inspect the exact reply first."
     : agentExternalDraft
       ? `The agent already prepared this reply on ${agentExternalDraft.channel === "sms" ? "SMS" : agentExternalDraft.channel.toUpperCase()}. Open that draft and send it from the correct channel thread.`
     : agentIsChannelHandoff && !currentThreadAiDraft
@@ -712,10 +749,31 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
     : agentIsChannelHandoff && !currentThreadAiDraft
       ? `Prepare ${agentTargetChannel === "sms" ? "SMS" : agentTargetChannel.toUpperCase()} draft`
     : currentThreadAiDraft
-      ? "Approve and send"
-      : "Prepare next reply";
+      ? agentCloseLoopMode === "suggest_only"
+        ? "Send suggestion"
+        : "Send now"
+      : agentCloseLoopMode === "suggest_only"
+        ? "Prepare suggestion"
+        : agentCloseLoopMode === "autosend_allowed"
+          ? "Prepare autosend draft"
+          : agentCloseLoopMode === "live_autonomy_allowed"
+            ? "Prepare live reply"
+            : "Prepare next reply";
   const agentSecondaryButtonLabel = currentThreadAiDraft && !agentAutoSendDue ? "Refresh draft" : null;
   const agentPassiveChoiceLabel = agentAutoSendDue ? "Let autosend handle it" : null;
+  const agentGateLabel =
+    agentCloseLoopMode === "suggest_only"
+      ? currentThreadAiDraft
+        ? "Reviewing suggestion"
+        : "Suggestion only"
+      : agentCloseLoopMode === "autosend_allowed"
+        ? "Autosend allowed"
+        : agentCloseLoopMode === "live_autonomy_allowed"
+          ? "Live autonomy allowed"
+          : agentCloseLoopMode === "blocked"
+            ? "Blocked for review"
+            : null;
+  const agentGateDetail = agentCloseLoopPolicy?.detail ?? null;
   const agentMediaAnalysis = mediaAnalysisSummary?.analysis ?? null;
   const agentMediaUsesVision =
     typeof agentMediaAnalysis?.source === "string" && agentMediaAnalysis.source.toLowerCase().includes("vision");
@@ -1391,6 +1449,19 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                         {currentThreadAiDraftPlanner?.reason ? (
                           <div className="mt-2 text-xs text-slate-600">
                             <span className="font-semibold text-slate-700">Why now:</span> {currentThreadAiDraftPlanner.reason}
+                          </div>
+                        ) : null}
+                        {agentGateLabel ? (
+                          <div className={`mt-3 rounded-xl border px-3 py-2 text-xs ${tonePanelClasses(agentCloseLoopPolicy?.tone ?? "neutral")}`}>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-semibold">{agentGateLabel}</span>
+                              {agentCloseLoopPolicy?.label ? (
+                                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium">
+                                  {agentCloseLoopPolicy.label}
+                                </span>
+                              ) : null}
+                            </div>
+                            {agentGateDetail ? <div className="mt-1">{agentGateDetail}</div> : null}
                           </div>
                         ) : null}
                         {agentMediaUsesVision && (agentMediaSummary || agentMediaMissingView) ? (
