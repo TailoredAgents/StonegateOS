@@ -1626,6 +1626,16 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                       currentThreadAiDraft?.id === message.id &&
                       isDraft &&
                       isAiSuggested;
+                    const draftGateLabel =
+                      managedByAgentCard && agentCloseLoopMode === "suggest_only"
+                        ? "Suggestion only"
+                        : managedByAgentCard && agentCloseLoopMode === "autosend_allowed"
+                          ? "Autosend allowed"
+                          : managedByAgentCard && agentCloseLoopMode === "live_autonomy_allowed"
+                            ? "Live autonomy allowed"
+                            : managedByAgentCard && agentCloseLoopMode === "blocked"
+                              ? "Blocked for review"
+                              : null;
                     return (
                       <div key={message.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                         <div
@@ -1671,6 +1681,19 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                           ) : null}
                           {isDraft && isAiSuggested ? (
                             <div className="mb-3 rounded-xl border border-primary-200 bg-white/70 px-3 py-2 text-[11px] text-slate-600">
+                              {draftGateLabel && agentGateDetail ? (
+                                <div className={`mb-2 rounded-xl border px-2 py-2 ${tonePanelClasses(agentCloseLoopPolicy?.tone ?? "neutral")}`}>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-semibold">{draftGateLabel}</span>
+                                    {agentCloseLoopPolicy?.label ? (
+                                      <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium">
+                                        {agentCloseLoopPolicy.label}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <div className="mt-1">{agentGateDetail}</div>
+                                </div>
+                              ) : null}
                               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                                 {aiPlannerActionType ? <span><span className="font-semibold text-slate-700">Planner:</span> {aiPlannerActionType}</span> : null}
                                 {aiPlanIntent ? <span><span className="font-semibold text-slate-700">Goal:</span> {aiPlanIntent}</span> : null}
@@ -1716,7 +1739,9 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                           </div>
                           {managedByAgentCard ? (
                             <div className="mt-3 text-right text-[11px] font-medium text-slate-500">
-                              Use the Agent card above to send or refresh this draft.
+                              {draftGateLabel
+                                ? `${draftGateLabel}. Use the Agent card above to send or refresh this draft.`
+                                : "Use the Agent card above to send or refresh this draft."}
                             </div>
                           ) : isOutbound && isDraft ? (
                             <div className="mt-3 flex justify-end">
