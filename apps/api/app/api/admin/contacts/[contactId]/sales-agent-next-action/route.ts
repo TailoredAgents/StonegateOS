@@ -30,6 +30,7 @@ import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import {
+  buildSalesCloseLoopPolicySummary,
   evaluateSalesPlannerAutosendPolicy,
   getSalesPlannerActionClass,
   getSalesAutopilotChannelMode,
@@ -252,6 +253,17 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       !dmLiveAutopilotBlocked &&
       isPlannerActionDue(nextAction, now)
   );
+  const humanReviewRequired =
+    nextAction?.actionType === "human_follow_up" || (liveContext.derived.exceptionSignals?.length ?? 0) > 0;
+  const closeLoopPolicySummary = buildSalesCloseLoopPolicySummary({
+    actionType: nextAction?.actionType ?? null,
+    channelMode,
+    autosendPolicy,
+    liveReplyAutonomyEnabled: autopilotPolicy.liveReplyAutonomyEnabled,
+    liveReplyAllowed,
+    dmLiveAutopilotBlocked,
+    humanReviewRequired,
+  });
   const draftReadyDetail = !draftIsOldEnough
     ? "Draft is ready and still aging before autosend."
     : dmLiveAutopilotBlocked
@@ -365,6 +377,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     liveContext,
     recentHumanReview,
     executionState,
+    closeLoopPolicySummary,
     autopilot: {
       mode: autopilotPolicy.mode,
       channelMode,

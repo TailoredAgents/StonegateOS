@@ -18,6 +18,7 @@ import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getDisqualifiedContactIds, getLeadClockStart, getSalesScorecardConfig, getSpeedToLeadDeadline } from "@/lib/sales-scorecard";
 import {
+  buildSalesCloseLoopPolicySummary,
   evaluateSalesPlannerAutosendPolicy,
   getSalesPlannerActionClass,
   getSalesAutopilotPolicy,
@@ -100,6 +101,9 @@ function shouldApplyRecentReviewCooldown(item: {
 function isSafeDraftPreparationAction(actionType: string | null | undefined): boolean {
   return (
     actionType === "missed_call_recovery" ||
+    actionType === "appointment_checkin" ||
+    actionType === "appointment_support" ||
+    actionType === "post_job_checkin" ||
     actionType === "dm_sms_handoff" ||
     actionType === "reply_now" ||
     actionType === "follow_up_quote" ||
@@ -943,6 +947,15 @@ export async function GET(request: NextRequest): Promise<Response> {
           dmLiveAutopilotState &&
           !dmLiveAutopilotState.ready,
       );
+      const closeLoopPolicySummary = buildSalesCloseLoopPolicySummary({
+        actionType: nextAction?.actionType ?? null,
+        channelMode,
+        autosendPolicy,
+        liveReplyAutonomyEnabled: autopilotPolicy.liveReplyAutonomyEnabled,
+        liveReplyAllowed,
+        dmLiveAutopilotBlocked,
+        humanReviewRequired: nextAction?.actionType === "human_follow_up",
+      });
       const autosendEligible = Boolean(
         autosendPolicyAllowed &&
           draft?.ready &&
@@ -1050,6 +1063,7 @@ export async function GET(request: NextRequest): Promise<Response> {
           liveReplyAutonomyEnabled: autopilotPolicy.liveReplyAutonomyEnabled,
           liveReplyAllowed,
         },
+        closeLoopPolicySummary,
       };
     })
     .sort((a, b) => {

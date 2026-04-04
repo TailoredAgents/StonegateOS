@@ -98,6 +98,12 @@ export type QueuePayload = {
       liveReplyAutonomyEnabled: boolean;
       liveReplyAllowed: boolean;
     } | null;
+    closeLoopPolicySummary?: {
+      mode: "suggest_only" | "autosend_allowed" | "live_autonomy_allowed" | "blocked";
+      label: string;
+      detail: string;
+      tone: "good" | "warn" | "bad" | "neutral";
+    } | null;
   }>;
 };
 

@@ -98,6 +98,17 @@ export type FollowUpSequencePolicy = {
 export type SalesAutopilotMode = "off" | "partial" | "full";
 export type SalesAutopilotChannel = "sms" | "email" | "dm";
 export type SalesPlannerActionClass = "follow_up" | "live_reply";
+export type SalesCloseLoopPolicySummaryMode =
+  | "suggest_only"
+  | "autosend_allowed"
+  | "live_autonomy_allowed"
+  | "blocked";
+export type SalesCloseLoopPolicySummary = {
+  mode: SalesCloseLoopPolicySummaryMode;
+  label: string;
+  detail: string;
+  tone: "good" | "warn" | "bad" | "neutral";
+};
 
 export type SalesAutopilotPolicy = {
   mode: SalesAutopilotMode;
@@ -1327,6 +1338,148 @@ export function getSalesPlannerActionClass(
     default:
       return null;
   }
+}
+
+export function isSalesCloseLoopAction(actionType: string | null | undefined): boolean {
+  switch (typeof actionType === "string" ? actionType.trim() : "") {
+    case "appointment_checkin":
+    case "appointment_support":
+    case "post_job_checkin":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function buildSalesCloseLoopPolicySummary(input: {
+  actionType?: string | null;
+  channelMode: SalesAutopilotMode;
+  autosendPolicy: ReturnType<typeof evaluateSalesPlannerAutosendPolicy>;
+  liveReplyAutonomyEnabled: boolean;
+  liveReplyAllowed: boolean;
+  dmLiveAutopilotBlocked?: boolean;
+  humanReviewRequired?: boolean;
+}): SalesCloseLoopPolicySummary | null {
+  const actionType = typeof input.actionType === "string" ? input.actionType.trim() : "";
+  if (!isSalesCloseLoopAction(actionType)) return null;
+
+  const actionClass = input.autosendPolicy.actionClass;
+  const reason = input.autosendPolicy.reason;
+
+  if (input.humanReviewRequired || reason === "human_review_required") {
+    return {
+      mode: "blocked",
+      label: "Blocked for review",
+      detail: "This close-loop action is held for human review and cannot run autonomously.",
+      tone: "bad",
+    };
+  }
+
+  if (input.channelMode === "off") {
+    return {
+      mode: "suggest_only",
+      label: "Suggest only",
+      detail: "Off mode keeps this close-loop action in draft and approval mode only.",
+      tone: "neutral",
+    };
+  }
+
+  if (actionClass === "follow_up") {
+    if (input.autosendPolicy.allowed) {
+      return {
+        mode: "autosend_allowed",
+        label: "Autosend allowed",
+        detail: "This close-loop follow-up is currently approved for planner autosend on this channel.",
+        tone: "good",
+      };
+    }
+
+    if (reason === "channel_not_allowed") {
+      return {
+        mode: "suggest_only",
+        label: "Suggest only",
+        detail: "Planner autosend is on, but this channel is not approved for close-loop follow-ups yet.",
+        tone: "warn",
+      };
+    }
+
+    if (reason === "action_not_allowed") {
+      return {
+        mode: "suggest_only",
+        label: "Suggest only",
+        detail: "Planner autosend is on, but this close-loop follow-up still requires approval first.",
+        tone: "warn",
+      };
+    }
+
+    return {
+      mode: "suggest_only",
+      label: "Suggest only",
+      detail: "This close-loop follow-up stays in suggest mode until planner autosend is enabled for it.",
+      tone: "neutral",
+    };
+  }
+
+  if (input.dmLiveAutopilotBlocked) {
+    return {
+      mode: "suggest_only",
+      label: "Suggest only",
+      detail: "Messenger warm-up is still active, so booked-job support stays approval-only for now.",
+      tone: "warn",
+    };
+  }
+
+  if (input.autosendPolicy.allowed && input.liveReplyAllowed) {
+    return {
+      mode: "live_autonomy_allowed",
+      label: "Live autonomy allowed",
+      detail: "This booked-job support reply can run under live autonomy on the current channel.",
+      tone: "good",
+    };
+  }
+
+  if (!input.liveReplyAutonomyEnabled || reason === "live_reply_autonomy_disabled") {
+    return {
+      mode: "suggest_only",
+      label: "Suggest only",
+      detail: "Live reply autonomy is still off, so this booked-job support reply stays approval-first.",
+      tone: "neutral",
+    };
+  }
+
+  if (reason === "live_reply_channel_not_allowed") {
+    return {
+      mode: "suggest_only",
+      label: "Suggest only",
+      detail: "Live reply autonomy is on, but this channel is not approved for booked-job support yet.",
+      tone: "warn",
+    };
+  }
+
+  if (reason === "action_requires_full_mode") {
+    return {
+      mode: "suggest_only",
+      label: "Suggest only",
+      detail: "Partial mode keeps this booked-job support reply approval-only until the channel is in Full.",
+      tone: "warn",
+    };
+  }
+
+  if (reason === "action_not_allowed") {
+    return {
+      mode: "suggest_only",
+      label: "Suggest only",
+      detail: "Live reply autonomy is on, but this close-loop support action still requires approval first.",
+      tone: "warn",
+    };
+  }
+
+  return {
+    mode: "blocked",
+    label: "Blocked",
+    detail: "This close-loop action is not currently eligible for autonomous handling on the current channel.",
+    tone: "bad",
+  };
 }
 
 export function evaluateSalesPlannerAutosendPolicy(

@@ -24,6 +24,12 @@ type NextActionPayload = {
     detail?: string | null;
     tone?: "good" | "warn" | "bad" | "neutral" | null;
   } | null;
+  closeLoopPolicySummary?: {
+    mode?: "suggest_only" | "autosend_allowed" | "live_autonomy_allowed" | "blocked" | null;
+    label?: string | null;
+    detail?: string | null;
+    tone?: "good" | "warn" | "bad" | "neutral" | null;
+  } | null;
   recentHumanReview?: {
     active?: boolean;
     label?: string | null;
@@ -266,6 +272,7 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
       : [];
   const learningSignalFact = getLearningSignalFact(facts);
   const executionState = payload?.executionState ?? null;
+  const closeLoopPolicySummary = payload?.closeLoopPolicySummary ?? null;
   const recentHumanReview = payload?.recentHumanReview ?? null;
   const recentHumanReviewUpdatedAt = formatTimestamp(recentHumanReview?.updatedAt);
   const recentHumanReviewDetail = compactText(recentHumanReview?.detail, compact ? 140 : 260);
@@ -332,6 +339,12 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               <div className="mt-2 rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
                 <div className="font-medium">{lifecycleStage.label}</div>
                 <div className="mt-1">{lifecycleStage.detail}</div>
+              </div>
+            ) : null}
+            {closeLoopPolicySummary?.label ? (
+              <div className={`mt-2 rounded-xl border px-2 py-1 text-[11px] ${toneClasses(closeLoopPolicySummary.tone)}`}>
+                <div className="font-medium">{closeLoopPolicySummary.label}</div>
+                {closeLoopPolicySummary.detail ? <div className="mt-1">{closeLoopPolicySummary.detail}</div> : null}
               </div>
             ) : null}
             {learningSignalFact ? (
@@ -440,6 +453,13 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] text-sky-900">
                 <div className="font-semibold uppercase tracking-wide text-sky-700">{lifecycleStage.label}</div>
                 <div className="mt-1">{lifecycleStage.detail}</div>
+              </div>
+            ) : null}
+
+            {closeLoopPolicySummary?.label ? (
+              <div className={`rounded-xl border px-3 py-2 text-[11px] ${toneClasses(closeLoopPolicySummary.tone)}`}>
+                <div className="font-semibold uppercase tracking-wide">{closeLoopPolicySummary.label}</div>
+                {closeLoopPolicySummary.detail ? <div className="mt-1">{closeLoopPolicySummary.detail}</div> : null}
               </div>
             ) : null}
 
@@ -579,17 +599,19 @@ export function ContactSalesAgentNextActionClient({ contactId, compact = false }
               </div>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-              {autopilot?.channelMode === "off"
-                ? "Off mode: the agent can draft, but nothing on this channel should send automatically."
-                : autopilot?.channelMode === "partial"
-                  ? "Partial mode: scheduled follow-ups may automate when allowed, but live conversation replies stay approval-only."
-                  : autopilot?.channelMode === "full"
-                    ? autopilot?.liveReplyAutonomyEnabled
-                      ? "Full mode: this channel can run live autopilot where supported and approved."
-                      : "Full mode is set, but live reply autonomy is still off until you enable it in Automation."
-                    : "Autopilot mode not available."}
-            </div>
+            {closeLoopPolicySummary ? null : (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                {autopilot?.channelMode === "off"
+                  ? "Off mode: the agent can draft, but nothing on this channel should send automatically."
+                  : autopilot?.channelMode === "partial"
+                    ? "Partial mode: scheduled follow-ups may automate when allowed, but live conversation replies stay approval-only."
+                    : autopilot?.channelMode === "full"
+                      ? autopilot?.liveReplyAutonomyEnabled
+                        ? "Full mode: this channel can run live autopilot where supported and approved."
+                        : "Full mode is set, but live reply autonomy is still off until you enable it in Automation."
+                      : "Autopilot mode not available."}
+              </div>
+            )}
 
             {nextAction.reason ? (
               <div>

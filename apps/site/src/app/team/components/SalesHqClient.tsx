@@ -195,6 +195,13 @@ function autopilotModeTone(value: string | null | undefined): "good" | "warn" | 
   return "neutral";
 }
 
+function closeLoopSummaryTone(
+  value: QueueItem["closeLoopPolicySummary"] | null | undefined,
+): "good" | "warn" | "bad" | "neutral" {
+  if (!value) return "neutral";
+  return value.tone;
+}
+
 function buildInboxHrefForQueue(item: QueueItem): string {
   const params = new URLSearchParams();
   params.set("tab", "inbox");
@@ -819,6 +826,22 @@ export function SalesHqClient({
                               <span className="font-medium text-slate-700">{item.agentState.label}:</span> {item.agentState.detail}
                             </div>
                           ) : null}
+                          {item.closeLoopPolicySummary?.label ? (
+                            <div
+                              className={`mt-2 rounded-xl border px-2 py-1 text-[11px] ${item.closeLoopPolicySummary.tone === "good"
+                                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                                : item.closeLoopPolicySummary.tone === "warn"
+                                  ? "border-amber-200 bg-amber-50 text-amber-800"
+                                  : item.closeLoopPolicySummary.tone === "bad"
+                                    ? "border-rose-200 bg-rose-50 text-rose-800"
+                                    : "border-slate-200 bg-slate-50 text-slate-700"}`}
+                            >
+                              <span className="font-medium">
+                                {item.closeLoopPolicySummary.label}:
+                              </span>{" "}
+                              {item.closeLoopPolicySummary.detail}
+                            </div>
+                          ) : null}
                           {item.lastAgentActivity?.summary ? (
                             <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
                               <span className="font-medium text-slate-700">Agent:</span> {item.lastAgentActivity.summary}
@@ -859,6 +882,11 @@ export function SalesHqClient({
                           {item.autopilot?.channelMode ? (
                             <Pill tone={autopilotModeTone(item.autopilot.channelMode)}>
                               {formatActionLabel(item.autopilot.channelMode)} mode
+                            </Pill>
+                          ) : null}
+                          {item.closeLoopPolicySummary?.label ? (
+                            <Pill tone={closeLoopSummaryTone(item.closeLoopPolicySummary)}>
+                              {item.closeLoopPolicySummary.label}
                             </Pill>
                           ) : null}
                           {item.lastAgentActivity?.action ? (
@@ -1016,15 +1044,39 @@ export function SalesHqClient({
                   <div className="mt-2">{selectedItem.agentState.detail}</div>
                   {selectedItem.autopilot?.channelMode ? (
                     <div className="mt-2 text-[11px] text-slate-500">
-                      {selectedItem.autopilot.channelMode === "off"
-                        ? "Off mode means drafts only for this channel."
-                        : selectedItem.autopilot.channelMode === "partial"
-                          ? "Partial mode means follow-ups can automate, but live replies still wait for approval."
-                          : selectedItem.autopilot.liveReplyAutonomyEnabled
-                            ? "Full mode allows live autopilot behavior on this channel once the normal guardrails pass."
-                            : "Full mode is set, but live reply autonomy is still off until you enable it in Automation."}
+                      {selectedItem.closeLoopPolicySummary?.detail
+                        ? selectedItem.closeLoopPolicySummary.detail
+                        : selectedItem.autopilot.channelMode === "off"
+                          ? "Off mode means drafts only for this channel."
+                          : selectedItem.autopilot.channelMode === "partial"
+                            ? "Partial mode means follow-ups can automate, but live replies still wait for approval."
+                            : selectedItem.autopilot.liveReplyAutonomyEnabled
+                              ? "Full mode allows live autopilot behavior on this channel once the normal guardrails pass."
+                              : "Full mode is set, but live reply autonomy is still off until you enable it in Automation."}
                     </div>
                   ) : null}
+                </div>
+              ) : null}
+
+              {selectedItem.closeLoopPolicySummary?.label ? (
+                <div
+                  className={`rounded-2xl border p-4 text-sm ${selectedItem.closeLoopPolicySummary.tone === "good"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                    : selectedItem.closeLoopPolicySummary.tone === "warn"
+                      ? "border-amber-200 bg-amber-50 text-amber-900"
+                      : selectedItem.closeLoopPolicySummary.tone === "bad"
+                        ? "border-rose-200 bg-rose-50 text-rose-900"
+                        : "border-slate-200 bg-slate-50 text-slate-700"}`}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide">
+                      Close-loop policy
+                    </div>
+                    <Pill tone={closeLoopSummaryTone(selectedItem.closeLoopPolicySummary)}>
+                      {selectedItem.closeLoopPolicySummary.label}
+                    </Pill>
+                  </div>
+                  <div className="mt-2">{selectedItem.closeLoopPolicySummary.detail}</div>
                 </div>
               ) : null}
 
