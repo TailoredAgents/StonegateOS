@@ -76,6 +76,7 @@ type MessageContext = {
   channel: string;
   subject: string | null;
   body: string;
+  mediaUrls: string[];
   createdAt: Date;
   participantName: string | null;
   metadata: Record<string, unknown> | null;
@@ -97,6 +98,17 @@ function parseIsoDate(value: string | null | undefined): Date | null {
   if (typeof value !== "string" || value.trim().length === 0) return null;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isMediaPlaceholderBody(body: string | null | undefined): boolean {
+  const normalized = (body ?? "").trim().toLowerCase();
+  return normalized === "" || normalized === "media message" || normalized === "message received";
+}
+
+function isLikelyReactionLikeMediaMessage(message: MessageContext | null | undefined): boolean {
+  if (!message || message.direction !== "inbound") return false;
+  if ((message.mediaUrls?.length ?? 0) !== 1) return false;
+  return isMediaPlaceholderBody(message.body);
 }
 
 function isSafePlannerFollowupAction(actionType: string | null | undefined): boolean {
@@ -639,6 +651,25 @@ function buildLocalWarmthInstruction(input: {
   }
 
   return "Local warmth: keep the tone friendly, steady, and lightly neighborly. Sound local and human without using forced slang or fake charm.";
+}
+
+function buildReactionLikeMediaInstruction(input: {
+  actionType: string | null | undefined;
+  messages: MessageContext[];
+  memoryMissingFields: string[];
+}): string | null {
+  const latestInbound = getLatestInboundMessage(input.messages);
+  if (!isLikelyReactionLikeMediaMessage(latestInbound)) return null;
+
+  const waitingOnPhotoLikeInfo = input.memoryMissingFields.some((field) =>
+    /photo|picture|pic|video|walkthrough|missing view|angle|media/i.test(field),
+  );
+
+  if (input.actionType === "collect_missing_info" || waitingOnPhotoLikeInfo) {
+    return "Latest inbound is media-only with no text. If you were waiting on photos or one better angle, you may treat it as possible media follow-through, but do not say 'got your photo' unless the rest of the context clearly supports that.";
+  }
+
+  return "Latest inbound is a single media-only message with no text. It may be a thumbs-up, sticker, or reaction rather than a useful job photo. Do not say 'got your photo' or act like new estimating media arrived. If you reply, treat it more like a brief acknowledgment than a new photo submission.";
 }
 
 function hashVariationSeed(input: string): number {
@@ -1247,6 +1278,7 @@ export async function POST(
       channel: conversationMessages.channel,
       subject: conversationMessages.subject,
       body: conversationMessages.body,
+      mediaUrls: conversationMessages.mediaUrls,
       createdAt: conversationMessages.createdAt,
       participantName: conversationParticipants.displayName,
       metadata: conversationMessages.metadata
@@ -1264,6 +1296,7 @@ export async function POST(
       channel: row.channel,
       subject: row.subject ?? null,
       body: row.body,
+      mediaUrls: Array.isArray(row.mediaUrls) ? row.mediaUrls.filter((url): url is string => typeof url === "string" && url.trim().length > 0) : [],
       createdAt: row.createdAt,
       participantName: row.participantName ?? null,
       metadata: isRecord(row.metadata) ? row.metadata : null
@@ -1546,6 +1579,7 @@ export async function POST(
  Write like a strong human salesperson or coordinator, not a workflow engine.
  React to the latest customer message first, then move the conversation forward naturally.
  Answer direct questions before asking for anything else.
+ Do not assume a media-only inbound message is a real job photo. It may be a sticker, emoji, thumbs-up, or reaction unless the context clearly shows they were sending requested photos.
  Match the customer's energy and message length. Prefer 1 to 3 short sentences by default. Ask at most one real question unless the customer clearly asked for multiple things.
  Match the lead's intent as well as the customer's energy. Hot booking leads can sound more decisive. Hesitant leads should sound softer. Booked customers should sound like service, not sales.
  Use business-specific natural phrasing. For junk jobs, sound like a real pickup company. For demo or land-clearing jobs, talk about coming out or taking a look. For booked jobs, sound like a scheduler, not a sales script.
@@ -1643,6 +1677,11 @@ export async function POST(
       replyChannel: targetReplyChannel,
       customerIntent: salesAgentMemory?.customerIntent,
       bookingReadiness: salesAgentMemory?.bookingReadiness,
+    }),
+    buildReactionLikeMediaInstruction({
+      actionType: salesAgentNextAction?.actionType,
+      messages,
+      memoryMissingFields: Array.isArray(salesAgentMemory?.missingFields) ? salesAgentMemory.missingFields : [],
     }),
     buildReplyVariationInstruction({
       threadId,
