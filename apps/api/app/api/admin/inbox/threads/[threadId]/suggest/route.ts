@@ -617,6 +617,30 @@ function buildSchedulingWindowInstruction(input: {
   return null;
 }
 
+function buildLocalWarmthInstruction(input: {
+  actionType: string | null | undefined;
+  replyChannel: ReplyChannel;
+  customerIntent: string | null | undefined;
+  bookingReadiness: string | null | undefined;
+}): string | null {
+  const intent = (input.customerIntent ?? "").trim().toLowerCase();
+  const readiness = (input.bookingReadiness ?? "").trim().toLowerCase();
+
+  if (input.actionType === "appointment_support" || input.actionType === "appointment_checkin" || intent === "booked_or_scheduling" || readiness === "booked") {
+    return "Local warmth: sound calm, neighborly, and reassuring. Think helpful local service rep, not corporate support. Do not use fake Southern slang or laid-on-thick regional phrasing.";
+  }
+
+  if (input.actionType === "follow_up_quote" || input.actionType === "collect_missing_info" || readiness === "high" || intent === "booking_intent") {
+    return "Local warmth: sound friendly and real, like a local owner-operator or salesperson texting naturally. Keep it warm without getting chatty, and avoid fake regional slang.";
+  }
+
+  if (input.replyChannel === "dm") {
+    return "Local warmth: keep Messenger replies easygoing and personable. Sound human and local, but do not force Southern-style wording.";
+  }
+
+  return "Local warmth: keep the tone friendly, steady, and lightly neighborly. Sound local and human without using forced slang or fake charm.";
+}
+
 function hashVariationSeed(input: string): number {
   let hash = 0;
   for (let index = 0; index < input.length; index += 1) {
@@ -1526,6 +1550,7 @@ export async function POST(
  Match the lead's intent as well as the customer's energy. Hot booking leads can sound more decisive. Hesitant leads should sound softer. Booked customers should sound like service, not sales.
  Use business-specific natural phrasing. For junk jobs, sound like a real pickup company. For demo or land-clearing jobs, talk about coming out or taking a look. For booked jobs, sound like a scheduler, not a sales script.
  When timing comes up, prefer natural scheduling windows like 'today', 'tomorrow', or 'later this week' when they fit the lead, instead of always asking an open-ended calendar question.
+ Keep a light local warmth in the tone. Sound neighborly and real, but do not use fake Southern slang or overplay regional charm.
  Use a brief acknowledgment when it helps. Do not sound overly polished, overly formal, or template-like.
  Avoid generic filler phrases like 'that helps a lot', 'let me know what works best', 'what day and time works best for you', or 'just checking in' when a more natural line would do.
  Do not narrate your logic, do not mention CRM memory, and do not sound like you are collecting fields off a form.
@@ -1612,6 +1637,12 @@ export async function POST(
       bookingReadiness: salesAgentMemory?.bookingReadiness,
       instantQuoteTimeframe: omni.instantQuote?.timeframe,
       messages,
+    }),
+    buildLocalWarmthInstruction({
+      actionType: salesAgentNextAction?.actionType,
+      replyChannel: targetReplyChannel,
+      customerIntent: salesAgentMemory?.customerIntent,
+      bookingReadiness: salesAgentMemory?.bookingReadiness,
     }),
     buildReplyVariationInstruction({
       threadId,
