@@ -347,6 +347,105 @@ function summarizeReplyPlanForPrompt(plan: ReplyPlan): string {
   return parts.join(" ");
 }
 
+function getLatestInboundMessage(messages: MessageContext[]): MessageContext | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.direction === "inbound") return message;
+  }
+  return null;
+}
+
+function isBriefAcknowledgment(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  return /^(ok|okay|sounds good|got it|thanks|thank you|perfect|works|that works|cool|awesome|great|yes|yep|sure)[.!]?$/i.test(
+    normalized,
+  );
+}
+
+function buildHumanReplyShapeInstruction(input: {
+  actionType: string | null | undefined;
+  replyChannel: ReplyChannel;
+  messages: MessageContext[];
+}): string | null {
+  const latestInbound = getLatestInboundMessage(input.messages);
+  const latestInboundBody = latestInbound?.body?.trim() ?? "";
+  const hasDirectQuestion = /\?/.test(latestInboundBody);
+  const inboundCount = input.messages.filter((message) => message.direction === "inbound").length;
+  const outboundCount = input.messages.filter((message) => message.direction === "outbound").length;
+  const likelyFreshLead = inboundCount > 0 && outboundCount === 0;
+
+  const instructions: string[] = [];
+
+  if (hasDirectQuestion) {
+    instructions.push("Reply shape: answer the customer's direct question in the first sentence before asking for anything else.");
+  } else if (isBriefAcknowledgment(latestInboundBody)) {
+    instructions.push("Reply shape: the customer's last message is brief, so keep your reply equally short and natural.");
+  }
+
+  switch (input.actionType) {
+    case "reply_now":
+      if (likelyFreshLead) {
+        instructions.push(
+          "Reply shape: this feels like a fresh inbound lead. Open with a short acknowledgment, then ask one easy next question. Do not stack multiple intake questions."
+        );
+      } else {
+        instructions.push(
+          "Reply shape: respond to the current message first, then move the conversation forward with one clear next step if needed."
+        );
+      }
+      break;
+    case "follow_up_quote":
+      instructions.push(
+        "Reply shape: keep the quote nudge short. Do not recap the whole situation unless needed. Use one easy reopen line or one simple booking question."
+      );
+      break;
+    case "collect_missing_info":
+      instructions.push(
+        "Reply shape: briefly acknowledge where things stand, ask for one very specific detail, and give only a short reason if needed."
+      );
+      break;
+    case "handle_price_objection":
+      instructions.push(
+        "Reply shape: first acknowledge the concern, then give one calm reassuring point, then one soft reopen question if useful. Do not sound defensive."
+      );
+      break;
+    case "appointment_support":
+      instructions.push(
+        "Reply shape: handle the logistics or timing question directly in the first sentence. Keep the rest practical and reassuring, not salesy."
+      );
+      break;
+    case "appointment_checkin":
+      instructions.push(
+        "Reply shape: keep the pre-appointment check-in light and human. One short reassurance plus one easy prompt is enough."
+      );
+      break;
+    case "post_job_checkin":
+      instructions.push(
+        "Reply shape: thank them briefly, check that everything went well, and make it easy to mention anything else they need. Do not turn it into a marketing blast."
+      );
+      break;
+    case "missed_call_recovery":
+      instructions.push(
+        "Reply shape: keep the missed-call recovery short and casual. Reopen the conversation fast instead of explaining too much."
+      );
+      break;
+    case "dm_sms_handoff":
+      instructions.push(
+        "Reply shape: make the handoff feel like a natural continuation of the conversation, not a channel-transfer script."
+      );
+      break;
+    default:
+      break;
+  }
+
+  if (input.replyChannel === "dm" && !instructions.some((line) => line.includes("short"))) {
+    instructions.push("Reply shape: keep Messenger replies tight and chat-like.");
+  }
+
+  return instructions.length ? instructions.join(" ") : null;
+}
+
 function stripDashLikeChars(text: string): string {
   return text
     .replace(/[-–—]/g, " ")
@@ -1026,6 +1125,7 @@ export async function POST(
  Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
  Write like a strong human salesperson or coordinator, not a workflow engine.
  React to the latest customer message first, then move the conversation forward naturally.
+ Answer direct questions before asking for anything else.
  Prefer 1 to 3 short sentences. Ask at most one real question unless the customer clearly asked for multiple things.
  Use a brief acknowledgment when it helps. Do not sound overly polished, overly formal, or template-like.
  Do not narrate your logic, do not mention CRM memory, and do not sound like you are collecting fields off a form.
@@ -1085,6 +1185,11 @@ export async function POST(
     salesAgentNextAction?.summary ? `Planner summary: ${salesAgentNextAction.summary}` : null,
     salesAgentNextAction?.channel ? `Planner channel: ${salesAgentNextAction.channel}` : null,
     buildPlannerInstruction(salesAgentNextAction?.actionType, targetReplyChannel),
+    buildHumanReplyShapeInstruction({
+      actionType: salesAgentNextAction?.actionType,
+      replyChannel: targetReplyChannel,
+      messages,
+    }),
     buildChannelStyleInstruction(targetReplyChannel, salesAgentNextAction?.actionType),
     buildDmOpeningInstruction({
       replyChannel: targetReplyChannel,
