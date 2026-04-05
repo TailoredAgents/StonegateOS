@@ -21,7 +21,6 @@ import {
   findAllowedCityInText,
   getServiceAreaPolicy,
   isCityAllowed,
-  isPostalCodeAllowed,
   normalizePostalCode,
 } from "@/lib/policy";
 
@@ -858,11 +857,7 @@ export async function loadOmniLeadContext(
       const city = (property as Record<string, unknown>)["city"];
       return typeof city === "string" ? cleanText(city) : null;
     })();
-  const serviceAreaAllowed = knownZip
-    ? isPostalCodeAllowed(knownZip, serviceAreaPolicy)
-    : knownCity
-      ? isCityAllowed(knownCity, serviceAreaPolicy)
-      : null;
+  const serviceAreaAllowed = knownCity ? isCityAllowed(knownCity, serviceAreaPolicy) : null;
   const instantQuoteMediaAnalysis = extractMediaAnalysis(latestInstantQuoteRow?.aiResult);
   const mediaConfidenceRaw = latestMediaAnalysisRow?.confidence;
   const mediaConfidence: "low" | "medium" | "high" | null =

@@ -263,7 +263,7 @@ export const DEFAULT_CONVERSATION_PERSONA_POLICY: ConversationPersonaPolicy = {
     "- Do NOT mention internal systems, databases, webhooks, or that you're an AI.",
     "- If the location clearly appears outside Georgia, politely say we currently serve Georgia only.",
     "- Do not keep asking for ZIP, city, or exact address early in the conversation unless the lead appears out of state.",
-    "- If the ZIP is in Georgia but outside the usual service area, do not reject. Confirm location and proceed if reasonable."
+    "- Treat core service cities as the main service-area signal. Do not let ZIP be the reason the conversation stalls."
   ].join("\n")
 };
 

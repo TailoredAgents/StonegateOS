@@ -18,14 +18,15 @@ import { recordAuditEvent } from "@/lib/audit";
 import { loadOmniThreadFacts } from "@/lib/omni-thread-context";
 import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
 import {
+  findAllowedCityInText,
   getCompanyProfilePolicy,
   getConversationPersonaPolicy,
   getSalesAutopilotPolicy,
   getServiceAreaPolicy,
   isSalesAutopilotLiveReplyEnabled,
   getTemplatesPolicy,
+  isCityAllowed,
   isGeorgiaPostalCode,
-  isPostalCodeAllowed,
   normalizePostalCode,
   resolveTemplateForChannel
 } from "@/lib/policy";
@@ -703,7 +704,13 @@ export async function handleInboundSalesAutopilot(messageId: string): Promise<Ou
   const zipFromTranscript = normalizePostalCode(extractZipFromText(messages.map((m) => m.body).join("\n")) ?? null);
   const normalizedPostal = zipFromThread ?? zipFromBody ?? zipFromTranscript;
   const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
-  const outOfServiceArea = normalizedPostal !== null ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
+  const cityFromThread =
+    typeof threadContext.propertyCity === "string" && threadContext.propertyCity.trim().length > 0
+      ? threadContext.propertyCity.trim()
+      : null;
+  const cityFromTranscript = findAllowedCityInText(messages.map((m) => m.body).join("\n"), serviceArea);
+  const knownCity = cityFromThread ?? cityFromTranscript;
+  const outOfServiceArea = knownCity ? !isCityAllowed(knownCity, serviceArea) : null;
   const automationMode = await getAutomationModeForReplyChannel(db, replyChannel);
   const autoSendEligible = automationMode === "auto";
   const extractedPhone = extractPhoneFromText(messages.map((m) => m.body).join("\n"));
@@ -728,9 +735,9 @@ ${persona.systemPrompt}
 
 Sales autopilot drafting rules (must follow):
 - The customer message must be short and natural. Avoid corporate phrases like "thanks for contacting" or "thanks for reaching out".
-- Do not ask for any info that is already present in the context (for example, do not ask for ZIP if a ZIP is provided).
+- Do not ask for any info that is already present in the context.
 - Never mention price or dollar amounts unless the customer explicitly asks about price/quote/cost/estimate.
-- Ask only for the minimum missing info to move forward (at most one question). If an instant quote or appointment exists in context, do not ask for items/ZIP/photos/timing again.
+- Ask only for the minimum missing info to move forward (at most one question). If an instant quote or appointment exists in context, do not ask for items, city, ZIP, photos, or timing again.
 - Do not include a signature line at the end.
 Output ONLY JSON matching the schema.
 
@@ -766,8 +773,8 @@ Notes: ${companyProfile.agentNotes}
           .join("\n")}`
       : null,
     omni.missingFields.length ? `Missing info (ask at most one): ${omni.missingFields.join(", ")}` : `Missing info: none`,
-    normalizedPostal ? `ZIP is already known: ${normalizedPostal} (do not ask for ZIP)` : `ZIP is unknown (ask for ZIP)`,
-    normalizedPostal && outOfServiceArea === true ? `Location warning: ZIP may be out of our usual service area. Confirm job location before closing out.` : null,
+    knownCity ? `Service city is already known: ${knownCity} (do not ask for ZIP)` : `Service city is not confirmed yet. Do not stop the sale over ZIP.`,
+    knownCity && outOfServiceArea === true ? `Location warning: city may be out of our usual service area. Confirm job location before closing out.` : null,
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
     followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,

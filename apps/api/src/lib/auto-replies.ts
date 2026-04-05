@@ -20,8 +20,7 @@ import {
   getServiceAreaPolicy,
   getSalesAutopilotPolicy,
   getTemplatesPolicy,
-  isPostalCodeAllowed,
-  normalizePostalCode,
+  isCityAllowed,
   resolveTemplateForChannel
 } from "@/lib/policy";
 import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
@@ -527,6 +526,7 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
       threadSubject: conversationThreads.subject,
       leadId: conversationThreads.leadId,
       contactId: conversationThreads.contactId,
+      propertyCity: properties.city,
       propertyPostalCode: properties.postalCode,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
@@ -729,9 +729,9 @@ export async function handleInboundAutoReply(messageId: string): Promise<AutoRep
 
   const templatesPolicy = await getTemplatesPolicy(db);
   const serviceArea = await getServiceAreaPolicy(db);
-  const normalizedPostalCode = normalizePostalCode(row.propertyPostalCode ?? null);
-  const isOutOfArea =
-    normalizedPostalCode !== null && !isPostalCodeAllowed(normalizedPostalCode, serviceArea);
+  const knownCity =
+    typeof row.propertyCity === "string" && row.propertyCity.trim().length > 0 ? row.propertyCity.trim() : null;
+  const isOutOfArea = knownCity ? !isCityAllowed(knownCity, serviceArea) : false;
   const templateGroup = isOutOfArea ? templatesPolicy.out_of_area : templatesPolicy.first_touch;
   const template = resolveTemplateForChannel(templateGroup, {
     inboundChannel,

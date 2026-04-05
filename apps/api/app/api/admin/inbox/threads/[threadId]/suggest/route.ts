@@ -18,9 +18,6 @@ import {
   getServiceAreaPolicy,
   getTemplatesPolicy,
   isCityAllowed,
-  isGeorgiaPostalCode,
-  isPostalCodeAllowed,
-  normalizePostalCode,
   resolveTemplateForChannel,
 } from "@/lib/policy";
 import { isAdminRequest } from "../../../../../web/admin";
@@ -1399,7 +1396,6 @@ export async function POST(
         includeQuotePrice: didCustomerAskAboutPrice(messages),
       })
     : null;
-  const normalizedPostal = normalizePostalCode(threadContext.propertyPostalCode ?? null);
   const knownCity =
     leadContext?.derived.knownCity ??
     omni.knownCity ??
@@ -1410,11 +1406,9 @@ export async function POST(
       ? threadContext.propertyState.trim()
       : null;
   const cityClearsServiceArea = knownCity ? isCityAllowed(knownCity, serviceArea) : false;
-  const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
   const stateLooksOutOfState =
     knownState !== null && !/^ga$|^georgia$/i.test(knownState);
-  const outsideUsualArea =
-    normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
+  const outsideUsualArea = knownCity ? !cityClearsServiceArea : null;
   const builtSalesAgentMemory = leadContext ? buildSalesAgentMemory(leadContext) : null;
   const appointmentPreservationOutcomeSummary = leadContext ? await loadAppointmentPreservationOutcomeSummary(db) : null;
   const appointmentReminderOutcomeSummary = leadContext ? await loadAppointmentReminderOutcomeSummary(db) : null;
@@ -1756,8 +1750,7 @@ export async function POST(
     threadContext.contactEmail ? `Customer email: ${threadContext.contactEmail}` : null,
     threadContext.propertyAddressLine1 ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}` : null,
     knownCity ? `Known city: ${knownCity}` : null,
-    normalizedPostal ? `ZIP: ${normalizedPostal}` : null,
-    inGeorgia === false || stateLooksOutOfState
+    stateLooksOutOfState
       ? `Location: OUT OF STATE (Georgia only)`
       : outsideUsualArea === true
         ? `Location: outside usual area (confirm)`
@@ -1920,7 +1913,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           aiPlannerReason: salesAgentNextAction?.reason ?? undefined,
           aiPlannerPriority: salesAgentNextAction?.priority ?? undefined,
           aiPlannerConfidence: salesAgentNextAction?.confidence ?? undefined,
-          outOfArea: inGeorgia === false || outsideUsualArea === true ? true : undefined
+          outOfArea: stateLooksOutOfState || outsideUsualArea === true ? true : undefined
         },
         createdAt: now
       })

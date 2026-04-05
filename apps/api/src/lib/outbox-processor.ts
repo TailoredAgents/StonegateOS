@@ -36,8 +36,7 @@ import {
   getSalesAutopilotPolicy,
   getServiceAreaPolicy,
   getTemplatesPolicy,
-  isPostalCodeAllowed,
-  normalizePostalCode,
+  isCityAllowed,
   nextQuietHoursEnd,
   resolveTemplateForChannel
 } from "@/lib/policy";
@@ -2047,6 +2046,7 @@ async function queueAutoFirstTouchSms(input: {
   contactId: string;
   leadId?: string | null;
   leadPropertyId?: string | null;
+  propertyCity?: string | null;
   propertyPostalCode?: string | null;
 }): Promise<void> {
   if (!AUTO_FIRST_TOUCH_SMS_ENABLED) return;
@@ -2068,11 +2068,10 @@ async function queueAutoFirstTouchSms(input: {
   if (await hasAnyOutboundForContact(input.db, input.contactId)) return;
 
   const templatesPolicy = await getTemplatesPolicy(input.db);
-  const pipelineZip = input.propertyPostalCode ? null : await resolveContactZipFromPipeline(input.db, input.contactId);
-  const normalizedPostalCode = normalizePostalCode(input.propertyPostalCode ?? pipelineZip);
   const serviceArea = await getServiceAreaPolicy(input.db);
-  const outOfServiceArea =
-    normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
+  const knownCity =
+    typeof input.propertyCity === "string" && input.propertyCity.trim().length > 0 ? input.propertyCity.trim() : null;
+  const outOfServiceArea = knownCity ? !isCityAllowed(knownCity, serviceArea) : null;
   const isOutOfArea = outOfServiceArea === true;
   const autoSendEligible = (await getAutomationMode(input.db, "sms")) === "auto";
   const templateGroup = isOutOfArea ? templatesPolicy.out_of_area : templatesPolicy.first_touch;
@@ -2917,6 +2916,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
           .select({
             contactId: leads.contactId,
             propertyId: leads.propertyId,
+            city: properties.city,
             postalCode: properties.postalCode
           })
           .from(leads)
@@ -2929,6 +2929,7 @@ async function handleOutboxEvent(event: OutboxEventRecord): Promise<OutboxOutcom
             contactId: leadRow.contactId,
             leadId,
             leadPropertyId: leadRow.propertyId ?? null,
+            propertyCity: leadRow.city ?? null,
             propertyPostalCode: leadRow.postalCode ?? null
           });
         }

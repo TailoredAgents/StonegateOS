@@ -534,11 +534,11 @@ export async function PolicyCenterSection({
                 className={TEXTAREA_CLASS}
               />
               <p className="mt-2 text-[11px] text-slate-500">
-                If a customer gives one of these cities, the agent can proceed without asking for ZIP first.
+                These cities are the main service-area signal for sales. If a customer gives one of these cities, the agent should proceed without asking for ZIP.
               </p>
             </div>
             <div>
-              <label className={LABEL_CLASS}>ZIP allowlist</label>
+              <label className={LABEL_CLASS}>Legacy ZIP list</label>
               <input
                 type="hidden"
                 name="zipAllowlistPreserved"
@@ -552,7 +552,7 @@ export async function PolicyCenterSection({
                 disabled={serviceMode === "ga_only" || serviceMode === "ga_above_macon"}
               />
               <p className="mt-2 text-[11px] text-slate-500">
-                When Coverage is set to Georgia only or Georgia above Macon, this list is ignored but preserved.
+                This is kept only as legacy background data. Sales flow now uses core cities instead of ZIPs, and this list is preserved even when ignored.
               </p>
             </div>
             {serviceMode === "ga_only" ? (
