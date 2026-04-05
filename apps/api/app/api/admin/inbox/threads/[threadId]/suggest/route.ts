@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ne, sql } from "drizzle-orm";
 import {
   contacts,
   conversationMessages,
@@ -570,6 +570,69 @@ function buildReplyVariationInstruction(input: {
   return [variant, ...antiRepeatHints].filter(Boolean).join(" ") || null;
 }
 
+function normalizeOpeningText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[^a-z0-9\s']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractOpeningSignature(text: string): string | null {
+  const normalized = normalizeOpeningText(text);
+  if (!normalized) return null;
+
+  const patternedSignatures: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /^just checking(?: in)?\b/, label: "just checking in" },
+    { pattern: /^hey there\b/, label: "hey there" },
+    { pattern: /^hey\b/, label: "hey" },
+    { pattern: /^thanks for\b/, label: "thanks for" },
+    { pattern: /^thanks again\b/, label: "thanks again" },
+    { pattern: /^thanks\b/, label: "thanks" },
+    { pattern: /^sounds good\b/, label: "sounds good" },
+    { pattern: /^got it\b/, label: "got it" },
+    { pattern: /^perfect\b/, label: "perfect" },
+    { pattern: /^no problem\b/, label: "no problem" },
+    { pattern: /^that works\b/, label: "that works" },
+    { pattern: /^we(?: are|'re) still on\b/, label: "we're still on" },
+  ];
+
+  for (const { pattern, label } of patternedSignatures) {
+    if (pattern.test(normalized)) return label;
+  }
+
+  const words = normalized.split(" ").filter(Boolean).slice(0, 3);
+  if (!words.length) return null;
+  return words.join(" ");
+}
+
+function buildGlobalReplyVariationInstruction(input: {
+  replyChannel: ReplyChannel;
+  recentBodies: string[];
+}): string | null {
+  const signatureCounts = new Map<string, number>();
+  for (const body of input.recentBodies) {
+    const signature = extractOpeningSignature(body);
+    if (!signature) continue;
+    signatureCounts.set(signature, (signatureCounts.get(signature) ?? 0) + 1);
+  }
+
+  const overused = [...signatureCounts.entries()]
+    .filter(([, count]) => count >= 3)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([signature]) => signature);
+
+  if (!overused.length) return null;
+
+  const channelLabel =
+    input.replyChannel === "dm" ? "Messenger" : input.replyChannel === "sms" ? "text" : "email";
+  return `Across recent ${channelLabel} drafts, these opener patterns are getting overused: ${overused
+    .map((item) => `"${item}"`)
+    .join(", ")}. Use a different natural opening unless one of those truly fits this thread.`;
+}
+
 function stripDashLikeChars(text: string): string {
   return text
     .replace(/[-–—]/g, " ")
@@ -994,6 +1057,26 @@ export async function POST(
     }))
     .reverse();
 
+  const recentAiPhrasingRows = await db
+    .select({
+      body: conversationMessages.body,
+    })
+    .from(conversationMessages)
+    .where(
+      and(
+        eq(conversationMessages.direction, "outbound"),
+        eq(conversationMessages.channel, replyChannel),
+        ne(conversationMessages.threadId, threadId),
+        sql`coalesce(${conversationMessages.metadata} ->> 'aiSuggested', 'false') = 'true'`
+      )
+    )
+    .orderBy(desc(conversationMessages.createdAt))
+    .limit(40);
+
+  const recentAiBodies = recentAiPhrasingRows
+    .map((row) => row.body.trim())
+    .filter((body) => body.length > 0);
+
   const latestInboundMessage = [...messages]
     .reverse()
     .find((message) => message.direction === "inbound");
@@ -1319,6 +1402,10 @@ export async function POST(
       actionType: salesAgentNextAction?.actionType,
       replyChannel: targetReplyChannel,
       messages,
+    }),
+    buildGlobalReplyVariationInstruction({
+      replyChannel: targetReplyChannel,
+      recentBodies: recentAiBodies,
     }),
     buildChannelStyleInstruction(targetReplyChannel, salesAgentNextAction?.actionType),
     buildDmOpeningInstruction({
