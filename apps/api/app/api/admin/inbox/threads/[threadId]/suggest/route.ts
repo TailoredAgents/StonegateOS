@@ -564,6 +564,59 @@ function buildBusinessSpecificPhrasingInstruction(input: {
   return "Stonegate phrasing: sound like a practical local rep. Prefer 'come out', 'get it taken care of', 'get you on the schedule', or 'what day were you thinking' over generic sales-script wording.";
 }
 
+function buildSchedulingWindowInstruction(input: {
+  actionType: string | null | undefined;
+  customerIntent: string | null | undefined;
+  bookingReadiness: string | null | undefined;
+  instantQuoteTimeframe: string | null | undefined;
+  messages: MessageContext[];
+}): string | null {
+  const latestInbound = getLatestInboundMessage(input.messages);
+  const latestText = `${latestInbound?.body ?? ""} ${input.instantQuoteTimeframe ?? ""}`.toLowerCase();
+  const intent = (input.customerIntent ?? "").trim().toLowerCase();
+  const readiness = (input.bookingReadiness ?? "").trim().toLowerCase();
+
+  const mentionsToday = /\b(today|asap|right away|right now|same day|as soon as possible)\b/.test(latestText);
+  const mentionsTomorrow = /\btomorrow\b/.test(latestText);
+  const mentionsThisWeek = /\b(this week|later this week|this weekend|weekend)\b/.test(latestText);
+  const bookedScheduling =
+    input.actionType === "appointment_support" ||
+    input.actionType === "appointment_checkin" ||
+    intent === "booked_or_scheduling" ||
+    readiness === "booked";
+  const hotSchedulingLead =
+    readiness === "high" ||
+    intent === "booking_intent" ||
+    input.actionType === "follow_up_quote" ||
+    input.actionType === "collect_missing_info";
+
+  if (bookedScheduling && (mentionsToday || mentionsTomorrow)) {
+    return "Scheduling phrasing: if the customer is talking about today or tomorrow, say that plainly. Prefer direct lines like 'still good for tomorrow?' or 'want to move this to later today?' instead of broad scheduling language.";
+  }
+
+  if (bookedScheduling && mentionsThisWeek) {
+    return "Scheduling phrasing: for booked jobs happening this week, keep the wording anchored to that week. Prefer something like 'want to keep it for later this week?' over an open-ended calendar question.";
+  }
+
+  if (hotSchedulingLead && mentionsToday) {
+    return "Scheduling phrasing: this lead sounds urgent. If you ask about timing, use tight options like 'today, tomorrow, or later this week?' instead of a broad 'what works best?' question.";
+  }
+
+  if (hotSchedulingLead && mentionsTomorrow) {
+    return "Scheduling phrasing: this lead is already thinking about tomorrow. Keep the timing language concrete and easy, like 'want to do tomorrow or later this week?'";
+  }
+
+  if (hotSchedulingLead && mentionsThisWeek) {
+    return "Scheduling phrasing: this lead is thinking in a this-week window. Prefer short options like 'tomorrow or later this week?' instead of an open-ended scheduling prompt.";
+  }
+
+  if (hotSchedulingLead) {
+    return "Scheduling phrasing: when a lead sounds close to booking, prefer simple timing choices like 'today, tomorrow, or later this week?' or 'what day were you thinking?' over generic open-ended scheduling language.";
+  }
+
+  return null;
+}
+
 function hashVariationSeed(input: string): number {
   let hash = 0;
   for (let index = 0; index < input.length; index += 1) {
@@ -1472,6 +1525,7 @@ export async function POST(
  Match the customer's energy and message length. Prefer 1 to 3 short sentences by default. Ask at most one real question unless the customer clearly asked for multiple things.
  Match the lead's intent as well as the customer's energy. Hot booking leads can sound more decisive. Hesitant leads should sound softer. Booked customers should sound like service, not sales.
  Use business-specific natural phrasing. For junk jobs, sound like a real pickup company. For demo or land-clearing jobs, talk about coming out or taking a look. For booked jobs, sound like a scheduler, not a sales script.
+ When timing comes up, prefer natural scheduling windows like 'today', 'tomorrow', or 'later this week' when they fit the lead, instead of always asking an open-ended calendar question.
  Use a brief acknowledgment when it helps. Do not sound overly polished, overly formal, or template-like.
  Avoid generic filler phrases like 'that helps a lot', 'let me know what works best', 'what day and time works best for you', or 'just checking in' when a more natural line would do.
  Do not narrate your logic, do not mention CRM memory, and do not sound like you are collecting fields off a form.
@@ -1551,6 +1605,13 @@ export async function POST(
       actionType: salesAgentNextAction?.actionType,
       customerIntent: salesAgentMemory?.customerIntent,
       bookingReadiness: salesAgentMemory?.bookingReadiness,
+    }),
+    buildSchedulingWindowInstruction({
+      actionType: salesAgentNextAction?.actionType,
+      customerIntent: salesAgentMemory?.customerIntent,
+      bookingReadiness: salesAgentMemory?.bookingReadiness,
+      instantQuoteTimeframe: omni.instantQuote?.timeframe,
+      messages,
     }),
     buildReplyVariationInstruction({
       threadId,
