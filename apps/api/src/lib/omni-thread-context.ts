@@ -1,6 +1,6 @@
 import { and, desc, eq, ne } from "drizzle-orm";
 import { appointments, conversationThreads, crmPipeline, getDb, instantQuotes, leads } from "@/db";
-import { getServiceAreaPolicy, isCityAllowed, normalizeCityName, normalizePostalCode } from "@/lib/policy";
+import { getServiceAreaPolicy, isCityAllowed, normalizePostalCode } from "@/lib/policy";
 
 type DatabaseClient = ReturnType<typeof getDb>;
 type TransactionExecutor = Parameters<DatabaseClient["transaction"]>[0] extends (tx: infer Tx) => Promise<unknown>
@@ -244,7 +244,6 @@ export async function loadOmniThreadFacts(
   const hasPhotos = Boolean(instantQuote && instantQuote.photoUrls.length > 0);
 
   const missingFields: string[] = [];
-  if (!knownZip && !cityClearsServiceArea) missingFields.push("zip");
   if (!hasKnownJob) missingFields.push("items");
   if (!nextAppointment) {
     const tf =

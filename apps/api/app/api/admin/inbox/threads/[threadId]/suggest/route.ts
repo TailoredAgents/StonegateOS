@@ -810,8 +810,14 @@ export async function POST(
     omni.knownCity ??
     threadContext.propertyCity ??
     null;
+  const knownState =
+    typeof threadContext.propertyState === "string" && threadContext.propertyState.trim().length > 0
+      ? threadContext.propertyState.trim()
+      : null;
   const cityClearsServiceArea = knownCity ? isCityAllowed(knownCity, serviceArea) : false;
   const inGeorgia = normalizedPostal !== null ? isGeorgiaPostalCode(normalizedPostal) : null;
+  const stateLooksOutOfState =
+    knownState !== null && !/^ga$|^georgia$/i.test(knownState);
   const outsideUsualArea =
     normalizedPostal !== null && inGeorgia === true ? !isPostalCodeAllowed(normalizedPostal, serviceArea) : null;
   const builtSalesAgentMemory = leadContext ? buildSalesAgentMemory(leadContext) : null;
@@ -1107,7 +1113,7 @@ export async function POST(
     threadContext.propertyAddressLine1 ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}` : null,
     knownCity ? `Known city: ${knownCity}` : null,
     normalizedPostal ? `ZIP: ${normalizedPostal}` : null,
-    inGeorgia === false
+    inGeorgia === false || stateLooksOutOfState
       ? `Location: OUT OF STATE (Georgia only)`
       : outsideUsualArea === true
         ? `Location: outside usual area (confirm)`
@@ -1115,7 +1121,9 @@ export async function POST(
           ? `Location: core service city confirmed. Do not ask for ZIP before moving the sale forward.`
         : outsideUsualArea === false
           ? `Location: OK`
-          : `Location: unknown (ask for ZIP)`,
+          : knownCity
+            ? `Location: city noted. Keep moving and do not stop to ask for ZIP or exact address yet.`
+            : `Location: broad local area is fine for now. Do not stop the sale to ask for ZIP or exact address unless the job appears out of state.`,
     firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
     followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,

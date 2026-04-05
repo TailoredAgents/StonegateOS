@@ -22,7 +22,6 @@ import {
   getServiceAreaPolicy,
   isCityAllowed,
   isPostalCodeAllowed,
-  normalizeCityName,
   normalizePostalCode,
 } from "@/lib/policy";
 
@@ -895,7 +894,6 @@ export async function loadOmniLeadContext(
       ...omniFacts.missingFields,
       ...(instantQuoteMediaAnalysis.missingViews.length > 0 ? ["one better photo angle"] : []),
       ...(mediaAnalysis?.missingViews.length ? ["one better photo angle"] : []),
-      ...(knownZip || (knownCity && isCityAllowed(knownCity, serviceAreaPolicy)) ? [] : ["zip"]),
       ...(contact.phoneE164 || contact.phone ? [] : ["phone"]),
       ...(contact.email ? [] : ["email"]),
     ]),

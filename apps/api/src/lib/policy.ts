@@ -190,15 +190,15 @@ export const DEFAULT_COMPANY_PROFILE_POLICY: CompanyProfilePolicy = {
   primaryPhone: "(404) 777-2631",
   discountPercent: 0.15,
   serviceAreaSummary:
-    "We serve north and central Georgia. If you are in one of our core service cities, city alone is enough to get moving. Otherwise share your city or ZIP and we will confirm availability.",
+    "We serve north and central Georgia. Broad local location is fine early in the conversation. We only need the exact address when you are ready to lock in the job, unless it looks like the job may be out of state.",
   trailerAndPricingSummary:
     "We use a 7x16x4 dump trailer. Pricing is strictly based on trailer volume. Minimum pickup starts at $150; quarter load $175; half load $350; 3/4 load $525; full load $700. Photos help us estimate quickly.",
   whatWeDo: "Junk removal and hauling for household and light commercial items.",
   whatWeDontDo: "We do not take hazmat, oils, or paints. Ask if unsure.",
   bookingStyle:
-    "Offer 2 concrete options and move to booking. If the customer already gave a core service city, do not stop on ZIP first. Ask only for the location detail needed to confirm service area, then get items and timing. If photos are available, request them. If we have enough info, propose a time and book it.",
+    "Offer 2 concrete options and move to booking. Do not stop the sale to ask for ZIP, city, or exact address early unless the lead appears out of state. Get items, photos, and timing first. If we have enough info, propose a time and book it. Confirm the exact address later when closing.",
   agentNotes:
-    "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If the customer gives a city that is one of our core service cities, do not keep asking for ZIP before moving the sale forward. Only ask for ZIP when the city is missing, ambiguous, or outside the core-city coverage.",
+    "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. Do not keep asking for ZIP, city, or exact address early in the sale. Broad local location is good enough until the customer is ready to close. Only push on location early if the job appears to be outside Georgia.",
   outboundCallRecordingNotice:
     "This call may be recorded for quality and training."
 };
@@ -259,10 +259,10 @@ export const DEFAULT_CONVERSATION_PERSONA_POLICY: ConversationPersonaPolicy = {
     "- Be concise and specific; avoid filler.",
     "- Do NOT use bullet points, numbered lists, or hyphen/dash characters of any kind in the customer message.",
     '- Do NOT include any links, URLs, domains, or paths (including "/book").',
-    "- Ask only for what you still need to move forward: items, timing, city or ZIP/address, and photos when helpful.",
+    "- Ask only for what you still need to move forward: items, timing, and photos when helpful. Location can stay broad until closing.",
     "- Do NOT mention internal systems, databases, webhooks, or that you're an AI.",
-    "- If the ZIP is outside Georgia, politely say we currently serve Georgia only.",
-    "- If the customer gives a city that is one of our core service cities, do not keep asking for ZIP before moving the conversation forward.",
+    "- If the location clearly appears outside Georgia, politely say we currently serve Georgia only.",
+    "- Do not keep asking for ZIP, city, or exact address early in the conversation unless the lead appears out of state.",
     "- If the ZIP is in Georgia but outside the usual service area, do not reject. Confirm location and proceed if reasonable."
   ].join("\n")
 };
@@ -637,12 +637,12 @@ export const DEFAULT_ITEM_POLICIES: ItemPoliciesPolicy = {
 
 export const DEFAULT_TEMPLATES_POLICY: TemplatesPolicy = {
   first_touch: {
-    sms: "Hey, this is Stonegate Junk Removal. What all do you need removed and when would you like us to come out? If you can, send a couple photos. If you have not shared your city or ZIP yet, please include it.",
+    sms: "Hey, this is Stonegate Junk Removal. What all do you need removed and when would you like us to come out? If you can, send a couple photos.",
     email:
-      "Thanks for contacting Stonegate Junk Removal. What items do you need removed and what timeframe are you aiming for? Photos help us quote quickly. If you have not shared your city or ZIP yet, please include it.",
-    dm: "Hey, this is Stonegate Junk Removal. What all do you need removed and when do you need it gone? Photos help. If you have not shared your city or ZIP yet, please include it.",
-    call: "Sorry we missed you. Text back what you need removed, when you want it gone, and any photos you have. If you have not shared your city or ZIP yet, please include it so we can confirm availability.",
-    web: "Hey, this is Stonegate Junk Removal. What all do you need removed and when do you need it gone? Photos help. If you have not shared your city or ZIP yet, please include it."
+      "Thanks for contacting Stonegate Junk Removal. What items do you need removed and what timeframe are you aiming for? Photos help us quote quickly.",
+    dm: "Hey, this is Stonegate Junk Removal. What all do you need removed and when do you need it gone? Photos help.",
+    call: "Sorry we missed you. Text back what you need removed, when you want it gone, and any photos you have.",
+    web: "Hey, this is Stonegate Junk Removal. What all do you need removed and when do you need it gone? Photos help."
   },
   follow_up: {
     sms: "Just checking in. Do you want to lock in a time for your junk removal?",

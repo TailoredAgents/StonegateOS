@@ -271,7 +271,7 @@ export async function PolicyCenterSection({
   const companyServiceAreaSummary =
     typeof companyValue["serviceAreaSummary"] === "string" && companyValue["serviceAreaSummary"].trim().length > 0
       ? companyValue["serviceAreaSummary"]
-      : "North Metro Atlanta within about 50 miles of Woodstock, Georgia. Core service cities can move forward on city alone, while other areas may still need ZIP confirmation.";
+      : "North Metro Atlanta and north-central Georgia. Broad local location is fine early in the conversation, and the exact address can wait until the customer is ready to close unless the job appears out of state.";
   const companyTrailerAndPricingSummary =
     typeof companyValue["trailerAndPricingSummary"] === "string" && companyValue["trailerAndPricingSummary"].trim().length > 0
       ? companyValue["trailerAndPricingSummary"]
@@ -287,11 +287,11 @@ export async function PolicyCenterSection({
   const companyBookingStyle =
     typeof companyValue["bookingStyle"] === "string" && companyValue["bookingStyle"].trim().length > 0
       ? companyValue["bookingStyle"]
-      : "Offer 2 concrete options and move to booking. If the customer already gave a core service city, do not stop on ZIP first. Ask for the location detail you still need, then item details and preferred timing. If photos are available, request them.";
+      : "Offer 2 concrete options and move to booking. Do not stop the sale to ask for ZIP, city, or exact address early unless the lead appears out of state. Get item details, photos, and preferred timing first, then confirm the exact address later when closing.";
   const companyAgentNotes =
     typeof companyValue["agentNotes"] === "string" && companyValue["agentNotes"].trim().length > 0
       ? companyValue["agentNotes"]
-      : "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. If the customer already gave a core service city, do not keep asking for ZIP before moving the sale forward.";
+      : "Keep replies short, friendly, and human. Avoid lists and avoid dash characters. No links. Do not keep asking for ZIP, city, or exact address early in the sale. Broad local location is good enough until the customer is ready to close unless the job appears outside Georgia.";
   const companyOutboundCallRecordingNotice =
     typeof companyValue["outboundCallRecordingNotice"] === "string"
       ? (companyValue["outboundCallRecordingNotice"] as string)
