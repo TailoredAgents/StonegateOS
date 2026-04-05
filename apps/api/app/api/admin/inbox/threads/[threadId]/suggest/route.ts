@@ -328,6 +328,25 @@ function isReplyPlan(value: unknown): value is ReplyPlan {
   return true;
 }
 
+function summarizeReplyPlanForPrompt(plan: ReplyPlan): string {
+  const parts: string[] = [];
+  const intent = plan.intent.trim();
+  const tone = plan.tone.trim();
+  const nextAction = plan.next_action.trim();
+  const topFacts = plan.facts.map((item) => item.trim()).filter(Boolean).slice(0, 2);
+  const topQuestion = plan.questions.map((item) => item.trim()).filter(Boolean)[0];
+  const topConstraint = plan.constraints.map((item) => item.trim()).filter(Boolean)[0];
+
+  if (intent) parts.push(`Intent: ${intent}.`);
+  if (tone) parts.push(`Tone: ${tone}.`);
+  if (nextAction) parts.push(`Next move: ${nextAction}.`);
+  if (topFacts.length) parts.push(`Key facts: ${topFacts.join(" | ")}.`);
+  if (topQuestion) parts.push(`If a question is needed, prefer this one: ${topQuestion}.`);
+  if (topConstraint) parts.push(`Watchout: ${topConstraint}.`);
+
+  return parts.join(" ");
+}
+
 function stripDashLikeChars(text: string): string {
   return text
     .replace(/[-–—]/g, " ")
@@ -997,14 +1016,6 @@ export async function POST(
     });
   }
 
-  const firstTouchExample = resolveTemplateForChannel(templates.first_touch, {
-    inboundChannel: replyChannel,
-    replyChannel: targetReplyChannel
-  });
-  const followUpExample = resolveTemplateForChannel(templates.follow_up, {
-    inboundChannel: replyChannel,
-    replyChannel: targetReplyChannel
-  });
   const outOfAreaExample =
     targetReplyChannel === "email" || targetReplyChannel === "sms"
       ? resolveTemplateForChannel(templates.out_of_area, { inboundChannel: replyChannel, replyChannel: targetReplyChannel })
@@ -1013,7 +1024,12 @@ export async function POST(
  const systemPrompt = `
  ${persona.systemPrompt}
  Output ONLY JSON with keys: body (string), subject (string). Use an empty string for subject when not needed.
- Never mention price or dollar amounts unless the customer explicitly asks about price/quote/cost/estimate.
+ Write like a strong human salesperson or coordinator, not a workflow engine.
+ React to the latest customer message first, then move the conversation forward naturally.
+ Prefer 1 to 3 short sentences. Ask at most one real question unless the customer clearly asked for multiple things.
+ Use a brief acknowledgment when it helps. Do not sound overly polished, overly formal, or template-like.
+ Do not narrate your logic, do not mention CRM memory, and do not sound like you are collecting fields off a form.
+ Never mention price or dollar amounts unless the customer explicitly asks about price, quote, cost, or estimate.
  Treat sales agent memory facts as current CRM truth unless the latest transcript clearly overrides them.
  Do not ask for info already present in the sales agent memory or omni context.
  Follow the planner recommendation unless the latest inbound message clearly makes it outdated.
@@ -1025,7 +1041,7 @@ export async function POST(
  Business: ${companyProfile.businessName}
  Phone: ${companyProfile.primaryPhone}
  Service area: ${companyProfile.serviceAreaSummary}
- Trailer/pricing: ${companyProfile.trailerAndPricingSummary}
+ Trailer and pricing: ${companyProfile.trailerAndPricingSummary}
  What we do: ${companyProfile.whatWeDo}
  What we do not do: ${companyProfile.whatWeDontDo}
  Booking style: ${companyProfile.bookingStyle}
@@ -1061,19 +1077,13 @@ export async function POST(
       ? `Known objections: ${salesAgentMemory.objections.join(", ")}`
       : null,
     Array.isArray(salesAgentMemory?.missingFields) && salesAgentMemory.missingFields.length
-      ? `Memory missing fields: ${salesAgentMemory.missingFields.join(", ")}`
+      ? `Only ask for one of these if you truly need it: ${salesAgentMemory.missingFields.join(", ")}`
       : null,
     salesAgentMemory?.lastPromisedNextStep ? `Last promised next step: ${salesAgentMemory.lastPromisedNextStep}` : null,
     salesAgentMemory?.lastHumanSummary ? `Last human summary: ${salesAgentMemory.lastHumanSummary}` : null,
     salesAgentNextAction?.actionType ? `Planner action type: ${salesAgentNextAction.actionType}` : null,
     salesAgentNextAction?.summary ? `Planner summary: ${salesAgentNextAction.summary}` : null,
-    salesAgentNextAction?.reason ? `Planner reason: ${salesAgentNextAction.reason}` : null,
-    salesAgentNextAction?.priority ? `Planner priority: ${salesAgentNextAction.priority}` : null,
-    salesAgentNextAction?.confidence ? `Planner confidence: ${salesAgentNextAction.confidence}` : null,
     salesAgentNextAction?.channel ? `Planner channel: ${salesAgentNextAction.channel}` : null,
-    Array.isArray(salesAgentNextAction?.facts) && salesAgentNextAction.facts.length
-      ? `Planner facts: ${salesAgentNextAction.facts.join(" | ")}`
-      : null,
     buildPlannerInstruction(salesAgentNextAction?.actionType, targetReplyChannel),
     buildChannelStyleInstruction(targetReplyChannel, salesAgentNextAction?.actionType),
     buildDmOpeningInstruction({
@@ -1092,7 +1102,6 @@ export async function POST(
       actionType: salesAgentNextAction?.actionType,
     }),
     omni.pipelineStage ? `Pipeline stage: ${omni.pipelineStage}` : null,
-    omni.pipelineNotes ? `CRM notes:\n${omni.pipelineNotes}` : null,
     omni.latestLead
       ? `Latest lead: ${omni.latestLead.source ?? "unknown_source"} (${omni.latestLead.status}) at ${omni.latestLead.createdAt.toISOString()}`
       : null,
@@ -1107,7 +1116,6 @@ export async function POST(
           .map((t) => `- ${t.channel} last=${t.lastMessageAt ? t.lastMessageAt.toISOString() : "unknown"}: ${t.lastMessagePreview ?? ""}`)
           .join("\n")}`
       : null,
-    omni.missingFields.length ? `Missing info (ask at most one): ${omni.missingFields.join(", ")}` : `Missing info: none`,
     threadContext.contactPhoneE164 || threadContext.contactPhone ? `Customer phone: ${threadContext.contactPhoneE164 ?? threadContext.contactPhone}` : null,
     threadContext.contactEmail ? `Customer email: ${threadContext.contactEmail}` : null,
     threadContext.propertyAddressLine1 ? `Property: ${threadContext.propertyAddressLine1}, ${threadContext.propertyCity ?? ""}, ${threadContext.propertyState ?? ""} ${threadContext.propertyPostalCode ?? ""}` : null,
@@ -1124,8 +1132,6 @@ export async function POST(
           : knownCity
             ? `Location: city noted. Keep moving and do not stop to ask for ZIP or exact address yet.`
             : `Location: broad local area is fine for now. Do not stop the sale to ask for ZIP or exact address unless the job appears out of state.`,
-    firstTouchExample ? `Example (first touch): ${firstTouchExample}` : null,
-    followUpExample ? `Example (follow up): ${followUpExample}` : null,
     outOfAreaExample ? `Example (out of area): ${outOfAreaExample}` : null,
     crossChannelRecentSummary ? `Recent cross-channel context:\n${crossChannelRecentSummary}` : null,
     `Transcript:\n${buildTranscript(messages)}`
@@ -1160,7 +1166,7 @@ Do not write the customer message. Output ONLY JSON matching the schema.
 
   const userPrompt =
     plan
-      ? `${baseUserPrompt}\n\nReply plan (internal):\n${JSON.stringify(plan)}`
+      ? `${baseUserPrompt}\n\nInternal guidance:\n${summarizeReplyPlanForPrompt(plan)}`
       : baseUserPrompt;
 
   const suggestionResult = await callOpenAIJsonSchema({
