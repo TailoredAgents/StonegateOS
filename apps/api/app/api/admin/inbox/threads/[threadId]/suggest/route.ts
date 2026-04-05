@@ -730,6 +730,24 @@ function containsDashLikeChars(text: string): boolean {
   return /[-–—]/.test(text);
 }
 
+function containsGenericFillerPhrasing(text: string): boolean {
+  const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
+  if (!normalized) return false;
+
+  const patterns = [
+    /\bthat helps a lot\b/,
+    /\blet me know what works best\b/,
+    /\blet me know what day and time works best\b/,
+    /\blet me know what day works best\b/,
+    /\bwhat day and time works best for you\b/,
+    /\bwhen would you like us to come pick everything up\b/,
+    /\bjust checking in\b/,
+    /\bthanks for reaching out\b/,
+  ];
+
+  return patterns.some((pattern) => pattern.test(normalized));
+}
+
 const REPLY_SUGGESTION_SCHEMA: Record<string, unknown> = {
   type: "object",
   additionalProperties: false,
@@ -1420,6 +1438,7 @@ export async function POST(
  Match the customer's energy and message length. Prefer 1 to 3 short sentences by default. Ask at most one real question unless the customer clearly asked for multiple things.
  Match the lead's intent as well as the customer's energy. Hot booking leads can sound more decisive. Hesitant leads should sound softer. Booked customers should sound like service, not sales.
  Use a brief acknowledgment when it helps. Do not sound overly polished, overly formal, or template-like.
+ Avoid generic filler phrases like 'that helps a lot', 'let me know what works best', 'what day and time works best for you', or 'just checking in' when a more natural line would do.
  Do not narrate your logic, do not mention CRM memory, and do not sound like you are collecting fields off a form.
  Never mention price or dollar amounts unless the customer explicitly asks about price, quote, cost, or estimate.
  Treat sales agent memory facts as current CRM truth unless the latest transcript clearly overrides them.
@@ -1617,8 +1636,21 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     subject: suggestionResult.value.subject.trim().length ? suggestionResult.value.subject.trim() : null
   };
 
-  if (containsDashLikeChars(suggestion.body) || (suggestion.subject && containsDashLikeChars(suggestion.subject))) {
-    const retryPrompt = `${userPrompt}\n\nIMPORTANT: Rewrite the reply with ZERO hyphen or dash characters of any kind. Do not use lists. Use only sentences.`;
+  if (
+    containsDashLikeChars(suggestion.body) ||
+    (suggestion.subject && containsDashLikeChars(suggestion.subject)) ||
+    containsGenericFillerPhrasing(suggestion.body)
+  ) {
+    const retryInstructions: string[] = [];
+    if (containsDashLikeChars(suggestion.body) || (suggestion.subject && containsDashLikeChars(suggestion.subject))) {
+      retryInstructions.push("Rewrite the reply with ZERO hyphen or dash characters of any kind. Do not use lists. Use only sentences.");
+    }
+    if (containsGenericFillerPhrasing(suggestion.body)) {
+      retryInstructions.push(
+        "Rewrite the reply without generic filler phrases like 'that helps a lot', 'let me know what works best', 'what day and time works best for you', or 'just checking in'. Make it sound more like a natural human closer."
+      );
+    }
+    const retryPrompt = `${userPrompt}\n\nIMPORTANT: ${retryInstructions.join(" ")}`;
     const retry = await callOpenAIJsonSchema({
       apiKey: config.apiKey,
       model: config.writeModel,
