@@ -653,10 +653,14 @@ function buildLocalWarmthInstruction(input: {
   return "Local warmth: keep the tone friendly, steady, and lightly neighborly. Sound local and human without using forced slang or fake charm.";
 }
 
-function buildReactionLikeMediaInstruction(input: {
+function buildInboundMediaIntentInstruction(input: {
   actionType: string | null | undefined;
   messages: MessageContext[];
   memoryMissingFields: string[];
+  customerIntent: string | null | undefined;
+  bookingReadiness: string | null | undefined;
+  hasVisionMediaEstimate: boolean;
+  instantQuotePhotoCount: number;
 }): string | null {
   const latestInbound = getLatestInboundMessage(input.messages);
   if (!isLikelyReactionLikeMediaMessage(latestInbound)) return null;
@@ -664,12 +668,32 @@ function buildReactionLikeMediaInstruction(input: {
   const waitingOnPhotoLikeInfo = input.memoryMissingFields.some((field) =>
     /photo|picture|pic|video|walkthrough|missing view|angle|media/i.test(field),
   );
+  const intent = (input.customerIntent ?? "").trim().toLowerCase();
+  const readiness = (input.bookingReadiness ?? "").trim().toLowerCase();
+  const hasExistingQuoteMedia = input.hasVisionMediaEstimate || input.instantQuotePhotoCount > 0;
+  const quoteStage =
+    input.actionType === "collect_missing_info" ||
+    input.actionType === "follow_up_quote" ||
+    intent === "quote_intent" ||
+    intent === "junk_removal_quote" ||
+    intent === "demolition_quote" ||
+    intent === "land_clearing_quote" ||
+    intent === "booking_intent";
+  const bookedScheduling =
+    input.actionType === "appointment_support" ||
+    input.actionType === "appointment_checkin" ||
+    intent === "booked_or_scheduling" ||
+    readiness === "booked";
 
-  if (input.actionType === "collect_missing_info" || waitingOnPhotoLikeInfo) {
-    return "Latest inbound is media-only with no text. If you were waiting on photos or one better angle, you may treat it as possible media follow-through, but do not say 'got your photo' unless the rest of the context clearly supports that.";
+  if (waitingOnPhotoLikeInfo || (!hasExistingQuoteMedia && quoteStage)) {
+    return "Latest inbound is media-only with no text. In this quote-stage context it is likely the customer finally sent a job photo. You may treat it as real follow-through, but do not use canned lines like 'got your photo'. Just react naturally and move the estimate forward.";
   }
 
-  return "Latest inbound is a single media-only message with no text. It may be a thumbs-up, sticker, or reaction rather than a useful job photo. Do not say 'got your photo' or act like new estimating media arrived. If you reply, treat it more like a brief acknowledgment than a new photo submission.";
+  if (bookedScheduling) {
+    return "Latest inbound is a single media-only message with no text in a booked or logistics conversation. It is more likely a thumbs-up, sticker, or reaction than useful quote media. Do not act like a new job photo arrived.";
+  }
+
+  return "Latest inbound is a single media-only message with no text. It could be either a quick reaction or a real photo. Do not say 'got your photo'. Only talk about the media if the wider quote context clearly supports that; otherwise treat it more like a brief acknowledgment.";
 }
 
 function hashVariationSeed(input: string): number {
@@ -1151,16 +1175,16 @@ function buildMediaReplyInstruction(input: {
 
   if ((input.actionType === "collect_missing_info" || confidence === "low") && missingViews.length > 0) {
     baseRules.push(
-      `If you ask for more media, ask for exactly one highest-signal missing view: ${missingViews[0]}.`
+      `If you truly need more media, ask for only one high-signal missing view: ${missingViews[0]}. Do not make another angle the default move if the conversation can keep momentum without it.`
     );
     if (input.actionType === "follow_up_quote" || input.actionType === "reply_now") {
       baseRules.push(
-        "Because media confidence is low, do not act like the estimate is fully locked in. Prefer tightening the scope with one better angle before making a strong close push."
+        "Because media confidence is low, do not act like the estimate is fully locked in. Keep the estimate a little provisional, but do not automatically turn the conversation into another photo chase."
       );
     }
   } else if (missingViews.length > 0 && (input.actionType === "follow_up_quote" || input.actionType === "reply_now")) {
     baseRules.push(
-      "Only bring up an extra photo/video angle if it clearly helps tighten the estimate or answer the customer's question."
+      "Only bring up an extra photo/video angle if it clearly helps tighten the estimate or answer the customer's question. Otherwise keep momentum."
     );
   }
 
@@ -1678,10 +1702,14 @@ export async function POST(
       customerIntent: salesAgentMemory?.customerIntent,
       bookingReadiness: salesAgentMemory?.bookingReadiness,
     }),
-    buildReactionLikeMediaInstruction({
+    buildInboundMediaIntentInstruction({
       actionType: salesAgentNextAction?.actionType,
       messages,
       memoryMissingFields: Array.isArray(salesAgentMemory?.missingFields) ? salesAgentMemory.missingFields : [],
+      customerIntent: salesAgentMemory?.customerIntent,
+      bookingReadiness: salesAgentMemory?.bookingReadiness,
+      hasVisionMediaEstimate: Boolean(mediaAnalysis),
+      instantQuotePhotoCount: omni.instantQuote?.photoUrls.length ?? 0,
     }),
     buildReplyVariationInstruction({
       threadId,

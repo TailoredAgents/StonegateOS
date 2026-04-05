@@ -1146,7 +1146,7 @@ export function buildSalesAgentNextAction(input: {
   const needsMediaRefinement =
     Boolean(preferredMissingAngle) || ((hasInstantQuote || hasFormalQuote) && memory.quoteConfidence === "low");
   const hasCriticalMissingInfo = memory.missingFields.some((field) =>
-    /photo angle|missing view|video angle|zip|postal|address|phone|email/i.test(field),
+    /zip|postal|address|phone|email/i.test(field),
   );
   const shouldKeepMomentumDespiteMissingInfo = Boolean(
     memory.missingFields.length > 0 &&
@@ -1157,7 +1157,7 @@ export function buildSalesAgentNextAction(input: {
 
   if (
     (hasInstantQuote || hasFormalQuote) &&
-    needsMediaRefinement &&
+    Boolean(preferredMissingAngle) &&
     (
       context.derived.bookingReadiness !== "high" ||
       lowConfidenceQuoteAccuracyRisk ||
@@ -1166,16 +1166,16 @@ export function buildSalesAgentNextAction(input: {
     !hasRecentOutbound(context, now, 60)
   ) {
     return {
-      actionType: "collect_missing_info",
-      channel: missingInfoChannel,
+      actionType: "human_follow_up",
+      channel: preferredChannel,
       status: "open",
       priority: "high",
       confidence: "high",
-      summary: "Tighten the estimate with one better media angle before pushing the quote harder.",
+      summary: "Human review is safer than asking for another angle before pushing the quote harder.",
       reason:
         preferredMissingAngle
-          ? `The current estimate is still missing a key view (${preferredMissingAngle}), so the next best move is to tighten the scope first.`
-          : "The current quote exists, but media confidence is still low enough that one better angle is safer than a normal quote follow-up.",
+          ? `The current estimate is still missing a key view (${preferredMissingAngle}), but asking for more media now adds friction. A real person should decide whether to tighten it or keep momentum.`
+          : "The current quote exists, but media confidence is still low enough that a human should decide whether to tighten it or keep momentum.",
       facts: dedupe([
         memory.pricingContext,
         memory.quoteConfidence ? `Quote confidence: ${memory.quoteConfidence}` : null,
@@ -1187,26 +1187,44 @@ export function buildSalesAgentNextAction(input: {
         quoteAccuracyTrendsAboveRange
           ? "Recent completed jobs are finishing above the original instant range often enough that shaky estimates should stay provisional until tightened."
           : null,
-        missingInfoChannel && missingInfoChannel !== preferredChannel
-          ? `Recent missing-detail requests are resolving better on ${missingInfoChannel.toUpperCase()}.`
-          : null,
         keepSingleMissingInfoAsk
-          ? "Recent missing-detail requests are stalling, so keep the ask to one specific detail or angle."
+          ? "Recent missing-detail requests are stalling, so extra angle requests should be used sparingly."
           : null,
         preferFastQuoteFollowup ? "Recent quote follow-ups are booking better when the first follow-up goes out within 60 minutes." : null,
         context.derived.dmEntrySource ? `Messenger entry source: ${context.derived.dmEntrySource.replace(/_/g, " ")}` : null,
         memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
       ]),
-      dueAt:
-        missingInfoChannel === "dm"
-          ? resolveDeferredDueAt({
-              channel: "dm",
-              delayMinutes: dmEntryProfile.missingInfoDelayMinutes,
-              baselines: [nextAutomationFollowup],
-            })
-          : accelerateQuoteFollowup
-            ? now.toISOString()
-            : nextAutomationFollowup?.toISOString() ?? now.toISOString(),
+      dueAt: accelerateQuoteFollowup ? now.toISOString() : nextAutomationFollowup?.toISOString() ?? now.toISOString(),
+      source: "rules_v1",
+    };
+  }
+
+  if (
+    (hasInstantQuote || hasFormalQuote) &&
+    needsMediaRefinement &&
+    context.derived.bookingReadiness !== "high" &&
+    !hasRecentOutbound(context, now, 60)
+  ) {
+    return {
+      actionType: "follow_up_quote",
+      channel: quoteCloseChannel,
+      status: "open",
+      priority: "high",
+      confidence: "medium",
+      summary: "Keep the quote moving without turning the conversation into another photo chase.",
+      reason: "The estimate is not perfect, but adding more photo friction right now is more likely to hurt momentum than help.",
+      facts: dedupe([
+        memory.pricingContext,
+        memory.quoteConfidence ? `Quote confidence: ${memory.quoteConfidence}` : null,
+        lowConfidenceQuoteAccuracyRisk
+          ? "Recent lower-confidence instant estimates have been weaker, so keep the quote framed as approximate."
+          : null,
+        quoteAccuracyTrendsAboveRange
+          ? "Recent completed jobs are finishing above the original instant range often enough that the quote should stay lightly provisional."
+          : null,
+        memory.customerIntent ? `Intent: ${memory.customerIntent}` : null,
+      ]),
+      dueAt: accelerateQuoteFollowup ? now.toISOString() : nextAutomationFollowup?.toISOString() ?? now.toISOString(),
       source: "rules_v1",
     };
   }
