@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { contacts, crmTasks, getDb, outboxEvents } from "@/db";
+import { contacts, crmTasks, getDb, outboxEvents, partnerAccounts } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
@@ -120,10 +120,17 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactEmail: contacts.email,
       contactPhone: contacts.phone,
       contactPhoneE164: contacts.phoneE164,
-      contactSource: contacts.source
+      contactSource: contacts.source,
+      accountId: partnerAccounts.id,
+      accountName: partnerAccounts.name,
+      accountStatus: partnerAccounts.status,
+      accountSegment: partnerAccounts.segment,
+      accountLastTouchAt: partnerAccounts.lastTouchAt,
+      accountNextTouchAt: partnerAccounts.nextTouchAt
     })
     .from(crmTasks)
     .innerJoin(contacts, eq(crmTasks.contactId, contacts.id))
+    .leftJoin(partnerAccounts, eq(crmTasks.partnerAccountId, partnerAccounts.id))
     .where(
       and(
         eq(crmTasks.status, "open"),
@@ -170,7 +177,23 @@ export async function GET(request: NextRequest): Promise<Response> {
         email: row.contactEmail ?? null,
         phone: row.contactPhoneE164 ?? row.contactPhone ?? null,
         source: row.contactSource ?? null
-      }
+      },
+      account: row.accountId
+        ? {
+            id: row.accountId,
+            name: row.accountName ?? company ?? name,
+            status: row.accountStatus ?? null,
+            segment: row.accountSegment ?? null,
+            lastTouchAt:
+              row.accountLastTouchAt instanceof Date
+                ? row.accountLastTouchAt.toISOString()
+                : null,
+            nextTouchAt:
+              row.accountNextTouchAt instanceof Date
+                ? row.accountNextTouchAt.toISOString()
+                : null,
+          }
+        : null
     };
   });
 

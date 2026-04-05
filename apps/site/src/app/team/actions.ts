@@ -4498,9 +4498,14 @@ type OutboundImportRow = {
   contactName?: string;
   phone?: string;
   email?: string;
+  website?: string;
+  domain?: string;
+  title?: string;
+  industry?: string;
   city?: string;
   state?: string;
   zip?: string;
+  sourceListName?: string;
   notes?: string;
 };
 
@@ -4606,21 +4611,46 @@ function parseOutboundCsv(text: string): OutboundImportRow[] {
       "cell",
     ]);
     const email = coerceRow(record, ["email", "email_address"]);
+    const website = coerceRow(record, [
+      "website",
+      "site",
+      "url",
+      "company_website",
+    ]);
+    const domain = coerceRow(record, [
+      "domain",
+      "company_domain",
+      "email_domain",
+    ]);
+    const title = coerceRow(record, ["title", "job_title", "role"]);
+    const industry = coerceRow(record, ["industry", "vertical", "segment"]);
     const city = coerceRow(record, ["city"]);
     const state = coerceRow(record, ["state"]);
     const zip = coerceRow(record, ["zip", "zipcode", "postal", "postal_code"]);
+    const sourceListName = coerceRow(record, [
+      "source_list_name",
+      "list_name",
+      "apollo_list",
+      "list",
+    ]);
     const notes = coerceRow(record, ["notes", "note", "details"]);
 
-    if (!company && !contactName && !phone && !email) continue;
+    if (!company && !contactName && !phone && !email && !website && !domain)
+      continue;
 
     rows.push({
       company,
       contactName,
       phone,
       email,
+      website,
+      domain,
+      title,
+      industry,
       city,
       state,
       zip,
+      sourceListName,
       notes,
     });
   }

@@ -70,6 +70,9 @@ export async function generateOutboundFirstTouchDraft(input: {
   campaign: string | null;
   attempt: number;
   notes: string | null;
+  segment?: string | null;
+  city?: string | null;
+  state?: string | null;
 }): Promise<OutboundFirstTouchDraft> {
   const apiKey = readEnvString("OPENAI_API_KEY");
   if (!apiKey) {
@@ -98,6 +101,10 @@ export async function generateOutboundFirstTouchDraft(input: {
     `Channel: ${input.channel}`,
     `Recipient name: ${input.recipientName ?? "Unknown"}`,
     `Recipient company: ${input.company ?? "Unknown"}`,
+    input.segment ? `Account segment: ${input.segment}` : null,
+    input.city || input.state
+      ? `Account location: ${[input.city ?? null, input.state ?? null].filter(Boolean).join(", ")}`
+      : null,
     `Campaign: ${input.campaign ?? "outbound"}`,
     `Attempt: ${input.attempt}`,
     input.notes ? `Notes: ${input.notes}` : null,
@@ -201,4 +208,3 @@ export async function generateOutboundFirstTouchDraft(input: {
     return fallbackDraft(input);
   }
 }
-

@@ -34,6 +34,14 @@ type OutboundQueueItem = {
   noteSnippet: string | null;
   startedAt?: string | null;
   reminderAt?: string | null;
+  account: {
+    id: string;
+    name: string;
+    status: string | null;
+    segment: string | null;
+    lastTouchAt: string | null;
+    nextTouchAt: string | null;
+  } | null;
   contact: {
     id: string;
     name: string;
@@ -436,8 +444,13 @@ export async function OutboundSection({
                         <td className="px-4 py-3 text-slate-600">{item.attempt}</td>
                         <td className="min-w-0 overflow-hidden px-4 py-3">
                           <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { taskId: item.id } })} className="block min-w-0">
-                            <div className="truncate text-sm font-semibold text-slate-900">{item.company ? item.company : item.contact.name}</div>
-                            <div className="mt-0.5 truncate text-[11px] text-slate-500">{item.company ? item.contact.name : item.campaign ? item.campaign : "Outbound"}</div>
+                            <div className="truncate text-sm font-semibold text-slate-900">
+                              {item.account?.name ?? (item.company ? item.company : item.contact.name)}
+                            </div>
+                            <div className="mt-0.5 truncate text-[11px] text-slate-500">
+                              {item.contact.name}
+                              {item.account?.segment ? ` / ${item.account.segment}` : item.campaign ? ` / ${item.campaign}` : ""}
+                            </div>
                             <div className="mt-1 truncate text-[11px] text-slate-500">
                               <span>{item.contact.phone ?? "No phone"}</span>
                               <span className="mx-1">{"\u2022"}</span>
@@ -445,6 +458,11 @@ export async function OutboundSection({
                               <span className="mx-1">{"\u2022"}</span>
                               <span>{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}</span>
                             </div>
+                            {item.account?.status ? (
+                              <div className="mt-1 truncate text-[11px] text-slate-500">
+                                Account: {item.account.status.replace(/_/g, " ")}
+                              </div>
+                            ) : null}
                           </a>
                         </td>
                         <td className="relative hidden w-[176px] border-l border-slate-100 bg-white px-4 py-3 md:table-cell">
@@ -485,11 +503,19 @@ export async function OutboundSection({
                 <div className="space-y-4">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Selected</p>
-                    <p className="mt-1 text-base font-semibold text-slate-900">{selected.company ? selected.company : selected.contact.name}</p>
+                    <p className="mt-1 text-base font-semibold text-slate-900">
+                      {selected.account?.name ?? (selected.company ? selected.company : selected.contact.name)}
+                    </p>
                     <p className="mt-1 text-xs text-slate-600">{selected.contact.name}</p>
                     <p className="mt-2 text-xs text-slate-600">
                       {selected.contact.phone ?? "No phone"} / {selected.contact.email ?? "No email"}
                     </p>
+                      {selected.account?.status || selected.account?.segment ? (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {selected.account?.status ? `Account ${selected.account.status.replace(/_/g, " ")}` : "Account linked"}
+                          {selected.account?.segment ? ` / ${selected.account.segment}` : ""}
+                        </p>
+                      ) : null}
                       <p className="mt-1 text-[11px] text-slate-500">
                         Attempt {selected.attempt} / {selected.campaign ?? "outbound"} / Due {formatDue(selected)}
                       </p>
@@ -499,6 +525,12 @@ export async function OutboundSection({
                       </p>
                       {formatTimestamp(selected.reminderAt) ? (
                         <p className="mt-1 text-[11px] text-slate-500">Reminder scheduled {formatTimestamp(selected.reminderAt)}</p>
+                      ) : null}
+                      {selected.account?.lastTouchAt ? (
+                        <p className="mt-1 text-[11px] text-slate-500">Account last touch {formatTimestamp(selected.account.lastTouchAt)}</p>
+                      ) : null}
+                      {selected.account?.nextTouchAt ? (
+                        <p className="mt-1 text-[11px] text-slate-500">Account next touch {formatTimestamp(selected.account.nextTouchAt)}</p>
                       ) : null}
                       {selected.noteSnippet ? (
                         <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{selected.noteSnippet}</p>
@@ -648,7 +680,7 @@ export async function OutboundSection({
               name="csv"
               className={`${TEAM_INPUT} min-h-[160px] font-mono text-xs`}
               placeholder={
-                "company,contactName,phone,email,city,state,zip,notes\nAcme Property Mgmt,Jane Doe,555-555-5555,jane@acme.com,Atlanta,GA,30303,prefers email"
+                "company,contactName,title,email,phone,website,city,state,zip,notes\nAcme Property Mgmt,Jane Doe,Regional PM,jane@acme.com,555-555-5555,acmepm.com,Atlanta,GA,30303,prefers email"
               }
             />
           </label>

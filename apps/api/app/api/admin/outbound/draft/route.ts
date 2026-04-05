@@ -7,13 +7,15 @@ import {
   conversationParticipants,
   conversationThreads,
   crmTasks,
-  getDb
+  getDb,
+  partnerAccounts
 } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { getSalesAutopilotPolicy } from "@/lib/policy";
 import { generateOutboundFirstTouchDraft } from "@/lib/outbound-drafts";
+import { resolveOrCreatePartnerAccount } from "@/lib/partner-accounts";
 
 const CHANNELS = ["sms", "email"] as const;
 type Channel = (typeof CHANNELS)[number];
@@ -170,7 +172,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       email: contacts.email,
       phone: contacts.phone,
       phoneE164: contacts.phoneE164,
-      salespersonMemberId: contacts.salespersonMemberId
+      salespersonMemberId: contacts.salespersonMemberId,
+      partnerAccountId: contacts.partnerAccountId
     })
     .from(contacts)
     .where(eq(contacts.id, contactId))
@@ -178,6 +181,53 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   if (!contact?.id) {
     return NextResponse.json({ error: "contact_not_found" }, { status: 404 });
+  }
+
+  let partnerAccountId = contact.partnerAccountId ?? null;
+  let accountName: string | null = null;
+  let accountSegment: string | null = null;
+  let accountCity: string | null = null;
+  let accountState: string | null = null;
+
+  if (!partnerAccountId) {
+    const account = await resolveOrCreatePartnerAccount(db as any, {
+      name: contact.company,
+      domain: contact.email ?? null,
+      source: null,
+      ownerMemberId: contact.salespersonMemberId ?? null
+    });
+    partnerAccountId = account?.id ?? null;
+    if (partnerAccountId) {
+      await db
+        .update(contacts)
+        .set({ partnerAccountId, updatedAt: now })
+        .where(eq(contacts.id, contact.id));
+      if (taskId) {
+        await db
+          .update(crmTasks)
+          .set({ partnerAccountId, updatedAt: now })
+          .where(eq(crmTasks.id, taskId));
+      }
+    }
+  }
+
+  if (partnerAccountId) {
+    const [account] = await db
+      .select({
+        id: partnerAccounts.id,
+        name: partnerAccounts.name,
+        segment: partnerAccounts.segment,
+        city: partnerAccounts.city,
+        state: partnerAccounts.state
+      })
+      .from(partnerAccounts)
+      .where(eq(partnerAccounts.id, partnerAccountId))
+      .limit(1);
+
+    accountName = account?.name ?? null;
+    accountSegment = account?.segment ?? null;
+    accountCity = account?.city ?? null;
+    accountState = account?.state ?? null;
   }
 
   const hasEmail = Boolean(contact.email && contact.email.trim().length);
@@ -217,7 +267,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const recipientName = `${contact.firstName ?? ""} ${contact.lastName ?? ""}`.trim() || null;
-  const company = companyFromTask ?? contact.company ?? null;
+  const company = accountName ?? companyFromTask ?? contact.company ?? null;
 
   const threadId = await ensureThreadForContact(db, {
     contactId,
@@ -237,7 +287,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     company,
     campaign,
     attempt,
-    notes: notesFromTask
+    notes: notesFromTask,
+    segment: accountSegment,
+    city: accountCity,
+    state: accountState
   });
 
   const subject = channel === "email" ? draft.subject : null;
@@ -262,6 +315,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         outboundCampaign: campaign ?? undefined,
         outboundAttempt: attempt,
         outboundTaskId: taskId ?? undefined,
+        partnerAccountId: partnerAccountId ?? undefined,
         generatedBy: draft.provider,
         generatedModel: draft.model ?? undefined
       },
@@ -306,4 +360,3 @@ export async function POST(request: NextRequest): Promise<Response> {
     channel
   });
 }
-

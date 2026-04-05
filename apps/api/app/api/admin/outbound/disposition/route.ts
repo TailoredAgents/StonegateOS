@@ -8,6 +8,10 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { DateTime } from "luxon";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
 import { upsertPartnerCheckinTask } from "@/lib/partner-checkins";
+import {
+  resolveOrCreatePartnerAccount,
+  updatePartnerAccountAfterOutboundTouch,
+} from "@/lib/partner-accounts";
 
 function parseField(notes: string, key: string): string | null {
   const match = notes.match(new RegExp(`(?:^|\\n)${key}=([^\\n]+)`, "i"));
@@ -113,6 +117,39 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!task?.id) return NextResponse.json({ error: "task_not_found" }, { status: 404 });
   if (!task.contactId) return NextResponse.json({ error: "contact_not_found" }, { status: 400 });
 
+  const [contact] = await db
+    .select({
+      id: contacts.id,
+      company: contacts.company,
+      email: contacts.email,
+      salespersonMemberId: contacts.salespersonMemberId,
+      partnerAccountId: contacts.partnerAccountId
+    })
+    .from(contacts)
+    .where(eq(contacts.id, task.contactId))
+    .limit(1);
+
+  let partnerAccountId = contact?.partnerAccountId ?? null;
+  if (!partnerAccountId) {
+    const account = await resolveOrCreatePartnerAccount(db as any, {
+      name: contact?.company ?? null,
+      domain: contact?.email ?? null,
+      source: null,
+      ownerMemberId: task.assignedTo ?? contact?.salespersonMemberId ?? null
+    });
+    partnerAccountId = account?.id ?? null;
+    if (partnerAccountId) {
+      await db
+        .update(contacts)
+        .set({ partnerAccountId, updatedAt: now })
+        .where(eq(contacts.id, task.contactId));
+      await db
+        .update(crmTasks)
+        .set({ partnerAccountId, updatedAt: now })
+        .where(eq(crmTasks.id, task.id));
+    }
+  }
+
   const notes = typeof task.notes === "string" ? task.notes : "";
   if (!notes.toLowerCase().includes("kind=outbound")) {
     return NextResponse.json({ error: "not_outbound_task" }, { status: 400 });
@@ -165,6 +202,16 @@ export async function POST(request: NextRequest): Promise<Response> {
       assignedTo: null,
       notes: `disqualify=outbound_${disposition}`
     });
+
+    if (partnerAccountId) {
+      await updatePartnerAccountAfterOutboundTouch(db as any, {
+        partnerAccountId,
+        status: "not_a_fit",
+        lastDisposition: disposition,
+        lastTouchAt: now,
+        nextTouchAt: null
+      });
+    }
 
     return NextResponse.json({ ok: true, taskId, contactId: task.contactId, stopped: true });
   }
@@ -238,6 +285,16 @@ export async function POST(request: NextRequest): Promise<Response> {
       });
     }
 
+    if (partnerAccountId) {
+      await updatePartnerAccountAfterOutboundTouch(db as any, {
+        partnerAccountId,
+        status: disposition === "partner" ? "active_partner" : "conversation_active",
+        lastDisposition: disposition,
+        lastTouchAt: now,
+        nextTouchAt: disposition === "partner" ? null : null
+      });
+    }
+
     return NextResponse.json({ ok: true, taskId, contactId: task.contactId, stopped: true });
   }
 
@@ -270,6 +327,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       .insert(crmTasks)
       .values({
         contactId: task.contactId,
+        partnerAccountId,
         title: callbackAt ? "Outbound: Callback" : "Outbound: Follow up",
         status: "open",
         dueAt: nextDueAt,
@@ -288,6 +346,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       .update(crmTasks)
       .set({
         title: callbackAt ? "Outbound: Callback" : "Outbound: Follow up",
+        partnerAccountId: partnerAccountId ?? undefined,
         dueAt: nextDueAt,
         assignedTo: task.assignedTo,
         notes: nextNotes,
@@ -309,6 +368,16 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   if (nextTaskId && nextTaskDueAt) {
     await ensureReminderOutbox(db, nextTaskId, nextTaskDueAt);
+  }
+
+  if (partnerAccountId) {
+    await updatePartnerAccountAfterOutboundTouch(db as any, {
+      partnerAccountId,
+      status: "attempting_contact",
+      lastDisposition: disposition,
+      lastTouchAt: now,
+      nextTouchAt: nextDueAt
+    });
   }
 
   return NextResponse.json({ ok: true, taskId, contactId: task.contactId, nextDueAt: nextDueAt.toISOString() });

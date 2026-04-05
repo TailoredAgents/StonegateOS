@@ -7,15 +7,21 @@ import { requirePermission } from "@/lib/permissions";
 import { normalizePhone } from "../../../web/utils";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
 import { recordAuditEvent, getAuditActorFromRequest } from "@/lib/audit";
+import { resolveOrCreatePartnerAccount } from "@/lib/partner-accounts";
 
 type OutboundRow = {
   company?: string;
   contactName?: string;
   phone?: string;
   email?: string;
+  website?: string;
+  domain?: string;
+  title?: string;
+  industry?: string;
   city?: string;
   state?: string;
   zip?: string;
+  sourceListName?: string;
   notes?: string;
 };
 
@@ -135,6 +141,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             phone: string | null;
             phoneE164: string | null;
             source: string | null;
+            partnerAccountId: string | null;
             partnerStatus: string;
             partnerOwnerMemberId: string | null;
           }
@@ -151,6 +158,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             phone: contacts.phone,
             phoneE164: contacts.phoneE164,
             source: contacts.source,
+            partnerAccountId: contacts.partnerAccountId,
             partnerStatus: contacts.partnerStatus,
             partnerOwnerMemberId: contacts.partnerOwnerMemberId
           })
@@ -171,6 +179,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             phone: contacts.phone,
             phoneE164: contacts.phoneE164,
             source: contacts.source,
+            partnerAccountId: contacts.partnerAccountId,
             partnerStatus: contacts.partnerStatus,
             partnerOwnerMemberId: contacts.partnerOwnerMemberId
           })
@@ -191,6 +200,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             phone: contacts.phone,
             phoneE164: contacts.phoneE164,
             source: contacts.source,
+            partnerAccountId: contacts.partnerAccountId,
             partnerStatus: contacts.partnerStatus,
             partnerOwnerMemberId: contacts.partnerOwnerMemberId
           })
@@ -198,6 +208,29 @@ export async function POST(request: NextRequest): Promise<Response> {
           .where(eq(contacts.phone, phone.raw))
           .limit(1);
         existing = found ?? null;
+      }
+
+      const website = normalizeText(row["website"]);
+      const domain = normalizeText(row["domain"]);
+      const title = normalizeText(row["title"]);
+      const industry = normalizeText(row["industry"]);
+      const sourceListName = normalizeText(row["sourceListName"]);
+
+      let partnerAccountId = existing?.partnerAccountId ?? null;
+      if (!partnerAccountId) {
+        const account = await resolveOrCreatePartnerAccount(tx as any, {
+          name: company,
+          website,
+          domain: domain ?? email ?? null,
+          city: normalizeText(row["city"]),
+          state: normalizeText(row["state"]),
+          source,
+          sourceCampaign: campaign,
+          sourceListName,
+          ownerMemberId: assignee,
+          notes: [title ? `Title: ${title}` : null, industry ? `Industry: ${industry}` : null, notesExtra].filter(Boolean).join(" | ") || null
+        });
+        partnerAccountId = account?.id ?? null;
       }
 
       if (existing) {
@@ -218,6 +251,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         }
         if (!existing.company && company) nextValues.company = company;
         if (!existing.source) nextValues.source = source;
+        if (!existing.partnerAccountId && partnerAccountId) nextValues.partnerAccountId = partnerAccountId;
         if ((existing.source ?? "").startsWith("outbound:") || !existing.source) {
           if (existing.partnerStatus === "none") nextValues.partnerStatus = "prospect";
           if (!existing.partnerOwnerMemberId) nextValues.partnerOwnerMemberId = assignee ?? null;
@@ -247,13 +281,23 @@ export async function POST(request: NextRequest): Promise<Response> {
           phone: phone?.e164 ?? phone?.raw ?? null,
           phoneE164: phone?.e164 ?? null,
           salespersonMemberId: assignee,
+          partnerAccountId,
           partnerStatus: "prospect",
           partnerOwnerMemberId: assignee ?? null,
           source,
           createdAt: now,
           updatedAt: now
         })
-        .returning({ id: contacts.id, firstName: contacts.firstName, lastName: contacts.lastName, email: contacts.email, phone: contacts.phone, phoneE164: contacts.phoneE164, source: contacts.source });
+        .returning({
+          id: contacts.id,
+          firstName: contacts.firstName,
+          lastName: contacts.lastName,
+          email: contacts.email,
+          phone: contacts.phone,
+          phoneE164: contacts.phoneE164,
+          source: contacts.source,
+          partnerAccountId: contacts.partnerAccountId
+        });
 
       if (!createdContact?.id) {
         throw new Error("contact_insert_failed");
@@ -267,6 +311,9 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       const noteBits = [
         company ? `Company: ${company}` : null,
+        title ? `Title: ${title}` : null,
+        industry ? `Industry: ${industry}` : null,
+        website ? `Website: ${website}` : null,
         location ? `Location: ${location}` : null,
         notesExtra ? `Notes: ${notesExtra}` : null
       ].filter(Boolean);
@@ -289,7 +336,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     // Create the first outbound task if none is currently open.
     const [existingTask] = await db
-      .select({ id: crmTasks.id })
+      .select({ id: crmTasks.id, partnerAccountId: crmTasks.partnerAccountId })
       .from(crmTasks)
       .where(
         and(
@@ -301,9 +348,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       )
       .limit(1);
 
+    const contactPartnerAccountId = (contact as any)?.partnerAccountId as string | null | undefined;
+
     if (!existingTask?.id) {
       await db.insert(crmTasks).values({
         contactId,
+        partnerAccountId: contactPartnerAccountId ?? null,
         title: "Outbound: Call property manager",
         status: "open",
         dueAt: null,
@@ -311,6 +361,11 @@ export async function POST(request: NextRequest): Promise<Response> {
         notes: buildOutboundNotes({ campaign, attempt: 1, company, notes: notesExtra })
       });
       tasksCreated += 1;
+    } else if (!existingTask.partnerAccountId && contactPartnerAccountId) {
+      await db
+        .update(crmTasks)
+        .set({ partnerAccountId: contactPartnerAccountId, updatedAt: now })
+        .where(eq(crmTasks.id, existingTask.id));
     }
 
     await recordAuditEvent({

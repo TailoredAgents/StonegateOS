@@ -316,6 +316,13 @@
       "when": 1775030400000,
       "tag": "0044_media_job_analyses",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1775342400000,
+      "tag": "0045_partner_accounts",
+      "breakpoints": true
     }
   ]
 }

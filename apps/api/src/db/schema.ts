@@ -176,6 +176,20 @@ export const automationModeEnum = pgEnum("automation_mode", [
   "auto",
 ]);
 
+export const partnerAccountStatusEnum = pgEnum("partner_account_status", [
+  "imported",
+  "ready_for_first_touch",
+  "attempting_contact",
+  "conversation_active",
+  "qualified_partner",
+  "trial_partner",
+  "active_partner",
+  "portal_partner",
+  "managed_partner",
+  "dormant",
+  "not_a_fit",
+]);
+
 export const partnerStatusEnum = pgEnum("partner_status", [
   "none",
   "prospect",
@@ -183,6 +197,49 @@ export const partnerStatusEnum = pgEnum("partner_status", [
   "partner",
   "inactive",
 ]);
+
+export const partnerAccounts = pgTable(
+  "partner_accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    domain: text("domain"),
+    website: text("website"),
+    segment: text("segment"),
+    subsegment: text("subsegment"),
+    status: partnerAccountStatusEnum("status").default("imported").notNull(),
+    source: text("source"),
+    sourceCampaign: text("source_campaign"),
+    sourceListName: text("source_list_name"),
+    city: text("city"),
+    state: varchar("state", { length: 32 }),
+    ownerMemberId: uuid("owner_member_id"),
+    portalFit: text("portal_fit"),
+    fitScore: integer("fit_score"),
+    lastTouchAt: timestamp("last_touch_at", { withTimezone: true }),
+    nextTouchAt: timestamp("next_touch_at", { withTimezone: true }),
+    lastDisposition: text("last_disposition"),
+    notes: text("notes"),
+    aiAccountBrief: jsonb("ai_account_brief").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    statusIdx: index("partner_accounts_status_idx").on(table.status),
+    ownerIdx: index("partner_accounts_owner_idx").on(table.ownerMemberId),
+    nextTouchIdx: index("partner_accounts_next_touch_idx").on(table.nextTouchAt),
+    domainIdx: index("partner_accounts_domain_idx").on(table.domain),
+    normalizedNameIdx: index("partner_accounts_normalized_name_idx").on(
+      table.normalizedName,
+    ),
+  }),
+);
 
 export const contacts = pgTable(
   "contacts",
@@ -195,6 +252,9 @@ export const contacts = pgTable(
     phone: varchar("phone", { length: 32 }),
     phoneE164: varchar("phone_e164", { length: 32 }),
     salespersonMemberId: uuid("salesperson_member_id"),
+    partnerAccountId: uuid("partner_account_id").references(() => partnerAccounts.id, {
+      onDelete: "set null",
+    }),
     partnerStatus: partnerStatusEnum("partner_status")
       .default("none")
       .notNull(),
@@ -227,6 +287,9 @@ export const contacts = pgTable(
     emailIdx: uniqueIndex("contacts_email_key").on(table.email),
     phoneIdx: uniqueIndex("contacts_phone_key").on(table.phone),
     phoneE164Idx: uniqueIndex("contacts_phone_e164_key").on(table.phoneE164),
+    partnerAccountIdx: index("contacts_partner_account_idx").on(
+      table.partnerAccountId,
+    ),
     partnerStatusIdx: index("contacts_partner_status_idx").on(
       table.partnerStatus,
     ),
@@ -310,6 +373,9 @@ export const crmTasks = pgTable(
     contactId: uuid("contact_id")
       .notNull()
       .references(() => contacts.id, { onDelete: "cascade" }),
+    partnerAccountId: uuid("partner_account_id").references(() => partnerAccounts.id, {
+      onDelete: "set null",
+    }),
     title: text("title").notNull(),
     dueAt: timestamp("due_at", { withTimezone: true }),
     assignedTo: text("assigned_to"),
@@ -325,6 +391,9 @@ export const crmTasks = pgTable(
   },
   (table) => ({
     contactIdx: index("crm_tasks_contact_idx").on(table.contactId),
+    partnerAccountIdx: index("crm_tasks_partner_account_idx").on(
+      table.partnerAccountId,
+    ),
     dueIdx: index("crm_tasks_due_idx").on(table.dueAt),
   }),
 );
@@ -1995,7 +2064,19 @@ export const seoAgentState = pgTable("seo_agent_state", {
     .$onUpdate(() => new Date()),
 });
 
+export const partnerAccountRelations = relations(
+  partnerAccounts,
+  ({ many }) => ({
+    contacts: many(contacts),
+    tasks: many(crmTasks),
+  }),
+);
+
 export const contactRelations = relations(contacts, ({ many, one }) => ({
+  partnerAccount: one(partnerAccounts, {
+    fields: [contacts.partnerAccountId],
+    references: [partnerAccounts.id],
+  }),
   properties: many(properties),
   leads: many(leads),
   quotes: many(quotes),
@@ -2115,6 +2196,10 @@ export const crmTaskRelations = relations(crmTasks, ({ one }) => ({
   contact: one(contacts, {
     fields: [crmTasks.contactId],
     references: [contacts.id],
+  }),
+  partnerAccount: one(partnerAccounts, {
+    fields: [crmTasks.partnerAccountId],
+    references: [partnerAccounts.id],
   }),
 }));
 

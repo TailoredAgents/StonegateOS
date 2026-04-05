@@ -25,6 +25,7 @@ const CONTACT_SELECT = {
   phone: contacts.phone,
   phoneE164: contacts.phoneE164,
   salespersonMemberId: contacts.salespersonMemberId,
+  partnerAccountId: contacts.partnerAccountId,
   partnerStatus: contacts.partnerStatus,
   partnerType: contacts.partnerType,
   partnerOwnerMemberId: contacts.partnerOwnerMemberId,
