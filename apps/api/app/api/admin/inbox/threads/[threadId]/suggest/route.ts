@@ -446,6 +446,130 @@ function buildHumanReplyShapeInstruction(input: {
   return instructions.length ? instructions.join(" ") : null;
 }
 
+function hashVariationSeed(input: string): number {
+  let hash = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function pickVariant(seed: string, variants: string[]): string | null {
+  if (!variants.length) return null;
+  const index = hashVariationSeed(seed) % variants.length;
+  return variants[index] ?? null;
+}
+
+function buildReplyVariationInstruction(input: {
+  threadId: string;
+  actionType: string | null | undefined;
+  replyChannel: ReplyChannel;
+  messages: MessageContext[];
+}): string | null {
+  const latestInbound = getLatestInboundMessage(input.messages);
+  const latestInboundBody = latestInbound?.body?.trim() ?? "";
+  const recentOutboundBodies = input.messages
+    .filter((message) => message.direction === "outbound")
+    .slice(-2)
+    .map((message) => message.body.trim().toLowerCase())
+    .filter(Boolean);
+
+  const seed = [
+    input.threadId,
+    input.actionType ?? "none",
+    input.replyChannel,
+    latestInbound?.id ?? "no_inbound",
+    latestInboundBody.slice(0, 80),
+  ].join("|");
+
+  const antiRepeatHints: string[] = [];
+  if (recentOutboundBodies.some((body) => body.startsWith("just checking"))) {
+    antiRepeatHints.push("Avoid opening with another 'just checking in' line.");
+  }
+  if (recentOutboundBodies.some((body) => body.startsWith("hey"))) {
+    antiRepeatHints.push("Do not keep reusing the same 'hey' opener.");
+  }
+  if (recentOutboundBodies.some((body) => body.startsWith("sounds good"))) {
+    antiRepeatHints.push("Do not mirror your own earlier acknowledgment wording too closely.");
+  }
+
+  let variant: string | null = null;
+  switch (input.actionType) {
+    case "reply_now":
+      variant = pickVariant(seed, [
+        "Variation: use a warm, direct acknowledgment and then move straight to the next useful point.",
+        "Variation: keep it extra lean and conversational, like a quick text from a real rep.",
+        "Variation: sound confident and matter of fact, with minimal filler before the next step.",
+      ]);
+      break;
+    case "follow_up_quote":
+      variant = pickVariant(seed, [
+        "Variation: make it a soft reopen, not a hard close.",
+        "Variation: lead with momentum and make booking sound easy.",
+        "Variation: keep it low-pressure and practical, like you are keeping the job moving rather than chasing them.",
+      ]);
+      break;
+    case "collect_missing_info":
+      variant = pickVariant(seed, [
+        "Variation: make the ask feel quick and easy, like a favor that helps you finish the quote.",
+        "Variation: be blunt but friendly about the one thing you still need.",
+        "Variation: frame the missing detail as the last easy step before you can move things forward.",
+      ]);
+      break;
+    case "handle_price_objection":
+      variant = pickVariant(seed, [
+        "Variation: sound empathetic first, then steady and practical.",
+        "Variation: keep the tone calm and unfazed, like a confident closer who hears this all the time.",
+        "Variation: stay warm and flexible, not argumentative.",
+      ]);
+      break;
+    case "appointment_support":
+      variant = pickVariant(seed, [
+        "Variation: be concise and logistical, like solving a small scheduling issue fast.",
+        "Variation: sound reassuring first, then practical.",
+        "Variation: keep it light and accommodating, without sounding scripted.",
+      ]);
+      break;
+    case "appointment_checkin":
+      variant = pickVariant(seed, [
+        "Variation: make it feel like a quick personal check-in, not a reminder template.",
+        "Variation: sound upbeat and steady, like confirming everything is still smooth.",
+        "Variation: keep it calm and low-key, with no extra sales energy.",
+      ]);
+      break;
+    case "post_job_checkin":
+      variant = pickVariant(seed, [
+        "Variation: make it warm and appreciative.",
+        "Variation: keep it casual and neighborly.",
+        "Variation: sound professional but easygoing, like a real owner following up.",
+      ]);
+      break;
+    case "missed_call_recovery":
+      variant = pickVariant(seed, [
+        "Variation: make it feel like a quick reconnect.",
+        "Variation: sound friendly and low-friction, like picking up where the missed call left off.",
+        "Variation: keep it crisp and practical, with no apology paragraph.",
+      ]);
+      break;
+    case "dm_sms_handoff":
+      variant = pickVariant(seed, [
+        "Variation: make the text feel like a natural continuation of the DM.",
+        "Variation: keep the handoff extra casual and easy to answer.",
+        "Variation: sound like you are simply switching to the easiest channel, not announcing a process change.",
+      ]);
+      break;
+    default:
+      variant = pickVariant(seed, [
+        "Variation: avoid stock opener language and keep the phrasing slightly fresh.",
+        "Variation: keep it natural and unforced, with a slightly different cadence than a standard template.",
+        "Variation: sound like a real person typing in the moment, not pasting a polished script.",
+      ]);
+      break;
+  }
+
+  return [variant, ...antiRepeatHints].filter(Boolean).join(" ") || null;
+}
+
 function stripDashLikeChars(text: string): string {
   return text
     .replace(/[-–—]/g, " ")
@@ -1186,6 +1310,12 @@ export async function POST(
     salesAgentNextAction?.channel ? `Planner channel: ${salesAgentNextAction.channel}` : null,
     buildPlannerInstruction(salesAgentNextAction?.actionType, targetReplyChannel),
     buildHumanReplyShapeInstruction({
+      actionType: salesAgentNextAction?.actionType,
+      replyChannel: targetReplyChannel,
+      messages,
+    }),
+    buildReplyVariationInstruction({
+      threadId,
       actionType: salesAgentNextAction?.actionType,
       replyChannel: targetReplyChannel,
       messages,
