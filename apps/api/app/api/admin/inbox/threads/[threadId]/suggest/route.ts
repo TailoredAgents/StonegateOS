@@ -530,6 +530,40 @@ function buildLeadIntentStyleInstruction(input: {
   return null;
 }
 
+function buildBusinessSpecificPhrasingInstruction(input: {
+  actionType: string | null | undefined;
+  customerIntent: string | null | undefined;
+  bookingReadiness: string | null | undefined;
+}): string | null {
+  const intent = (input.customerIntent ?? "").trim().toLowerCase();
+  const readiness = (input.bookingReadiness ?? "").trim().toLowerCase();
+
+  if (
+    input.actionType === "appointment_support" ||
+    input.actionType === "appointment_checkin" ||
+    intent === "booked_or_scheduling" ||
+    readiness === "booked"
+  ) {
+    return "Stonegate phrasing: for booked jobs and scheduling, sound like a real coordinator. Prefer natural lines like 'still good for tomorrow?', 'want to keep the same time?', or 'we can move it if needed'. Avoid generic wording like 'what works best for you'.";
+  }
+
+  if (intent === "demolition_quote" || intent === "land_clearing_quote") {
+    return "Stonegate phrasing: for demo or land-clearing jobs, talk about coming out, taking a look, or getting eyes on it. Do not use junk-pickup wording like 'come pick everything up'.";
+  }
+
+  if (
+    intent === "junk_removal_quote" ||
+    intent === "booking_intent" ||
+    intent === "quote_intent" ||
+    input.actionType === "follow_up_quote" ||
+    input.actionType === "collect_missing_info"
+  ) {
+    return "Stonegate phrasing: for junk jobs, prefer plain local wording like 'what day were you thinking for pickup?', 'want to get this knocked out this week?', or 'we can come out'. Avoid stiff sales lines like 'let me know what works best' or 'when would you like us to come pick everything up'.";
+  }
+
+  return "Stonegate phrasing: sound like a practical local rep. Prefer 'come out', 'get it taken care of', 'get you on the schedule', or 'what day were you thinking' over generic sales-script wording.";
+}
+
 function hashVariationSeed(input: string): number {
   let hash = 0;
   for (let index = 0; index < input.length; index += 1) {
@@ -1437,6 +1471,7 @@ export async function POST(
  Answer direct questions before asking for anything else.
  Match the customer's energy and message length. Prefer 1 to 3 short sentences by default. Ask at most one real question unless the customer clearly asked for multiple things.
  Match the lead's intent as well as the customer's energy. Hot booking leads can sound more decisive. Hesitant leads should sound softer. Booked customers should sound like service, not sales.
+ Use business-specific natural phrasing. For junk jobs, sound like a real pickup company. For demo or land-clearing jobs, talk about coming out or taking a look. For booked jobs, sound like a scheduler, not a sales script.
  Use a brief acknowledgment when it helps. Do not sound overly polished, overly formal, or template-like.
  Avoid generic filler phrases like 'that helps a lot', 'let me know what works best', 'what day and time works best for you', or 'just checking in' when a more natural line would do.
  Do not narrate your logic, do not mention CRM memory, and do not sound like you are collecting fields off a form.
@@ -1511,6 +1546,11 @@ export async function POST(
       customerIntent: salesAgentMemory?.customerIntent,
       bookingReadiness: salesAgentMemory?.bookingReadiness,
       objections: Array.isArray(salesAgentMemory?.objections) ? salesAgentMemory.objections : [],
+    }),
+    buildBusinessSpecificPhrasingInstruction({
+      actionType: salesAgentNextAction?.actionType,
+      customerIntent: salesAgentMemory?.customerIntent,
+      bookingReadiness: salesAgentMemory?.bookingReadiness,
     }),
     buildReplyVariationInstruction({
       threadId,
