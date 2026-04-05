@@ -539,6 +539,11 @@ export async function PolicyCenterSection({
             </div>
             <div>
               <label className={LABEL_CLASS}>ZIP allowlist</label>
+              <input
+                type="hidden"
+                name="zipAllowlistPreserved"
+                value={zipAllowlist.join(", ")}
+              />
               <textarea
                 name="zipAllowlist"
                 rows={4}
@@ -547,7 +552,7 @@ export async function PolicyCenterSection({
                 disabled={serviceMode === "ga_only" || serviceMode === "ga_above_macon"}
               />
               <p className="mt-2 text-[11px] text-slate-500">
-                When Coverage is set to Georgia only or Georgia above Macon, this list is ignored.
+                When Coverage is set to Georgia only or Georgia above Macon, this list is ignored but preserved.
               </p>
             </div>
             {serviceMode === "ga_only" ? (

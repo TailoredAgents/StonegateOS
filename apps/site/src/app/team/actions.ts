@@ -2537,7 +2537,7 @@ export async function updateServiceAreaPolicyAction(formData: FormData) {
   }
   const zipAllowlist =
     mode === "ga_only" || mode === "ga_above_macon"
-      ? []
+      ? parseZipListField(formData.get("zipAllowlistPreserved"))
       : parseZipListField(formData.get("zipAllowlist"));
   const cityAllowlist = parseListField(formData.get("cityAllowlist"));
   const notesRaw = formData.get("notes");
