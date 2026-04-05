@@ -446,6 +446,61 @@ function buildHumanReplyShapeInstruction(input: {
   return instructions.length ? instructions.join(" ") : null;
 }
 
+function classifyCustomerEnergy(messages: MessageContext[]): "brief" | "normal" | "detailed" {
+  const inboundMessages = messages.filter((message) => message.direction === "inbound");
+  const latestInbound = getLatestInboundMessage(messages);
+  const latestBody = latestInbound?.body?.trim() ?? "";
+  const normalizedLatest = latestBody.replace(/\s+/g, " ").trim();
+  const wordCount = normalizedLatest ? normalizedLatest.split(" ").length : 0;
+  const questionCount = (latestBody.match(/\?/g) ?? []).length;
+  const avgInboundWords =
+    inboundMessages.length > 0
+      ? inboundMessages
+          .map((message) => message.body.replace(/\s+/g, " ").trim())
+          .filter(Boolean)
+          .reduce((sum, body) => sum + body.split(" ").length, 0) / inboundMessages.length
+      : 0;
+
+  if (
+    wordCount <= 5 ||
+    isBriefAcknowledgment(latestBody) ||
+    (wordCount <= 10 && questionCount === 0 && avgInboundWords <= 8)
+  ) {
+    return "brief";
+  }
+
+  if (wordCount >= 28 || questionCount >= 2 || avgInboundWords >= 18) {
+    return "detailed";
+  }
+
+  return "normal";
+}
+
+function buildCustomerEnergyInstruction(input: {
+  actionType: string | null | undefined;
+  replyChannel: ReplyChannel;
+  messages: MessageContext[];
+}): string | null {
+  const energy = classifyCustomerEnergy(input.messages);
+
+  if (energy === "brief") {
+    return "Customer energy: brief. Match that energy with a short reply. Prefer 1 or 2 short sentences and avoid an overly helpful paragraph.";
+  }
+
+  if (energy === "detailed") {
+    if (input.actionType === "appointment_support") {
+      return "Customer energy: detailed. Answer the main question clearly and you may use a slightly fuller reply if it helps resolve the logistics cleanly.";
+    }
+    return "Customer energy: detailed. You can be a little fuller and more responsive than usual, but still stay concise and avoid sounding formal.";
+  }
+
+  if (input.replyChannel === "dm") {
+    return "Customer energy: normal. Keep the reply easygoing and fairly short.";
+  }
+
+  return "Customer energy: normal. Keep the reply concise, with only enough detail to move things forward naturally.";
+}
+
 function hashVariationSeed(input: string): number {
   let hash = 0;
   for (let index = 0; index < input.length; index += 1) {
@@ -1333,7 +1388,7 @@ export async function POST(
  Write like a strong human salesperson or coordinator, not a workflow engine.
  React to the latest customer message first, then move the conversation forward naturally.
  Answer direct questions before asking for anything else.
- Prefer 1 to 3 short sentences. Ask at most one real question unless the customer clearly asked for multiple things.
+ Match the customer's energy and message length. Prefer 1 to 3 short sentences by default. Ask at most one real question unless the customer clearly asked for multiple things.
  Use a brief acknowledgment when it helps. Do not sound overly polished, overly formal, or template-like.
  Do not narrate your logic, do not mention CRM memory, and do not sound like you are collecting fields off a form.
  Never mention price or dollar amounts unless the customer explicitly asks about price, quote, cost, or estimate.
@@ -1393,6 +1448,11 @@ export async function POST(
     salesAgentNextAction?.channel ? `Planner channel: ${salesAgentNextAction.channel}` : null,
     buildPlannerInstruction(salesAgentNextAction?.actionType, targetReplyChannel),
     buildHumanReplyShapeInstruction({
+      actionType: salesAgentNextAction?.actionType,
+      replyChannel: targetReplyChannel,
+      messages,
+    }),
+    buildCustomerEnergyInstruction({
       actionType: salesAgentNextAction?.actionType,
       replyChannel: targetReplyChannel,
       messages,
