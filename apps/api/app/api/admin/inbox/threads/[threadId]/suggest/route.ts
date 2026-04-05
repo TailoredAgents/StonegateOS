@@ -501,6 +501,35 @@ function buildCustomerEnergyInstruction(input: {
   return "Customer energy: normal. Keep the reply concise, with only enough detail to move things forward naturally.";
 }
 
+function buildLeadIntentStyleInstruction(input: {
+  actionType: string | null | undefined;
+  customerIntent: string | null | undefined;
+  bookingReadiness: string | null | undefined;
+  objections: string[];
+}): string | null {
+  const objections = new Set(input.objections);
+  const intent = (input.customerIntent ?? "").trim().toLowerCase();
+  const readiness = (input.bookingReadiness ?? "").trim().toLowerCase();
+
+  if (input.actionType === "appointment_support" || intent === "booked_or_scheduling" || readiness === "booked") {
+    return "Lead intent style: this is a booked or scheduling conversation. Sound service-oriented, practical, and reassuring. Do not use a sales-closing tone.";
+  }
+
+  if (objections.has("price") || objections.has("timing") || objections.has("decision_maker") || objections.has("comparison_shopping")) {
+    return "Lead intent style: this lead has hesitation. Keep the tone softer and lower-pressure. Reopen the conversation without sounding pushy.";
+  }
+
+  if (readiness === "high" || intent === "booking_intent") {
+    return "Lead intent style: this lead looks close to booking. Sound a little more decisive and action-oriented. Make the next step feel easy and concrete, without overexplaining.";
+  }
+
+  if (intent === "quote_intent" || intent === "junk_removal_quote" || intent === "demolition_quote" || intent === "land_clearing_quote") {
+    return "Lead intent style: this is still a quote-stage sales conversation. Be helpful and confident, but do not sound like you are forcing the close too early.";
+  }
+
+  return null;
+}
+
 function hashVariationSeed(input: string): number {
   let hash = 0;
   for (let index = 0; index < input.length; index += 1) {
@@ -1389,6 +1418,7 @@ export async function POST(
  React to the latest customer message first, then move the conversation forward naturally.
  Answer direct questions before asking for anything else.
  Match the customer's energy and message length. Prefer 1 to 3 short sentences by default. Ask at most one real question unless the customer clearly asked for multiple things.
+ Match the lead's intent as well as the customer's energy. Hot booking leads can sound more decisive. Hesitant leads should sound softer. Booked customers should sound like service, not sales.
  Use a brief acknowledgment when it helps. Do not sound overly polished, overly formal, or template-like.
  Do not narrate your logic, do not mention CRM memory, and do not sound like you are collecting fields off a form.
  Never mention price or dollar amounts unless the customer explicitly asks about price, quote, cost, or estimate.
@@ -1456,6 +1486,12 @@ export async function POST(
       actionType: salesAgentNextAction?.actionType,
       replyChannel: targetReplyChannel,
       messages,
+    }),
+    buildLeadIntentStyleInstruction({
+      actionType: salesAgentNextAction?.actionType,
+      customerIntent: salesAgentMemory?.customerIntent,
+      bookingReadiness: salesAgentMemory?.bookingReadiness,
+      objections: Array.isArray(salesAgentMemory?.objections) ? salesAgentMemory.objections : [],
     }),
     buildReplyVariationInstruction({
       threadId,
