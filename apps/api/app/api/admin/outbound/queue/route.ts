@@ -63,6 +63,16 @@ function includesQuery(haystack: string, needle: string): boolean {
   return haystack.toLowerCase().includes(needle.toLowerCase());
 }
 
+function dedupeStrings(values: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((value) => value.trim()),
+    ),
+  );
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -225,11 +235,158 @@ export async function GET(request: NextRequest): Promise<Response> {
     return true;
   });
 
-  const total = filtered.length;
-  const page = filtered.slice(offset, offset + limit);
+  const groupedMap = new Map<
+    string,
+    {
+      id: string;
+      key: string;
+      name: string;
+      status: string | null;
+      segment: string | null;
+      campaign: string | null;
+      primaryTaskId: string;
+      primaryContactId: string;
+      title: string | null;
+      dueAt: string | null;
+      overdue: boolean;
+      minutesUntilDue: number | null;
+      attempt: number;
+      lastDisposition: string | null;
+      company: string | null;
+      noteSnippet: string | null;
+      startedAt: string | null;
+      reminderAt: string | null;
+      lastTouchAt: string | null;
+      nextTouchAt: string | null;
+      contacts: Array<{
+        id: string;
+        name: string;
+        email: string | null;
+        phone: string | null;
+        source: string | null;
+      }>;
+      tasks: Array<{
+        id: string;
+        title: string | null;
+        dueAt: string | null;
+        attempt: number;
+        lastDisposition: string | null;
+        contactId: string;
+        contactName: string;
+      }>;
+      taskIds: string[];
+    }
+  >();
+
+  for (const item of filtered) {
+    const key = item.account?.id
+      ? `account:${item.account.id}`
+      : `contact:${item.contact.id}`;
+    const existing = groupedMap.get(key);
+    if (!existing) {
+      groupedMap.set(key, {
+        id: item.account?.id ?? item.contact.id,
+        key,
+        name: item.account?.name ?? item.company ?? item.contact.name,
+        status: item.account?.status ?? null,
+        segment: item.account?.segment ?? null,
+        campaign: item.campaign ?? null,
+        primaryTaskId: item.id,
+        primaryContactId: item.contact.id,
+        title: item.title,
+        dueAt: item.dueAt,
+        overdue: item.overdue,
+        minutesUntilDue: item.minutesUntilDue,
+        attempt: item.attempt,
+        lastDisposition: item.lastDisposition,
+        company: item.company,
+        noteSnippet: item.noteSnippet,
+        startedAt: item.startedAt ?? null,
+        reminderAt: item.reminderAt ?? null,
+        lastTouchAt: item.account?.lastTouchAt ?? null,
+        nextTouchAt: item.account?.nextTouchAt ?? null,
+        contacts: [
+          {
+            id: item.contact.id,
+            name: item.contact.name,
+            email: item.contact.email ?? null,
+            phone: item.contact.phone ?? null,
+            source: item.contact.source ?? null,
+          },
+        ],
+        tasks: [
+          {
+            id: item.id,
+            title: item.title,
+            dueAt: item.dueAt,
+            attempt: item.attempt,
+            lastDisposition: item.lastDisposition,
+            contactId: item.contact.id,
+            contactName: item.contact.name,
+          },
+        ],
+        taskIds: [item.id],
+      });
+      continue;
+    }
+
+    existing.taskIds.push(item.id);
+    if (
+      existing.dueAt === null ||
+      (item.dueAt !== null && Date.parse(item.dueAt) < Date.parse(existing.dueAt))
+    ) {
+      existing.primaryTaskId = item.id;
+      existing.primaryContactId = item.contact.id;
+      existing.title = item.title;
+      existing.dueAt = item.dueAt;
+      existing.overdue = item.overdue;
+      existing.minutesUntilDue = item.minutesUntilDue;
+      existing.attempt = item.attempt;
+      existing.lastDisposition = item.lastDisposition;
+      existing.noteSnippet = item.noteSnippet;
+      existing.startedAt = item.startedAt ?? null;
+      existing.reminderAt = item.reminderAt ?? null;
+    }
+
+    if (!existing.campaign && item.campaign) existing.campaign = item.campaign;
+    if (!existing.segment && item.account?.segment) existing.segment = item.account.segment;
+    if (!existing.status && item.account?.status) existing.status = item.account.status;
+    if (!existing.lastTouchAt && item.account?.lastTouchAt) existing.lastTouchAt = item.account.lastTouchAt;
+    if (!existing.nextTouchAt && item.account?.nextTouchAt) existing.nextTouchAt = item.account.nextTouchAt;
+
+    if (!existing.contacts.some((contact) => contact.id === item.contact.id)) {
+      existing.contacts.push({
+        id: item.contact.id,
+        name: item.contact.name,
+        email: item.contact.email ?? null,
+        phone: item.contact.phone ?? null,
+        source: item.contact.source ?? null,
+      });
+    }
+
+    existing.tasks.push({
+      id: item.id,
+      title: item.title,
+      dueAt: item.dueAt,
+      attempt: item.attempt,
+      lastDisposition: item.lastDisposition,
+      contactId: item.contact.id,
+      contactName: item.contact.name,
+    });
+  }
+
+  const grouped = Array.from(groupedMap.values()).sort((a, b) => {
+    if (!a.dueAt && !b.dueAt) return a.name.localeCompare(b.name);
+    if (!a.dueAt) return 1;
+    if (!b.dueAt) return -1;
+    return Date.parse(a.dueAt) - Date.parse(b.dueAt);
+  });
+
+  const total = grouped.length;
+  const page = grouped.slice(offset, offset + limit);
   const nextOffset = offset + page.length < total ? offset + page.length : null;
 
-  const pageIds = page.map((item) => item.id);
+  const pageIds = page.flatMap((item) => item.taskIds);
   if (pageIds.length > 0) {
     const taskIdExpr = sql<string>`(${outboxEvents.payload} ->> 'taskId')`;
     const idList = sql.join(
@@ -249,11 +406,11 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
 
     for (const item of page) {
-      item.reminderAt = reminderMap.get(item.id) ?? null;
+      item.reminderAt = reminderMap.get(item.primaryTaskId) ?? null;
     }
   }
 
-  const summary = filtered.reduce(
+  const summary = grouped.reduce(
     (acc, item) => {
       const dueMs = item.dueAt ? Date.parse(item.dueAt) : null;
       if (dueMs !== null && dueMs <= now.getTime()) acc.dueNow += 1;
@@ -290,6 +447,34 @@ export async function GET(request: NextRequest): Promise<Response> {
       dispositions: Array.from(facets.dispositions).sort(),
       attempts: Array.from(facets.attempts).sort((a, b) => Number(a) - Number(b))
     },
-    items: page
+    items: page.map((item) => ({
+      id: item.id,
+      title: item.title,
+      dueAt: item.dueAt,
+      overdue: item.overdue,
+      minutesUntilDue: item.minutesUntilDue,
+      attempt: item.attempt,
+      campaign: item.campaign,
+      lastDisposition: item.lastDisposition,
+      company: item.company,
+      noteSnippet: item.noteSnippet,
+      startedAt: item.startedAt,
+      reminderAt: item.reminderAt,
+      primaryTaskId: item.primaryTaskId,
+      primaryContactId: item.primaryContactId,
+      taskIds: item.taskIds,
+      contactCount: item.contacts.length,
+      openTaskCount: item.tasks.length,
+      contacts: item.contacts,
+      tasks: item.tasks,
+      account: {
+        id: item.id,
+        name: item.name,
+        status: item.status,
+        segment: item.segment,
+        lastTouchAt: item.lastTouchAt,
+        nextTouchAt: item.nextTouchAt,
+      },
+    }))
   });
 }

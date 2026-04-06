@@ -34,6 +34,11 @@ type OutboundQueueItem = {
   noteSnippet: string | null;
   startedAt?: string | null;
   reminderAt?: string | null;
+  primaryTaskId: string;
+  primaryContactId: string;
+  taskIds: string[];
+  contactCount: number;
+  openTaskCount: number;
   account: {
     id: string;
     name: string;
@@ -41,14 +46,23 @@ type OutboundQueueItem = {
     segment: string | null;
     lastTouchAt: string | null;
     nextTouchAt: string | null;
-  } | null;
-  contact: {
+  };
+  contacts: Array<{
     id: string;
     name: string;
     email: string | null;
     phone: string | null;
     source?: string | null;
-  };
+  }>;
+  tasks: Array<{
+    id: string;
+    title: string | null;
+    dueAt: string | null;
+    attempt: number;
+    lastDisposition: string | null;
+    contactId: string;
+    contactName: string;
+  }>;
 };
 
 type OutboundQueueSummary = { dueNow: number; overdue: number; callbacksToday: number; notStarted?: number };
@@ -75,6 +89,7 @@ type OutboundFilters = {
   has?: string;
   disposition?: string;
   taskId?: string;
+  accountId?: string;
   offset?: string;
 };
 
@@ -126,6 +141,7 @@ function buildOutboundHref(args: { memberId?: string; filters: OutboundFilters; 
   setIf("out_has", merged.has);
   setIf("out_disposition", merged.disposition);
   setIf("out_taskId", merged.taskId);
+  setIf("out_account", merged.accountId);
   setIf("out_offset", merged.offset);
 
   return `/team?${qs.toString()}`;
@@ -177,8 +193,13 @@ export async function OutboundSection({
   const resolvedMemberId = typeof queuePayload.memberId === "string" ? queuePayload.memberId : memberId ?? "";
   const memberLabel = resolvedMemberId ? members.find((m) => m.id === resolvedMemberId)?.name ?? null : null;
 
+  const selectedAccountId = normalizeFilterValue(resolvedFilters.accountId);
   const selectedTaskId = normalizeFilterValue(resolvedFilters.taskId);
-  const selected = selectedTaskId ? items.find((item) => item.id === selectedTaskId) ?? null : null;
+  const selected = selectedAccountId
+    ? items.find((item) => item.id === selectedAccountId) ?? null
+    : selectedTaskId
+      ? items.find((item) => item.primaryTaskId === selectedTaskId || item.taskIds.includes(selectedTaskId)) ?? null
+      : null;
 
   const pagination = {
     total: queuePayload.total ?? 0,
@@ -216,10 +237,10 @@ export async function OutboundSection({
             {pagination.total > 0 ? (
               <span>
                 Showing {Math.min(pagination.offset + 1, pagination.total)}-{Math.min(pagination.offset + items.length, pagination.total)} of{" "}
-                {pagination.total}
+                {pagination.total} accounts
               </span>
             ) : (
-              <span>No open outbound tasks</span>
+              <span>No open outbound accounts</span>
             )}
           </div>
         </div>
@@ -229,7 +250,7 @@ export async function OutboundSection({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h3 className="text-base font-semibold text-slate-900">Queue</h3>
-            <p className="mt-1 text-sm text-slate-600">Call-first outreach. Select a row to see script + quick dispositions.</p>
+            <p className="mt-1 text-sm text-slate-600">Account-first outreach. Select a row to work one business relationship with linked contacts and tasks.</p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
             <a
@@ -366,7 +387,7 @@ export async function OutboundSection({
         </form>
 
         {items.length === 0 ? (
-          <div className={`${TEAM_EMPTY_STATE} mt-4`}>No outbound tasks match these filters.</div>
+          <div className={`${TEAM_EMPTY_STATE} mt-4`}>No outbound accounts match these filters.</div>
         ) : (
           <>
             <form
@@ -430,11 +451,12 @@ export async function OutboundSection({
                 <tbody className="divide-y divide-slate-100">
                   {items.map((item) => {
                     const dueBadge = formatDueBadge(item);
-                    const isSelected = Boolean(selectedTaskId && item.id === selectedTaskId);
+                    const primaryContact = item.contacts.find((contact) => contact.id === item.primaryContactId) ?? item.contacts[0] ?? null;
+                    const isSelected = Boolean(selected?.id === item.id);
                     return (
                       <tr key={item.id} className={isSelected ? "bg-primary-50/40" : "hover:bg-slate-50"}>
                         <td className="px-4 py-3">
-                          <input form="outboundBulkForm" type="checkbox" name="taskIds" value={item.id} />
+                          <input form="outboundBulkForm" type="checkbox" name="taskIds" value={item.taskIds.join(",")} />
                         </td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${dueBadge.tone}`}>
@@ -443,48 +465,44 @@ export async function OutboundSection({
                         </td>
                         <td className="px-4 py-3 text-slate-600">{item.attempt}</td>
                         <td className="min-w-0 overflow-hidden px-4 py-3">
-                          <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { taskId: item.id } })} className="block min-w-0">
-                            <div className="truncate text-sm font-semibold text-slate-900">
-                              {item.account?.name ?? (item.company ? item.company : item.contact.name)}
-                            </div>
+                          <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { accountId: item.id, taskId: item.primaryTaskId } })} className="block min-w-0">
+                            <div className="truncate text-sm font-semibold text-slate-900">{item.account.name}</div>
                             <div className="mt-0.5 truncate text-[11px] text-slate-500">
-                              {item.contact.name}
-                              {item.account?.segment ? ` / ${item.account.segment}` : item.campaign ? ` / ${item.campaign}` : ""}
+                              {primaryContact?.name ?? "No primary contact"}
+                              {item.account.segment ? ` / ${item.account.segment}` : item.campaign ? ` / ${item.campaign}` : ""}
                             </div>
                             <div className="mt-1 truncate text-[11px] text-slate-500">
-                              <span>{item.contact.phone ?? "No phone"}</span>
+                              <span>{primaryContact?.phone ?? "No phone"}</span>
                               <span className="mx-1">{"\u2022"}</span>
-                              <span>{item.contact.email ?? "No email"}</span>
+                              <span>{primaryContact?.email ?? "No email"}</span>
                               <span className="mx-1">{"\u2022"}</span>
                               <span>{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}</span>
                             </div>
-                            {item.account?.status ? (
-                              <div className="mt-1 truncate text-[11px] text-slate-500">
-                                Account: {item.account.status.replace(/_/g, " ")}
-                              </div>
-                            ) : null}
+                            <div className="mt-1 truncate text-[11px] text-slate-500">
+                              {item.contactCount} contact{item.contactCount === 1 ? "" : "s"} / {item.openTaskCount} open task{item.openTaskCount === 1 ? "" : "s"} / Account {item.account.status?.replace(/_/g, " ") ?? "linked"}
+                            </div>
                           </a>
                         </td>
                         <td className="relative hidden w-[176px] border-l border-slate-100 bg-white px-4 py-3 md:table-cell">
                           <div className="flex flex-col items-end gap-2">
                             <form action={startContactCallAction}>
-                              <input type="hidden" name="contactId" value={item.contact.id} />
-                              <input type="hidden" name="taskId" value={item.id} />
+                              <input type="hidden" name="contactId" value={primaryContact?.id ?? item.primaryContactId} />
+                              <input type="hidden" name="taskId" value={item.primaryTaskId} />
                               <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
                                 Call
                               </SubmitButton>
                             </form>
                             <form action={openContactThreadAction}>
-                              <input type="hidden" name="contactId" value={item.contact.id} />
-                              <input type="hidden" name="channel" value={item.contact.email ? "email" : "sms"} />
+                              <input type="hidden" name="contactId" value={primaryContact?.id ?? item.primaryContactId} />
+                              <input type="hidden" name="channel" value={primaryContact?.email ? "email" : "sms"} />
                               <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
                                 Msg
                               </SubmitButton>
                             </form>
                             <form action={draftOutboundFirstTouchAction}>
-                              <input type="hidden" name="contactId" value={item.contact.id} />
-                              <input type="hidden" name="taskId" value={item.id} />
-                              <input type="hidden" name="channel" value={item.contact.email ? "email" : "sms"} />
+                              <input type="hidden" name="contactId" value={primaryContact?.id ?? item.primaryContactId} />
+                              <input type="hidden" name="taskId" value={item.primaryTaskId} />
+                              <input type="hidden" name="channel" value={primaryContact?.email ? "email" : "sms"} />
                               <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Drafting...">
                                 Draft
                               </SubmitButton>
@@ -502,20 +520,15 @@ export async function OutboundSection({
               {selected ? (
                 <div className="space-y-4">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Selected</p>
-                    <p className="mt-1 text-base font-semibold text-slate-900">
-                      {selected.account?.name ?? (selected.company ? selected.company : selected.contact.name)}
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Selected account</p>
+                    <p className="mt-1 text-base font-semibold text-slate-900">{selected.account.name}</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      {selected.contactCount} contact{selected.contactCount === 1 ? "" : "s"} / {selected.openTaskCount} open task{selected.openTaskCount === 1 ? "" : "s"}
                     </p>
-                    <p className="mt-1 text-xs text-slate-600">{selected.contact.name}</p>
-                    <p className="mt-2 text-xs text-slate-600">
-                      {selected.contact.phone ?? "No phone"} / {selected.contact.email ?? "No email"}
-                    </p>
-                      {selected.account?.status || selected.account?.segment ? (
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          {selected.account?.status ? `Account ${selected.account.status.replace(/_/g, " ")}` : "Account linked"}
-                          {selected.account?.segment ? ` / ${selected.account.segment}` : ""}
-                        </p>
-                      ) : null}
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Account {selected.account.status?.replace(/_/g, " ") ?? "linked"}
+                        {selected.account.segment ? ` / ${selected.account.segment}` : ""}
+                      </p>
                       <p className="mt-1 text-[11px] text-slate-500">
                         Attempt {selected.attempt} / {selected.campaign ?? "outbound"} / Due {formatDue(selected)}
                       </p>
@@ -526,10 +539,10 @@ export async function OutboundSection({
                       {formatTimestamp(selected.reminderAt) ? (
                         <p className="mt-1 text-[11px] text-slate-500">Reminder scheduled {formatTimestamp(selected.reminderAt)}</p>
                       ) : null}
-                      {selected.account?.lastTouchAt ? (
+                      {selected.account.lastTouchAt ? (
                         <p className="mt-1 text-[11px] text-slate-500">Account last touch {formatTimestamp(selected.account.lastTouchAt)}</p>
                       ) : null}
-                      {selected.account?.nextTouchAt ? (
+                      {selected.account.nextTouchAt ? (
                         <p className="mt-1 text-[11px] text-slate-500">Account next touch {formatTimestamp(selected.account.nextTouchAt)}</p>
                       ) : null}
                       {selected.noteSnippet ? (
@@ -537,29 +550,42 @@ export async function OutboundSection({
                       ) : null}
                     </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    <form action={startContactCallAction}>
-                      <input type="hidden" name="contactId" value={selected.contact.id} />
-                      <input type="hidden" name="taskId" value={selected.id} />
-                      <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
-                        Call
-                      </SubmitButton>
-                    </form>
-                    <form action={openContactThreadAction}>
-                      <input type="hidden" name="contactId" value={selected.contact.id} />
-                      <input type="hidden" name="channel" value={selected.contact.email ? "email" : "sms"} />
-                      <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
-                        Message
-                      </SubmitButton>
-                    </form>
-                    <form action={draftOutboundFirstTouchAction}>
-                      <input type="hidden" name="contactId" value={selected.contact.id} />
-                      <input type="hidden" name="taskId" value={selected.id} />
-                      <input type="hidden" name="channel" value={selected.contact.email ? "email" : "sms"} />
-                      <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Drafting...">
-                        Draft outreach
-                      </SubmitButton>
-                    </form>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Linked contacts</p>
+                    <div className="mt-2 space-y-3">
+                      {selected.contacts.map((contact) => (
+                        <div key={contact.id} className="rounded-xl border border-slate-200 bg-white p-3">
+                          <div className="text-sm font-semibold text-slate-900">{contact.name}</div>
+                          <div className="mt-1 text-xs text-slate-600">
+                            {contact.phone ?? "No phone"} / {contact.email ?? "No email"}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <form action={startContactCallAction}>
+                              <input type="hidden" name="contactId" value={contact.id} />
+                              <input type="hidden" name="taskId" value={selected.primaryTaskId} />
+                              <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
+                                Call
+                              </SubmitButton>
+                            </form>
+                            <form action={openContactThreadAction}>
+                              <input type="hidden" name="contactId" value={contact.id} />
+                              <input type="hidden" name="channel" value={contact.email ? "email" : "sms"} />
+                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
+                                Message
+                              </SubmitButton>
+                            </form>
+                            <form action={draftOutboundFirstTouchAction}>
+                              <input type="hidden" name="contactId" value={contact.id} />
+                              <input type="hidden" name="taskId" value={selected.primaryTaskId} />
+                              <input type="hidden" name="channel" value={contact.email ? "email" : "sms"} />
+                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Drafting...">
+                                Draft outreach
+                              </SubmitButton>
+                            </form>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
                   {!selected.dueAt ? (
@@ -590,7 +616,7 @@ export async function OutboundSection({
                       { key: "dnc", label: "DNC" }
                     ].map((d) => (
                       <form key={d.key} action={setOutboundDispositionAction}>
-                        <input type="hidden" name="taskId" value={selected.id} />
+                        <input type="hidden" name="taskId" value={selected.primaryTaskId} />
                         <input type="hidden" name="disposition" value={d.key} />
                         <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
                           {d.label}
@@ -602,7 +628,7 @@ export async function OutboundSection({
                   <div className="rounded-xl border border-slate-200 bg-white p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Schedule callback</p>
                     <form action={setOutboundDispositionAction} className="mt-2 flex flex-col gap-2">
-                      <input type="hidden" name="taskId" value={selected.id} />
+                      <input type="hidden" name="taskId" value={selected.primaryTaskId} />
                       <input type="hidden" name="disposition" value="callback_requested" />
                       <input name="callbackAt" type="datetime-local" className={TEAM_INPUT_COMPACT} />
                       <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Scheduling...">
@@ -611,14 +637,28 @@ export async function OutboundSection({
                     </form>
                   </div>
 
-                  <a href={`/team?tab=contacts&contactId=${encodeURIComponent(selected.contact.id)}`} className="text-xs font-semibold text-primary-700 hover:text-primary-900">
-                    Open contact &gt;
-                  </a>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Open tasks</p>
+                    <div className="mt-2 space-y-2">
+                      {selected.tasks.map((task) => (
+                        <div key={task.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                          <div className="font-semibold text-slate-900">
+                            {task.title ?? "Outbound task"} / {task.contactName}
+                          </div>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            Attempt {task.attempt}
+                            {task.lastDisposition ? ` / ${task.lastDisposition.replace(/_/g, " ")}` : ""}
+                            {task.dueAt ? ` / Due ${formatTimestamp(task.dueAt)}` : " / Not started"}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="text-sm text-slate-600">
-                  <p className="font-semibold text-slate-900">Select a prospect</p>
-                  <p className="mt-1 text-xs text-slate-600">Click a row to see company notes, a quick script, and one-click dispositions.</p>
+                  <p className="font-semibold text-slate-900">Select an account</p>
+                  <p className="mt-1 text-xs text-slate-600">Click a row to work one company with linked contacts, open tasks, and quick outreach actions.</p>
                 </div>
               )}
             </aside>

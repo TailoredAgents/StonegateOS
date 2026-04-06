@@ -4927,11 +4927,14 @@ export async function bulkOutboundAction(formData: FormData) {
 
   const taskIds = formData
     .getAll("taskIds")
-    .filter(
-      (value): value is string =>
-        typeof value === "string" && value.trim().length > 0,
-    )
-    .map((value) => value.trim());
+    .flatMap((value) =>
+      typeof value === "string"
+        ? value
+            .split(",")
+            .map((part) => part.trim())
+            .filter((part) => part.length > 0)
+        : [],
+    );
 
   if (taskIds.length === 0) {
     jar.set({
