@@ -63,12 +63,18 @@
     --team-card: rgba(255, 255, 255, 0.9);
     --team-surface: #ffffff;
     --team-surface-muted: rgba(248, 250, 252, 0.92);
+    --team-panel-alt: rgba(248, 250, 252, 0.84);
     --team-border: rgba(226, 232, 240, 0.92);
     --team-border-strong: rgba(203, 213, 225, 0.92);
     --team-text: #0f172a;
     --team-text-muted: #475569;
     --team-text-soft: #64748b;
     --team-card-shadow: rgba(148, 163, 184, 0.22);
+    --team-list-item: rgba(255, 255, 255, 0.94);
+    --team-list-item-hover: rgba(248, 250, 252, 0.98);
+    --team-list-item-active: rgba(239, 246, 255, 0.96);
+    --team-bubble-inbound: rgba(241, 245, 249, 0.98);
+    --team-bubble-outbound: rgba(219, 234, 254, 0.98);
   }
 
   .team-theme-dark {
@@ -79,12 +85,18 @@
     --team-card: rgba(15, 23, 42, 0.88);
     --team-surface: rgba(15, 23, 42, 0.98);
     --team-surface-muted: rgba(15, 23, 42, 0.78);
+    --team-panel-alt: rgba(8, 15, 31, 0.94);
     --team-border: rgba(51, 65, 85, 0.92);
     --team-border-strong: rgba(71, 85, 105, 0.92);
     --team-text: #e2e8f0;
     --team-text-muted: #cbd5e1;
     --team-text-soft: #94a3b8;
     --team-card-shadow: rgba(2, 6, 23, 0.5);
+    --team-list-item: rgba(9, 16, 31, 0.86);
+    --team-list-item-hover: rgba(15, 23, 42, 0.98);
+    --team-list-item-active: rgba(30, 41, 59, 0.98);
+    --team-bubble-inbound: rgba(20, 30, 49, 0.98);
+    --team-bubble-outbound: rgba(37, 52, 78, 0.98);
   }
 }
 

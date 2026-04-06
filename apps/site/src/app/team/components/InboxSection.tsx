@@ -1056,10 +1056,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                   return (
                     <div
                       key={group.key}
-                      className={`rounded-2xl border px-4 py-3 text-sm transition ${
+                      className={`rounded-2xl border px-4 py-3 text-sm transition duration-150 ${
                         isActive
-                          ? "border-primary-300 bg-primary-50/60 shadow-md shadow-primary-100"
-                          : "border-slate-200 bg-white hover:border-primary-200 hover:bg-primary-50/30"
+                          ? "border-[color:var(--team-border-strong)] bg-[color:var(--team-list-item-active)] shadow-[0_14px_32px_var(--team-card-shadow)]"
+                          : "border-[color:var(--team-border)] bg-[color:var(--team-list-item)] hover:border-[color:var(--team-border-strong)] hover:bg-[color:var(--team-list-item-hover)]"
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -1111,10 +1111,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                               <a
                                 key={t.id}
                                 href={href}
-                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition ${
                                   isChannelActive
-                                    ? "border-primary-300 bg-primary-100 text-primary-800"
-                                    : "border-slate-200 bg-slate-50 text-slate-600 hover:border-primary-200 hover:text-primary-700"
+                                    ? "border-[color:var(--team-border-strong)] bg-[color:var(--team-list-item-active)] text-primary-800"
+                                    : "border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] text-[color:var(--team-text-muted)] hover:border-[color:var(--team-border-strong)] hover:text-primary-700"
                                 }`}
                                 title={`${t.channel.toUpperCase()} thread`}
                               >
@@ -1594,7 +1594,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                   </div>
                 ) : null}
                 {timelineMessages.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-sm text-slate-500">
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-[color:var(--team-surface-muted)] p-4 text-sm text-slate-500">
                     No messages yet. Send the first touch below.
                   </div>
                 ) : (
@@ -1651,8 +1651,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     return (
                       <div key={message.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                         <div
-                          className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm shadow-sm lg:max-w-[640px] ${
-                            isOutbound ? "bg-primary-100 text-slate-900" : "bg-slate-100 text-slate-700"
+                          className={`max-w-[85%] rounded-2xl border border-[color:var(--team-border)] px-4 py-3 text-sm shadow-[0_12px_28px_var(--team-card-shadow)] lg:max-w-[640px] ${
+                            isOutbound
+                              ? "bg-[color:var(--team-bubble-outbound)] text-[color:var(--team-text)]"
+                              : "bg-[color:var(--team-bubble-inbound)] text-[color:var(--team-text-muted)]"
                           }`}
                         >
                           <div className="mb-1 flex items-center justify-between gap-2">
@@ -1692,7 +1694,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                             </div>
                           ) : null}
                           {isDraft && isAiSuggested ? (
-                            <div className="mb-3 rounded-xl border border-primary-200 bg-white/70 px-3 py-2 text-[11px] text-slate-600">
+                            <div className="mb-3 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-[11px] text-slate-600">
                               {draftGateLabel && agentGateDetail ? (
                                 <div className={`mb-2 rounded-xl border px-2 py-2 ${tonePanelClasses(agentCloseLoopPolicy?.tone ?? "neutral")}`}>
                                   <div className="flex flex-wrap items-center gap-2">
@@ -1845,7 +1847,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
           )}
         </div>
 
-        <div className="hidden rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur lg:block">
+        <div className="hidden rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur lg:block">
           <div className="flex max-h-[78dvh] flex-col gap-4 overflow-hidden p-5">
             <div className="flex items-start justify-between gap-3 border-b border-[color:var(--team-border)] pb-4">
               <div className="min-w-0">
@@ -1856,7 +1858,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
 
             {activeContactId ? (
               <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-                <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-4">
+                <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-[0_10px_24px_var(--team-card-shadow)]">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
