@@ -226,6 +226,7 @@ function isFreshBrief(brief: OutboundAccountBrief | null): boolean {
 async function generateOpenAiBrief(input: {
   accountName: string;
   segment: string | null;
+  subsegment: string | null;
   campaign: string | null;
   sourceListName: string | null;
   city: string | null;
@@ -256,6 +257,7 @@ async function generateOpenAiBrief(input: {
         content: [
           `Account: ${input.accountName}`,
           input.segment ? `Segment: ${input.segment}` : null,
+          input.subsegment ? `Subsegment: ${input.subsegment}` : null,
           input.campaign ? `Campaign: ${input.campaign}` : null,
           input.sourceListName ? `Source list: ${input.sourceListName}` : null,
           input.city || input.state
@@ -470,6 +472,7 @@ export async function ensureOutboundAccountBrief(input: {
       id: partnerAccounts.id,
       name: partnerAccounts.name,
       segment: partnerAccounts.segment,
+      subsegment: partnerAccounts.subsegment,
       status: partnerAccounts.status,
       sourceCampaign: partnerAccounts.sourceCampaign,
       sourceListName: partnerAccounts.sourceListName,
@@ -520,6 +523,7 @@ export async function ensureOutboundAccountBrief(input: {
   const briefInput = {
     accountName: account.name,
     segment: cleanText(account.segment),
+    subsegment: cleanText(account.subsegment),
     campaign: cleanText(account.sourceCampaign),
     sourceListName: cleanText(account.sourceListName),
     city: cleanText(account.city),

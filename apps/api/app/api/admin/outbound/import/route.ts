@@ -18,6 +18,8 @@ type OutboundRow = {
   domain?: string;
   title?: string;
   industry?: string;
+  companySize?: string;
+  linkedinUrl?: string;
   city?: string;
   state?: string;
   zip?: string;
@@ -58,6 +60,122 @@ function buildOutboundNotes(input: { campaign: string; attempt: number; company?
   if (input.company) lines.push(`company=${input.company.replace(/\s+/g, " ").trim().slice(0, 120)}`);
   if (input.notes) lines.push(`notes=${input.notes.replace(/\s+/g, " ").trim().slice(0, 280)}`);
   return lines.join("\n");
+}
+
+function slugText(value: string | null): string {
+  if (!value) return "";
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function uniqueText(values: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((value) => value.trim()),
+    ),
+  );
+}
+
+function classifyOutboundSegment(input: {
+  campaign: string;
+  company: string | null;
+  title: string | null;
+  industry: string | null;
+  notes: string | null;
+  sourceListName: string | null;
+}): { segment: string | null; subsegment: string | null } {
+  const haystack = slugText(
+    [
+      input.campaign,
+      input.company,
+      input.title,
+      input.industry,
+      input.notes,
+      input.sourceListName,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+
+  if (/(property manager|property management|community manager|apartment|multifamily|leasing)/.test(haystack)) {
+    const subsegment = /apartment|multifamily|community/.test(haystack)
+      ? "multifamily"
+      : "property_management";
+    return { segment: "property_manager", subsegment };
+  }
+
+  if (/(realtor|real estate|broker|listing agent|agent\b)/.test(haystack)) {
+    const subsegment = /broker/.test(haystack) ? "brokerage" : "residential_agent";
+    return { segment: "real_estate_agent", subsegment };
+  }
+
+  if (/(estate|probate|senior move|downsizing|organizer)/.test(haystack)) {
+    const subsegment = /senior move|downsizing/.test(haystack)
+      ? "senior_transition"
+      : "estate_cleanout";
+    return { segment: "estate_cleanout", subsegment };
+  }
+
+  if (/(investor|flipper|flip|wholesale|wholesaler)/.test(haystack)) {
+    return { segment: "investor_flipper", subsegment: "residential_investor" };
+  }
+
+  if (/(contractor|construction|remodel|renovation|roofing|plumbing|restoration)/.test(haystack)) {
+    return { segment: "contractor", subsegment: "trade_contractor" };
+  }
+
+  if (/(storage|facility manager|self storage)/.test(haystack)) {
+    return { segment: "storage_facility", subsegment: "facility_manager" };
+  }
+
+  if (/(junk|haul|cleanout|removal)/.test(haystack)) {
+    return { segment: "cleanout_referral", subsegment: "general_referral" };
+  }
+
+  if (input.campaign.trim().toLowerCase() === "property_management") {
+    return { segment: "property_manager", subsegment: "property_management" };
+  }
+
+  return { segment: null, subsegment: null };
+}
+
+function buildAccountResearchNotes(input: {
+  title: string | null;
+  industry: string | null;
+  companySize: string | null;
+  linkedinUrl: string | null;
+  notes: string | null;
+  sourceListName: string | null;
+}): string | null {
+  const bits = uniqueText([
+    input.title ? `Title: ${input.title}` : null,
+    input.industry ? `Industry: ${input.industry}` : null,
+    input.companySize ? `Company size: ${input.companySize}` : null,
+    input.linkedinUrl ? `LinkedIn: ${input.linkedinUrl}` : null,
+    input.sourceListName ? `Source list: ${input.sourceListName}` : null,
+    input.notes,
+  ]);
+  return bits.length ? bits.join(" | ") : null;
+}
+
+function chooseOutboundTaskTitle(segment: string | null): string {
+  switch (segment) {
+    case "property_manager":
+      return "Outbound: Call property manager";
+    case "real_estate_agent":
+      return "Outbound: Call realtor";
+    case "estate_cleanout":
+      return "Outbound: Call estate partner";
+    case "investor_flipper":
+      return "Outbound: Call investor";
+    case "contractor":
+      return "Outbound: Call contractor";
+    case "storage_facility":
+      return "Outbound: Call facility manager";
+    default:
+      return "Outbound: Call referral partner";
+  }
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -109,8 +227,31 @@ export async function POST(request: NextRequest): Promise<Response> {
     const email = normalizeEmail(row["email"]);
     const phoneRaw = normalizeText(row["phone"]);
     const notesExtra = normalizeText(row["notes"]);
+    const title = normalizeText(row["title"]);
+    const industry = normalizeText(row["industry"]);
+    const companySize = normalizeText(row["companySize"]);
+    const linkedinUrl = normalizeText(row["linkedinUrl"]);
+    const sourceListName = normalizeText(row["sourceListName"]);
+    const website = normalizeText(row["website"]);
+    const domain = normalizeText(row["domain"]);
     const locationBits = [normalizeText(row["city"]), normalizeText(row["state"]), normalizeText(row["zip"])].filter(Boolean);
     const location = locationBits.length ? locationBits.join(", ") : null;
+    const { segment, subsegment } = classifyOutboundSegment({
+      campaign,
+      company,
+      title,
+      industry,
+      notes: notesExtra,
+      sourceListName,
+    });
+    const researchNotes = buildAccountResearchNotes({
+      title,
+      industry,
+      companySize,
+      linkedinUrl,
+      notes: notesExtra,
+      sourceListName,
+    });
 
     let phone: { raw: string; e164: string } | null = null;
     if (phoneRaw) {
@@ -209,26 +350,21 @@ export async function POST(request: NextRequest): Promise<Response> {
           .limit(1);
         existing = found ?? null;
       }
-
-      const website = normalizeText(row["website"]);
-      const domain = normalizeText(row["domain"]);
-      const title = normalizeText(row["title"]);
-      const industry = normalizeText(row["industry"]);
-      const sourceListName = normalizeText(row["sourceListName"]);
-
       let partnerAccountId = existing?.partnerAccountId ?? null;
       if (!partnerAccountId) {
         const account = await resolveOrCreatePartnerAccount(tx as any, {
           name: company,
           website,
           domain: domain ?? email ?? null,
+          segment,
+          subsegment,
           city: normalizeText(row["city"]),
           state: normalizeText(row["state"]),
           source,
           sourceCampaign: campaign,
           sourceListName,
           ownerMemberId: assignee,
-          notes: [title ? `Title: ${title}` : null, industry ? `Industry: ${industry}` : null, notesExtra].filter(Boolean).join(" | ") || null
+          notes: researchNotes,
         });
         partnerAccountId = account?.id ?? null;
       }
@@ -313,7 +449,12 @@ export async function POST(request: NextRequest): Promise<Response> {
         company ? `Company: ${company}` : null,
         title ? `Title: ${title}` : null,
         industry ? `Industry: ${industry}` : null,
+        companySize ? `Company size: ${companySize}` : null,
         website ? `Website: ${website}` : null,
+        linkedinUrl ? `LinkedIn: ${linkedinUrl}` : null,
+        sourceListName ? `Source list: ${sourceListName}` : null,
+        segment ? `Segment: ${segment}` : null,
+        subsegment ? `Subsegment: ${subsegment}` : null,
         location ? `Location: ${location}` : null,
         notesExtra ? `Notes: ${notesExtra}` : null
       ].filter(Boolean);
@@ -354,7 +495,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       await db.insert(crmTasks).values({
         contactId,
         partnerAccountId: contactPartnerAccountId ?? null,
-        title: "Outbound: Call property manager",
+        title: chooseOutboundTaskTitle(segment),
         status: "open",
         dueAt: null,
         assignedTo: assignee,

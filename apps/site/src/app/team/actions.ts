@@ -4502,6 +4502,8 @@ type OutboundImportRow = {
   domain?: string;
   title?: string;
   industry?: string;
+  companySize?: string;
+  linkedinUrl?: string;
   city?: string;
   state?: string;
   zip?: string;
@@ -4624,6 +4626,19 @@ function parseOutboundCsv(text: string): OutboundImportRow[] {
     ]);
     const title = coerceRow(record, ["title", "job_title", "role"]);
     const industry = coerceRow(record, ["industry", "vertical", "segment"]);
+    const companySize = coerceRow(record, [
+      "company_size",
+      "employees",
+      "employee_count",
+      "employee_range",
+      "organization_num_employees",
+    ]);
+    const linkedinUrl = coerceRow(record, [
+      "linkedin_url",
+      "person_linkedin_url",
+      "company_linkedin_url",
+      "linkedin",
+    ]);
     const city = coerceRow(record, ["city"]);
     const state = coerceRow(record, ["state"]);
     const zip = coerceRow(record, ["zip", "zipcode", "postal", "postal_code"]);
@@ -4644,12 +4659,14 @@ function parseOutboundCsv(text: string): OutboundImportRow[] {
       phone,
       email,
       website,
-      domain,
-      title,
-      industry,
-      city,
-      state,
-      zip,
+        domain,
+        title,
+        industry,
+        companySize,
+        linkedinUrl,
+        city,
+        state,
+        zip,
       sourceListName,
       notes,
     });

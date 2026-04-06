@@ -13,6 +13,8 @@ export type ResolvePartnerAccountInput = {
   name?: string | null;
   domain?: string | null;
   website?: string | null;
+  segment?: string | null;
+  subsegment?: string | null;
   city?: string | null;
   state?: string | null;
   source?: string | null;
@@ -86,6 +88,8 @@ async function findExistingPartnerAccount(
       normalizedName: string;
       domain: string | null;
       website: string | null;
+      segment: string | null;
+      subsegment: string | null;
       city: string | null;
       state: string | null;
       ownerMemberId: string | null;
@@ -105,6 +109,8 @@ async function findExistingPartnerAccount(
         normalizedName: partnerAccounts.normalizedName,
         domain: partnerAccounts.domain,
         website: partnerAccounts.website,
+        segment: partnerAccounts.segment,
+        subsegment: partnerAccounts.subsegment,
         city: partnerAccounts.city,
         state: partnerAccounts.state,
         ownerMemberId: partnerAccounts.ownerMemberId,
@@ -133,6 +139,8 @@ async function findExistingPartnerAccount(
       normalizedName: partnerAccounts.normalizedName,
       domain: partnerAccounts.domain,
       website: partnerAccounts.website,
+      segment: partnerAccounts.segment,
+      subsegment: partnerAccounts.subsegment,
       city: partnerAccounts.city,
       state: partnerAccounts.state,
       ownerMemberId: partnerAccounts.ownerMemberId,
@@ -156,6 +164,8 @@ export async function resolveOrCreatePartnerAccount(
   const normalizedName = normalizePartnerAccountName(name);
   const domain = normalizePartnerAccountDomain(input.domain ?? input.website ?? null);
   const website = readText(input.website);
+  const segment = readText(input.segment);
+  const subsegment = readText(input.subsegment);
   const city = readText(input.city);
   const state = readText(input.state)?.toUpperCase() ?? null;
   const source = readText(input.source);
@@ -178,6 +188,8 @@ export async function resolveOrCreatePartnerAccount(
     const patch: Partial<typeof partnerAccounts.$inferInsert> = {};
     if (!existing.domain && domain) patch.domain = domain;
     if (!existing.website && website) patch.website = website;
+    if (!existing.segment && segment) patch.segment = segment;
+    if (!existing.subsegment && subsegment) patch.subsegment = subsegment;
     if (!existing.city && city) patch.city = city;
     if (!existing.state && state) patch.state = state;
     if (!existing.ownerMemberId && ownerMemberId) patch.ownerMemberId = ownerMemberId;
@@ -203,6 +215,8 @@ export async function resolveOrCreatePartnerAccount(
       normalizedName,
       domain,
       website,
+      segment,
+      subsegment,
       city,
       state,
       ownerMemberId,
