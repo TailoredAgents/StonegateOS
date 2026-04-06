@@ -14,7 +14,10 @@ import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { getSalesAutopilotPolicy } from "@/lib/policy";
-import { generateOutboundFirstTouchDraft } from "@/lib/outbound-drafts";
+import {
+  generateOutboundFirstTouchDraft,
+  generateOutboundFollowupDraft,
+} from "@/lib/outbound-drafts";
 import { resolveOrCreatePartnerAccount } from "@/lib/partner-accounts";
 
 const CHANNELS = ["sms", "email"] as const;
@@ -154,7 +157,11 @@ export async function POST(request: NextRequest): Promise<Response> {
   const contactId = readString((payload as any).contactId) ?? "";
   const taskId = readString((payload as any).taskId);
   const channelRaw = readString((payload as any).channel);
+  const kindRaw = readString((payload as any).kind);
+  const recap = readString((payload as any).recap);
+  const explicitDisposition = readString((payload as any).disposition);
   const requestedChannel: Channel | null = isChannel(channelRaw) ? (channelRaw as Channel) : null;
+  const kind = kindRaw === "follow_up" ? "follow_up" : "first_touch";
 
   if (!contactId) {
     return NextResponse.json({ error: "contact_id_required" }, { status: 400 });
@@ -249,6 +256,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   let attempt = 1;
   let companyFromTask: string | null = null;
   let notesFromTask: string | null = null;
+  let lastDisposition: string | null = explicitDisposition;
 
   if (taskId) {
     const [task] = await db
@@ -263,6 +271,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       if (Number.isFinite(attemptRaw) && attemptRaw > 0) attempt = Math.floor(attemptRaw);
       companyFromTask = parseOutboundNoteField(notes, "company");
       notesFromTask = parseOutboundNoteField(notes, "notes");
+      lastDisposition = lastDisposition ?? parseOutboundNoteField(notes, "lastDisposition");
     }
   }
 
@@ -281,17 +290,32 @@ export async function POST(request: NextRequest): Promise<Response> {
     displayName: autopilot.agentDisplayName
   });
 
-  const draft = await generateOutboundFirstTouchDraft({
-    channel,
-    recipientName,
-    company,
-    campaign,
-    attempt,
-    notes: notesFromTask,
-    segment: accountSegment,
-    city: accountCity,
-    state: accountState
-  });
+  const draft =
+    kind === "follow_up"
+      ? await generateOutboundFollowupDraft({
+          channel,
+          recipientName,
+          company,
+          campaign,
+          attempt,
+          notes: notesFromTask,
+          segment: accountSegment,
+          city: accountCity,
+          state: accountState,
+          disposition: lastDisposition,
+          recap,
+        })
+      : await generateOutboundFirstTouchDraft({
+          channel,
+          recipientName,
+          company,
+          campaign,
+          attempt,
+          notes: notesFromTask,
+          segment: accountSegment,
+          city: accountCity,
+          state: accountState,
+        });
 
   const subject = channel === "email" ? draft.subject : null;
   const body = draft.body;
@@ -311,9 +335,11 @@ export async function POST(request: NextRequest): Promise<Response> {
         draft: true,
         automation: true,
         outbound: true,
-        outboundKind: "first_touch",
+        outboundKind: kind,
         outboundCampaign: campaign ?? undefined,
         outboundAttempt: attempt,
+        outboundDisposition: lastDisposition ?? undefined,
+        outboundRecap: recap ?? undefined,
         outboundTaskId: taskId ?? undefined,
         partnerAccountId: partnerAccountId ?? undefined,
         generatedBy: draft.provider,
@@ -346,6 +372,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       threadId,
       channel,
       toAddress,
+      kind,
+      disposition: lastDisposition ?? null,
       campaign,
       attempt,
       taskId: taskId ?? null

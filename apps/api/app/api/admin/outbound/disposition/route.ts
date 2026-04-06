@@ -89,6 +89,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   const taskId = typeof (payload as any).taskId === "string" ? (payload as any).taskId.trim() : "";
   const disposition = normalizeDisposition((payload as any).disposition);
   const callbackAtRaw = typeof (payload as any).callbackAt === "string" ? (payload as any).callbackAt.trim() : "";
+  const recapRaw = typeof (payload as any).recap === "string" ? (payload as any).recap.trim() : "";
+  const recap = recapRaw.length ? recapRaw : null;
 
   if (!taskId) return NextResponse.json({ error: "task_id_required" }, { status: 400 });
   if (!disposition) return NextResponse.json({ error: "disposition_required" }, { status: 400 });
@@ -180,9 +182,22 @@ export async function POST(request: NextRequest): Promise<Response> {
       contactId: task.contactId,
       disposition,
       attempt: normalizedAttempt,
-      campaign
+      campaign,
+      hasRecap: Boolean(recap)
     }
   });
+
+  if (recap) {
+    await db.insert(crmTasks).values({
+      contactId: task.contactId,
+      partnerAccountId: partnerAccountId ?? null,
+      title: "Note",
+      status: "completed",
+      dueAt: null,
+      assignedTo: null,
+      notes: `Outbound recap (${disposition}): ${recap}`,
+    });
+  }
 
   const hardStop =
     disposition === "dnc" ||

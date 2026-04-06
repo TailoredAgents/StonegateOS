@@ -4750,12 +4750,17 @@ export async function setOutboundDispositionAction(formData: FormData) {
   const taskIdRaw = formData.get("taskId");
   const dispositionRaw = formData.get("disposition");
   const callbackAtRaw = formData.get("callbackAt");
+  const recapRaw = formData.get("recap");
 
   const taskId = typeof taskIdRaw === "string" ? taskIdRaw.trim() : "";
   const disposition =
     typeof dispositionRaw === "string" ? dispositionRaw.trim() : "";
   const callbackAtString =
     typeof callbackAtRaw === "string" ? callbackAtRaw.trim() : "";
+  const recap =
+    typeof recapRaw === "string" && recapRaw.trim().length
+      ? recapRaw.trim()
+      : null;
   const callbackAt =
     callbackAtString && Number.isFinite(Date.parse(callbackAtString))
       ? new Date(callbackAtString).toISOString()
@@ -4778,12 +4783,13 @@ export async function setOutboundDispositionAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/outbound/disposition", {
     method: "POST",
-    body: JSON.stringify({
-      taskId,
-      disposition,
-      callbackAt: callbackAt ?? undefined,
-    }),
-  });
+      body: JSON.stringify({
+        taskId,
+        disposition,
+        callbackAt: callbackAt ?? undefined,
+        recap: recap ?? undefined,
+      }),
+    });
 
   if (!response.ok) {
     const message = await readErrorMessage(
@@ -4797,6 +4803,93 @@ export async function setOutboundDispositionAction(formData: FormData) {
 
   jar.set({ name: "myst-flash", value: "Outbound updated.", path: "/" });
   revalidatePath("/team");
+}
+
+export async function draftOutboundFollowupAction(formData: FormData) {
+  const jar = await cookies();
+  const contactIdRaw = formData.get("contactId");
+  const taskIdRaw = formData.get("taskId");
+  const channelRaw = formData.get("channel");
+  const dispositionRaw = formData.get("disposition");
+  const recapRaw = formData.get("recap");
+
+  const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
+  const taskId = typeof taskIdRaw === "string" ? taskIdRaw.trim() : "";
+  const channel = typeof channelRaw === "string" ? channelRaw.trim() : "";
+  const disposition =
+    typeof dispositionRaw === "string" && dispositionRaw.trim().length
+      ? dispositionRaw.trim()
+      : "";
+  const recap =
+    typeof recapRaw === "string" && recapRaw.trim().length
+      ? recapRaw.trim()
+      : "";
+
+  if (!contactId) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Contact ID missing",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi("/api/admin/outbound/draft", {
+    method: "POST",
+    body: JSON.stringify({
+      contactId,
+      ...(taskId ? { taskId } : {}),
+      ...(channel ? { channel } : {}),
+      kind: "follow_up",
+      ...(disposition ? { disposition } : {}),
+      ...(recap ? { recap } : {}),
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(
+      response,
+      "Unable to draft follow-up",
+    );
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+    revalidatePath("/team");
+    return;
+  }
+
+  const payload = (await response.json().catch(() => null)) as {
+    threadId?: string;
+    channel?: string;
+  } | null;
+
+  const threadId =
+    typeof payload?.threadId === "string" ? payload.threadId.trim() : "";
+  const resolvedChannel =
+    typeof payload?.channel === "string"
+      ? payload.channel.trim()
+      : channel || "sms";
+
+  if (!threadId) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Draft created but thread is missing",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  jar.set({
+    name: "myst-flash",
+    value: "Follow-up draft created. Review and send from Inbox.",
+    path: "/",
+  });
+
+  redirect(
+    `/team?tab=inbox&threadId=${encodeURIComponent(threadId)}&contactId=${encodeURIComponent(
+      contactId,
+    )}&channel=${encodeURIComponent(resolvedChannel)}`,
+  );
 }
 
 export async function startOutboundCadenceAction(formData: FormData) {

@@ -4,6 +4,7 @@ import {
   importOutboundProspectsAction,
   bulkOutboundAction,
   draftOutboundFirstTouchAction,
+  draftOutboundFollowupAction,
   openContactThreadAction,
   setOutboundDispositionAction,
   startContactCallAction
@@ -694,6 +695,109 @@ export async function OutboundSection({
                         </SubmitButton>
                       </form>
                     ))}
+                    </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Detailed update</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Save a quick recap from the call or reply so the next move is easier to pick up later.
+                    </p>
+                    <form action={setOutboundDispositionAction} className="mt-3 flex flex-col gap-2">
+                      <input type="hidden" name="taskId" value={selected.primaryTaskId} />
+                      <select
+                        name="disposition"
+                        defaultValue={selected.lastDisposition ?? ""}
+                        className={TEAM_INPUT_COMPACT}
+                      >
+                        <option value="">Choose disposition</option>
+                        <option value="connected">Connected</option>
+                        <option value="partner">Partner</option>
+                        <option value="no_answer">No answer</option>
+                        <option value="left_voicemail">Left voicemail</option>
+                        <option value="email_sent">Email sent</option>
+                        <option value="callback_requested">Callback requested</option>
+                        <option value="not_interested">Not interested</option>
+                        <option value="dnc">DNC</option>
+                      </select>
+                      <textarea
+                        name="recap"
+                        className={`${TEAM_INPUT_COMPACT} min-h-[96px]`}
+                        placeholder="Quick recap: who you spoke with, what they said, what they want next, anything useful for the next touch..."
+                      />
+                      <input
+                        name="callbackAt"
+                        type="datetime-local"
+                        className={TEAM_INPUT_COMPACT}
+                      />
+                      <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
+                        Save detailed update
+                      </SubmitButton>
+                    </form>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Draft follow-up</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Use the latest outcome and your recap to prep the second touch for Inbox.
+                    </p>
+                    <form action={draftOutboundFollowupAction} className="mt-3 flex flex-col gap-2">
+                      <input type="hidden" name="taskId" value={selected.primaryTaskId} />
+                      <label className="flex flex-col gap-1 text-xs text-slate-600">
+                        <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Contact</span>
+                        <select
+                          name="contactId"
+                          defaultValue={selected.primaryContactId}
+                          className={TEAM_INPUT_COMPACT}
+                        >
+                          {selected.contacts.map((contact) => (
+                            <option key={contact.id} value={contact.id}>
+                              {contact.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1 text-xs text-slate-600">
+                        <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Channel</span>
+                        <select
+                          name="channel"
+                          defaultValue={
+                            (selected.contacts.find((contact) => contact.id === selected.primaryContactId) ??
+                              selected.contacts[0])?.email
+                              ? "email"
+                              : "sms"
+                          }
+                          className={TEAM_INPUT_COMPACT}
+                        >
+                          <option value="sms">SMS</option>
+                          <option value="email">Email</option>
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1 text-xs text-slate-600">
+                        <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Latest outcome</span>
+                        <select
+                          name="disposition"
+                          defaultValue={selected.lastDisposition ?? ""}
+                          className={TEAM_INPUT_COMPACT}
+                        >
+                          <option value="">Use task context</option>
+                          <option value="connected">Connected</option>
+                          <option value="partner">Partner</option>
+                          <option value="no_answer">No answer</option>
+                          <option value="left_voicemail">Left voicemail</option>
+                          <option value="email_sent">Email sent</option>
+                          <option value="callback_requested">Callback requested</option>
+                          <option value="not_interested">Not interested</option>
+                        </select>
+                      </label>
+                      <textarea
+                        name="recap"
+                        className={`${TEAM_INPUT_COMPACT} min-h-[88px]`}
+                        placeholder="Optional recap to steer the follow-up draft..."
+                      />
+                      <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Drafting...">
+                        Draft follow-up
+                      </SubmitButton>
+                    </form>
                   </div>
 
                   <div className="rounded-xl border border-slate-200 bg-white p-3">
