@@ -21,6 +21,18 @@ import { OutboundBulkSelectionControls } from "./OutboundBulkSelectionControls";
 
 type TeamMember = { id: string; name: string; active?: boolean };
 
+type OutboundAccountBrief = {
+  summary: string;
+  whyFit: string;
+  serviceAngle: string;
+  bestOpener: string;
+  likelyObjections: string[];
+  recommendedNextMove: string;
+  provider: "openai" | "fallback";
+  model: string | null;
+  updatedAt: string;
+};
+
 type OutboundQueueItem = {
   id: string;
   title: string | null;
@@ -46,6 +58,7 @@ type OutboundQueueItem = {
     segment: string | null;
     lastTouchAt: string | null;
     nextTouchAt: string | null;
+    brief?: OutboundAccountBrief | null;
   };
   contacts: Array<{
     id: string;
@@ -182,6 +195,8 @@ export async function OutboundSection({
   for (const [, apiKey, value] of apiFilterMap) {
     if (value) apiQs.set(apiKey, value);
   }
+  if (resolvedFilters.accountId?.trim()) apiQs.set("accountId", resolvedFilters.accountId.trim());
+  if (resolvedFilters.taskId?.trim()) apiQs.set("taskId", resolvedFilters.taskId.trim());
 
   const queueRes = await callAdminApi(`/api/admin/outbound/queue?${apiQs.toString()}`);
   if (!queueRes.ok) {
@@ -549,6 +564,62 @@ export async function OutboundSection({
                         <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{selected.noteSnippet}</p>
                       ) : null}
                     </div>
+
+                  {selected.account.brief ? (
+                    <div className="rounded-xl border border-primary-200 bg-primary-50/70 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary-700">AI account brief</p>
+                          <p className="mt-1 text-xs text-primary-900">
+                            Prep for the next real outreach touch.
+                          </p>
+                        </div>
+                        <div className="text-right text-[11px] text-primary-700">
+                          <div>{selected.account.brief.provider === "openai" ? "AI brief" : "Fallback brief"}</div>
+                          <div>{formatTimestamp(selected.account.brief.updatedAt) ?? selected.account.brief.updatedAt}</div>
+                        </div>
+                      </div>
+                      <div className="mt-3 space-y-3 text-xs text-slate-700">
+                        <div>
+                          <p className="font-semibold text-slate-900">Who they are</p>
+                          <p className="mt-1">{selected.account.brief.summary}</p>
+                        </div>
+                        <div>
+                          <p className="font-semibold text-slate-900">Why they matter</p>
+                          <p className="mt-1">{selected.account.brief.whyFit}</p>
+                        </div>
+                        <div>
+                          <p className="font-semibold text-slate-900">Service angle</p>
+                          <p className="mt-1">{selected.account.brief.serviceAngle}</p>
+                        </div>
+                        <div>
+                          <p className="font-semibold text-slate-900">Best opener</p>
+                          <p className="mt-1 rounded-lg border border-primary-200 bg-white px-3 py-2 text-slate-900">
+                            {selected.account.brief.bestOpener}
+                          </p>
+                        </div>
+                        {selected.account.brief.likelyObjections.length ? (
+                          <div>
+                            <p className="font-semibold text-slate-900">Likely objections</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {selected.account.brief.likelyObjections.map((item) => (
+                                <span
+                                  key={item}
+                                  className="rounded-full border border-primary-200 bg-white px-2.5 py-1 text-[11px] text-slate-700"
+                                >
+                                  {item}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                        <div>
+                          <p className="font-semibold text-slate-900">Best next move</p>
+                          <p className="mt-1">{selected.account.brief.recommendedNextMove}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Linked contacts</p>

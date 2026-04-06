@@ -6,6 +6,7 @@ import { contacts, crmTasks, getDb, outboxEvents, partnerAccounts } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
+import { ensureOutboundAccountBrief } from "@/lib/outbound-account-briefs";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -91,6 +92,8 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const qRaw = url.searchParams.get("q");
   const q = typeof qRaw === "string" ? qRaw.trim() : "";
+  const selectedAccountId = url.searchParams.get("accountId")?.trim() || "";
+  const selectedTaskId = url.searchParams.get("taskId")?.trim() || "";
   const campaignFilter = url.searchParams.get("campaign")?.trim() || "";
   const dispositionFilter = normalizeDisposition(url.searchParams.get("disposition"));
   const dueFilter = parseDue(url.searchParams.get("due"));
@@ -386,6 +389,26 @@ export async function GET(request: NextRequest): Promise<Response> {
   const page = grouped.slice(offset, offset + limit);
   const nextOffset = offset + page.length < total ? offset + page.length : null;
 
+  const selectedForBrief =
+    (selectedAccountId
+      ? page.find((item) => item.id === selectedAccountId)
+      : null) ??
+    (selectedTaskId
+      ? page.find(
+          (item) =>
+            item.primaryTaskId === selectedTaskId || item.taskIds.includes(selectedTaskId),
+        )
+      : null) ??
+    null;
+
+  const briefByAccountId = new Map<string, Awaited<ReturnType<typeof ensureOutboundAccountBrief>>>();
+  if (selectedForBrief?.key.startsWith("account:")) {
+    const brief = await ensureOutboundAccountBrief({
+      partnerAccountId: selectedForBrief.id,
+    });
+    if (brief) briefByAccountId.set(selectedForBrief.id, brief);
+  }
+
   const pageIds = page.flatMap((item) => item.taskIds);
   if (pageIds.length > 0) {
     const taskIdExpr = sql<string>`(${outboxEvents.payload} ->> 'taskId')`;
@@ -474,6 +497,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         segment: item.segment,
         lastTouchAt: item.lastTouchAt,
         nextTouchAt: item.nextTouchAt,
+        brief: briefByAccountId.get(item.id) ?? null,
       },
     }))
   });
