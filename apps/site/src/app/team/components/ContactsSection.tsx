@@ -202,10 +202,10 @@ export async function ContactsSection({
 
   return (
     <section className="space-y-4">
-      <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-4 shadow-md shadow-slate-200/50 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] px-4 py-4 shadow-[0_18px_36px_var(--team-card-shadow)] sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-slate-900">Contacts</h2>
-          <p className="mt-1 text-sm text-slate-600">
+          <h2 className="text-xl font-semibold text-[color:var(--team-text)]">Contacts</h2>
+          <p className="mt-1 text-sm text-[color:var(--team-text-muted)]">
             Search, assign, and keep follow-ups tight.
           </p>
         </div>
@@ -214,7 +214,7 @@ export async function ContactsSection({
 
       <form
         method="get"
-        className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm text-slate-600 shadow-md shadow-slate-200/50"
+        className="flex flex-wrap items-center gap-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] px-4 py-3 text-sm text-[color:var(--team-text-muted)] shadow-[0_18px_36px_var(--team-card-shadow)]"
       >
         <input type="hidden" name="tab" value="contacts" />
         <input type="hidden" name="offset" value="0" />
@@ -222,10 +222,10 @@ export async function ContactsSection({
           name="q"
           defaultValue={search ?? ""}
           placeholder="Search name, email, phone, address"
-          className="min-w-[240px] flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+          className="min-w-[240px] flex-1 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-4 py-2 text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
         />
-        <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+        <div className="flex items-center gap-2 rounded-full border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs text-[color:var(--team-text-muted)]">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">
             View
           </span>
           <label className="inline-flex items-center gap-1">

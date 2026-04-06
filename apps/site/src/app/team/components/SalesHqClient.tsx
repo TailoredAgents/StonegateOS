@@ -86,7 +86,7 @@ function ScoreRing({ value }: { value: number }) {
   return (
     <div className="relative h-24 w-24">
       <svg viewBox="0 0 100 100" className="h-24 w-24">
-        <circle cx="50" cy="50" r={r} fill="none" stroke="#e2e8f0" strokeWidth={stroke} />
+        <circle cx="50" cy="50" r={r} fill="none" stroke="var(--team-border)" strokeWidth={stroke} />
         <circle
           cx="50"
           cy="50"
@@ -102,8 +102,8 @@ function ScoreRing({ value }: { value: number }) {
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">
         <div className="text-center">
-          <div className="text-2xl font-semibold text-slate-900">{pct}</div>
-          <div className="text-[11px] font-medium text-slate-500">score</div>
+          <div className="text-2xl font-semibold text-[color:var(--team-text)]">{pct}</div>
+          <div className="text-[11px] font-medium text-[color:var(--team-text-soft)]">score</div>
         </div>
       </div>
     </div>
