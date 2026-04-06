@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { contacts, crmTasks, getDb, outboxEvents, partnerAccounts } from "@/db";
+import { auditLogs, contacts, crmTasks, getDb, outboxEvents, partnerAccounts } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getSalesScorecardConfig } from "@/lib/sales-scorecard";
@@ -72,6 +72,213 @@ function dedupeStrings(values: Array<string | null | undefined>): string[] {
         .map((value) => value.trim()),
     ),
   );
+}
+
+type AccountHistoryEntry = {
+  id: string;
+  at: string;
+  kind: "import" | "draft" | "disposition" | "recap" | "task" | "partner" | "note";
+  title: string;
+  summary: string;
+  contactName: string | null;
+};
+
+function labelDisposition(value: string | null | undefined): string {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (!normalized) return "Updated";
+  return normalized.replace(/_/g, " ");
+}
+
+function normalizeIso(value: Date | null | undefined): string | null {
+  return value instanceof Date ? value.toISOString() : null;
+}
+
+function isRelevantOutboundHistoryTask(title: string | null, notes: string | null): boolean {
+  const normalizedTitle = typeof title === "string" ? title.trim().toLowerCase() : "";
+  const normalizedNotes = typeof notes === "string" ? notes.trim().toLowerCase() : "";
+  if (!normalizedTitle && !normalizedNotes) return false;
+  if (normalizedNotes.includes("kind=outbound")) return true;
+  if (normalizedNotes.startsWith("outbound recap (")) return true;
+  if (normalizedNotes.startsWith("outbound updated:")) return true;
+  if (normalizedNotes.startsWith("outbound connected")) return true;
+  if (normalizedNotes.startsWith("outbound converted to partner")) return true;
+  if (
+    normalizedTitle === "note" &&
+    ["company:", "title:", "industry:", "company size:", "website:", "linkedin:", "source list:", "segment:", "subsegment:"].some((marker) =>
+      normalizedNotes.includes(marker),
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function buildTaskHistoryEntry(row: {
+  id: string;
+  title: string | null;
+  status: string;
+  notes: string | null;
+  dueAt: Date | null;
+  createdAt: Date;
+  contactId: string;
+  contactFirst: string | null;
+  contactLast: string | null;
+}): AccountHistoryEntry | null {
+  const notes = typeof row.notes === "string" ? row.notes.trim() : "";
+  const contactName = `${row.contactFirst ?? ""} ${row.contactLast ?? ""}`.trim() || null;
+  if (!isRelevantOutboundHistoryTask(row.title, row.notes)) return null;
+
+  if (notes.toLowerCase().startsWith("outbound recap (")) {
+    const summary = notes.replace(/^Outbound recap \([^)]+\):\s*/i, "").trim();
+    return {
+      id: `task:${row.id}:recap`,
+      at: row.createdAt.toISOString(),
+      kind: "recap",
+      title: "Recap saved",
+      summary: summary || "Conversation recap saved for the next touch.",
+      contactName,
+    };
+  }
+
+  if (notes.toLowerCase().startsWith("outbound converted to partner")) {
+    return {
+      id: `task:${row.id}:partner`,
+      at: row.createdAt.toISOString(),
+      kind: "partner",
+      title: "Converted to partner",
+      summary: "Outbound relationship moved into the partner workflow.",
+      contactName,
+    };
+  }
+
+  if (notes.toLowerCase().startsWith("outbound connected")) {
+    return {
+      id: `task:${row.id}:connected`,
+      at: row.createdAt.toISOString(),
+      kind: "disposition",
+      title: "Conversation started",
+      summary: "Cadence was stopped because a real conversation was established.",
+      contactName,
+    };
+  }
+
+  if (notes.toLowerCase().startsWith("outbound updated:")) {
+    const disposition = notes.replace(/^Outbound updated:\s*/i, "").trim();
+    return {
+      id: `task:${row.id}:updated`,
+      at: row.createdAt.toISOString(),
+      kind: "disposition",
+      title: "Disposition logged",
+      summary: disposition ? `Marked as ${labelDisposition(disposition)}.` : "Outbound status was updated.",
+      contactName,
+    };
+  }
+
+  if (notes.toLowerCase().includes("kind=outbound")) {
+    const attempt = parseField(notes, "attempt");
+    const campaign = parseField(notes, "campaign");
+    const summaryBits = [
+      attempt ? `Attempt ${attempt}` : null,
+      campaign,
+      row.dueAt instanceof Date ? `Due ${row.dueAt.toISOString()}` : row.status === "open" ? "Not started yet" : null,
+    ].filter(Boolean);
+    return {
+      id: `task:${row.id}:cadence`,
+      at: row.createdAt.toISOString(),
+      kind: "task",
+      title: row.title ?? (row.status === "open" ? "Outbound task" : "Completed outbound task"),
+      summary: summaryBits.length ? summaryBits.join(" / ") : "Outbound cadence activity.",
+      contactName,
+    };
+  }
+
+  return {
+    id: `task:${row.id}:note`,
+    at: row.createdAt.toISOString(),
+    kind: "note",
+    title: "Research note added",
+    summary: notes.split("\n").slice(0, 2).join(" / ").trim() || "Account research details were saved.",
+    contactName,
+  };
+}
+
+function buildAuditHistoryEntry(
+  row: {
+    id: string;
+    action: string;
+    entityType: string;
+    entityId: string | null;
+    meta: Record<string, unknown> | null;
+    createdAt: Date;
+  },
+  contactNameById: Map<string, string>,
+): AccountHistoryEntry | null {
+  const meta = row.meta ?? {};
+  const contactId = typeof meta["contactId"] === "string" ? meta["contactId"] : null;
+  const contactName = (contactId ? contactNameById.get(contactId) : null) ?? null;
+
+  if (row.action === "outbound.imported") {
+    const campaign = typeof meta["campaign"] === "string" ? meta["campaign"] : null;
+    const source = typeof meta["source"] === "string" ? meta["source"] : null;
+    return {
+      id: `audit:${row.id}`,
+      at: row.createdAt.toISOString(),
+      kind: "import",
+      title: "Imported prospect",
+      summary: [campaign, source].filter(Boolean).join(" / ") || "Prospect imported into outbound.",
+      contactName,
+    };
+  }
+
+  if (row.action === "outbound.draft_created") {
+    const kind = typeof meta["kind"] === "string" ? meta["kind"] : null;
+    const channel = typeof meta["channel"] === "string" ? meta["channel"] : null;
+    const disposition = typeof meta["disposition"] === "string" ? meta["disposition"] : null;
+    return {
+      id: `audit:${row.id}`,
+      at: row.createdAt.toISOString(),
+      kind: "draft",
+      title: kind === "follow_up" ? "Drafted follow-up" : "Drafted first outreach",
+      summary: [channel ? channel.toUpperCase() : null, disposition ? `after ${labelDisposition(disposition)}` : null]
+        .filter(Boolean)
+        .join(" / ") || "Prepared an outreach draft in Inbox.",
+      contactName,
+    };
+  }
+
+  if (row.action === "outbound.disposition") {
+    const disposition = typeof meta["disposition"] === "string" ? meta["disposition"] : null;
+    const attempt = typeof meta["attempt"] === "number" ? meta["attempt"] : typeof meta["attempt"] === "string" ? Number(meta["attempt"]) : null;
+    const hasRecap = Boolean(meta["hasRecap"]);
+    return {
+      id: `audit:${row.id}`,
+      at: row.createdAt.toISOString(),
+      kind: "disposition",
+      title: "Disposition logged",
+      summary: [
+        disposition ? labelDisposition(disposition) : null,
+        typeof attempt === "number" && Number.isFinite(attempt) ? `Attempt ${attempt}` : null,
+        hasRecap ? "recap saved" : null,
+      ]
+        .filter(Boolean)
+        .join(" / ") || "Outbound disposition was recorded.",
+      contactName,
+    };
+  }
+
+  if (row.action === "partner.converted") {
+    const partnerType = typeof meta["partnerType"] === "string" ? meta["partnerType"] : null;
+    return {
+      id: `audit:${row.id}`,
+      at: row.createdAt.toISOString(),
+      kind: "partner",
+      title: "Converted to partner",
+      summary: partnerType ? `Suggested path: ${partnerType.replace(/_/g, " ")}` : "Outbound account converted into partner flow.",
+      contactName,
+    };
+  }
+
+  return null;
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -431,11 +638,88 @@ export async function GET(request: NextRequest): Promise<Response> {
     null;
 
   const briefByAccountId = new Map<string, Awaited<ReturnType<typeof ensureOutboundAccountBrief>>>();
+  const historyByAccountId = new Map<string, AccountHistoryEntry[]>();
   if (selectedForBrief?.key.startsWith("account:")) {
     const brief = await ensureOutboundAccountBrief({
       partnerAccountId: selectedForBrief.id,
     });
     if (brief) briefByAccountId.set(selectedForBrief.id, brief);
+
+    const selectedContactIds = dedupeStrings(selectedForBrief.contacts.map((contact) => contact.id));
+    const selectedTaskIds = dedupeStrings(selectedForBrief.taskIds);
+    const contactNameById = new Map(
+      selectedForBrief.contacts.map((contact) => [contact.id, contact.name] as const),
+    );
+
+    const taskHistoryRows = await db
+      .select({
+        id: crmTasks.id,
+        title: crmTasks.title,
+        status: crmTasks.status,
+        notes: crmTasks.notes,
+        dueAt: crmTasks.dueAt,
+        createdAt: crmTasks.createdAt,
+        contactId: crmTasks.contactId,
+        contactFirst: contacts.firstName,
+        contactLast: contacts.lastName,
+      })
+      .from(crmTasks)
+      .innerJoin(contacts, eq(crmTasks.contactId, contacts.id))
+      .where(eq(crmTasks.partnerAccountId, selectedForBrief.id))
+      .orderBy(desc(crmTasks.createdAt))
+      .limit(30);
+
+    const auditPredicates = [];
+    if (selectedContactIds.length > 0) {
+      auditPredicates.push(and(eq(auditLogs.entityType, "contact"), inArray(auditLogs.entityId, selectedContactIds)));
+      const contactIdList = sql.join(selectedContactIds.map((id) => sql`${id}`), sql`,`);
+      auditPredicates.push(
+        and(
+          eq(auditLogs.entityType, "conversation_message"),
+          sql`${auditLogs.meta} ->> 'contactId' in (${contactIdList})`,
+        ),
+      );
+    }
+    if (selectedTaskIds.length > 0) {
+      auditPredicates.push(and(eq(auditLogs.entityType, "crm_task"), inArray(auditLogs.entityId, selectedTaskIds)));
+    }
+
+    const auditHistoryRows =
+      auditPredicates.length > 0
+        ? await db
+            .select({
+              id: auditLogs.id,
+              action: auditLogs.action,
+              entityType: auditLogs.entityType,
+              entityId: auditLogs.entityId,
+              meta: auditLogs.meta,
+              createdAt: auditLogs.createdAt,
+            })
+            .from(auditLogs)
+            .where(
+              and(
+                inArray(auditLogs.action, [
+                  "outbound.imported",
+                  "outbound.draft_created",
+                  "outbound.disposition",
+                  "partner.converted",
+                ]),
+                or(...auditPredicates),
+              ),
+            )
+            .orderBy(desc(auditLogs.createdAt))
+            .limit(40)
+        : [];
+
+    const history = [
+      ...taskHistoryRows.map((row) => buildTaskHistoryEntry(row)),
+      ...auditHistoryRows.map((row) => buildAuditHistoryEntry(row, contactNameById)),
+    ]
+      .filter((entry): entry is AccountHistoryEntry => Boolean(entry))
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+      .slice(0, 12);
+
+    historyByAccountId.set(selectedForBrief.id, history);
   }
 
   const pageIds = page.flatMap((item) => item.taskIds);
@@ -604,6 +888,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         lastTouchAt: item.lastTouchAt,
         nextTouchAt: item.nextTouchAt,
         brief: briefByAccountId.get(item.id) ?? null,
+        history: historyByAccountId.get(item.id) ?? [],
       },
     }))
   });

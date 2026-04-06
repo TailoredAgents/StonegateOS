@@ -37,6 +37,15 @@ type OutboundAccountBrief = {
   updatedAt: string;
 };
 
+type OutboundHistoryEntry = {
+  id: string;
+  at: string;
+  kind: "import" | "draft" | "disposition" | "recap" | "task" | "partner" | "note";
+  title: string;
+  summary: string;
+  contactName: string | null;
+};
+
 type OutboundQueueItem = {
   id: string;
   title: string | null;
@@ -65,6 +74,7 @@ type OutboundQueueItem = {
     lastTouchAt: string | null;
     nextTouchAt: string | null;
     brief?: OutboundAccountBrief | null;
+    history?: OutboundHistoryEntry[];
   };
   contacts: Array<{
     id: string;
@@ -165,6 +175,16 @@ function formatPartnerFit(value: string | null | undefined): string {
   if (normalized === "hybrid") return "Hybrid";
   if (normalized === "not_a_fit") return "Not a fit";
   return "Unclassified";
+}
+
+function formatHistoryKind(value: OutboundHistoryEntry["kind"]): { label: string; tone: string } {
+  if (value === "import") return { label: "Import", tone: "bg-slate-100 text-slate-700" };
+  if (value === "draft") return { label: "Draft", tone: "bg-primary-50 text-primary-700" };
+  if (value === "disposition") return { label: "Disposition", tone: "bg-amber-50 text-amber-700" };
+  if (value === "recap") return { label: "Recap", tone: "bg-emerald-50 text-emerald-700" };
+  if (value === "partner") return { label: "Partner", tone: "bg-violet-50 text-violet-700" };
+  if (value === "task") return { label: "Task", tone: "bg-slate-100 text-slate-700" };
+  return { label: "Note", tone: "bg-slate-100 text-slate-700" };
 }
 
 function buildOutboundHref(args: { memberId?: string; filters: OutboundFilters; patch?: Partial<OutboundFilters> }): string {
@@ -730,6 +750,49 @@ export async function OutboundSection({
                       </div>
                     </div>
                   ) : null}
+
+                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Account history</p>
+                        <p className="mt-1 text-xs text-slate-600">
+                          Recent import, draft, disposition, recap, and conversion activity for this relationship.
+                        </p>
+                      </div>
+                    </div>
+                    {selected.account.history && selected.account.history.length > 0 ? (
+                      <div className="mt-3 space-y-2">
+                        {selected.account.history.map((entry) => {
+                          const kind = formatHistoryKind(entry.kind);
+                          return (
+                            <div key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${kind.tone}`}>
+                                      {kind.label}
+                                    </span>
+                                    <span className="text-sm font-semibold text-slate-900">{entry.title}</span>
+                                  </div>
+                                  <p className="mt-1 text-xs text-slate-700">{entry.summary}</p>
+                                  {entry.contactName ? (
+                                    <p className="mt-1 text-[11px] text-slate-500">{entry.contactName}</p>
+                                  ) : null}
+                                </div>
+                                <div className="shrink-0 text-[11px] text-slate-500">
+                                  {formatTimestamp(entry.at) ?? entry.at}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                        No account activity yet beyond the current queue state.
+                      </div>
+                    )}
+                  </div>
 
                   <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Linked contacts</p>
