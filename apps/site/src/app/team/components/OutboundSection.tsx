@@ -84,7 +84,25 @@ type OutboundQueueItem = {
   }>;
 };
 
-type OutboundQueueSummary = { dueNow: number; overdue: number; callbacksToday: number; notStarted?: number };
+type OutboundQueueSummary = {
+  dueNow: number;
+  overdue: number;
+  callbacksToday: number;
+  notStarted?: number;
+  scoreboard?: {
+    accountsTouched: number;
+    conversationsStarted: number;
+    qualifiedPartners: number;
+    activePartners: number;
+    avgFitScore: number | null;
+    partnerPathMix: {
+      portalFirst: number;
+      managedDirect: number;
+      hybrid: number;
+      notAFit: number;
+    };
+  };
+};
 type OutboundQueueFacets = { campaigns: string[]; dispositions: string[]; attempts: string[] };
 
 type OutboundQueueResponse = {
@@ -277,6 +295,67 @@ export async function OutboundSection({
       </header>
 
       <div className={TEAM_CARD_PADDED}>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Accounts touched</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              {queuePayload.summary?.scoreboard?.accountsTouched ?? 0}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">Accounts with at least one logged touch</div>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Conversations</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              {queuePayload.summary?.scoreboard?.conversationsStarted ?? 0}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">Accounts past cold outreach into real dialogue</div>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Qualified partners</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              {queuePayload.summary?.scoreboard?.qualifiedPartners ?? 0}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">Accounts that look strong enough to convert</div>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Active partners</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              {queuePayload.summary?.scoreboard?.activePartners ?? 0}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">Converted accounts now in active partner status</div>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Avg fit score</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              {queuePayload.summary?.scoreboard?.avgFitScore ?? 0}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">Average AI partner-fit score across the owned book</div>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Partner path mix</div>
+              <div className="mt-1 text-xs text-slate-500">How the current outbound book is leaning by recommended partner model</div>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-700">
+                Portal first {queuePayload.summary?.scoreboard?.partnerPathMix.portalFirst ?? 0}
+              </span>
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-700">
+                Managed direct {queuePayload.summary?.scoreboard?.partnerPathMix.managedDirect ?? 0}
+              </span>
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-700">
+                Hybrid {queuePayload.summary?.scoreboard?.partnerPathMix.hybrid ?? 0}
+              </span>
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-700">
+                Not a fit {queuePayload.summary?.scoreboard?.partnerPathMix.notAFit ?? 0}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h3 className="text-base font-semibold text-slate-900">Queue</h3>

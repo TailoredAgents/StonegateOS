@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { contacts, crmTasks, getDb, outboxEvents, partnerAccounts } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
@@ -158,6 +158,25 @@ export async function GET(request: NextRequest): Promise<Response> {
     )
     .orderBy(sql`(${crmTasks.dueAt} is null) asc`, asc(crmTasks.dueAt), desc(crmTasks.createdAt))
     .limit(MAX_SCAN);
+
+  const accountScoreFilters = [
+    eq(partnerAccounts.ownerMemberId, assignedTo),
+    or(ilike(partnerAccounts.source, "outbound:%"), isNotNull(partnerAccounts.sourceCampaign)),
+  ];
+  if (campaignFilter) {
+    accountScoreFilters.push(eq(partnerAccounts.sourceCampaign, campaignFilter));
+  }
+
+  const accountScoreRows = await db
+    .select({
+      id: partnerAccounts.id,
+      status: partnerAccounts.status,
+      portalFit: partnerAccounts.portalFit,
+      fitScore: partnerAccounts.fitScore,
+      lastTouchAt: partnerAccounts.lastTouchAt,
+    })
+    .from(partnerAccounts)
+    .where(and(...accountScoreFilters));
 
   const parsedItems = rows.map((row) => {
     const notes = typeof row.notes === "string" ? row.notes : "";
@@ -453,7 +472,69 @@ export async function GET(request: NextRequest): Promise<Response> {
       if (isCallback && dueMs !== null && dueMs >= startOfTodayUtcMs && dueMs <= endOfTodayUtcMs) acc.callbacksToday += 1;
       return acc;
     },
-    { dueNow: 0, overdue: 0, callbacksToday: 0, notStarted: 0 }
+      { dueNow: 0, overdue: 0, callbacksToday: 0, notStarted: 0 }
+    );
+
+  const scoreboard = accountScoreRows.reduce(
+    (acc, row) => {
+      if (row.lastTouchAt instanceof Date) acc.accountsTouched += 1;
+
+      if (
+        row.status === "conversation_active" ||
+        row.status === "qualified_partner" ||
+        row.status === "trial_partner" ||
+        row.status === "active_partner" ||
+        row.status === "portal_partner" ||
+        row.status === "managed_partner"
+      ) {
+        acc.conversationsStarted += 1;
+      }
+
+      if (
+        row.status === "qualified_partner" ||
+        row.status === "trial_partner" ||
+        row.status === "active_partner" ||
+        row.status === "portal_partner" ||
+        row.status === "managed_partner"
+      ) {
+        acc.qualifiedPartners += 1;
+      }
+
+      if (
+        row.status === "active_partner" ||
+        row.status === "portal_partner" ||
+        row.status === "managed_partner"
+      ) {
+        acc.activePartners += 1;
+      }
+
+      const normalizedFit = typeof row.portalFit === "string" ? row.portalFit.trim().toLowerCase() : "";
+      if (normalizedFit === "portal_first") acc.partnerPathMix.portalFirst += 1;
+      else if (normalizedFit === "managed_direct") acc.partnerPathMix.managedDirect += 1;
+      else if (normalizedFit === "hybrid") acc.partnerPathMix.hybrid += 1;
+      else if (normalizedFit === "not_a_fit") acc.partnerPathMix.notAFit += 1;
+
+      if (typeof row.fitScore === "number" && Number.isFinite(row.fitScore)) {
+        acc.fitScoreCount += 1;
+        acc.fitScoreTotal += row.fitScore;
+      }
+
+      return acc;
+    },
+    {
+      accountsTouched: 0,
+      conversationsStarted: 0,
+      qualifiedPartners: 0,
+      activePartners: 0,
+      partnerPathMix: {
+        portalFirst: 0,
+        managedDirect: 0,
+        hybrid: 0,
+        notAFit: 0,
+      },
+      fitScoreCount: 0,
+      fitScoreTotal: 0,
+    },
   );
 
   const facets = filtered.reduce(
@@ -474,7 +555,20 @@ export async function GET(request: NextRequest): Promise<Response> {
     offset,
     limit,
     nextOffset,
-    summary,
+    summary: {
+      ...summary,
+      scoreboard: {
+        accountsTouched: scoreboard.accountsTouched,
+        conversationsStarted: scoreboard.conversationsStarted,
+        qualifiedPartners: scoreboard.qualifiedPartners,
+        activePartners: scoreboard.activePartners,
+        avgFitScore:
+          scoreboard.fitScoreCount > 0
+            ? Math.round(scoreboard.fitScoreTotal / scoreboard.fitScoreCount)
+            : null,
+        partnerPathMix: scoreboard.partnerPathMix,
+      },
+    },
     facets: {
       campaigns: Array.from(facets.campaigns).sort(),
       dispositions: Array.from(facets.dispositions).sort(),
