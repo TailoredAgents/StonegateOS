@@ -54,3 +54,37 @@
   }
 }
 
+@layer base {
+  .team-theme-light {
+    color-scheme: light;
+    --team-app-bg: #f1f5f9;
+    --team-sidebar-bg: rgba(248, 250, 252, 0.86);
+    --team-header-bg: rgba(255, 255, 255, 0.76);
+    --team-card: rgba(255, 255, 255, 0.9);
+    --team-surface: #ffffff;
+    --team-surface-muted: rgba(248, 250, 252, 0.92);
+    --team-border: rgba(226, 232, 240, 0.92);
+    --team-border-strong: rgba(203, 213, 225, 0.92);
+    --team-text: #0f172a;
+    --team-text-muted: #475569;
+    --team-text-soft: #64748b;
+    --team-card-shadow: rgba(148, 163, 184, 0.22);
+  }
+
+  .team-theme-dark {
+    color-scheme: dark;
+    --team-app-bg: #020617;
+    --team-sidebar-bg: rgba(15, 23, 42, 0.9);
+    --team-header-bg: rgba(15, 23, 42, 0.78);
+    --team-card: rgba(15, 23, 42, 0.88);
+    --team-surface: rgba(15, 23, 42, 0.98);
+    --team-surface-muted: rgba(15, 23, 42, 0.78);
+    --team-border: rgba(51, 65, 85, 0.92);
+    --team-border-strong: rgba(71, 85, 105, 0.92);
+    --team-text: #e2e8f0;
+    --team-text-muted: #cbd5e1;
+    --team-text-soft: #94a3b8;
+    --team-card-shadow: rgba(2, 6, 23, 0.5);
+  }
+}
+

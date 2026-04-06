@@ -298,6 +298,41 @@ function IconKey(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconSun(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M12 16.25A4.25 4.25 0 1 0 12 7.75a4.25 4.25 0 0 0 0 8.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M12 2.75v2.5M12 18.75v2.5M4.75 12h2.5M16.75 12h2.5M5.7 5.7l1.8 1.8M16.5 16.5l1.8 1.8M18.3 5.7l-1.8 1.8M7.5 16.5l-1.8 1.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function IconMoon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+      <path
+        d="M14.75 3.2a8.9 8.9 0 1 0 6.05 12.35A9.25 9.25 0 0 1 14.75 3.2Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function IconList(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
@@ -499,6 +534,7 @@ function AccessPill({ label, enabled, tone }: { label: string; enabled: boolean;
 
 const SIDEBAR_STORAGE_KEY = "team.sidebar.collapsed.v1";
 const GROUPS_STORAGE_KEY = "team.sidebar.groups.collapsed.v1";
+const THEME_STORAGE_KEY = "team.theme.v1";
 
 export function TeamAppShell(props: {
   activeId: string;
@@ -517,10 +553,16 @@ export function TeamAppShell(props: {
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
+  const [theme, setTheme] = React.useState<"light" | "dark">("light");
 
   React.useEffect(() => {
     const stored = globalThis.localStorage?.getItem(SIDEBAR_STORAGE_KEY);
     if (stored === "1") setCollapsed(true);
+
+    const storedTheme = globalThis.localStorage?.getItem(THEME_STORAGE_KEY);
+    if (storedTheme === "dark" || storedTheme === "light") {
+      setTheme(storedTheme);
+    }
 
     const groupsStored = globalThis.localStorage?.getItem(GROUPS_STORAGE_KEY);
     if (!groupsStored) return;
@@ -536,6 +578,14 @@ export function TeamAppShell(props: {
     } catch {
       // ignore invalid JSON
     }
+  }, []);
+
+  const handleToggleTheme = React.useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      globalThis.localStorage?.setItem(THEME_STORAGE_KEY, next);
+      return next;
+    });
   }, []);
 
   const handleToggleCollapse = React.useCallback(() => {
@@ -581,31 +631,32 @@ export function TeamAppShell(props: {
   const isClassic = hasLayoutParam === "classic";
 
   const sidebarWidth = collapsed ? "w-[72px]" : "w-[280px]";
+  const themeClass = theme === "dark" ? "team-theme-dark" : "team-theme-light";
 
   const SidebarContent = (
     <div className={cn("flex h-full flex-col gap-5 px-3 py-4", collapsed ? "px-2" : "px-3")}>
       <div className={cn("flex items-center justify-between", collapsed ? "px-1" : "px-2")}>
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] shadow-sm">
             {props.brand?.logoPath ? (
               <Image src={props.brand.logoPath} alt="" aria-hidden="true" width={32} height={32} className="h-8 w-8 object-contain" />
             ) : (
-              <IconGrid className="h-5 w-5 text-slate-700" />
+              <IconGrid className="h-5 w-5 text-[color:var(--team-text)]" />
             )}
           </div>
           {collapsed ? null : (
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[color:var(--team-text-soft)]">
                 {props.brand?.shortName ?? "Team"}
               </div>
-              <div className="text-sm font-semibold text-slate-900">Team Console</div>
+              <div className="text-sm font-semibold text-[color:var(--team-text)]">Team Console</div>
             </div>
           )}
         </div>
       </div>
 
       <div className="space-y-2">
-        {collapsed ? null : <div className="px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Quick</div>}
+        {collapsed ? null : <div className="px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">Quick</div>}
         <div className="space-y-1">
           {props.quickItems.map((item) => {
             const active = item.id === props.activeId;
@@ -619,14 +670,14 @@ export function TeamAppShell(props: {
                   "group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
                   active
                     ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/60"
-                    : "text-slate-700 hover:bg-white hover:text-slate-900"
+                    : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]"
                 )}
                 aria-current={active ? "page" : undefined}
               >
                 <span
                   className={cn(
                     "flex h-9 w-9 items-center justify-center rounded-2xl border",
-                    active ? "border-primary-100 bg-white text-primary-700" : "border-slate-200 bg-white text-slate-500 group-hover:text-slate-700"
+                    active ? "border-primary-100 bg-[color:var(--team-surface)] text-primary-700" : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]"
                   )}
                 >
                   {iconForTab(item.id)}
@@ -648,13 +699,13 @@ export function TeamAppShell(props: {
                   <button
                     type="button"
                     onClick={() => toggleGroupCollapsed(group.id)}
-                    className="flex w-full items-center justify-between rounded-2xl px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500 transition hover:bg-white hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary-200"
+                    className="flex w-full items-center justify-between rounded-2xl px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)] transition hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text-muted)] focus:outline-none focus:ring-2 focus:ring-primary-200"
                     aria-expanded={!isGroupCollapsed}
                   >
                     <span>{group.label}</span>
                     <span
                       className={cn(
-                        "inline-flex h-6 w-6 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition",
+                        "inline-flex h-6 w-6 items-center justify-center rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] transition",
                         isGroupCollapsed ? "rotate-[-90deg]" : "rotate-0"
                       )}
                     >
@@ -676,7 +727,7 @@ export function TeamAppShell(props: {
                             "group flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-primary-200",
                             active
                               ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/60"
-                              : "text-slate-700 hover:bg-white hover:text-slate-900"
+                              : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]"
                           )}
                           aria-current={active ? "page" : undefined}
                         >
@@ -684,8 +735,8 @@ export function TeamAppShell(props: {
                             className={cn(
                               "flex h-9 w-9 items-center justify-center rounded-2xl border",
                               active
-                                ? "border-primary-100 bg-white text-primary-700"
-                                : "border-slate-200 bg-white text-slate-500 group-hover:text-slate-700"
+                                ? "border-primary-100 bg-[color:var(--team-surface)] text-primary-700"
+                                : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)] group-hover:text-[color:var(--team-text)]"
                             )}
                           >
                             {iconForTab(item.id)}
@@ -707,18 +758,28 @@ export function TeamAppShell(props: {
           type="button"
           onClick={handleToggleCollapse}
           className={cn(
-            "flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
+            "flex w-full items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
           )}
         >
           {collapsed ? <IconChevronRight className="h-4 w-4" /> : <IconChevronLeft className="h-4 w-4" />}
           {collapsed ? null : <span>Collapse</span>}
+        </button>
+        <button
+          type="button"
+          onClick={handleToggleTheme}
+          className={cn(
+            "flex w-full items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
+          )}
+        >
+          {theme === "dark" ? <IconSun className="h-4 w-4" /> : <IconMoon className="h-4 w-4" />}
+          {collapsed ? null : <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>}
         </button>
         {hasClassic ? (
           <button
             type="button"
             onClick={switchToClassic}
             className={cn(
-              "flex w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-200",
+              "flex w-full items-center justify-center rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-[color:var(--team-border-strong)] hover:text-[color:var(--team-text)] focus:outline-none focus:ring-2 focus:ring-slate-200",
               isClassic ? "opacity-60" : ""
             )}
             disabled={isClassic}
@@ -731,11 +792,11 @@ export function TeamAppShell(props: {
   );
 
   return (
-    <div className="min-h-screen bg-slate-100">
+    <div className={cn("min-h-screen bg-[color:var(--team-app-bg)] text-[color:var(--team-text)] transition-colors", themeClass)}>
       <div className="flex min-h-screen w-full">
         <aside
           className={cn(
-            "hidden shrink-0 border-r border-slate-200/70 bg-slate-50/80 backdrop-blur supports-[backdrop-filter]:bg-slate-50/70 lg:block",
+            "hidden shrink-0 border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] backdrop-blur lg:block",
             sidebarWidth
           )}
         >
@@ -743,32 +804,40 @@ export function TeamAppShell(props: {
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-40 border-b border-slate-200/70 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/60">
+          <header className="sticky top-0 z-40 border-b border-[color:var(--team-border)] bg-[color:var(--team-header-bg)] backdrop-blur">
             <div className="flex w-full items-center justify-between gap-4 px-4 py-3 sm:px-6">
               <div className="flex items-center gap-3">
                 <button
                   type="button"
                   onClick={() => setMobileOpen(true)}
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200 lg:hidden"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200 lg:hidden"
                   aria-label="Open navigation"
                 >
                   <IconMenu className="h-5 w-5" />
                 </button>
                 <div>
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Team</div>
-                  <div className="text-lg font-semibold text-slate-900">{props.title}</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[color:var(--team-text-soft)]">Team</div>
+                  <div className="text-lg font-semibold text-[color:var(--team-text)]">{props.title}</div>
                 </div>
-                {isPending ? <span className="text-xs font-semibold text-slate-400">Loading...</span> : null}
+                {isPending ? <span className="text-xs font-semibold text-[color:var(--team-text-soft)]">Loading...</span> : null}
               </div>
               <div className="flex items-center gap-2 sm:gap-3">
+                <button
+                  type="button"
+                  onClick={handleToggleTheme}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 text-xs font-semibold text-[color:var(--team-text)] shadow-sm transition hover:border-primary-200 hover:text-primary-800 focus:outline-none focus:ring-2 focus:ring-primary-200"
+                >
+                  {theme === "dark" ? <IconSun className="h-4 w-4" /> : <IconMoon className="h-4 w-4" />}
+                  <span className="hidden sm:inline">{theme === "dark" ? "Light" : "Dark"}</span>
+                </button>
                 <div className="hidden items-center gap-2 md:flex">
                   <AccessPill label="Crew" enabled={props.access.hasCrew || props.access.hasOwner} tone="emerald" />
                   <AccessPill label="Office" enabled={props.access.hasOffice || props.access.hasOwner} tone="sky" />
                   <AccessPill label="Owner" enabled={props.access.hasOwner} tone="primary" />
                 </div>
                 {props.user ? (
-                  <div className="hidden text-right text-xs text-slate-600 sm:block">
-                    <div className="font-semibold text-slate-900">{props.user.name}</div>
+                  <div className="hidden text-right text-xs text-[color:var(--team-text-muted)] sm:block">
+                    <div className="font-semibold text-[color:var(--team-text)]">{props.user.name}</div>
                     {props.user.email ? <div className="truncate">{props.user.email}</div> : null}
                   </div>
                 ) : null}
@@ -787,13 +856,13 @@ export function TeamAppShell(props: {
       {mobileOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
           <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-          <div className="absolute inset-y-0 left-0 w-[300px] max-w-[85vw] border-r border-slate-200 bg-slate-50 shadow-2xl">
+          <div className="absolute inset-y-0 left-0 w-[300px] max-w-[85vw] border-r border-[color:var(--team-border)] bg-[color:var(--team-sidebar-bg)] shadow-2xl">
             <div className="flex items-center justify-between px-3 py-3">
-              <div className="text-sm font-semibold text-slate-900">Navigation</div>
+              <div className="text-sm font-semibold text-[color:var(--team-text)]">Navigation</div>
               <button
                 type="button"
                 onClick={() => setMobileOpen(false)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm"
+                className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs font-semibold text-[color:var(--team-text)] shadow-sm"
               >
                 Close
               </button>

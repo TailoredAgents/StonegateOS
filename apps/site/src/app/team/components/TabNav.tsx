@@ -59,14 +59,14 @@ export interface TabNavGroup {
 
 export const teamTabTokens = {
   container:
-    "flex flex-wrap gap-2 overflow-visible rounded-2xl border border-slate-200/80 bg-white/80 p-2 shadow-sm shadow-slate-200/50 backdrop-blur supports-[backdrop-filter]:bg-white/60 sm:items-center sm:justify-start sm:sticky sm:top-4 z-50",
+    "flex flex-wrap gap-2 overflow-visible rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-2 shadow-[0_18px_36px_var(--team-card-shadow)] backdrop-blur sm:items-center sm:justify-start sm:sticky sm:top-4 z-50",
   item: {
     base:
-      "relative flex min-h-[44px] items-center justify-center rounded-xl border border-transparent px-4 py-2 text-sm font-medium leading-tight transition duration-150 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white",
+      "relative flex min-h-[44px] items-center justify-center rounded-xl border border-transparent px-4 py-2 text-sm font-medium leading-tight transition duration-150 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--team-surface)]",
     active:
-      "border-primary-200 bg-white text-primary-700 shadow-[0_10px_24px_rgba(15,23,42,0.12)] ring-1 ring-primary-200",
+      "border-primary-200 bg-[color:var(--team-surface)] text-primary-700 shadow-[0_10px_24px_var(--team-card-shadow)] ring-1 ring-primary-200",
     inactive:
-      "text-slate-600 hover:bg-white/80 hover:text-primary-700 focus-visible:bg-white focus-visible:text-primary-700",
+      "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-primary-700 focus-visible:bg-[color:var(--team-surface)] focus-visible:text-primary-700",
     disabled: "opacity-45"
   },
   label: "relative z-10 whitespace-nowrap"
@@ -195,9 +195,9 @@ export function TabNav({
     <div className="flex flex-col gap-3">
       <div className="sm:hidden">
         <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">
-          <span>Section</span>
+          <span className="text-[color:var(--team-text-muted)]">Section</span>
           <select
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-200"
+            className="w-full rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-200"
             value={mobileValue}
             onChange={(event) => {
               const nextId = event.target.value;
