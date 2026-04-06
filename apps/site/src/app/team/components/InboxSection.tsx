@@ -882,7 +882,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
 
       <form
         method="get"
-        className={`flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm text-slate-600 shadow-md shadow-slate-200/50 ${
+        className={`flex flex-wrap items-center gap-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] px-4 py-3 text-sm text-[color:var(--team-text-muted)] shadow-[0_18px_36px_var(--team-card-shadow)] ${
           showConversation ? "hidden lg:flex" : ""
         }`}
       >
@@ -892,12 +892,12 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
           type="search"
           defaultValue={searchQuery}
           placeholder="Search name, phone, or email…"
-          className="min-w-[220px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+          className="min-w-[220px] flex-1 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
         />
         <select
           name="status"
           defaultValue={activeStatus}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+          className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
         >
           {THREAD_STATUSES.map((value) => (
             <option key={value} value={value}>
@@ -916,13 +916,13 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
 
       <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)_340px] xl:grid-cols-[400px_minmax(0,1fr)_380px]">
         <div
-          className={`space-y-4 rounded-3xl border border-slate-200 bg-white/90 p-4 shadow-xl shadow-slate-200/50 backdrop-blur ${
+          className={`space-y-4 rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur ${
             showConversation ? "hidden lg:block" : ""
           }`}
         >
           <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-slate-900">Threads</h3>
-            <span className="text-xs text-slate-500">
+            <h3 className="text-base font-semibold text-[color:var(--team-text)]">Threads</h3>
+            <span className="text-xs text-[color:var(--team-text-soft)]">
               {threads.length} {activeStatus === "all" ? "threads" : activeStatus}
             </span>
           </div>
@@ -1225,13 +1225,13 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         </div>
 
         <div
-          className={`rounded-3xl border border-slate-200 bg-white/90 shadow-xl shadow-slate-200/50 backdrop-blur ${
+          className={`rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur ${
             showConversation ? "" : "hidden lg:block"
           }`}
         >
           {activeContactId ? (
             <div className="flex flex-col gap-4 overflow-hidden p-5">
-              <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-3 border-b border-[color:var(--team-border)] pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <a
                     href={buildInboxHref({ status: activeStatus === "all" ? null : activeStatus })}
@@ -1780,18 +1780,18 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                 <InboxAutoScroll containerId="inbox-thread-scroll" bottomId="inbox-thread-bottom" depsKey={scrollKey} />
               </div>
 
-              <div className="-mx-5 relative z-10 border-t border-slate-200 bg-white/95 px-5 pt-3 pb-[calc(env(safe-area-inset-bottom)+1rem)] backdrop-blur">
+              <div className="-mx-5 relative z-10 border-t border-[color:var(--team-border)] bg-[color:var(--team-card)] px-5 pt-3 pb-[calc(env(safe-area-inset-bottom)+1rem)] backdrop-blur">
                 <form
                   action={sendThreadMessageAction}
                   method="post"
                   encType="multipart/form-data"
-                  className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4"
+                  className="space-y-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-4"
                 >
                   <input type="hidden" name="contactId" value={activeContactId} />
                   <input type="hidden" name="channel" value={requestedChannel} />
                   {selectedThreadId ? <input type="hidden" name="threadId" value={selectedThreadId} /> : null}
                   {requestedChannel === "email" ? (
-                    <label className="flex flex-col gap-1 text-xs text-slate-600">
+                    <label className="flex flex-col gap-1 text-xs text-[color:var(--team-text-muted)]">
                       <span>Subject</span>
                       <input
                         name="subject"
@@ -1800,7 +1800,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                       />
                     </label>
                   ) : null}
-                  <label className="flex flex-col gap-1 text-xs text-slate-600">
+                  <label className="flex flex-col gap-1 text-xs text-[color:var(--team-text-muted)]">
                     <span className="flex items-center justify-between gap-3">
                       <span>Message</span>
                       <InboxSpeechToTextButtonClient textareaId="inbox-thread-body" />
@@ -1808,16 +1808,16 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     <textarea id="inbox-thread-body" name="body" rows={3} className={TEAM_INPUT_COMPACT} />
                   </label>
                   {requestedChannel === "sms" || requestedChannel === "dm" ? (
-                    <label className="flex flex-col gap-1 text-xs text-slate-600">
+                    <label className="flex flex-col gap-1 text-xs text-[color:var(--team-text-muted)]">
                       <span>Attach photos (optional)</span>
                       <input
                         type="file"
                         name="attachments"
                         accept="image/*,video/*"
                         multiple
-                        className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
+                        className="block w-full rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-xs text-[color:var(--team-text-muted)]"
                       />
-                      <span className="text-[11px] text-slate-500">You can send photos with or without text.</span>
+                      <span className="text-[11px] text-[color:var(--team-text-soft)]">You can send photos with or without text.</span>
                     </label>
                   ) : null}
                   <SubmitButton
@@ -1845,36 +1845,36 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
           )}
         </div>
 
-        <div className="hidden rounded-3xl border border-slate-200 bg-white/90 shadow-xl shadow-slate-200/50 backdrop-blur lg:block">
+        <div className="hidden rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur lg:block">
           <div className="flex max-h-[78dvh] flex-col gap-4 overflow-hidden p-5">
-            <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-4">
+            <div className="flex items-start justify-between gap-3 border-b border-[color:var(--team-border)] pb-4">
               <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-slate-900">Details</h3>
-                <p className="mt-1 text-xs text-slate-500">Keep context handy while you reply.</p>
+                <h3 className="text-sm font-semibold text-[color:var(--team-text)]">Details</h3>
+                <p className="mt-1 text-xs text-[color:var(--team-text-soft)]">Keep context handy while you reply.</p>
               </div>
             </div>
 
             {activeContactId ? (
               <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-                <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+                <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-4">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="truncate text-sm font-semibold text-slate-900">
+                        <div className="truncate text-sm font-semibold text-[color:var(--team-text)]">
                           {activeContact?.name ?? "Unknown contact"}
                         </div>
                         <ContactNameEditorClient contactId={activeContactId} contactName={activeContact?.name ?? ""} />
                       </div>
-                      <div className="mt-1 space-y-1 text-xs text-slate-600">
+                      <div className="mt-1 space-y-1 text-xs text-[color:var(--team-text-muted)]">
                         {activeContact?.phone ? (
                           <div>Phone: {activeContact.phone}</div>
                         ) : (
-                          <div className="text-slate-400">Phone: not on file</div>
+                          <div className="text-[color:var(--team-text-soft)]">Phone: not on file</div>
                         )}
                         {activeContact?.email ? (
                           <div>Email: {activeContact.email}</div>
                         ) : (
-                          <div className="text-slate-400">Email: not on file</div>
+                          <div className="text-[color:var(--team-text-soft)]">Email: not on file</div>
                         )}
                         {activeThreadSummary?.assignedTo?.name ? (
                           <div>Assigned to: {activeThreadSummary.assignedTo.name}</div>
@@ -1900,11 +1900,11 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                   </div>
 
                   {activeProperty ? (
-                    <div className="mt-3 border-t border-slate-200/70 pt-3 text-xs text-slate-600">
-                      <div className="font-semibold text-slate-700">Address</div>
+                    <div className="mt-3 border-t border-[color:var(--team-border)] pt-3 text-xs text-[color:var(--team-text-muted)]">
+                      <div className="font-semibold text-[color:var(--team-text-muted)]">Address</div>
                       <div className="mt-1">
                         {activeProperty.addressLine1}
-                        <div className="text-slate-500">
+                        <div className="text-[color:var(--team-text-soft)]">
                           {activeProperty.city}, {activeProperty.state} {activeProperty.postalCode}
                         </div>
                       </div>

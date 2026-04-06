@@ -564,9 +564,9 @@ export async function OutboundSection({
             </form>
 
             <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="rounded-2xl border border-slate-200 bg-white">
+            <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)]">
               <table className="w-full table-fixed text-left text-xs">
-                <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <thead className="sticky top-0 z-10 bg-[color:var(--team-surface-muted)] text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">
                   <tr>
                     <th className="w-[52px] px-4 py-3">
                       <span className="sr-only">Select</span>
@@ -577,7 +577,7 @@ export async function OutboundSection({
                     <th className="hidden w-[176px] px-4 py-3 text-right md:table-cell">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-[color:var(--team-border)]">
                   {items.map((item) => {
                     const dueBadge = formatDueBadge(item);
                     const primaryContact = item.contacts.find((contact) => contact.id === item.primaryContactId) ?? item.contacts[0] ?? null;
@@ -592,27 +592,27 @@ export async function OutboundSection({
                             {dueBadge.label}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-slate-600">{item.attempt}</td>
+                        <td className="px-4 py-3 text-[color:var(--team-text-muted)]">{item.attempt}</td>
                         <td className="min-w-0 overflow-hidden px-4 py-3">
                           <a href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { accountId: item.id, taskId: item.primaryTaskId } })} className="block min-w-0">
-                            <div className="truncate text-sm font-semibold text-slate-900">{item.account.name}</div>
-                            <div className="mt-0.5 truncate text-[11px] text-slate-500">
+                            <div className="truncate text-sm font-semibold text-[color:var(--team-text)]">{item.account.name}</div>
+                            <div className="mt-0.5 truncate text-[11px] text-[color:var(--team-text-soft)]">
                               {primaryContact?.name ?? "No primary contact"}
                               {item.account.segment ? ` / ${item.account.segment}` : item.campaign ? ` / ${item.campaign}` : ""}
                             </div>
-                            <div className="mt-1 truncate text-[11px] text-slate-500">
+                            <div className="mt-1 truncate text-[11px] text-[color:var(--team-text-soft)]">
                               <span>{primaryContact?.phone ?? "No phone"}</span>
                               <span className="mx-1">{"\u2022"}</span>
                               <span>{primaryContact?.email ?? "No email"}</span>
                               <span className="mx-1">{"\u2022"}</span>
                               <span>{item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}</span>
                             </div>
-                            <div className="mt-1 truncate text-[11px] text-slate-500">
+                            <div className="mt-1 truncate text-[11px] text-[color:var(--team-text-soft)]">
                               {item.contactCount} contact{item.contactCount === 1 ? "" : "s"} / {item.openTaskCount} open task{item.openTaskCount === 1 ? "" : "s"} / Account {item.account.status?.replace(/_/g, " ") ?? "linked"}
                             </div>
                           </a>
                         </td>
-                        <td className="relative hidden w-[176px] border-l border-slate-100 bg-white px-4 py-3 md:table-cell">
+                        <td className="relative hidden w-[176px] border-l border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-4 py-3 md:table-cell">
                           <div className="flex flex-col items-end gap-2">
                             <form action={startContactCallAction}>
                               <input type="hidden" name="contactId" value={primaryContact?.id ?? item.primaryContactId} />
@@ -645,37 +645,37 @@ export async function OutboundSection({
               </table>
             </div>
 
-            <aside className="rounded-2xl border border-slate-200 bg-white p-4">
+            <aside className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
               {selected ? (
                 <div className="space-y-4">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Selected account</p>
-                    <p className="mt-1 text-base font-semibold text-slate-900">{selected.account.name}</p>
-                    <p className="mt-1 text-xs text-slate-600">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">Selected account</p>
+                    <p className="mt-1 text-base font-semibold text-[color:var(--team-text)]">{selected.account.name}</p>
+                    <p className="mt-1 text-xs text-[color:var(--team-text-muted)]">
                       {selected.contactCount} contact{selected.contactCount === 1 ? "" : "s"} / {selected.openTaskCount} open task{selected.openTaskCount === 1 ? "" : "s"}
                     </p>
-                      <p className="mt-1 text-[11px] text-slate-500">
+                      <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
                         Account {selected.account.status?.replace(/_/g, " ") ?? "linked"}
                         {selected.account.segment ? ` / ${selected.account.segment}` : ""}
                       </p>
-                      <p className="mt-1 text-[11px] text-slate-500">
+                      <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
                         Attempt {selected.attempt} / {selected.campaign ?? "outbound"} / Due {formatDue(selected)}
                       </p>
-                      <p className="mt-1 text-[11px] text-slate-500">
+                      <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">
                         {selected.dueAt ? "Cadence started" : "Cadence not started"}
                         {formatTimestamp(selected.startedAt) ? ` (${formatTimestamp(selected.startedAt)})` : ""}
                       </p>
                       {formatTimestamp(selected.reminderAt) ? (
-                        <p className="mt-1 text-[11px] text-slate-500">Reminder scheduled {formatTimestamp(selected.reminderAt)}</p>
+                        <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">Reminder scheduled {formatTimestamp(selected.reminderAt)}</p>
                       ) : null}
                       {selected.account.lastTouchAt ? (
-                        <p className="mt-1 text-[11px] text-slate-500">Account last touch {formatTimestamp(selected.account.lastTouchAt)}</p>
+                        <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">Account last touch {formatTimestamp(selected.account.lastTouchAt)}</p>
                       ) : null}
                       {selected.account.nextTouchAt ? (
-                        <p className="mt-1 text-[11px] text-slate-500">Account next touch {formatTimestamp(selected.account.nextTouchAt)}</p>
+                        <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">Account next touch {formatTimestamp(selected.account.nextTouchAt)}</p>
                       ) : null}
                       {selected.noteSnippet ? (
-                        <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{selected.noteSnippet}</p>
+                        <p className="mt-3 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-3 py-2 text-xs text-[color:var(--team-text-muted)]">{selected.noteSnippet}</p>
                       ) : null}
                     </div>
 
@@ -751,11 +751,11 @@ export async function OutboundSection({
                     </div>
                   ) : null}
 
-                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Account history</p>
-                        <p className="mt-1 text-xs text-slate-600">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">Account history</p>
+                        <p className="mt-1 text-xs text-[color:var(--team-text-muted)]">
                           Recent import, draft, disposition, recap, and conversion activity for this relationship.
                         </p>
                       </div>
@@ -765,21 +765,21 @@ export async function OutboundSection({
                         {selected.account.history.map((entry) => {
                           const kind = formatHistoryKind(entry.kind);
                           return (
-                            <div key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                            <div key={entry.id} className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-3 py-3">
                               <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                   <div className="flex flex-wrap items-center gap-2">
                                     <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${kind.tone}`}>
                                       {kind.label}
                                     </span>
-                                    <span className="text-sm font-semibold text-slate-900">{entry.title}</span>
+                                    <span className="text-sm font-semibold text-[color:var(--team-text)]">{entry.title}</span>
                                   </div>
-                                  <p className="mt-1 text-xs text-slate-700">{entry.summary}</p>
+                                  <p className="mt-1 text-xs text-[color:var(--team-text-muted)]">{entry.summary}</p>
                                   {entry.contactName ? (
-                                    <p className="mt-1 text-[11px] text-slate-500">{entry.contactName}</p>
+                                    <p className="mt-1 text-[11px] text-[color:var(--team-text-soft)]">{entry.contactName}</p>
                                   ) : null}
                                 </div>
-                                <div className="shrink-0 text-[11px] text-slate-500">
+                                <div className="shrink-0 text-[11px] text-[color:var(--team-text-soft)]">
                                   {formatTimestamp(entry.at) ?? entry.at}
                                 </div>
                               </div>
@@ -788,19 +788,19 @@ export async function OutboundSection({
                         })}
                       </div>
                     ) : (
-                      <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                      <div className="mt-3 rounded-xl border border-dashed border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-3 py-3 text-xs text-[color:var(--team-text-soft)]">
                         No account activity yet beyond the current queue state.
                       </div>
                     )}
                   </div>
 
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Linked contacts</p>
+                  <div className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">Linked contacts</p>
                     <div className="mt-2 space-y-3">
                       {selected.contacts.map((contact) => (
-                        <div key={contact.id} className="rounded-xl border border-slate-200 bg-white p-3">
-                          <div className="text-sm font-semibold text-slate-900">{contact.name}</div>
-                          <div className="mt-1 text-xs text-slate-600">
+                        <div key={contact.id} className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-3">
+                          <div className="text-sm font-semibold text-[color:var(--team-text)]">{contact.name}</div>
+                          <div className="mt-1 text-xs text-[color:var(--team-text-muted)]">
                             {contact.phone ?? "No phone"} / {contact.email ?? "No email"}
                           </div>
                           <div className="mt-2 flex flex-wrap gap-2">
