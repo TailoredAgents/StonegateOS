@@ -8,6 +8,9 @@ export type OutboundAccountBrief = {
   bestOpener: string;
   likelyObjections: string[];
   recommendedNextMove: string;
+  partnerFit: "portal_first" | "managed_direct" | "hybrid" | "not_a_fit";
+  fitScore: number;
+  fitReason: string;
   provider: "openai" | "fallback";
   model: string | null;
   updatedAt: string;
@@ -122,6 +125,12 @@ function fallbackBrief(input: {
       "Call first if a phone number exists, then send a short follow-up with one clear question and a simple referral angle.",
       180,
     ),
+    partnerFit: "managed_direct",
+    fitScore: 64,
+    fitReason: clampText(
+      "This looks more like a relationship to develop directly first, then move into portal use if they start sending repeat work.",
+      180,
+    ),
     provider: "fallback",
     model: null,
     updatedAt: new Date().toISOString(),
@@ -144,6 +153,28 @@ function parseStoredBrief(value: unknown): OutboundAccountBrief | null {
       ? record["recommendedNextMove"]
       : null,
   );
+  const partnerFitRaw =
+    typeof record["partnerFit"] === "string" ? record["partnerFit"] : null;
+  const partnerFit =
+    partnerFitRaw === "portal_first" ||
+    partnerFitRaw === "managed_direct" ||
+    partnerFitRaw === "hybrid" ||
+    partnerFitRaw === "not_a_fit"
+      ? partnerFitRaw
+      : null;
+  const fitScoreRaw =
+    typeof record["fitScore"] === "number"
+      ? record["fitScore"]
+      : typeof record["fitScore"] === "string"
+        ? Number(record["fitScore"])
+        : null;
+  const fitScore =
+    typeof fitScoreRaw === "number" && Number.isFinite(fitScoreRaw)
+      ? Math.max(0, Math.min(100, Math.round(fitScoreRaw)))
+      : null;
+  const fitReason = cleanText(
+    typeof record["fitReason"] === "string" ? record["fitReason"] : null,
+  );
   const provider =
     record["provider"] === "openai"
       ? "openai"
@@ -160,6 +191,9 @@ function parseStoredBrief(value: unknown): OutboundAccountBrief | null {
     !serviceAngle ||
     !bestOpener ||
     !recommendedNextMove ||
+    !partnerFit ||
+    fitScore === null ||
+    !fitReason ||
     !provider ||
     !updatedAt
   ) {
@@ -173,6 +207,9 @@ function parseStoredBrief(value: unknown): OutboundAccountBrief | null {
     bestOpener,
     likelyObjections: safeArray(record["likelyObjections"]),
     recommendedNextMove,
+    partnerFit,
+    fitScore,
+    fitReason,
     provider,
     model: cleanText(typeof record["model"] === "string" ? record["model"] : null),
     updatedAt,
@@ -243,6 +280,9 @@ async function generateOpenAiBrief(input: {
                 .join(" | ")}`
             : "Known contacts: none",
           "Return JSON with keys: summary, whyFit, serviceAngle, bestOpener, likelyObjections, recommendedNextMove.",
+          "Also return partnerFit, fitScore, fitReason.",
+          "partnerFit must be one of: portal_first, managed_direct, hybrid, not_a_fit.",
+          "fitScore must be an integer 0 to 100.",
           "Each field should be concise. likelyObjections should be an array of 2 to 4 short strings.",
         ]
           .filter(Boolean)
@@ -271,6 +311,12 @@ async function generateOpenAiBrief(input: {
               maxItems: 4,
             },
             recommendedNextMove: { type: "string" },
+            partnerFit: {
+              type: "string",
+              enum: ["portal_first", "managed_direct", "hybrid", "not_a_fit"],
+            },
+            fitScore: { type: "integer", minimum: 0, maximum: 100 },
+            fitReason: { type: "string" },
           },
           required: [
             "summary",
@@ -279,6 +325,9 @@ async function generateOpenAiBrief(input: {
             "bestOpener",
             "likelyObjections",
             "recommendedNextMove",
+            "partnerFit",
+            "fitScore",
+            "fitReason",
           ],
         },
       },
@@ -350,6 +399,28 @@ async function generateOpenAiBrief(input: {
         ? parsed["recommendedNextMove"]
         : null,
     );
+    const partnerFitRaw =
+      typeof parsed["partnerFit"] === "string" ? parsed["partnerFit"] : null;
+    const partnerFit =
+      partnerFitRaw === "portal_first" ||
+      partnerFitRaw === "managed_direct" ||
+      partnerFitRaw === "hybrid" ||
+      partnerFitRaw === "not_a_fit"
+        ? partnerFitRaw
+        : null;
+    const fitScoreRaw =
+      typeof parsed["fitScore"] === "number"
+        ? parsed["fitScore"]
+        : typeof parsed["fitScore"] === "string"
+          ? Number(parsed["fitScore"])
+          : null;
+    const fitScore =
+      typeof fitScoreRaw === "number" && Number.isFinite(fitScoreRaw)
+        ? Math.max(0, Math.min(100, Math.round(fitScoreRaw)))
+        : null;
+    const fitReason = cleanText(
+      typeof parsed["fitReason"] === "string" ? parsed["fitReason"] : null,
+    );
     const likelyObjections = safeArray(parsed["likelyObjections"]);
 
     if (
@@ -358,6 +429,9 @@ async function generateOpenAiBrief(input: {
       !serviceAngle ||
       !bestOpener ||
       !recommendedNextMove ||
+      !partnerFit ||
+      fitScore === null ||
+      !fitReason ||
       likelyObjections.length < 2
     ) {
       return null;
@@ -370,6 +444,9 @@ async function generateOpenAiBrief(input: {
       bestOpener: clampText(bestOpener, 180),
       likelyObjections: likelyObjections.map((item) => clampText(item, 100)),
       recommendedNextMove: clampText(recommendedNextMove, 180),
+      partnerFit,
+      fitScore,
+      fitReason: clampText(fitReason, 180),
       provider: "openai",
       model,
       updatedAt: new Date().toISOString(),
@@ -398,6 +475,8 @@ export async function ensureOutboundAccountBrief(input: {
       sourceListName: partnerAccounts.sourceListName,
       city: partnerAccounts.city,
       state: partnerAccounts.state,
+      portalFit: partnerAccounts.portalFit,
+      fitScore: partnerAccounts.fitScore,
       lastDisposition: partnerAccounts.lastDisposition,
       lastTouchAt: partnerAccounts.lastTouchAt,
       nextTouchAt: partnerAccounts.nextTouchAt,
@@ -481,6 +560,8 @@ export async function ensureOutboundAccountBrief(input: {
   await db
     .update(partnerAccounts)
     .set({
+      portalFit: brief.partnerFit,
+      fitScore: brief.fitScore,
       aiAccountBrief: brief,
       updatedAt: new Date(),
     })

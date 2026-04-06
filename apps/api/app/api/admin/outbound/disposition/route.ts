@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, eq, ilike, isNotNull, isNull, sql } from "drizzle-orm";
-import { contacts, crmTasks, getDb, outboxEvents } from "@/db";
+import { contacts, crmTasks, getDb, outboxEvents, partnerAccounts } from "@/db";
 import { isAdminRequest } from "../../../web/admin";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -43,6 +43,20 @@ function normalizeDisposition(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim().toLowerCase();
   return trimmed.length ? trimmed : null;
+}
+
+function normalizePartnerTypeFromFit(
+  value: string | null | undefined,
+): "portal_first" | "managed_direct" | "hybrid" | null {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (
+    normalized === "portal_first" ||
+    normalized === "managed_direct" ||
+    normalized === "hybrid"
+  ) {
+    return normalized;
+  }
+  return null;
 }
 
 type DbClient = ReturnType<typeof getDb>;
@@ -275,9 +289,22 @@ export async function POST(request: NextRequest): Promise<Response> {
         .toUTC()
         .toJSDate();
 
+      let partnerType: "portal_first" | "managed_direct" | "hybrid" | null = null;
+      if (partnerAccountId) {
+        const [account] = await db
+          .select({
+            portalFit: partnerAccounts.portalFit,
+          })
+          .from(partnerAccounts)
+          .where(eq(partnerAccounts.id, partnerAccountId))
+          .limit(1);
+        partnerType = normalizePartnerTypeFromFit(account?.portalFit ?? null);
+      }
+
       const nowIso = now.toISOString();
       await db.update(contacts).set({
         partnerStatus: "partner",
+        partnerType: partnerType ?? undefined,
         partnerOwnerMemberId: task.assignedTo ?? null,
         partnerSince: sql`coalesce(${contacts.partnerSince}, ${nowIso})`,
         partnerLastTouchAt: now,
@@ -296,7 +323,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         action: "partner.converted",
         entityType: "contact",
         entityId: task.contactId,
-        meta: { from: "outbound", campaign }
+        meta: { from: "outbound", campaign, partnerType }
       });
     }
 

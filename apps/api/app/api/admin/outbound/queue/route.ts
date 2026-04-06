@@ -138,6 +138,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       accountName: partnerAccounts.name,
       accountStatus: partnerAccounts.status,
       accountSegment: partnerAccounts.segment,
+      accountPortalFit: partnerAccounts.portalFit,
+      accountFitScore: partnerAccounts.fitScore,
       accountLastTouchAt: partnerAccounts.lastTouchAt,
       accountNextTouchAt: partnerAccounts.nextTouchAt
     })
@@ -197,6 +199,8 @@ export async function GET(request: NextRequest): Promise<Response> {
             name: row.accountName ?? company ?? name,
             status: row.accountStatus ?? null,
             segment: row.accountSegment ?? null,
+            portalFit: row.accountPortalFit ?? null,
+            fitScore: typeof row.accountFitScore === "number" ? row.accountFitScore : null,
             lastTouchAt:
               row.accountLastTouchAt instanceof Date
                 ? row.accountLastTouchAt.toISOString()
@@ -244,9 +248,11 @@ export async function GET(request: NextRequest): Promise<Response> {
       id: string;
       key: string;
       name: string;
-      status: string | null;
-      segment: string | null;
-      campaign: string | null;
+        status: string | null;
+        segment: string | null;
+        portalFit: string | null;
+        fitScore: number | null;
+        campaign: string | null;
       primaryTaskId: string;
       primaryContactId: string;
       title: string | null;
@@ -293,6 +299,8 @@ export async function GET(request: NextRequest): Promise<Response> {
         name: item.account?.name ?? item.company ?? item.contact.name,
         status: item.account?.status ?? null,
         segment: item.account?.segment ?? null,
+        portalFit: item.account?.portalFit ?? null,
+        fitScore: item.account?.fitScore ?? null,
         campaign: item.campaign ?? null,
         primaryTaskId: item.id,
         primaryContactId: item.contact.id,
@@ -354,6 +362,8 @@ export async function GET(request: NextRequest): Promise<Response> {
     if (!existing.campaign && item.campaign) existing.campaign = item.campaign;
     if (!existing.segment && item.account?.segment) existing.segment = item.account.segment;
     if (!existing.status && item.account?.status) existing.status = item.account.status;
+    if (!existing.portalFit && item.account?.portalFit) existing.portalFit = item.account.portalFit;
+    if (existing.fitScore === null && typeof item.account?.fitScore === "number") existing.fitScore = item.account.fitScore;
     if (!existing.lastTouchAt && item.account?.lastTouchAt) existing.lastTouchAt = item.account.lastTouchAt;
     if (!existing.nextTouchAt && item.account?.nextTouchAt) existing.nextTouchAt = item.account.nextTouchAt;
 
@@ -495,6 +505,8 @@ export async function GET(request: NextRequest): Promise<Response> {
         name: item.name,
         status: item.status,
         segment: item.segment,
+        portalFit: item.portalFit,
+        fitScore: item.fitScore,
         lastTouchAt: item.lastTouchAt,
         nextTouchAt: item.nextTouchAt,
         brief: briefByAccountId.get(item.id) ?? null,

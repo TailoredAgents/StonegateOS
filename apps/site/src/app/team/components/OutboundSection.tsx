@@ -29,6 +29,9 @@ type OutboundAccountBrief = {
   bestOpener: string;
   likelyObjections: string[];
   recommendedNextMove: string;
+  partnerFit: "portal_first" | "managed_direct" | "hybrid" | "not_a_fit";
+  fitScore: number;
+  fitReason: string;
   provider: "openai" | "fallback";
   model: string | null;
   updatedAt: string;
@@ -57,6 +60,8 @@ type OutboundQueueItem = {
     name: string;
     status: string | null;
     segment: string | null;
+    portalFit?: string | null;
+    fitScore?: number | null;
     lastTouchAt: string | null;
     nextTouchAt: string | null;
     brief?: OutboundAccountBrief | null;
@@ -133,6 +138,15 @@ function formatDueBadge(item: OutboundQueueItem): { label: string; tone: string 
     if (item.minutesUntilDue < 60) return { label: `Due in ${item.minutesUntilDue}m`, tone: "bg-amber-50 text-amber-700" };
   }
   return { label: "Scheduled", tone: "bg-slate-100 text-slate-600" };
+}
+
+function formatPartnerFit(value: string | null | undefined): string {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "portal_first") return "Portal first";
+  if (normalized === "managed_direct") return "Managed direct";
+  if (normalized === "hybrid") return "Hybrid";
+  if (normalized === "not_a_fit") return "Not a fit";
+  return "Unclassified";
 }
 
 function buildOutboundHref(args: { memberId?: string; filters: OutboundFilters; patch?: Partial<OutboundFilters> }): string {
@@ -617,6 +631,22 @@ export async function OutboundSection({
                         <div>
                           <p className="font-semibold text-slate-900">Best next move</p>
                           <p className="mt-1">{selected.account.brief.recommendedNextMove}</p>
+                        </div>
+                        <div className="rounded-lg border border-primary-200 bg-white px-3 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-slate-900">Suggested partner path</p>
+                              <p className="mt-1 text-slate-700">{selected.account.brief.fitReason}</p>
+                            </div>
+                            <div className="text-right">
+                              <div className="rounded-full border border-primary-200 bg-primary-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
+                                {formatPartnerFit(selected.account.brief.partnerFit)}
+                              </div>
+                              <div className="mt-2 text-[11px] text-slate-500">
+                                Fit score {selected.account.brief.fitScore}/100
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
