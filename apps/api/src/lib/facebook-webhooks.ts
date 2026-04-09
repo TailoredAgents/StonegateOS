@@ -178,7 +178,7 @@ export async function fetchFacebookPageAccessToken(pageId: string, systemUserTok
       return null;
     }
     const data = (result.json ?? null) as { access_token?: string | null } | null;
-    const token = data.access_token?.trim() ?? null;
+    const token = data?.access_token?.trim() ?? null;
     if (token) {
       pageTokenCache.set(pageId, { token, fetchedAt: Date.now() });
     }
@@ -225,10 +225,15 @@ export async function fetchFacebookSenderName(pageId: string | null, senderId: s
       return null;
     }
     const data = (result.json ?? null) as { name?: string; first_name?: string; last_name?: string } | null;
-    const full = typeof data.name === "string" && data.name.trim().length ? data.name.trim() : null;
+    const full =
+      typeof data?.name === "string" && data.name.trim().length
+        ? data.name.trim()
+        : null;
     if (full) return full;
-    const first = typeof data.first_name === "string" ? data.first_name.trim() : "";
-    const last = typeof data.last_name === "string" ? data.last_name.trim() : "";
+    const first =
+      typeof data?.first_name === "string" ? data.first_name.trim() : "";
+    const last =
+      typeof data?.last_name === "string" ? data.last_name.trim() : "";
     const combined = `${first} ${last}`.trim();
     return combined.length ? combined : null;
   } catch (error) {

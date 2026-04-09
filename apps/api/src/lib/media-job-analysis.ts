@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { eq } from "drizzle-orm";
-import ffmpegStatic from "ffmpeg-static";
 import { z } from "zod";
 import { getDb, mediaJobAnalyses } from "@/db";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
@@ -799,7 +798,7 @@ function parseDurationSeconds(stderr: string): number | null {
 }
 
 async function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  const binary = typeof ffmpegStatic === "string" && ffmpegStatic.trim().length > 0 ? ffmpegStatic : null;
+  const binary = readEnvString("FFMPEG_PATH") ?? "ffmpeg";
   if (!binary) {
     throw new Error("ffmpeg_missing");
   }
