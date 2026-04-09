@@ -11,6 +11,12 @@ const DEFAULT_PLACEHOLDER_POSTAL = "00000";
 const PAGE_TOKEN_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const pageTokenCache = new Map<string, { token: string; fetchedAt: number }>();
 
+type FacebookResponseDiagnostics = {
+  fbTraceId: string | null;
+  fbDebug: string | null;
+  wwwAuthenticate: string | null;
+};
+
 export type FacebookLeadgenField = {
   name?: string;
   values?: string[];
@@ -110,6 +116,46 @@ function readConfiguredFacebookPageId(): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
+function readConfiguredFacebookAppSecret(): string | null {
+  const value = process.env["FB_APP_SECRET"];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function getFacebookResponseDiagnostics(response: Response): FacebookResponseDiagnostics {
+  return {
+    fbTraceId: response.headers.get("x-fb-trace-id"),
+    fbDebug: response.headers.get("x-fb-debug"),
+    wwwAuthenticate: response.headers.get("www-authenticate")
+  };
+}
+
+type FacebookGraphGetResult = {
+  ok: boolean;
+  status: number;
+  text: string;
+  json: unknown | null;
+  diagnostics: FacebookResponseDiagnostics;
+};
+
+async function runFacebookGraphGet(url: URL): Promise<FacebookGraphGetResult> {
+  const response = await fetch(url.toString(), { method: "GET" });
+  const text = await response.text();
+  let json: unknown | null = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = null;
+  }
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    text,
+    json,
+    diagnostics: getFacebookResponseDiagnostics(response)
+  };
+}
+
 export async function fetchFacebookPageAccessToken(pageId: string, systemUserToken: string): Promise<string | null> {
   const cached = pageTokenCache.get(pageId);
   if (cached && Date.now() - cached.fetchedAt < PAGE_TOKEN_CACHE_TTL_MS) {
@@ -121,13 +167,17 @@ export async function fetchFacebookPageAccessToken(pageId: string, systemUserTok
   url.searchParams.set("access_token", systemUserToken);
 
   try {
-    const response = await fetch(url.toString(), { method: "GET" });
-    const text = await response.text();
-    if (!response.ok) {
-      console.warn("[facebook] page_token_failed", { status: response.status, body: text });
+    const result = await runFacebookGraphGet(url);
+    if (!result.ok) {
+      console.warn("[facebook] page_token_failed", {
+        status: result.status,
+        pageId,
+        body: result.text,
+        ...result.diagnostics
+      });
       return null;
     }
-    const data = JSON.parse(text) as { access_token?: string | null };
+    const data = (result.json ?? null) as { access_token?: string | null } | null;
     const token = data.access_token?.trim() ?? null;
     if (token) {
       pageTokenCache.set(pageId, { token, fetchedAt: Date.now() });
@@ -163,18 +213,18 @@ export async function fetchFacebookSenderName(pageId: string | null, senderId: s
   url.searchParams.set("access_token", accessToken);
 
   try {
-    const response = await fetch(url.toString(), { method: "GET" });
-    const text = await response.text();
-    if (!response.ok) {
+    const result = await runFacebookGraphGet(url);
+    if (!result.ok) {
       console.warn("[facebook] sender_lookup_failed", {
-        status: response.status,
+        status: result.status,
         pageId: resolvedPageId,
         senderId,
-        body: text
+        body: result.text,
+        ...result.diagnostics
       });
       return null;
     }
-    const data = JSON.parse(text) as { name?: string; first_name?: string; last_name?: string };
+    const data = (result.json ?? null) as { name?: string; first_name?: string; last_name?: string } | null;
     const full = typeof data.name === "string" && data.name.trim().length ? data.name.trim() : null;
     if (full) return full;
     const first = typeof data.first_name === "string" ? data.first_name.trim() : "";
@@ -185,6 +235,120 @@ export async function fetchFacebookSenderName(pageId: string | null, senderId: s
     console.warn("[facebook] sender_lookup_error", { pageId: resolvedPageId, senderId, error: String(error) });
     return null;
   }
+}
+
+export async function diagnoseFacebookMessengerLookup(input: {
+  senderId: string;
+  pageId?: string | null;
+  appId?: string | null;
+}): Promise<Record<string, unknown>> {
+  const resolvedPageId = input.pageId?.trim() || readConfiguredFacebookPageId();
+  const { systemUserToken, pageAccessToken } = resolveFacebookToken();
+  const appSecret = readConfiguredFacebookAppSecret();
+  const appId = input.appId?.trim() || null;
+
+  const result: Record<string, unknown> = {
+    pageId: resolvedPageId,
+    senderId: input.senderId,
+    tokenSource: pageAccessToken ? "page_access_token" : systemUserToken ? "system_user_token" : "missing",
+    env: {
+      hasSystemUserToken: Boolean(systemUserToken),
+      hasPageAccessToken: Boolean(pageAccessToken),
+      hasAppSecret: Boolean(appSecret),
+      hasAppId: Boolean(appId)
+    }
+  };
+
+  if (systemUserToken && appSecret && appId) {
+    const debugUrl = new URL("https://graph.facebook.com/debug_token");
+    debugUrl.searchParams.set("input_token", systemUserToken);
+    debugUrl.searchParams.set("access_token", `${appId}|${appSecret}`);
+    try {
+      const debugResult = await runFacebookGraphGet(debugUrl);
+      result["systemTokenDebug"] = {
+        ok: debugResult.ok,
+        status: debugResult.status,
+        body: debugResult.json ?? debugResult.text,
+        ...debugResult.diagnostics
+      };
+    } catch (error) {
+      result["systemTokenDebug"] = {
+        ok: false,
+        error: String(error)
+      };
+    }
+  }
+
+  let effectivePageToken: string | null = pageAccessToken;
+  if (!effectivePageToken && resolvedPageId && systemUserToken) {
+    const pageTokenUrl = new URL(`https://graph.facebook.com/v24.0/${resolvedPageId}`);
+    pageTokenUrl.searchParams.set("fields", "id,name,access_token");
+    pageTokenUrl.searchParams.set("access_token", systemUserToken);
+    const pageTokenResult = await runFacebookGraphGet(pageTokenUrl);
+    const pageTokenBody =
+      pageTokenResult.json && typeof pageTokenResult.json === "object"
+        ? (pageTokenResult.json as Record<string, unknown>)
+        : null;
+    effectivePageToken =
+      typeof pageTokenBody?.["access_token"] === "string" && pageTokenBody["access_token"].trim().length > 0
+        ? pageTokenBody["access_token"].trim()
+        : null;
+
+    result["pageTokenFetch"] = {
+      ok: pageTokenResult.ok,
+      status: pageTokenResult.status,
+      pageTokenResolved: Boolean(effectivePageToken),
+      body:
+        pageTokenBody && typeof pageTokenBody["access_token"] === "string"
+          ? { ...pageTokenBody, access_token: "[redacted]" }
+          : pageTokenResult.json ?? pageTokenResult.text,
+      ...pageTokenResult.diagnostics
+    };
+  }
+
+  if (!effectivePageToken) {
+    result["senderLookup"] = {
+      ok: false,
+      error: "page_access_token_unavailable"
+    };
+    return result;
+  }
+
+  if (resolvedPageId) {
+    const pageInspectUrl = new URL(`https://graph.facebook.com/v24.0/${resolvedPageId}`);
+    pageInspectUrl.searchParams.set("fields", "id,name");
+    pageInspectUrl.searchParams.set("access_token", effectivePageToken);
+    const pageInspectResult = await runFacebookGraphGet(pageInspectUrl);
+    result["pageInspect"] = {
+      ok: pageInspectResult.ok,
+      status: pageInspectResult.status,
+      body: pageInspectResult.json ?? pageInspectResult.text,
+      ...pageInspectResult.diagnostics
+    };
+
+    const subscribedAppsUrl = new URL(`https://graph.facebook.com/v24.0/${resolvedPageId}/subscribed_apps`);
+    subscribedAppsUrl.searchParams.set("access_token", effectivePageToken);
+    const subscribedAppsResult = await runFacebookGraphGet(subscribedAppsUrl);
+    result["pageSubscribedApps"] = {
+      ok: subscribedAppsResult.ok,
+      status: subscribedAppsResult.status,
+      body: subscribedAppsResult.json ?? subscribedAppsResult.text,
+      ...subscribedAppsResult.diagnostics
+    };
+  }
+
+  const senderLookupUrl = new URL(`https://graph.facebook.com/v24.0/${input.senderId}`);
+  senderLookupUrl.searchParams.set("fields", "id,name,first_name,last_name");
+  senderLookupUrl.searchParams.set("access_token", effectivePageToken);
+  const senderLookupResult = await runFacebookGraphGet(senderLookupUrl);
+  result["senderLookup"] = {
+    ok: senderLookupResult.ok,
+    status: senderLookupResult.status,
+    body: senderLookupResult.json ?? senderLookupResult.text,
+    ...senderLookupResult.diagnostics
+  };
+
+  return result;
 }
 
 export async function fetchFacebookLeadgenDetails(
