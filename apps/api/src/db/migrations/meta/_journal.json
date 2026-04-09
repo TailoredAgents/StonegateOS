@@ -323,6 +323,13 @@
       "when": 1775342400000,
       "tag": "0045_partner_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1775649600000,
+      "tag": "0046_commission_restructure",
+      "breakpoints": true
     }
   ]
 }

@@ -33,10 +33,8 @@ const EXACT_CREW_RULES: readonly ExactCrewRule[] = [
     key: "austin+jeffrey",
     memberIds: [TEAM_MEMBER_IDS.austin, TEAM_MEMBER_IDS.jeffreyHacker],
     splitBpsByMemberId: {
-      // Exact 1:2 weights so Austin + Jeffrey demo jobs land on a true
-      // one-third / two-thirds split without basis-point rounding drift.
-      [TEAM_MEMBER_IDS.austin]: 1,
-      [TEAM_MEMBER_IDS.jeffreyHacker]: 2,
+      [TEAM_MEMBER_IDS.austin]: 5000,
+      [TEAM_MEMBER_IDS.jeffreyHacker]: 5000,
     },
   },
   {
@@ -55,9 +53,9 @@ const EXACT_CREW_RULES: readonly ExactCrewRule[] = [
       TEAM_MEMBER_IDS.jeffreyHacker,
     ],
     splitBpsByMemberId: {
-      [TEAM_MEMBER_IDS.austin]: 2700,
-      [TEAM_MEMBER_IDS.devon]: 2300,
-      [TEAM_MEMBER_IDS.jeffreyHacker]: 5000,
+      [TEAM_MEMBER_IDS.austin]: 4000,
+      [TEAM_MEMBER_IDS.devon]: 2000,
+      [TEAM_MEMBER_IDS.jeffreyHacker]: 4000,
     },
   },
 ] as const;

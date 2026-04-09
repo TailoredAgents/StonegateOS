@@ -835,7 +835,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
                       {fmtMoney(commissionSummary.totalsCents.sales, "USD")}
                     </div>
                     <div>
-                      Marketing:{" "}
+                      Management:{" "}
                       {fmtMoney(commissionSummary.totalsCents.marketing, "USD")}
                     </div>
                     <div>

@@ -4,6 +4,8 @@ import { callAdminApi } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
 const ADMIN_COOKIE = "myst-admin-session";
+const SALES_RATE_BPS = 500;
+const MANAGEMENT_RATE_BPS = 500;
 
 export const dynamic = "force-dynamic";
 
@@ -32,12 +34,9 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const formData = await request.formData();
-  const marketingMemberId = formData.get("marketingMemberId");
-  const salesRateBps = parsePercentToBps(formData.get("salesRatePercent"));
-  const marketingRateBps = parsePercentToBps(formData.get("marketingRatePercent"));
   const crewPoolRateBps = parsePercentToBps(formData.get("crewPoolRatePercent"));
 
-  if (salesRateBps === null || marketingRateBps === null || crewPoolRateBps === null) {
+  if (crewPoolRateBps === null) {
     const response = NextResponse.redirect(redirectTo, 303);
     response.cookies.set({
       name: "myst-flash-error",
@@ -52,10 +51,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     payoutWeekday: 1,
     payoutHour: 12,
     payoutMinute: 0,
-    salesRateBps,
-    marketingRateBps,
+    salesRateBps: SALES_RATE_BPS,
+    marketingRateBps: MANAGEMENT_RATE_BPS,
     crewPoolRateBps,
-    marketingMemberId: typeof marketingMemberId === "string" && marketingMemberId.trim().length > 0 ? marketingMemberId.trim() : null
+    marketingMemberId: null
   };
 
   const apiResponse = await callAdminApi("/api/admin/commissions/settings", {

@@ -143,7 +143,7 @@ function formatAddress(row: {
 
 function formatRoleLabel(role: CommissionDetailRow["role"]): string {
   if (role === "sales") return "Sales";
-  if (role === "marketing") return "Marketing";
+  if (role === "marketing") return "Management";
   return "Crew";
 }
 
@@ -183,7 +183,40 @@ export function describeCommissionMath(detail: Pick<CommissionDetailRow, "role" 
   effectivePercentLabel: string;
 } {
   const meta = detail.meta;
-  if (detail.role === "sales" || detail.role === "marketing") {
+  if (detail.role === "sales") {
+    const rateBps = readMetaNumber(meta, "rateBps");
+    if (rateBps === null) {
+      return {
+        mathLabel: "Rate unavailable",
+        effectivePercentLabel: "Unknown",
+      };
+    }
+    return {
+      mathLabel: `${fmtPercentFromBps(rateBps)} of base`,
+      effectivePercentLabel: fmtPercentFromBps(rateBps),
+    };
+  }
+
+  if (detail.role === "marketing") {
+    const totalRateBps = readMetaNumber(meta, "totalRateBps");
+    const splitBps = readMetaNumber(meta, "splitBps");
+    const totalSplitBps = readMetaNumber(meta, "totalSplitBps");
+    if (
+      totalRateBps !== null &&
+      splitBps !== null &&
+      totalSplitBps !== null &&
+      totalSplitBps > 0
+    ) {
+      const effectivePercent = (totalRateBps * splitBps) / totalSplitBps / 100;
+      return {
+        mathLabel: `${fmtPercentFromBps(totalRateBps)} management pool x ${formatSplitLabel(
+          splitBps,
+          totalSplitBps,
+        )} split`,
+        effectivePercentLabel: fmtPercent(effectivePercent),
+      };
+    }
+
     const rateBps = readMetaNumber(meta, "rateBps");
     if (rateBps === null) {
       return {
@@ -548,7 +581,7 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
           <div class="member-totals">
             <span>Total owed: <strong>${escapeHtml(fmtMoney(summary.totalCents))}</strong></span>
             <span>Sales ${escapeHtml(fmtMoney(summary.salesCents))}</span>
-            <span>Marketing ${escapeHtml(fmtMoney(summary.marketingCents))}</span>
+            <span>Management ${escapeHtml(fmtMoney(summary.marketingCents))}</span>
             <span>Crew ${escapeHtml(fmtMoney(summary.crewCents))}</span>
             <span>Reimbursements ${escapeHtml(fmtMoney(summary.reimbursementsCents))}</span>
             <span>Other adjustments ${escapeHtml(fmtMoney(summary.otherAdjustmentsCents))}</span>
@@ -786,7 +819,7 @@ export function renderPayoutRunReportHtml(report: PayoutRunReportData): string {
                   <tr>
                     <th>Member</th>
                     <th>Sales</th>
-                    <th>Marketing</th>
+                    <th>Management</th>
                     <th>Crew</th>
                     <th>Reimbursements</th>
                     <th>Other adjustments</th>

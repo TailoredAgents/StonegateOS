@@ -44,7 +44,7 @@ describe("commission rules", () => {
     ).toBe(false);
   });
 
-  it("pays Austin and Jeffrey at an exact one-third/two-thirds split", () => {
+  it("pays Austin and Jeffrey at an even 50/50 split", () => {
     const resolved = resolveLockedCrewPayout([
       "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
       "d52dafcd-c571-40ac-ac20-527e4031bc05",
@@ -62,10 +62,38 @@ describe("commission rules", () => {
     );
 
     expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
-      24000,
+      36000,
     );
     expect(amountByMemberId.get("d52dafcd-c571-40ac-ac20-527e4031bc05")).toBe(
-      48000,
+      36000,
+    );
+  });
+
+  it("pays Austin, Jeffrey, and Devon at a 40/40/20 split", () => {
+    const resolved = resolveLockedCrewPayout([
+      "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
+      "b45988bb-7417-48c5-af6d-fcdf71088282",
+      "d52dafcd-c571-40ac-ac20-527e4031bc05",
+    ]);
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) {
+      throw new Error("Expected Austin + Devon + Jeffrey locked payout rule");
+    }
+
+    const allocations = allocateCrewPoolCents(10000, resolved.splits);
+    const amountByMemberId = new Map(
+      allocations.map((entry) => [entry.memberId, entry.cents]),
+    );
+
+    expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
+      4000,
+    );
+    expect(amountByMemberId.get("d52dafcd-c571-40ac-ac20-527e4031bc05")).toBe(
+      4000,
+    );
+    expect(amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282")).toBe(
+      2000,
     );
   });
 });

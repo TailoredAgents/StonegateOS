@@ -91,7 +91,7 @@ export async function GET(
   const header = [
     "Member",
     "Sales",
-    "Marketing",
+    "Management",
     "Crew",
     "Reimbursements",
     "Other Adjustments",

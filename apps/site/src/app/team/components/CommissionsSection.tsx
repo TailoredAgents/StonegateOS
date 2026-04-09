@@ -209,7 +209,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         <p className={TEAM_SECTION_SUBTITLE}>
           Weekly payouts use the current Monday-Sunday week and final amount
           paid. Sales is assigned on each appointment through Who sold the job,
-          marketing is paid to the marketing recipient, and crews are selected
+          management pays Jeffrey and Austin 2.5% each, and crews are selected
           when marking a job complete.
         </p>
       </header>
@@ -587,7 +587,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
       <div className={TEAM_CARD_PADDED}>
         <h3 className="text-lg font-semibold text-slate-900">Settings</h3>
         <p className="mt-1 text-sm text-slate-600">
-          Update the commission split percentages and marketing recipient.
+          Sales and management are fixed. Adjust the standard crew pool here.
         </p>
 
         {commissionSettings ? (
@@ -596,28 +596,26 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
             method="post"
             className="mt-4 grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700 sm:grid-cols-2"
           >
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-600">
-                Sales %
-              </span>
-              <input
-                name="salesRatePercent"
-                defaultValue={fmtPercent(commissionSettings.salesRateBps)}
-                inputMode="decimal"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-600">
-                Marketing %
-              </span>
-              <input
-                name="marketingRatePercent"
-                defaultValue={fmtPercent(commissionSettings.marketingRateBps)}
-                inputMode="decimal"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              />
-            </label>
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-medium text-slate-600">Sales</div>
+              <div className="mt-1 text-base font-semibold text-slate-900">
+                5%
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                Paid to the seller on the job.
+              </div>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-medium text-slate-600">
+                Management
+              </div>
+              <div className="mt-1 text-base font-semibold text-slate-900">
+                5% total
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                Split 2.5% to Jeffrey and 2.5% to Austin.
+              </div>
+            </div>
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-slate-600">
                 Crew pool %
@@ -629,23 +627,20 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2"
               />
             </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-slate-600">
-                Marketing recipient
-              </span>
-              <select
-                name="marketingMemberId"
-                defaultValue={commissionSettings.marketingMemberId ?? ""}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              >
-                <option value="">(Select)</option>
-                {members.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-3">
+              <div className="text-xs font-medium text-slate-600">
+                Locked labor splits
+              </div>
+              <div className="mt-1 text-sm text-slate-700">
+                Jeffrey + Austin: 50/50
+              </div>
+              <div className="mt-1 text-sm text-slate-700">
+                Jeffrey + Austin + Devon: 40/40/20
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                30% override days still apply when that override is saved.
+              </div>
+            </div>
             <div className="sm:col-span-2">
               <SubmitButton
                 className={teamButtonClass("secondary")}

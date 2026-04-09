@@ -5,11 +5,27 @@ describe("describeCommissionMath", () => {
     expect(
       describeCommissionMath({
         role: "sales",
-        meta: { rateBps: 750 },
+        meta: { rateBps: 500 },
       }),
     ).toEqual({
-      mathLabel: "7.5% of base",
-      effectivePercentLabel: "7.5%",
+      mathLabel: "5% of base",
+      effectivePercentLabel: "5%",
+    });
+  });
+
+  it("describes management math with a shared pool split", () => {
+    expect(
+      describeCommissionMath({
+        role: "marketing",
+        meta: {
+          totalRateBps: 500,
+          splitBps: 5000,
+          totalSplitBps: 10000,
+        },
+      }),
+    ).toEqual({
+      mathLabel: "5% management pool x 50% split",
+      effectivePercentLabel: "2.5%",
     });
   });
 

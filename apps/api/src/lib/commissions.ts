@@ -30,10 +30,21 @@ export type CommissionSettingsRow = {
 
 const SETTINGS_KEY = "default";
 export const DEMO_CREW_POOL_RATE_BPS = 3000;
+const DEFAULT_SALES_RATE_BPS = 500;
+const DEFAULT_MANAGEMENT_RATE_BPS = 500;
+const TEAM_MEMBER_IDS = {
+  austin: "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
+  devon: "b45988bb-7417-48c5-af6d-fcdf71088282",
+  jeffreyHacker: "d52dafcd-c571-40ac-ac20-527e4031bc05",
+} as const;
+const MANAGEMENT_SPLITS = [
+  { memberId: TEAM_MEMBER_IDS.jeffreyHacker, splitBps: 5000 },
+  { memberId: TEAM_MEMBER_IDS.austin, splitBps: 5000 },
+] as const;
 const THIRTY_PERCENT_DAY_CREW_MEMBER_IDS = [
-  "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
-  "b45988bb-7417-48c5-af6d-fcdf71088282",
-  "d52dafcd-c571-40ac-ac20-527e4031bc05",
+  TEAM_MEMBER_IDS.austin,
+  TEAM_MEMBER_IDS.devon,
+  TEAM_MEMBER_IDS.jeffreyHacker,
 ] as const;
 
 function asWeekday(value: number): 1 | 2 | 3 | 4 | 5 | 6 | 7 {
@@ -79,19 +90,13 @@ export async function getOrCreateCommissionSettings(
     .limit(1);
 
   if (existing)
-    return { ...existing, payoutWeekday: asWeekday(existing.payoutWeekday) };
-
-  let defaultMarketingMemberId: string | null = null;
-  try {
-    const [austin] = await db
-      .select({ id: teamMembers.id })
-      .from(teamMembers)
-      .where(sql`lower(${teamMembers.name}) like 'austin%'`)
-      .limit(1);
-    defaultMarketingMemberId = austin?.id ?? null;
-  } catch {
-    defaultMarketingMemberId = null;
-  }
+    return {
+      ...existing,
+      payoutWeekday: asWeekday(existing.payoutWeekday),
+      salesRateBps: DEFAULT_SALES_RATE_BPS,
+      marketingRateBps: DEFAULT_MANAGEMENT_RATE_BPS,
+      marketingMemberId: null,
+    };
 
   await db
     .insert(commissionSettings)
@@ -101,10 +106,10 @@ export async function getOrCreateCommissionSettings(
       payoutWeekday: 1,
       payoutHour: 12,
       payoutMinute: 0,
-      salesRateBps: 750,
-      marketingRateBps: 1000,
+      salesRateBps: DEFAULT_SALES_RATE_BPS,
+      marketingRateBps: DEFAULT_MANAGEMENT_RATE_BPS,
       crewPoolRateBps: 2500,
-      marketingMemberId: defaultMarketingMemberId,
+      marketingMemberId: null,
       updatedBy: null,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -131,7 +136,13 @@ export async function getOrCreateCommissionSettings(
     throw new Error("commission_settings_missing");
   }
 
-  return { ...created, payoutWeekday: asWeekday(created.payoutWeekday) };
+  return {
+    ...created,
+    payoutWeekday: asWeekday(created.payoutWeekday),
+    salesRateBps: DEFAULT_SALES_RATE_BPS,
+    marketingRateBps: DEFAULT_MANAGEMENT_RATE_BPS,
+    marketingMemberId: null,
+  };
 }
 
 export function resolveCurrentPayoutPeriod(
@@ -506,16 +517,31 @@ export async function recalculateAppointmentCommissions(
         });
       }
 
-      const marketingMemberId =
-        row.marketingMemberId ?? settings.marketingMemberId ?? null;
-      if (marketingMemberId) {
+      const managementPoolCents = computeBpsAmount(
+        baseCents,
+        settings.marketingRateBps,
+      );
+      const managementTotalSplitBps = MANAGEMENT_SPLITS.reduce(
+        (sum, entry) => sum + entry.splitBps,
+        0,
+      );
+      for (const entry of allocateCrewPoolCents(
+        managementPoolCents,
+        MANAGEMENT_SPLITS.map((split) => ({ ...split })),
+      )) {
         commissionRows.push({
           appointmentId,
-          memberId: marketingMemberId,
+          memberId: entry.memberId,
           role: "marketing",
           baseCents,
-          amountCents: computeBpsAmount(baseCents, settings.marketingRateBps),
-          meta: { rateBps: settings.marketingRateBps },
+          amountCents: entry.cents,
+          meta: {
+            rateBps: settings.marketingRateBps,
+            totalRateBps: settings.marketingRateBps,
+            splitBps: entry.splitBps,
+            totalSplitBps: managementTotalSplitBps,
+            poolLabel: "management",
+          },
         });
       }
 
@@ -651,6 +677,29 @@ export async function createOrGetCurrentPayoutRun(
   if (!created?.id) throw new Error("payout_run_create_failed");
   await refreshDraftPayoutReports(db);
   return { payoutRunId: created.id };
+}
+
+export async function recalculateCurrentPayoutPeriodAppointments(
+  db: DatabaseClient,
+): Promise<void> {
+  const settings = await getOrCreateCommissionSettings(db);
+  const period = resolveCurrentPayoutPeriod(new Date(), settings);
+  const rows = await db
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.status, "completed"),
+        gte(appointments.completedAt, period.periodStart),
+        lt(appointments.completedAt, period.periodEnd),
+      ),
+    );
+
+  for (const row of rows) {
+    await recalculateAppointmentCommissions(db, row.id);
+  }
+
+  await refreshDraftPayoutReports(db);
 }
 
 export async function lockPayoutRun(

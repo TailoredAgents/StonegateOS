@@ -1748,8 +1748,8 @@ export const commissionSettings = pgTable("commission_settings", {
   payoutWeekday: integer("payout_weekday").default(5).notNull(),
   payoutHour: integer("payout_hour").default(12).notNull(),
   payoutMinute: integer("payout_minute").default(0).notNull(),
-  salesRateBps: integer("sales_rate_bps").default(750).notNull(),
-  marketingRateBps: integer("marketing_rate_bps").default(1000).notNull(),
+  salesRateBps: integer("sales_rate_bps").default(500).notNull(),
+  marketingRateBps: integer("marketing_rate_bps").default(500).notNull(),
   crewPoolRateBps: integer("crew_pool_rate_bps").default(2500).notNull(),
   marketingMemberId: uuid("marketing_member_id").references(
     () => teamMembers.id,

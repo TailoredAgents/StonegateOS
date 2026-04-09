@@ -5,7 +5,10 @@ import { eq } from "drizzle-orm";
 import { commissionSettings, getDb } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
-import { getOrCreateCommissionSettings } from "@/lib/commissions";
+import {
+  getOrCreateCommissionSettings,
+  recalculateCurrentPayoutPeriodAppointments,
+} from "@/lib/commissions";
 import { isAdminRequest } from "../../../web/admin";
 
 const SettingsSchema = z.object({
@@ -16,7 +19,7 @@ const SettingsSchema = z.object({
   salesRateBps: z.number().int().min(0).max(10000),
   marketingRateBps: z.number().int().min(0).max(10000),
   crewPoolRateBps: z.number().int().min(0).max(10000),
-  marketingMemberId: z.string().uuid().nullable()
+  marketingMemberId: z.string().uuid().nullable().optional()
 });
 
 export async function GET(request: NextRequest): Promise<Response> {
@@ -61,10 +64,12 @@ export async function PUT(request: NextRequest): Promise<Response> {
   const db = getDb();
   const actor = getAuditActorFromRequest(request);
 
-  const settings = parsed.data;
-  if (settings.marketingRateBps > 0 && !settings.marketingMemberId) {
-    return NextResponse.json({ error: "marketing_recipient_required" }, { status: 400 });
-  }
+  const settings = {
+    ...parsed.data,
+    salesRateBps: 500,
+    marketingRateBps: 500,
+    marketingMemberId: null,
+  };
   await db
     .insert(commissionSettings)
     .values({
@@ -76,7 +81,7 @@ export async function PUT(request: NextRequest): Promise<Response> {
       salesRateBps: settings.salesRateBps,
       marketingRateBps: settings.marketingRateBps,
       crewPoolRateBps: settings.crewPoolRateBps,
-      marketingMemberId: settings.marketingMemberId,
+      marketingMemberId: settings.marketingMemberId ?? null,
       updatedBy: actor.id ?? null,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -91,7 +96,7 @@ export async function PUT(request: NextRequest): Promise<Response> {
         salesRateBps: settings.salesRateBps,
         marketingRateBps: settings.marketingRateBps,
         crewPoolRateBps: settings.crewPoolRateBps,
-        marketingMemberId: settings.marketingMemberId,
+        marketingMemberId: settings.marketingMemberId ?? null,
         updatedBy: actor.id ?? null,
         updatedAt: new Date()
       }
@@ -112,6 +117,8 @@ export async function PUT(request: NextRequest): Promise<Response> {
     .from(commissionSettings)
     .where(eq(commissionSettings.key, "default"))
     .limit(1);
+
+  await recalculateCurrentPayoutPeriodAppointments(db);
 
   await recordAuditEvent({
     actor,
