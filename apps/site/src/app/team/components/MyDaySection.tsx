@@ -878,18 +878,6 @@ function AppointmentCard({
                     Commissions
                   </summary>
                   <div className="mt-3 space-y-3">
-                    <div className="text-[11px] text-slate-600">
-                      Sales commission uses the person in Who sold the job?.
-                      Changing that seller requires the secret code.
-                    </div>
-                    <div className="text-[11px] text-slate-600">
-                      Management commission is fixed at 5% total, split 2.5%
-                      each to Jeffrey and Austin.
-                    </div>
-                    <div className="text-[11px] text-slate-600">
-                      Crew payout is locked by the selected crew combo, and at
-                      least one crew member is required before completion.
-                    </div>
                     <CrewPayoutSelector teamMembers={teamMembers} />
                   </div>
                 </details>
