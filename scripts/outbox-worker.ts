@@ -59,6 +59,16 @@ async function runSalesDraftPrepOnce() {
   }
 }
 
+async function runFacebookDmNameBackfillOnce() {
+  const { backfillFacebookDmContactNames } = await import("../apps/api/src/lib/facebook-dm-name-backfill");
+  const result = await backfillFacebookDmContactNames({
+    limit: Number(process.env["FACEBOOK_DM_NAME_BACKFILL_LIMIT"] ?? 25)
+  });
+  if (result.candidates > 0 || result.updated > 0 || result.unresolved > 0 || result.missingMessage > 0) {
+    console.log(JSON.stringify({ ok: true, facebookDmNameBackfill: result }, null, 2));
+  }
+}
+
 async function main() {
   registerAliases();
   const limit = Number(process.env["OUTBOX_BATCH_SIZE"] ?? 10);
@@ -70,9 +80,13 @@ async function main() {
   const salesDraftPrepIntervalMs = Number(
     process.env["SALES_DRAFT_PREP_INTERVAL_MS"] ?? 3 * 60 * 1000
   );
+  const facebookDmNameBackfillIntervalMs = Number(
+    process.env["FACEBOOK_DM_NAME_BACKFILL_INTERVAL_MS"] ?? 2 * 60 * 60 * 1000
+  );
   let nextSeoAt = Date.now();
   let nextGoogleAdsAt = Date.now();
   let nextSalesDraftPrepAt = Date.now();
+  let nextFacebookDmNameBackfillAt = Date.now();
 
   if (pollIntervalMs > 0) {
     // Continuous polling loop
@@ -111,6 +125,18 @@ async function main() {
             ? salesDraftPrepIntervalMs
             : 3 * 60 * 1000);
       }
+      if (Date.now() >= nextFacebookDmNameBackfillAt) {
+        try {
+          await runFacebookDmNameBackfillOnce();
+        } catch (error) {
+          console.warn("[facebook_dm_name_backfill] loop_failed", String(error));
+        }
+        nextFacebookDmNameBackfillAt =
+          Date.now() +
+          (Number.isFinite(facebookDmNameBackfillIntervalMs) && facebookDmNameBackfillIntervalMs > 60_000
+            ? facebookDmNameBackfillIntervalMs
+            : 2 * 60 * 60 * 1000);
+      }
       if (stats.total === 0) {
         await sleep(pollIntervalMs);
       }
@@ -120,6 +146,7 @@ async function main() {
     await runSeoOnce();
     await runGoogleAdsQueueOnce();
     await runSalesDraftPrepOnce();
+    await runFacebookDmNameBackfillOnce();
   }
 }
 
