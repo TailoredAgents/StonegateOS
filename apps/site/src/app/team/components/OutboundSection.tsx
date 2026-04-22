@@ -179,7 +179,7 @@ function formatPartnerFit(value: string | null | undefined): string {
 
 function formatHistoryKind(value: OutboundHistoryEntry["kind"]): { label: string; tone: string } {
   if (value === "import") return { label: "Import", tone: "bg-slate-100 text-slate-700" };
-  if (value === "draft") return { label: "Draft", tone: "bg-primary-50 text-primary-700" };
+  if (value === "draft") return { label: "Suggestion", tone: "bg-primary-50 text-primary-700" };
   if (value === "disposition") return { label: "Disposition", tone: "bg-amber-50 text-amber-700" };
   if (value === "recap") return { label: "Recap", tone: "bg-emerald-50 text-emerald-700" };
   if (value === "partner") return { label: "Partner", tone: "bg-violet-50 text-violet-700" };
@@ -632,8 +632,8 @@ export async function OutboundSection({
                               <input type="hidden" name="contactId" value={primaryContact?.id ?? item.primaryContactId} />
                               <input type="hidden" name="taskId" value={item.primaryTaskId} />
                               <input type="hidden" name="channel" value={primaryContact?.email ? "email" : "sms"} />
-                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Drafting...">
-                                Draft
+                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Suggesting...">
+                                Suggest
                               </SubmitButton>
                             </form>
                           </div>
@@ -756,7 +756,7 @@ export async function OutboundSection({
                       <div>
                         <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">Account history</p>
                         <p className="mt-1 text-xs text-[color:var(--team-text-muted)]">
-                          Recent import, draft, disposition, recap, and conversion activity for this relationship.
+                          Recent import, suggestion, disposition, recap, and conversion activity for this relationship.
                         </p>
                       </div>
                     </div>
@@ -822,8 +822,8 @@ export async function OutboundSection({
                               <input type="hidden" name="contactId" value={contact.id} />
                               <input type="hidden" name="taskId" value={selected.primaryTaskId} />
                               <input type="hidden" name="channel" value={contact.email ? "email" : "sms"} />
-                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Drafting...">
-                                Draft outreach
+                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Suggesting...">
+                                Suggest
                               </SubmitButton>
                             </form>
                           </div>
@@ -908,9 +908,9 @@ export async function OutboundSection({
                   </div>
 
                   <div className="rounded-xl border border-slate-200 bg-white p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Draft follow-up</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Suggest follow-up</p>
                     <p className="mt-1 text-xs text-slate-600">
-                      Use the latest outcome and your recap to prep the second touch for Inbox.
+                      Use the latest outcome, recap, and contact history to suggest the next SMS or email for Inbox.
                     </p>
                     <form action={draftOutboundFollowupAction} className="mt-3 flex flex-col gap-2">
                       <input type="hidden" name="taskId" value={selected.primaryTaskId} />
@@ -964,10 +964,10 @@ export async function OutboundSection({
                       <textarea
                         name="recap"
                         className={`${TEAM_INPUT_COMPACT} min-h-[88px]`}
-                        placeholder="Optional recap to steer the follow-up draft..."
+                        placeholder="Optional recap to steer the follow-up suggestion..."
                       />
-                      <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Drafting...">
-                        Draft follow-up
+                      <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Suggesting...">
+                        Suggest
                       </SubmitButton>
                     </form>
                   </div>

@@ -1,5 +1,13 @@
 type OutboundDraftChannel = "sms" | "email";
 
+export type OutboundDraftContextMessage = {
+  direction: string;
+  channel: string;
+  subject: string | null;
+  body: string;
+  createdAt: string;
+};
+
 export type OutboundDraft = {
   subject: string | null;
   body: string;
@@ -31,6 +39,20 @@ function clampText(value: string, maxLen: number): string {
   const trimmed = value.trim();
   if (trimmed.length <= maxLen) return trimmed;
   return trimmed.slice(0, maxLen - 1).trimEnd() + "…";
+}
+
+function formatRecentContactHistory(messages: OutboundDraftContextMessage[] | null | undefined): string | null {
+  if (!messages?.length) return null;
+
+  const lines = messages.slice(-10).map((message) => {
+    const subject = message.subject?.trim().length ? ` subject="${clampText(message.subject, 80)}"` : "";
+    return [
+      `${message.createdAt} ${message.channel} ${message.direction}${subject}:`,
+      clampText(message.body.replace(/\s+/g, " "), 220),
+    ].join(" ");
+  });
+
+  return ["Recent actual contact history (oldest to newest):", ...lines].join("\n");
 }
 
 function fallbackFirstTouchDraft(input: {
@@ -210,6 +232,7 @@ export async function generateOutboundFirstTouchDraft(input: {
   segment?: string | null;
   city?: string | null;
   state?: string | null;
+  recentMessages?: OutboundDraftContextMessage[];
 }): Promise<OutboundDraft> {
   const apiKey = readEnvString("OPENAI_API_KEY");
   if (!apiKey) {
@@ -224,11 +247,13 @@ export async function generateOutboundFirstTouchDraft(input: {
     "- Mention Stonegate Junk Removal exactly once.\n" +
     "- Do NOT include pricing unless the recipient asked.\n" +
     "- Ask one clear question that makes it easy to reply.\n" +
+    "- If recent contact history exists, continue naturally from it instead of acting like this is the first contact.\n" +
+    "- Do not mention internal notes, campaigns, attempts, CRM tasks, or AI.\n" +
     "- If channel is sms, end with: 'Reply STOP to opt out.'\n" +
     "- Output ONLY JSON with keys: subject, body.\n";
 
   const systemPrompt =
-    "You write first-touch outbound messages for a local junk removal company.\n" +
+    "You write salesperson-requested outbound message suggestions for a local junk removal company.\n" +
     toneRules;
 
   const serviceCities =
@@ -245,8 +270,9 @@ export async function generateOutboundFirstTouchDraft(input: {
     `Campaign: ${input.campaign ?? "outbound"}`,
     `Attempt: ${input.attempt}`,
     input.notes ? `Notes: ${input.notes}` : null,
+    formatRecentContactHistory(input.recentMessages),
     `Service area cities: ${serviceCities}`,
-    "Goal: start a conversation and get a reply about whether they have properties needing haul-off / cleanouts this month.",
+    "Goal: help the salesperson send the best next message and get a reply about whether they have properties needing haul-off / cleanouts this month.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -289,6 +315,7 @@ export async function generateOutboundFollowupDraft(input: {
   state?: string | null;
   disposition?: string | null;
   recap?: string | null;
+  recentMessages?: OutboundDraftContextMessage[];
 }): Promise<OutboundDraft> {
   const apiKey = readEnvString("OPENAI_API_KEY");
   if (!apiKey) {
@@ -305,6 +332,8 @@ export async function generateOutboundFollowupDraft(input: {
     "- Do not sound spammy, mass-market, or overly polished.\n" +
     "- If there was a real conversation, lightly pick up from it.\n" +
     "- Ask at most one clear next-step question.\n" +
+    "- Use recent contact history and the salesperson recap as the source of truth.\n" +
+    "- Do not mention internal notes, campaigns, attempts, CRM tasks, or AI.\n" +
     "- If channel is sms, end with: 'Reply STOP to opt out.'\n" +
     "- Output ONLY JSON with keys: subject, body.\n";
 
@@ -328,6 +357,7 @@ export async function generateOutboundFollowupDraft(input: {
     input.disposition ? `Latest outcome: ${input.disposition}` : null,
     input.recap ? `Salesperson recap: ${input.recap}` : null,
     input.notes ? `Notes: ${input.notes}` : null,
+    formatRecentContactHistory(input.recentMessages),
     `Service area cities: ${serviceCities}`,
     "Goal: send the right next touch after the latest outbound outcome and keep the conversation moving without sounding pushy.",
   ]

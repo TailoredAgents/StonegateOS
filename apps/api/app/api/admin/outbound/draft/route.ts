@@ -17,6 +17,7 @@ import { getSalesAutopilotPolicy } from "@/lib/policy";
 import {
   generateOutboundFirstTouchDraft,
   generateOutboundFollowupDraft,
+  type OutboundDraftContextMessage,
 } from "@/lib/outbound-drafts";
 import { resolveOrCreatePartnerAccount } from "@/lib/partner-accounts";
 
@@ -142,6 +143,41 @@ async function ensureAgentParticipant(
   return created.id;
 }
 
+async function loadRecentContactHistory(
+  db: ReturnType<typeof getDb>,
+  contactId: string
+): Promise<OutboundDraftContextMessage[]> {
+  const rows = await db
+    .select({
+      direction: conversationMessages.direction,
+      channel: conversationMessages.channel,
+      subject: conversationMessages.subject,
+      body: conversationMessages.body,
+      createdAt: conversationMessages.createdAt
+    })
+    .from(conversationMessages)
+    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .where(
+      and(
+        eq(conversationThreads.contactId, contactId),
+        sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`
+      )
+    )
+    .orderBy(desc(conversationMessages.createdAt))
+    .limit(12);
+
+  return rows
+    .reverse()
+    .map((row) => ({
+      direction: row.direction,
+      channel: row.channel,
+      subject: row.subject,
+      body: row.body,
+      createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : new Date().toISOString()
+    }))
+    .filter((message) => message.body.trim().length > 0);
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -153,14 +189,15 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!payload || typeof payload !== "object") {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
+  const payloadRecord = payload as Record<string, unknown>;
 
-  const contactId = readString((payload as any).contactId) ?? "";
-  const taskId = readString((payload as any).taskId);
-  const channelRaw = readString((payload as any).channel);
-  const kindRaw = readString((payload as any).kind);
-  const recap = readString((payload as any).recap);
-  const explicitDisposition = readString((payload as any).disposition);
-  const requestedChannel: Channel | null = isChannel(channelRaw) ? (channelRaw as Channel) : null;
+  const contactId = readString(payloadRecord["contactId"]) ?? "";
+  const taskId = readString(payloadRecord["taskId"]);
+  const channelRaw = readString(payloadRecord["channel"]);
+  const kindRaw = readString(payloadRecord["kind"]);
+  const recap = readString(payloadRecord["recap"]);
+  const explicitDisposition = readString(payloadRecord["disposition"]);
+  const requestedChannel: Channel | null = isChannel(channelRaw) ? channelRaw : null;
   const kind = kindRaw === "follow_up" ? "follow_up" : "first_touch";
 
   if (!contactId) {
@@ -197,7 +234,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   let accountState: string | null = null;
 
   if (!partnerAccountId) {
-    const account = await resolveOrCreatePartnerAccount(db as any, {
+    const account = await resolveOrCreatePartnerAccount(db, {
       name: contact.company,
       domain: contact.email ?? null,
       source: null,
@@ -289,6 +326,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     threadId,
     displayName: autopilot.agentDisplayName
   });
+  const recentMessages = await loadRecentContactHistory(db, contactId);
 
   const draft =
     kind === "follow_up"
@@ -304,6 +342,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           state: accountState,
           disposition: lastDisposition,
           recap,
+          recentMessages,
         })
       : await generateOutboundFirstTouchDraft({
           channel,
@@ -315,6 +354,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           segment: accountSegment,
           city: accountCity,
           state: accountState,
+          recentMessages,
         });
 
   const subject = channel === "email" ? draft.subject : null;

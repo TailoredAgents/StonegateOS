@@ -4867,7 +4867,7 @@ export async function draftOutboundFollowupAction(formData: FormData) {
   if (!response.ok) {
     const message = await readErrorMessage(
       response,
-      "Unable to draft follow-up",
+      "Unable to suggest follow-up",
     );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
@@ -4889,7 +4889,7 @@ export async function draftOutboundFollowupAction(formData: FormData) {
   if (!threadId) {
     jar.set({
       name: "myst-flash-error",
-      value: "Draft created but thread is missing",
+      value: "Suggestion created but thread is missing",
       path: "/",
     });
     revalidatePath("/team");
@@ -4898,7 +4898,7 @@ export async function draftOutboundFollowupAction(formData: FormData) {
 
   jar.set({
     name: "myst-flash",
-    value: "Follow-up draft created. Review and send from Inbox.",
+    value: "Suggestion created. Review and send from Inbox.",
     path: "/",
   });
 
@@ -4975,7 +4975,7 @@ export async function draftOutboundFirstTouchAction(formData: FormData) {
   if (!response.ok) {
     const message = await readErrorMessage(
       response,
-      "Unable to draft outreach",
+      "Unable to suggest outreach",
     );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
     revalidatePath("/team");
@@ -4997,7 +4997,7 @@ export async function draftOutboundFirstTouchAction(formData: FormData) {
   if (!threadId) {
     jar.set({
       name: "myst-flash-error",
-      value: "Draft created but thread is missing",
+      value: "Suggestion created but thread is missing",
       path: "/",
     });
     revalidatePath("/team");
@@ -5006,7 +5006,7 @@ export async function draftOutboundFirstTouchAction(formData: FormData) {
 
   jar.set({
     name: "myst-flash",
-    value: "Draft created. Review and send from Inbox.",
+    value: "Suggestion created. Review and send from Inbox.",
     path: "/",
   });
 
