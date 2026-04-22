@@ -3,7 +3,6 @@ import { CopyButton } from "@/components/CopyButton";
 import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
-  convertAppointmentToJobAction,
   rescheduleAppointmentAction,
   scheduleQuoteFollowupAction,
   startContactCallAction,
@@ -17,9 +16,7 @@ import {
   formatAppointmentPricing,
   formatAppointmentServiceType,
   formatStoredContactSource,
-  parseStoredContactSourceValue,
   type AppointmentBookingDetails,
-  type AppointmentLeadSource,
 } from "../lib/booking-details";
 import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
 import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFields";
@@ -125,17 +122,6 @@ function isQuoteOnlyAppointment(appointmentType: string | null | undefined) {
   return (
     normalized === "in_person_quote" || normalized === "in_person_estimate"
   );
-}
-
-function canReuseLeadSource(source: AppointmentLeadSource | null): boolean {
-  if (!source) return false;
-  if (source.type === "team_member") {
-    return Boolean(source.teamMemberId);
-  }
-  if (source.type === "referral") {
-    return Boolean(source.referralName);
-  }
-  return true;
 }
 
 function getTimeZoneOffsetMinutes(date: Date, timeZone: string): number {
@@ -414,7 +400,7 @@ function AppointmentCard({
   const sellerName = a.soldByMemberId
     ? (teamMemberNameById.get(a.soldByMemberId) ?? "Unknown")
     : item.isQuoteOnly
-      ? "Set when converted"
+      ? "Quote only"
       : "Not set";
   const moneySummary = formatMoneySummary(a);
   const serviceSummary = item.isQuoteOnly
@@ -440,11 +426,6 @@ function AppointmentCard({
         ? "border-slate-200 bg-slate-50/60"
         : "border-emerald-200 bg-white";
 
-  const resolvedSource: AppointmentLeadSource | null =
-    a.bookingDetails?.source ?? parseStoredContactSourceValue(a.contact.source);
-  const reusableSource = canReuseLeadSource(resolvedSource)
-    ? resolvedSource
-    : null;
   const notesLabel = a.notes.length
     ? `${a.notes.length} ${a.notes.length === 1 ? "note" : "notes"}`
     : "Notes";
@@ -590,10 +571,7 @@ function AppointmentCard({
         <SummaryTile label="Service" value={serviceSummary} />
         <SummaryTile
           label="Money"
-          value={
-            moneySummary ??
-            (item.isQuoteOnly ? "Set when converted" : "Not set")
-          }
+          value={moneySummary ?? (item.isQuoteOnly ? "Quote only" : "Not set")}
           muted={!moneySummary}
         />
         <SummaryTile
@@ -637,117 +615,26 @@ function AppointmentCard({
         <div className="mt-4 space-y-3">
           {item.isQuoteOnly ? (
             <>
-              <details className="group rounded-2xl border border-sky-200 bg-white p-3">
-                <summary className={summaryButtonClass("primary")}>
-                  Convert to job
-                </summary>
-                <form
-                  action={convertAppointmentToJobAction}
-                  className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
-                >
-                  <input type="hidden" name="appointmentId" value={a.id} />
-                  {reusableSource ? (
-                    <>
-                      <input
-                        type="hidden"
-                        name="resolvedSourceType"
-                        value={reusableSource.type}
-                      />
-                      {reusableSource.teamMemberId ? (
-                        <input
-                          type="hidden"
-                          name="resolvedSourceTeamMemberId"
-                          value={reusableSource.teamMemberId}
-                        />
-                      ) : null}
-                      {reusableSource.referralName ? (
-                        <input
-                          type="hidden"
-                          name="resolvedSourceReferralName"
-                          value={reusableSource.referralName}
-                        />
-                      ) : null}
-                      <div className="sm:col-span-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
-                        Where from will stay as{" "}
-                        <span className="font-semibold">
-                          {item.leadSourceSummary}
-                        </span>
-                        .
-                      </div>
-                    </>
-                  ) : (
-                    <div className="sm:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-                      This quote is missing a lead source. Set it here so the
-                      converted job tracks correctly.
-                    </div>
-                  )}
-
-                  <label className="flex flex-col gap-1">
-                    <span>Who sold the job?</span>
-                    <select
-                      name="soldByMemberId"
-                      defaultValue={a.soldByMemberId ?? ""}
-                      required
-                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    >
-                      <option value="">(Select seller)</option>
-                      {teamMembers.map((member) => (
-                        <option key={member.id} value={member.id}>
-                          {member.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <span>Seller override code</span>
-                    <input
-                      name="soldByOverrideCode"
-                      type="password"
-                      autoComplete="off"
-                      placeholder="Only needed if changing seller"
-                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <span>Job date and time</span>
-                    <input
-                      type="datetime-local"
-                      name="startAt"
-                      required
-                      step={300}
-                      defaultValue={fmtDateTimeInputValue(a.startAt)}
-                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    />
-                  </label>
-
-                  <div className="sm:col-span-2 text-[11px] text-slate-600">
-                    Use the actual job time if you already did the job right
-                    after the quote.
+              <form
+                action="/api/team/appointments/status"
+                method="post"
+                className="rounded-2xl border border-sky-200 bg-white p-3"
+              >
+                <input type="hidden" name="appointmentId" value={a.id} />
+                <input type="hidden" name="appointmentType" value={a.appointmentType ?? ""} />
+                <input type="hidden" name="status" value="completed" />
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm text-slate-600">
+                    Mark this in-person quote visit as done.
                   </div>
-
-                  <AppointmentBookingDetailsFields
-                    teamMembers={teamMembers}
-                    bookingDetails={a.bookingDetails}
-                    quotedTotalCents={a.quotedTotalCents}
-                    allowServiceTypeSelection
-                    labelClassName="flex flex-col gap-1"
-                    fieldClassName="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    hideLeadSource={Boolean(reusableSource)}
-                    fixedSource={reusableSource}
-                  />
-
-                  <div className="sm:col-span-2 flex items-center justify-end">
-                    <SubmitButton
-                      className={teamButtonClass("primary", "sm")}
-                      pendingLabel="Saving..."
-                    >
-                      Save converted job
-                    </SubmitButton>
-                  </div>
-                </form>
-              </details>
+                  <SubmitButton
+                    className={teamButtonClass("primary", "sm")}
+                    pendingLabel="Saving..."
+                  >
+                    Done
+                  </SubmitButton>
+                </div>
+              </form>
 
               {showFollowUpPanel ? (
                 <details className="group rounded-2xl border border-slate-200 bg-white p-3">

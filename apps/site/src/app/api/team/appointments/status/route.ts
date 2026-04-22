@@ -7,6 +7,14 @@ import { resolveLockedCrewPayout } from "@/app/team/lib/locked-crew-payout";
 
 export const dynamic = "force-dynamic";
 
+function isQuoteOnlyAppointmentType(value: FormDataEntryValue | null): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === "in_person_quote" || normalized === "in_person_estimate"
+  );
+}
+
 function parseUsdToCents(value: unknown): number | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -33,6 +41,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   const formData = await request.formData();
   const appointmentId = formData.get("appointmentId");
   const status = formData.get("status");
+  const appointmentType = formData.get("appointmentType");
 
   if (typeof appointmentId !== "string" || appointmentId.trim().length === 0) {
     const response = NextResponse.redirect(redirectTo, 303);
@@ -56,8 +65,9 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const statusValue = status.trim();
   const payload: Record<string, unknown> = { status: statusValue };
+  const isQuoteOnly = isQuoteOnlyAppointmentType(appointmentType);
 
-  if (statusValue === "completed") {
+  if (statusValue === "completed" && !isQuoteOnly) {
     const cents = parseUsdToCents(formData.get("finalTotal"));
     if (cents === null) {
       const response = NextResponse.redirect(redirectTo, 303);
@@ -146,7 +156,14 @@ export async function POST(request: NextRequest): Promise<Response> {
   const response = NextResponse.redirect(redirectTo, 303);
   response.cookies.set({
     name: "myst-flash",
-    value: "Appointment updated",
+    value:
+      statusValue === "completed" && isQuoteOnly
+        ? "Quote marked done"
+        : statusValue === "completed"
+          ? "Job completed"
+          : statusValue === "canceled"
+            ? "Appointment canceled"
+            : "Appointment updated",
     path: "/",
   });
   return response;

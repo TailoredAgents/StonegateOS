@@ -27,23 +27,10 @@ type CalendarFeedResponse = {
   conflicts: Array<{ a: string; b: string }>;
 };
 
-type CalendarStatusApiResponse = {
-  ok: boolean;
-  config: {
-    calendarId: string | null;
-    webhookConfigured: boolean;
-  };
-  status: {
-    calendarId: string;
-    syncTokenPresent: boolean;
-    channelId: string | null;
-    resourceId: string | null;
-    channelExpiresAt: string | null;
-    lastSyncedAt: string | null;
-    lastNotificationAt: string | null;
-    updatedAt: string | null;
-  } | null;
-  error?: string;
+type TeamMember = {
+  id: string;
+  name: string;
+  active?: boolean;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -66,9 +53,9 @@ export async function CalendarSection({
   const anchor = parseAnchorDate(searchParams?.cal ?? null) ?? new Date();
   const range = computeRange(anchor, view);
 
-  const [feedRes, statusRes] = await Promise.all([
+  const [feedRes, membersRes] = await Promise.all([
     callAdminApi(`/api/admin/calendar/feed?start=${encodeURIComponent(range.start.toISOString())}&end=${encodeURIComponent(range.end.toISOString())}`),
-    callAdminApi("/api/calendar/status")
+    callAdminApi("/api/admin/team/directory")
   ]);
 
   if (!feedRes.ok) {
@@ -76,8 +63,13 @@ export async function CalendarSection({
   }
 
   const feed = (await feedRes.json()) as CalendarFeedResponse;
-  const statusPayload = statusRes.ok ? ((await statusRes.json()) as CalendarStatusApiResponse) : null;
   const allEvents = [...feed.appointments, ...feed.externalEvents];
+  const memberPayload = membersRes.ok
+    ? ((await membersRes.json()) as { members?: TeamMember[] })
+    : null;
+  const teamMembers = (memberPayload?.members ?? []).filter(
+    (member) => member.active !== false,
+  );
 
   return (
     <section className="space-y-4">
@@ -86,6 +78,7 @@ export async function CalendarSection({
         initialAnchor={formatDayKeyFromDate(anchor)}
         events={allEvents}
         conflicts={feed.conflicts}
+        teamMembers={teamMembers}
       />
     </section>
   );

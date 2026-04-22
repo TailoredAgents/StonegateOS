@@ -18,6 +18,7 @@ type Props = {
   initialAnchor: string;
   events: CalendarEvent[];
   conflicts: Array<{ a: string; b: string }>;
+  teamMembers: Array<{ id: string; name: string }>;
 };
 
 export function CalendarViewer({
@@ -25,6 +26,7 @@ export function CalendarViewer({
   initialAnchor,
   events,
   conflicts,
+  teamMembers,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -81,7 +83,7 @@ export function CalendarViewer({
 
       const nextView = next.view ?? view;
       params.set("calView", nextView);
-      router.push(`${pathname}?${params.toString()}` as any);
+      router.push(`${pathname}?${params.toString()}`);
     },
     [anchorDay, pathname, router, searchParams, view],
   );
@@ -426,7 +428,11 @@ export function CalendarViewer({
 
             <div className="mt-4">
               {selectedEvent ? (
-                <CalendarEventDetail event={selectedEvent} variant="embedded" />
+                <CalendarEventDetail
+                  event={selectedEvent}
+                  teamMembers={teamMembers}
+                  variant="embedded"
+                />
               ) : (
                 <p className="text-sm text-slate-500">
                   Select an appointment to see full details.

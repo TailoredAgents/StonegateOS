@@ -43,6 +43,15 @@ const StatusSchema = z.object({
     .optional(),
 });
 
+function isQuoteOnlyAppointmentType(
+  value: string | null | undefined,
+): boolean {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return (
+    normalized === "in_person_quote" || normalized === "in_person_estimate"
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -53,9 +62,7 @@ function extractPgCode(error: unknown): string | null {
     direct && typeof direct["code"] === "string" ? direct["code"] : null;
   if (directCode) return directCode;
   const cause =
-    direct && isRecord(direct["cause"])
-      ? (direct["cause"] as Record<string, unknown>)
-      : null;
+    direct && isRecord(direct["cause"]) ? direct["cause"] : null;
   const causeCode =
     cause && typeof cause["code"] === "string" ? cause["code"] : null;
   return causeCode;
@@ -131,6 +138,7 @@ export async function POST(
     .select({
       id: appointments.id,
       leadId: appointments.leadId,
+      type: appointments.type,
       calendarEventId: appointments.calendarEventId,
       quotedTotalCents: appointments.quotedTotalCents,
       finalTotalCents: appointments.finalTotalCents,
@@ -144,6 +152,8 @@ export async function POST(
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
+  const isQuoteOnly = isQuoteOnlyAppointmentType(existing.type);
+
   if (status === "completed") {
     const existingCrewMembers =
       crewMembers === undefined
@@ -152,7 +162,7 @@ export async function POST(
     const effectiveCrewMembers =
       crewMembers !== undefined ? crewMembers : existingCrewMembers;
 
-    if (effectiveCrewMembers.length === 0) {
+    if (!isQuoteOnly && effectiveCrewMembers.length === 0) {
       return NextResponse.json(
         {
           error: "crew_required",
@@ -164,7 +174,7 @@ export async function POST(
   }
 
   let finalTotalCentsToSet: number | null | undefined = undefined;
-  if (status === "completed") {
+  if (status === "completed" && !isQuoteOnly) {
     if (typeof finalTotalCentsInput === "number") {
       finalTotalCentsToSet = finalTotalCentsInput;
     } else if (finalTotalSameAsQuoted) {
@@ -202,6 +212,7 @@ export async function POST(
   }
 
   const needsRecalc =
+    !isQuoteOnly &&
     status === "completed" &&
     (becameCompleted ||
       finalTotalCentsToSet !== undefined ||
@@ -298,7 +309,7 @@ export async function POST(
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
 
-  if (needsRecalc || leavingCompleted) {
+  if (needsRecalc || (!isQuoteOnly && leavingCompleted)) {
     await recalculateAppointmentCommissionsAndRefreshDraftPayouts(
       db,
       appointmentId,
