@@ -429,7 +429,7 @@ export async function OutboundSection({
         <form method="get" action="/team" className="mt-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4">
           <input type="hidden" name="tab" value="outbound" />
 
-          <label className="flex flex-col gap-1 text-xs text-slate-600 sm:max-w-xs">
+          <label className="flex w-full flex-col gap-1 text-xs text-slate-600 sm:max-w-xs">
             <span className="font-semibold uppercase tracking-[0.18em] text-slate-500">Assigned to</span>
             <select name="memberId" defaultValue={resolvedMemberId} className={TEAM_INPUT_COMPACT}>
               <option value="">Default assignee</option>
@@ -505,7 +505,7 @@ export async function OutboundSection({
             </label>
 
             <div className="flex items-end gap-2">
-              <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Filtering...">
+              <SubmitButton className={`${teamButtonClass("primary", "sm")} w-full sm:w-auto`} pendingLabel="Filtering...">
                 Filter
               </SubmitButton>
               <a className="text-xs font-semibold text-slate-500 hover:text-slate-700" href={buildOutboundHref({ memberId: resolvedMemberId, filters: {} })}>
@@ -563,7 +563,123 @@ export async function OutboundSection({
               </SubmitButton>
             </form>
 
-            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px]">
+            {selected ? (
+              <div className="mt-4 rounded-2xl border border-primary-200 bg-primary-50/60 p-4 lg:hidden">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-primary-700">Selected account</p>
+                    <p className="mt-1 text-base font-semibold text-slate-900">{selected.account.name}</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      {selected.contactCount} contact{selected.contactCount === 1 ? "" : "s"} / {selected.openTaskCount} open task{selected.openTaskCount === 1 ? "" : "s"}
+                    </p>
+                    {selected.account.brief?.summary ? (
+                      <p className="mt-2 text-sm text-slate-600">{selected.account.brief.summary}</p>
+                    ) : null}
+                  </div>
+                  <a
+                    href={buildOutboundHref({ memberId: resolvedMemberId, filters: resolvedFilters, patch: { accountId: "", taskId: "" } })}
+                    className="text-xs font-semibold text-primary-700 hover:text-primary-800"
+                  >
+                    Close
+                  </a>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  <div className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
+                    <div className="font-semibold text-slate-900">Last touch</div>
+                    <div className="mt-1">{formatTimestamp(selected.account.lastTouchAt) ?? "No touch yet"}</div>
+                  </div>
+                  <div className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
+                    <div className="font-semibold text-slate-900">Next touch</div>
+                    <div className="mt-1">{formatTimestamp(selected.account.nextTouchAt) ?? "Not scheduled"}</div>
+                  </div>
+                  <div className="rounded-xl border border-white/80 bg-white px-3 py-2 text-xs text-slate-600">
+                    <div className="font-semibold text-slate-900">Fit</div>
+                    <div className="mt-1">
+                      {selected.account.fitScore !== null && selected.account.fitScore !== undefined
+                        ? `${selected.account.fitScore}/100 · ${formatPartnerFit(selected.account.portalFit)}`
+                        : formatPartnerFit(selected.account.portalFit)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-4 space-y-3 lg:hidden">
+              {items.map((item) => {
+                const dueBadge = formatDueBadge(item);
+                const primaryContact =
+                  item.contacts.find((contact) => contact.id === item.primaryContactId) ??
+                  item.contacts[0] ??
+                  null;
+                const isSelected = Boolean(selected?.id === item.id);
+                return (
+                  <div
+                    key={item.id}
+                    className={`rounded-2xl border px-4 py-4 shadow-sm ${
+                      isSelected
+                        ? "border-primary-300 bg-primary-50/70"
+                        : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <a
+                      href={buildOutboundHref({
+                        memberId: resolvedMemberId,
+                        filters: resolvedFilters,
+                        patch: { accountId: item.id, taskId: item.primaryTaskId },
+                      })}
+                      className="block"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-base font-semibold text-slate-900">{item.account.name}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            Attempt {item.attempt} · {item.lastDisposition ? item.lastDisposition.replace(/_/g, " ") : "No disposition yet"}
+                          </div>
+                        </div>
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${dueBadge.tone}`}>
+                          {dueBadge.label}
+                        </span>
+                      </div>
+                      <div className="mt-3 space-y-1 text-sm text-slate-700">
+                        <div>{primaryContact?.name ?? "No primary contact"}</div>
+                        <div className="truncate text-xs text-slate-500">
+                          {primaryContact?.phone ?? "No phone"} · {primaryContact?.email ?? "No email"}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {item.contactCount} contact{item.contactCount === 1 ? "" : "s"} / {item.openTaskCount} open task{item.openTaskCount === 1 ? "" : "s"}
+                        </div>
+                      </div>
+                    </a>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <form action={startContactCallAction}>
+                        <input type="hidden" name="contactId" value={primaryContact?.id ?? item.primaryContactId} />
+                        <input type="hidden" name="taskId" value={item.primaryTaskId} />
+                        <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
+                          Call
+                        </SubmitButton>
+                      </form>
+                      <form action={openContactThreadAction}>
+                        <input type="hidden" name="contactId" value={primaryContact?.id ?? item.primaryContactId} />
+                        <input type="hidden" name="channel" value={primaryContact?.email ? "email" : "sms"} />
+                        <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
+                          Message
+                        </SubmitButton>
+                      </form>
+                      <form action={draftOutboundFirstTouchAction}>
+                        <input type="hidden" name="contactId" value={primaryContact?.id ?? item.primaryContactId} />
+                        <input type="hidden" name="taskId" value={item.primaryTaskId} />
+                        <input type="hidden" name="channel" value={primaryContact?.email ? "email" : "sms"} />
+                        <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Suggesting...">
+                          Suggest
+                        </SubmitButton>
+                      </form>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 hidden gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_360px]">
             <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)]">
               <table className="w-full table-fixed text-left text-xs">
                 <thead className="sticky top-0 z-10 bg-[color:var(--team-surface-muted)] text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--team-text-soft)]">

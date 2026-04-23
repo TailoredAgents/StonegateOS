@@ -193,69 +193,124 @@ export async function CanvassSection({
           <div className={`${TEAM_EMPTY_STATE} mt-4`}>No active canvass follow-ups yet.</div>
         ) : (
           <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-              <table className="min-w-full text-left text-xs">
-                <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3">Due</th>
-                    <th className="px-4 py-3">Lead</th>
-                    <th className="px-4 py-3">Phone</th>
-                    <th className="px-4 py-3">Email</th>
-                    <th className="px-4 py-3 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {items.map((item) => {
-                    const badge = dueBadge(item);
-                    const isActive = initialContactId && item.contact.id === initialContactId;
-                    return (
-                      <tr key={item.id} className={isActive ? "bg-primary-50/40" : "hover:bg-slate-50"}>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${badge.tone}`}>
-                            {badge.label}
-                          </span>
-                          <div className="mt-1 text-[11px] text-slate-500">Due {formatDue(item)}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <a
-                            href={`/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(item.contact.id)}`}
-                            className="block max-w-[320px]"
-                          >
-                            <div className="truncate text-sm font-semibold text-slate-900">{item.contact.name}</div>
-                            <div className="mt-0.5 truncate text-[11px] text-slate-500">{item.title ?? "Canvass task"}</div>
-                          </a>
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">{item.contact.phone ?? "-"}</td>
-                        <td className="px-4 py-3 text-slate-600">{item.contact.email ?? "-"}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap justify-end gap-2">
-                            <form action={startContactCallAction}>
-                              <input type="hidden" name="contactId" value={item.contact.id} />
-                              <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
-                                Call
-                              </SubmitButton>
-                            </form>
-                            <form action={openContactThreadAction}>
-                              <input type="hidden" name="contactId" value={item.contact.id} />
-                              <input type="hidden" name="channel" value={item.contact.email ? "email" : "sms"} />
-                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
-                                Msg
-                              </SubmitButton>
-                            </form>
-                            <form action={updateTaskAction}>
-                              <input type="hidden" name="taskId" value={item.id} />
-                              <input type="hidden" name="status" value="completed" />
-                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
-                                Done
-                              </SubmitButton>
-                            </form>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div>
+              <div className="space-y-3 lg:hidden">
+                {items.map((item) => {
+                  const badge = dueBadge(item);
+                  const isActive = initialContactId && item.contact.id === initialContactId;
+                  return (
+                    <article
+                      key={item.id}
+                      className={`rounded-2xl border bg-white p-4 shadow-sm ${isActive ? "border-primary-200 bg-primary-50/30" : "border-slate-200"}`}
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${badge.tone}`}>
+                          {badge.label}
+                        </span>
+                        <span className="text-[11px] text-slate-500">Due {formatDue(item)}</span>
+                      </div>
+                      <a
+                        href={`/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(item.contact.id)}`}
+                        className="mt-3 block"
+                      >
+                        <div className="text-sm font-semibold text-slate-900">{item.contact.name}</div>
+                        <div className="mt-1 text-[11px] text-slate-500">{item.title ?? "Canvass task"}</div>
+                      </a>
+                      <div className="mt-3 space-y-1 text-xs text-slate-600">
+                        <div>Phone: {item.contact.phone ?? "-"}</div>
+                        <div>Email: {item.contact.email ?? "-"}</div>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <form action={startContactCallAction}>
+                          <input type="hidden" name="contactId" value={item.contact.id} />
+                          <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
+                            Call
+                          </SubmitButton>
+                        </form>
+                        <form action={openContactThreadAction}>
+                          <input type="hidden" name="contactId" value={item.contact.id} />
+                          <input type="hidden" name="channel" value={item.contact.email ? "email" : "sms"} />
+                          <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
+                            Msg
+                          </SubmitButton>
+                        </form>
+                        <form action={updateTaskAction}>
+                          <input type="hidden" name="taskId" value={item.id} />
+                          <input type="hidden" name="status" value="completed" />
+                          <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
+                            Done
+                          </SubmitButton>
+                        </form>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+
+              <div className="hidden overflow-x-auto rounded-2xl border border-slate-200 bg-white lg:block">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    <tr>
+                      <th className="px-4 py-3">Due</th>
+                      <th className="px-4 py-3">Lead</th>
+                      <th className="px-4 py-3">Phone</th>
+                      <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {items.map((item) => {
+                      const badge = dueBadge(item);
+                      const isActive = initialContactId && item.contact.id === initialContactId;
+                      return (
+                        <tr key={item.id} className={isActive ? "bg-primary-50/40" : "hover:bg-slate-50"}>
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${badge.tone}`}>
+                              {badge.label}
+                            </span>
+                            <div className="mt-1 text-[11px] text-slate-500">Due {formatDue(item)}</div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <a
+                              href={`/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(item.contact.id)}`}
+                              className="block max-w-[320px]"
+                            >
+                              <div className="truncate text-sm font-semibold text-slate-900">{item.contact.name}</div>
+                              <div className="mt-0.5 truncate text-[11px] text-slate-500">{item.title ?? "Canvass task"}</div>
+                            </a>
+                          </td>
+                          <td className="px-4 py-3 text-slate-600">{item.contact.phone ?? "-"}</td>
+                          <td className="px-4 py-3 text-slate-600">{item.contact.email ?? "-"}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap justify-end gap-2">
+                              <form action={startContactCallAction}>
+                                <input type="hidden" name="contactId" value={item.contact.id} />
+                                <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
+                                  Call
+                                </SubmitButton>
+                              </form>
+                              <form action={openContactThreadAction}>
+                                <input type="hidden" name="contactId" value={item.contact.id} />
+                                <input type="hidden" name="channel" value={item.contact.email ? "email" : "sms"} />
+                                <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
+                                  Msg
+                                </SubmitButton>
+                              </form>
+                              <form action={updateTaskAction}>
+                                <input type="hidden" name="taskId" value={item.id} />
+                                <input type="hidden" name="status" value="completed" />
+                                <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
+                                  Done
+                                </SubmitButton>
+                              </form>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <aside className="rounded-2xl border border-slate-200 bg-white p-4">

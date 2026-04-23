@@ -90,7 +90,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
             <select
               name="defaultAssigneeMemberId"
               defaultValue={defaultAssigneeMemberId ?? ""}
-              className="min-w-[240px] rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+              className="w-full rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 sm:min-w-[240px] sm:w-auto"
             >
               <option value="">Auto (first active team member)</option>
               {members
@@ -171,7 +171,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
                 <form action={`/api/team/access/members/${member.id}`} method="post" className="space-y-3">
                   <input type="hidden" name="memberId" value={member.id} />
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-[220px] flex-1">
+                    <div className="w-full flex-1 sm:min-w-[220px]">
                       <div className="grid gap-2 sm:grid-cols-2">
                         <label className="flex flex-col gap-1">
                           <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Name</span>
@@ -213,7 +213,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
                     <select
                       name="roleId"
                       defaultValue={member.role?.id ?? ""}
-                      className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-700"
+                      className="w-full rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-700 sm:w-auto"
                     >
                       <option value="">No role</option>
                       {roles.map((role) => (
@@ -226,14 +226,14 @@ export async function AccessSection(): Promise<React.ReactElement> {
                       name="phone"
                       defaultValue={member.phone ?? ""}
                       placeholder="SMS phone (US), e.g. 6785551234"
-                      className="min-w-[240px] flex-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                      className="w-full flex-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 sm:min-w-[240px]"
                     />
                     <input
                       name="defaultCrewSplitPercent"
                       defaultValue={member.defaultCrewSplitBps !== null ? String(member.defaultCrewSplitBps / 100) : ""}
                       placeholder="Crew split % (e.g. 50)"
                       inputMode="decimal"
-                      className="w-[170px] rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700"
+                      className="w-full rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 sm:w-[170px]"
                     />
                     <SubmitButton
                       className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
@@ -308,7 +308,7 @@ export async function AccessSection(): Promise<React.ReactElement> {
                       <input
                         name="confirm"
                         placeholder='Type "DELETE" to confirm'
-                        className="min-w-[220px] flex-1 rounded-full border border-red-200 bg-white px-3 py-2 text-xs text-slate-700"
+                        className="w-full flex-1 rounded-full border border-red-200 bg-white px-3 py-2 text-xs text-slate-700 sm:min-w-[220px]"
                       />
                       <SubmitButton
                         className="rounded-full bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-red-200/50 transition hover:bg-red-700"

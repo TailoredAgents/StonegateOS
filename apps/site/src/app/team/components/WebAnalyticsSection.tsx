@@ -226,7 +226,43 @@ export async function WebAnalyticsSection(props: {
                 <div className="text-sm font-semibold text-slate-900">/book + /bookbrush + /bookdemo funnel by service area</div>
                 <div className="text-xs text-slate-500">ZIP is bucketed (never stored).</div>
               </div>
-              <div className="mt-4 overflow-x-auto">
+              <div className="mt-4 space-y-3 sm:hidden">
+                {(funnel?.byBucket ?? []).map((row) => (
+                  <article key={row.bucket} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm">
+                    <div className="font-semibold text-slate-900">{labelBucket(row.bucket)}</div>
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
+                      <div>
+                        <div className="font-semibold uppercase tracking-wide text-slate-500">Step 1</div>
+                        <div className="mt-1 text-sm text-slate-900">{fmtNumber(row.step1Views)}</div>
+                      </div>
+                      <div>
+                        <div className="font-semibold uppercase tracking-wide text-slate-500">Submit</div>
+                        <div className="mt-1 text-sm text-slate-900">
+                          {fmtNumber(row.step1Submits)} <span className="text-xs text-slate-500">{fmtPercent(safeRate(row.step1Submits, row.step1Views))}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-semibold uppercase tracking-wide text-slate-500">Quote</div>
+                        <div className="mt-1 text-sm text-slate-900">
+                          {fmtNumber(row.quoteSuccess)} <span className="text-xs text-slate-500">{fmtPercent(safeRate(row.quoteSuccess, row.step1Submits))}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-semibold uppercase tracking-wide text-slate-500">Book</div>
+                        <div className="mt-1 text-sm text-slate-900">
+                          {fmtNumber(row.bookingSuccess)} <span className="text-xs text-slate-500">{fmtPercent(safeRate(row.bookingSuccess, row.quoteSuccess))}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+                {!funnel?.byBucket?.length ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-5 text-sm text-slate-500">
+                    No /book, /bookbrush, or /bookdemo events in this range yet.
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-4 hidden overflow-x-auto sm:block">
                 <table className="min-w-full text-sm">
                   <thead className="text-xs uppercase tracking-wide text-slate-500">
                     <tr>
@@ -305,7 +341,24 @@ export async function WebAnalyticsSection(props: {
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="text-sm font-semibold text-slate-900">Top errors</div>
               <div className="mt-2 text-xs text-slate-500">Grouped by error key (no payload contents stored).</div>
-              <div className="mt-4 overflow-x-auto">
+              <div className="mt-4 space-y-3 sm:hidden">
+                {errorsRows.map((row) => (
+                  <article key={`${row.event}-${row.key ?? ""}-${row.path}`} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="font-semibold text-slate-900">{row.event}</div>
+                      <div className="text-xs font-semibold text-slate-500">{fmtNumber(row.count)}</div>
+                    </div>
+                    <div className="mt-2 text-xs text-slate-600">Key: {row.key ?? "\u2014"}</div>
+                    <div className="mt-1 text-xs text-slate-600">Path: {row.path}</div>
+                  </article>
+                ))}
+                {!errorsRows.length ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-5 text-sm text-slate-500">
+                    No fail events captured in this range.
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-4 hidden overflow-x-auto sm:block">
                 <table className="min-w-full text-sm">
                   <thead className="text-xs uppercase tracking-wide text-slate-500">
                     <tr>
@@ -339,7 +392,33 @@ export async function WebAnalyticsSection(props: {
             <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="text-sm font-semibold text-slate-900">Core Web Vitals (p75)</div>
               <div className="mt-2 text-xs text-slate-500">Sampled from real visitors (LCP/CLS only).</div>
-              <div className="mt-4 overflow-x-auto">
+              <div className="mt-4 space-y-3 sm:hidden">
+                {vitalsRows.slice(0, 14).map((row) => (
+                  <article key={`${row.path}-${row.metric}-${row.device ?? ""}`} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm">
+                    <div className="font-semibold text-slate-900">{row.path}</div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                      <span className="rounded-full bg-white px-2.5 py-1 font-semibold text-slate-700">{row.metric}</span>
+                      <span className="rounded-full bg-white px-2.5 py-1 font-semibold text-slate-700">{row.device ?? "unknown"}</span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
+                      <div>
+                        <div className="font-semibold uppercase tracking-wide text-slate-500">Samples</div>
+                        <div className="mt-1 text-sm text-slate-900">{fmtNumber(row.samples)}</div>
+                      </div>
+                      <div>
+                        <div className="font-semibold uppercase tracking-wide text-slate-500">p75</div>
+                        <div className="mt-1 text-sm text-slate-900">{fmtVital(row.metric, row.p75)}</div>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+                {!vitalsRows.length ? (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-5 text-sm text-slate-500">
+                    No vitals captured yet. These populate as visitors browse /, /book, /bookbrush, and /bookdemo.
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-4 hidden overflow-x-auto sm:block">
                 <table className="min-w-full text-sm">
                   <thead className="text-xs uppercase tracking-wide text-slate-500">
                     <tr>

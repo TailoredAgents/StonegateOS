@@ -62,10 +62,41 @@ export default function PipelineBoardClient({ stages, lanes, selectedContactId }
   const [ignoreClickUntil, setIgnoreClickUntil] = useState(0);
   const [savingCount, setSavingCount] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [mobileStage, setMobileStage] = useState<string>(() => stages[0] ?? "");
 
   useEffect(() => {
     setBoard(normalizeBoard(lanes));
   }, [lanes]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const media = window.matchMedia("(max-width: 1023px)");
+    const syncViewport = (event?: MediaQueryList | MediaQueryListEvent) => {
+      setIsMobileViewport(event?.matches ?? media.matches);
+    };
+    syncViewport(media);
+    const listener = (event: MediaQueryListEvent) => syncViewport(event);
+    media.addEventListener("change", listener);
+    return () => media.removeEventListener("change", listener);
+  }, []);
+
+  useEffect(() => {
+    setMobileStage((current) => {
+      if (current && stages.includes(current)) return current;
+      return stages[0] ?? "";
+    });
+  }, [stages]);
+
+  useEffect(() => {
+    if (!selectedContactId) return;
+    const selectedStage = board.find((lane) =>
+      lane.contacts.some((contact) => contact.id === selectedContactId)
+    )?.stage;
+    if (selectedStage) {
+      setMobileStage(selectedStage);
+    }
+  }, [board, selectedContactId]);
 
   function moveContact(contactId: string, targetStage: string) {
     setBoard((current) => {
@@ -177,10 +208,30 @@ export default function PipelineBoardClient({ stages, lanes, selectedContactId }
     router.push(`/team?${query.toString()}`);
   }
 
+  const renderedStages = isMobileViewport ? stages.filter((stage) => stage === mobileStage) : stages;
+
   return (
     <div className="overflow-x-auto pb-6">
-      <div className="grid auto-cols-[minmax(280px,320px)] grid-flow-col gap-5">
-        {stages.map((stage) => {
+      {isMobileViewport ? (
+        <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+          {stages.map((stage) => (
+            <button
+              key={stage}
+              type="button"
+              onClick={() => setMobileStage(stage)}
+              className={`shrink-0 rounded-full px-3 py-2 text-xs font-semibold transition ${
+                mobileStage === stage
+                  ? "bg-primary-600 text-white"
+                  : "border border-slate-200 bg-white text-slate-700"
+              }`}
+            >
+              {labelForPipelineStage(stage)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div className="grid auto-cols-[minmax(84vw,84vw)] grid-flow-col gap-4 sm:auto-cols-[minmax(280px,320px)] sm:gap-5">
+        {renderedStages.map((stage) => {
           const lane = board.find((item) => item.stage === stage) ?? { stage, contacts: [] };
           const isHover = hoverStage === stage;
           const laneTheme = themeForPipelineStage(stage);
@@ -194,7 +245,7 @@ export default function PipelineBoardClient({ stages, lanes, selectedContactId }
                   setHoverStage(null);
                 }
               }}
-              className={`group flex h-[min(620px,calc(100vh-14rem))] min-h-[360px] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white/80 shadow-xl shadow-slate-200/60 transition sm:h-[min(720px,calc(100vh-18rem))] ${
+              className={`group flex h-[min(68dvh,560px)] min-h-[340px] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white/80 shadow-xl shadow-slate-200/60 transition sm:h-[min(720px,calc(100vh-18rem))] ${
                 isHover ? "border-primary-400 ring-2 ring-primary-200/60" : ""
               }`}
             >

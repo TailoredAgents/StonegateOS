@@ -211,7 +211,29 @@ export async function SeoAgentSection(): Promise<React.ReactElement> {
             </a>
           </div>
 
-          <div className="mt-3 overflow-x-auto">
+          <div className="mt-3 space-y-3 sm:hidden">
+            {(payload?.posts ?? []).length ? (
+              payload!.posts.map((post) => (
+                <article key={post.id} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm">
+                  <a
+                    href={`/blog/${encodeURIComponent(post.slug)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-semibold text-slate-900 hover:text-primary-700"
+                  >
+                    {post.title}
+                  </a>
+                  <div className="mt-2 font-mono text-xs text-slate-600">{post.slug}</div>
+                  <div className="mt-1 text-xs text-slate-500">Published {fmtDate(post.publishedAt)}</div>
+                </article>
+              ))
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-5 text-sm text-slate-600">
+                No published blog posts yet.
+              </div>
+            )}
+          </div>
+          <div className="mt-3 hidden overflow-x-auto sm:block">
             <table className="min-w-full text-left text-sm">
               <thead>
                 <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">

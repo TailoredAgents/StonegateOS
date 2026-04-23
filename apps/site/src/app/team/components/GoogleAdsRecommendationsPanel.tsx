@@ -273,18 +273,165 @@ export function GoogleAdsRecommendationsPanel(props: {
       {filtered.length === 0 ? (
         <div className="mt-3 text-sm text-slate-600">No recommendations match your filters.</div>
       ) : (
-        <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full text-left text-sm">
-            <thead>
-              <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                <th className="py-2 pr-2"></th>
-                <th className="py-2 pr-4">Item</th>
-                <th className="py-2 pr-4">Status</th>
-                <th className="py-2 pr-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {filtered.map((item) => {
+        <>
+          <div className="mt-3 space-y-3 sm:hidden">
+            {filtered.map((item) => {
+              const term = safeString(item.payload["term"]).trim();
+              const campaignName = safeString(item.payload["campaignName"]).trim();
+              const campaignId = safeString(item.payload["campaignId"]).trim();
+              const tier = safeString(item.payload["tier"]).trim();
+              const matchType = safeString(item.payload["matchType"]).trim();
+              const clicks = item.payload["clicks"];
+              const cost = item.payload["cost"];
+              const callConv = item.payload["callConversions"];
+              const bookConv = item.payload["bookingConversions"];
+              const risk = safeString(item.payload["risk"]).trim().toLowerCase();
+              const confidence = toPercent(item.payload["confidence"]);
+              const riskReason = safeString(item.payload["riskReason"]).trim();
+              const impactClicks = safeNumber(item.payload["impactClicks"]) ?? safeNumber(clicks);
+              const impactImpressions = safeNumber(item.payload["impactImpressions"]);
+              const impactCost = safeNumber(item.payload["impactCost"]) ?? safeNumber(cost);
+              const campaignIds = Array.isArray(item.payload["campaignIds"])
+                ? (item.payload["campaignIds"] as unknown[])
+                    .map((v) => safeString(v).trim())
+                    .filter((v) => v.length > 0)
+                : [];
+
+              const label =
+                item.kind === "negative_keyword"
+                  ? term || "Negative keyword"
+                  : item.kind === "pause_candidate"
+                    ? campaignName || campaignId || "Pause candidate"
+                    : `${item.kind}`;
+
+              const subtitleParts: string[] = [];
+              if (item.kind === "negative_keyword" && tier) subtitleParts.push(`Tier ${tier.toUpperCase()}`);
+              if (item.kind === "negative_keyword" && matchType) subtitleParts.push(matchType.toLowerCase());
+              if (item.kind === "negative_keyword") {
+                if (risk) subtitleParts.push(`risk ${risk}`);
+                if (confidence) subtitleParts.push(`confidence ${confidence}`);
+
+                if (campaignIds.length > 1) subtitleParts.push(`seen in ${campaignIds.length} campaigns`);
+                else if (campaignName) subtitleParts.push(campaignName);
+                else if (campaignId) subtitleParts.push(`campaign ${campaignId}`);
+
+                if (impactClicks !== null) subtitleParts.push(`${impactClicks} clicks`);
+                const usd = toUsd(impactCost ?? "");
+                if (usd) subtitleParts.push(`${usd} spend`);
+                if (impactImpressions !== null && impactImpressions > 0) subtitleParts.push(`${impactImpressions} impr`);
+              } else {
+                if (campaignName) subtitleParts.push(campaignName);
+                if (campaignId) subtitleParts.push(`campaign ${campaignId}`);
+                const clickN = safeNumber(clicks);
+                if (clickN !== null) subtitleParts.push(`${clickN} clicks`);
+                const usd = toUsd(cost);
+                if (usd) subtitleParts.push(`${usd} spend`);
+              }
+              if (typeof callConv === "number" || typeof bookConv === "number") {
+                const call = typeof callConv === "number" ? callConv : Number(callConv);
+                const book = typeof bookConv === "number" ? bookConv : Number(bookConv);
+                if (Number.isFinite(call) || Number.isFinite(book)) {
+                  subtitleParts.push(`calls ${Number.isFinite(call) ? call : 0} / bookings ${Number.isFinite(book) ? book : 0}`);
+                }
+              }
+
+              const reason = safeString(item.payload["reason"]).trim();
+
+              return (
+                <article key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                      checked={selectedIds.has(item.id)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (checked) next.add(item.id);
+                          else next.delete(item.id);
+                          return next;
+                        });
+                      }}
+                      aria-label="Select recommendation"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-semibold text-slate-900">{label}</div>
+                        <span className="rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700">
+                          {item.status}
+                        </span>
+                      </div>
+                      {subtitleParts.length > 0 ? (
+                        <div className="mt-1 text-xs text-slate-500">{subtitleParts.join(" • ")}</div>
+                      ) : null}
+                      {riskReason ? <div className="mt-1 text-xs text-rose-600">{riskReason}</div> : null}
+                      {reason ? <div className="mt-1 text-xs text-slate-500">{reason}</div> : null}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {item.status !== "approved" ? (
+                          <form action={props.updateAction}>
+                            <input type="hidden" name="id" value={item.id} />
+                            <input type="hidden" name="status" value="approved" />
+                            <SubmitButton className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800">
+                              Approve
+                            </SubmitButton>
+                          </form>
+                        ) : null}
+
+                        {item.status !== "ignored" ? (
+                          <form action={props.updateAction}>
+                            <input type="hidden" name="id" value={item.id} />
+                            <input type="hidden" name="status" value="ignored" />
+                            <SubmitButton className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50">
+                              Ignore
+                            </SubmitButton>
+                          </form>
+                        ) : null}
+
+                        {item.status === "approved" && item.kind === "negative_keyword" && props.applyAction ? (
+                          <form
+                            action={props.applyAction}
+                            onSubmit={(event) => {
+                              if (!confirm("Apply this negative keyword in Google Ads now?")) {
+                                event.preventDefault();
+                              }
+                            }}
+                          >
+                            <input type="hidden" name="id" value={item.id} />
+                            <SubmitButton className="rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">
+                              Apply
+                            </SubmitButton>
+                          </form>
+                        ) : null}
+
+                        {item.status === "approved" ? (
+                          <form action={props.updateAction}>
+                            <input type="hidden" name="id" value={item.id} />
+                            <input type="hidden" name="status" value="applied" />
+                            <SubmitButton className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-100">
+                              Mark applied
+                            </SubmitButton>
+                          </form>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          <div className="mt-3 hidden overflow-x-auto sm:block">
+            <table className="min-w-full text-left text-sm">
+              <thead>
+                <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <th className="py-2 pr-2"></th>
+                  <th className="py-2 pr-4">Item</th>
+                  <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {filtered.map((item) => {
                 const term = safeString(item.payload["term"]).trim();
                 const campaignName = safeString(item.payload["campaignName"]).trim();
                 const campaignId = safeString(item.payload["campaignId"]).trim();
@@ -430,9 +577,10 @@ export function GoogleAdsRecommendationsPanel(props: {
                   </tr>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {approvedNegatives.length > 0 ? (

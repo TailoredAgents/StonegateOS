@@ -367,113 +367,205 @@ export async function PartnersSection({ filters }: { filters?: PartnerFilters })
         {partners.length === 0 ? (
           <div className={TEAM_EMPTY_STATE}>No partners match these filters yet.</div>
         ) : (
-          <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                <tr>
-                  <th className="px-4 py-3 text-left">Next</th>
-                  <th className="px-4 py-3 text-left">Partner</th>
-                  <th className="px-4 py-3 text-left">Owner</th>
-                  <th className="px-4 py-3 text-left">Referrals</th>
-                  <th className="px-4 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {partners.map((partner) => {
-                  const dueBadge = formatDueBadge(partner.partnerNextTouchAt);
-                  const ownerLabel = partner.partnerOwnerName ?? "Unassigned";
-                  const companyLine = partner.company ? `${partner.company} • ` : "";
-                  const contactLine = `${companyLine}${partner.name}`;
-                  const detailBits = [partner.phone, partner.email].filter(Boolean).join(" • ");
-                  return (
-                    <tr key={partner.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-4 align-top">
-                        <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold ${dueBadge.tone}`}>{dueBadge.label}</span>
-                        {partner.partnerNextTouchAt ? (
-                          <div className="mt-2 text-xs text-slate-500">{formatDateTime(partner.partnerNextTouchAt)}</div>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-4 align-top">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-semibold text-slate-900">{contactLine}</span>
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
-                            {partner.partnerStatus}
-                          </span>
-                          {partner.partnerType ? (
-                            <span className="rounded-full bg-primary-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-700">
-                              {partner.partnerType}
-                            </span>
+          <>
+            <div className="mt-4 space-y-3 lg:hidden">
+              {partners.map((partner) => {
+                const dueBadge = formatDueBadge(partner.partnerNextTouchAt);
+                const ownerLabel = partner.partnerOwnerName ?? "Unassigned";
+                const companyLine = partner.company ? `${partner.company} • ` : "";
+                const contactLine = `${companyLine}${partner.name}`;
+                const detailBits = [partner.phone, partner.email].filter(Boolean).join(" • ");
+                return (
+                  <article key={partner.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold ${dueBadge.tone}`}>{dueBadge.label}</span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                        {partner.partnerStatus}
+                      </span>
+                      {partner.partnerType ? (
+                        <span className="rounded-full bg-primary-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-primary-700">
+                          {partner.partnerType}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-3 text-sm font-semibold text-slate-900">{contactLine}</div>
+                    {detailBits ? <div className="mt-1 text-xs text-slate-600">{detailBits}</div> : null}
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
+                      <div>
+                        <div className="font-semibold uppercase tracking-wide text-slate-500">Owner</div>
+                        <div className="mt-1 text-sm text-slate-900">{ownerLabel}</div>
+                      </div>
+                      <div>
+                        <div className="font-semibold uppercase tracking-wide text-slate-500">Referrals</div>
+                        <div className="mt-1 text-sm text-slate-900">{partner.partnerReferralCount ?? 0}</div>
+                      </div>
+                    </div>
+                    {partner.partnerNextTouchAt ? (
+                      <div className="mt-3 text-xs text-slate-500">Next touch {formatDateTime(partner.partnerNextTouchAt)}</div>
+                    ) : null}
+                    {partner.partnerLastTouchAt ? (
+                      <div className="mt-1 text-xs text-slate-500">Last touch {formatDateTime(partner.partnerLastTouchAt)}</div>
+                    ) : null}
+                    {partner.partnerLastReferralAt ? (
+                      <div className="mt-1 text-xs text-slate-500">Last referral {formatDateTime(partner.partnerLastReferralAt)}</div>
+                    ) : null}
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <a
+                        className={teamButtonClass("secondary", "sm")}
+                        href={buildPartnersHref({ filters: resolvedFilters, patch: { selectedId: partner.id } })}
+                      >
+                        Portal
+                      </a>
+                      <form action={startContactCallAction}>
+                        <input type="hidden" name="contactId" value={partner.id} />
+                        <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
+                          Call
+                        </SubmitButton>
+                      </form>
+                      <form action={openContactThreadAction}>
+                        <input type="hidden" name="contactId" value={partner.id} />
+                        <input type="hidden" name="channel" value={partner.email ? "email" : "sms"} />
+                        <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
+                          Message
+                        </SubmitButton>
+                      </form>
+                      <form action={partnerLogReferralAction}>
+                        <input type="hidden" name="contactId" value={partner.id} />
+                        <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
+                          + Referral
+                        </SubmitButton>
+                      </form>
+                      <form action={partnerLogTouchAction}>
+                        <input type="hidden" name="contactId" value={partner.id} />
+                        <input type="hidden" name="nextTouchDays" value="30" />
+                        <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
+                          Log touch
+                        </SubmitButton>
+                      </form>
+                      <form action={partnerScheduleCheckinAction}>
+                        <input type="hidden" name="contactId" value={partner.id} />
+                        <input type="hidden" name="daysFromNow" value="7" />
+                        <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Scheduling...">
+                          Check-in 7d
+                        </SubmitButton>
+                      </form>
+                      <a className={teamButtonClass("secondary", "sm")} href={`/team?tab=contacts&contactId=${encodeURIComponent(partner.id)}`}>
+                        Open
+                      </a>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 hidden overflow-x-auto rounded-2xl border border-slate-200 bg-white lg:block">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Next</th>
+                    <th className="px-4 py-3 text-left">Partner</th>
+                    <th className="px-4 py-3 text-left">Owner</th>
+                    <th className="px-4 py-3 text-left">Referrals</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {partners.map((partner) => {
+                    const dueBadge = formatDueBadge(partner.partnerNextTouchAt);
+                    const ownerLabel = partner.partnerOwnerName ?? "Unassigned";
+                    const companyLine = partner.company ? `${partner.company} • ` : "";
+                    const contactLine = `${companyLine}${partner.name}`;
+                    const detailBits = [partner.phone, partner.email].filter(Boolean).join(" • ");
+                    return (
+                      <tr key={partner.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-4 align-top">
+                          <span className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold ${dueBadge.tone}`}>{dueBadge.label}</span>
+                          {partner.partnerNextTouchAt ? (
+                            <div className="mt-2 text-xs text-slate-500">{formatDateTime(partner.partnerNextTouchAt)}</div>
                           ) : null}
-                        </div>
-                        {detailBits ? <div className="mt-2 text-xs text-slate-600">{detailBits}</div> : null}
-                        {partner.partnerLastTouchAt ? (
-                          <div className="mt-1 text-[11px] text-slate-500">Last touch: {formatDateTime(partner.partnerLastTouchAt)}</div>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-4 align-top text-xs text-slate-700">
-                        <div className="font-semibold text-slate-900">{ownerLabel}</div>
-                        {partner.partnerSince ? (
-                          <div className="mt-1 text-[11px] text-slate-500">Partner since {formatDateTime(partner.partnerSince)}</div>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-4 align-top text-xs text-slate-700">
-                        <div className="text-sm font-semibold text-slate-900">{partner.partnerReferralCount ?? 0}</div>
-                        {partner.partnerLastReferralAt ? (
-                          <div className="mt-1 text-[11px] text-slate-500">Last referral {formatDateTime(partner.partnerLastReferralAt)}</div>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-4 align-top text-right">
-                        <div className="flex flex-wrap justify-end gap-2">
-                          <a
-                            className={teamButtonClass("secondary", "sm")}
-                            href={buildPartnersHref({ filters: resolvedFilters, patch: { selectedId: partner.id } })}
-                          >
-                            Portal
-                          </a>
-                          <form action={startContactCallAction}>
-                            <input type="hidden" name="contactId" value={partner.id} />
-                            <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
-                              Call
-                            </SubmitButton>
-                          </form>
-                          <form action={openContactThreadAction}>
-                            <input type="hidden" name="contactId" value={partner.id} />
-                            <input type="hidden" name="channel" value={partner.email ? "email" : "sms"} />
-                            <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
-                              Message
-                            </SubmitButton>
-                          </form>
-                          <form action={partnerLogReferralAction}>
-                            <input type="hidden" name="contactId" value={partner.id} />
-                            <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
-                              + Referral
-                            </SubmitButton>
-                          </form>
-                          <form action={partnerLogTouchAction}>
-                            <input type="hidden" name="contactId" value={partner.id} />
-                            <input type="hidden" name="nextTouchDays" value="30" />
-                            <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
-                              Log touch
-                            </SubmitButton>
-                          </form>
-                          <form action={partnerScheduleCheckinAction}>
-                            <input type="hidden" name="contactId" value={partner.id} />
-                            <input type="hidden" name="daysFromNow" value="7" />
-                            <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Scheduling...">
-                              Check-in 7d
-                            </SubmitButton>
-                          </form>
-                          <a className={teamButtonClass("secondary", "sm")} href={`/team?tab=contacts&contactId=${encodeURIComponent(partner.id)}`}>
-                            Open
-                          </a>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        </td>
+                        <td className="px-4 py-4 align-top">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-slate-900">{contactLine}</span>
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                              {partner.partnerStatus}
+                            </span>
+                            {partner.partnerType ? (
+                              <span className="rounded-full bg-primary-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-700">
+                                {partner.partnerType}
+                              </span>
+                            ) : null}
+                          </div>
+                          {detailBits ? <div className="mt-2 text-xs text-slate-600">{detailBits}</div> : null}
+                          {partner.partnerLastTouchAt ? (
+                            <div className="mt-1 text-[11px] text-slate-500">Last touch: {formatDateTime(partner.partnerLastTouchAt)}</div>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-4 align-top text-xs text-slate-700">
+                          <div className="font-semibold text-slate-900">{ownerLabel}</div>
+                          {partner.partnerSince ? (
+                            <div className="mt-1 text-[11px] text-slate-500">Partner since {formatDateTime(partner.partnerSince)}</div>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-4 align-top text-xs text-slate-700">
+                          <div className="text-sm font-semibold text-slate-900">{partner.partnerReferralCount ?? 0}</div>
+                          {partner.partnerLastReferralAt ? (
+                            <div className="mt-1 text-[11px] text-slate-500">Last referral {formatDateTime(partner.partnerLastReferralAt)}</div>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-4 align-top text-right">
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <a
+                              className={teamButtonClass("secondary", "sm")}
+                              href={buildPartnersHref({ filters: resolvedFilters, patch: { selectedId: partner.id } })}
+                            >
+                              Portal
+                            </a>
+                            <form action={startContactCallAction}>
+                              <input type="hidden" name="contactId" value={partner.id} />
+                              <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Calling...">
+                                Call
+                              </SubmitButton>
+                            </form>
+                            <form action={openContactThreadAction}>
+                              <input type="hidden" name="contactId" value={partner.id} />
+                              <input type="hidden" name="channel" value={partner.email ? "email" : "sms"} />
+                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Opening...">
+                                Message
+                              </SubmitButton>
+                            </form>
+                            <form action={partnerLogReferralAction}>
+                              <input type="hidden" name="contactId" value={partner.id} />
+                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
+                                + Referral
+                              </SubmitButton>
+                            </form>
+                            <form action={partnerLogTouchAction}>
+                              <input type="hidden" name="contactId" value={partner.id} />
+                              <input type="hidden" name="nextTouchDays" value="30" />
+                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
+                                Log touch
+                              </SubmitButton>
+                            </form>
+                            <form action={partnerScheduleCheckinAction}>
+                              <input type="hidden" name="contactId" value={partner.id} />
+                              <input type="hidden" name="daysFromNow" value="7" />
+                              <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Scheduling...">
+                                Check-in 7d
+                              </SubmitButton>
+                            </form>
+                            <a className={teamButtonClass("secondary", "sm")} href={`/team?tab=contacts&contactId=${encodeURIComponent(partner.id)}`}>
+                              Open
+                            </a>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
 
         <div className="mt-4 flex items-center justify-between text-xs text-slate-600">

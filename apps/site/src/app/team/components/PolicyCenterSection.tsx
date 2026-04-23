@@ -193,7 +193,7 @@ function AdvancedJsonEditor(props: { setting: PolicySetting | undefined }) {
         <div className="flex items-center justify-between text-[11px] text-slate-500">
           <span>Last updated {formatUpdatedAt(setting.updatedAt)}</span>
           <SubmitButton
-            className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-slate-200/60 transition hover:bg-slate-800"
+            className="w-full rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-slate-200/60 transition hover:bg-slate-800 sm:w-auto"
             pendingLabel="Saving..."
           >
             Save JSON
@@ -430,7 +430,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(businessSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save business hours
@@ -478,7 +478,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(quietSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save quiet hours
@@ -576,7 +576,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(serviceSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save service area
@@ -670,7 +670,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(companySetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save company profile
@@ -695,7 +695,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save name
@@ -726,7 +726,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(personaSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save persona
@@ -761,7 +761,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(inboxAlertsSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save alerts
@@ -823,7 +823,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(bookingSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save booking rules
@@ -859,7 +859,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(confirmationSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save confirmation loop
@@ -895,7 +895,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(followupSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save follow-up sequence
@@ -957,7 +957,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(standardSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save standard job
@@ -1005,7 +1005,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(itemSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save item policies
@@ -1122,7 +1122,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(templatesSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save templates
@@ -1150,7 +1150,7 @@ export async function PolicyCenterSection({
             <div className="flex items-center justify-between text-[11px] text-slate-500">
               <span>Last updated {formatUpdatedAt(reviewRequestSetting?.updatedAt ?? null)}</span>
               <SubmitButton
-                className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
+                className="w-full rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700 sm:w-auto"
                 pendingLabel="Saving..."
               >
                 Save review settings

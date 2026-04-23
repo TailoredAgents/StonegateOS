@@ -32,6 +32,7 @@ export function CalendarViewer({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const requestedView = searchParams?.get("calView");
 
   const [view, setView] = React.useState<"week" | "month" | "day">(initialView);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
@@ -41,6 +42,7 @@ export function CalendarViewer({
   const [selectedDay, setSelectedDay] = React.useState<string>(() =>
     initialAnchor?.trim()?.length ? initialAnchor : formatDayKey(new Date()),
   );
+  const [isMobileViewport, setIsMobileViewport] = React.useState(false);
   const selectedEvent = selectedId
     ? (events.find((evt) => evt.id === selectedId) ?? null)
     : null;
@@ -56,6 +58,23 @@ export function CalendarViewer({
       setSelectedDay(next);
     }
   }, [initialAnchor]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const media = window.matchMedia("(max-width: 639px)");
+    const syncViewport = (event?: MediaQueryList | MediaQueryListEvent) => {
+      setIsMobileViewport(event?.matches ?? media.matches);
+    };
+    syncViewport(media);
+    const listener = (event: MediaQueryListEvent) => syncViewport(event);
+    media.addEventListener("change", listener);
+    return () => media.removeEventListener("change", listener);
+  }, []);
+
+  React.useEffect(() => {
+    if (!isMobileViewport || requestedView) return;
+    setView("day");
+  }, [isMobileViewport, requestedView]);
 
   const dayEvents = React.useMemo(() => {
     return events
@@ -343,7 +362,7 @@ export function CalendarViewer({
           )}
         </div>
 
-        <aside className="min-w-0">
+        <aside className="hidden min-w-0 lg:block">
           <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
             <div className="flex items-center justify-between gap-2">
               <div>
@@ -442,6 +461,47 @@ export function CalendarViewer({
             </div>
           </div>
         </aside>
+      </div>
+
+      <div className="lg:hidden">
+        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-lg shadow-slate-200/50">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-xs font-semibold uppercase text-slate-500">
+                {selectedEvent ? "Appointment details" : "Day details"}
+              </div>
+              <div className="mt-1 text-sm font-semibold text-slate-900">
+                {formatDayKeyLabel(selectedDay)}
+              </div>
+              {selectedDayRevenueSummary && selectedDayRevenueLabel ? (
+                <div className="mt-1 text-[11px] font-semibold text-emerald-700">
+                  {selectedDayRevenueSummary.label} {selectedDayRevenueLabel}
+                </div>
+              ) : null}
+            </div>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+              {dayEvents.length} {dayEvents.length === 1 ? "item" : "items"}
+            </span>
+          </div>
+
+          <div className="mt-4">
+            {selectedEvent ? (
+              <CalendarEventDetail
+                event={selectedEvent}
+                teamMembers={teamMembers}
+                variant="embedded"
+              />
+            ) : dayEvents.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                Select a date to see appointments.
+              </p>
+            ) : (
+              <p className="text-sm text-slate-500">
+                Pick an appointment above to see the full details.
+              </p>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 export const TEAM_CARD =
   "rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] text-[color:var(--team-text)] shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur";
 
-export const TEAM_CARD_PADDED = `${TEAM_CARD} p-6`;
+export const TEAM_CARD_PADDED = `${TEAM_CARD} p-4 sm:p-6`;
 
 export const TEAM_SECTION_TITLE = "text-lg font-semibold text-[color:var(--team-text)]";
 export const TEAM_SECTION_SUBTITLE = "mt-1 text-sm text-[color:var(--team-text-muted)]";

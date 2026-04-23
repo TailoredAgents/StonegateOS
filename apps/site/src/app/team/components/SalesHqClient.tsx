@@ -831,7 +831,7 @@ export function SalesHqClient({
         <div className={`${TEAM_CARD} p-4`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm font-semibold text-slate-900">Queue</div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
               <button
                 type="button"
                 className={teamButtonClass(activeQueue === "speed_to_lead" ? "primary" : "secondary", "sm")}
@@ -872,7 +872,7 @@ export function SalesHqClient({
                 ? "On-time = completed by due time + 10 minutes."
                 : "These are the leads the agent deliberately held back for a human."}
           </div>
-          <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-600">
+          <div className="mt-2 flex flex-col gap-3 text-xs text-slate-600 sm:flex-row sm:items-center sm:justify-between">
             <span>
               {activeQueue === "human_review"
                 ? `${humanReviewItems.length} lead${humanReviewItems.length === 1 ? "" : "s"} currently held for human review.`
@@ -1022,7 +1022,7 @@ export function SalesHqClient({
             )}
           </div>
 
-          <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-200 pt-4">
+          <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 text-center sm:flex-row sm:items-center sm:justify-between sm:text-left">
             <div className="text-xs text-slate-500">Use the selected task to open the contact and call/message.</div>
             <button type="button" className={teamButtonClass("secondary", "sm")} onClick={resetSalesHq} disabled={!isOwnerSession || actionBusy}>
               Clear Sales HQ
@@ -1067,7 +1067,7 @@ export function SalesHqClient({
                   )}
                 </div>
 
-                <div className="flex flex-wrap gap-2">
+                <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap">
                   <button
                     type="button"
                     className={teamButtonClass("primary", "sm")}
@@ -1197,7 +1197,7 @@ export function SalesHqClient({
               <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Task</div>
                 <div className="font-semibold text-slate-900">{selectedItem.title}</div>
-                <div className="flex flex-wrap gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
                   <button
                     type="button"
                     className={teamButtonClass("secondary", "sm")}
@@ -1208,7 +1208,7 @@ export function SalesHqClient({
                   </button>
                   <details className="relative">
                     <summary className={teamButtonClass("secondary", "sm")}>Remove</summary>
-                    <div className="absolute right-0 z-10 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl shadow-slate-200/60">
+                    <div className="absolute left-0 z-10 mt-2 w-[min(18rem,calc(100vw-3rem))] rounded-2xl border border-slate-200 bg-white p-3 shadow-xl shadow-slate-200/60 sm:left-auto sm:right-0 sm:w-72">
                       <div className="text-xs font-semibold text-slate-700">Remove from Sales HQ</div>
                       <div className="mt-2 grid gap-2">
                         {["spam", "not_a_lead", "out_of_state", "out_of_area", "bad_phone", "duplicate", "handled", "do_not_contact"].map(

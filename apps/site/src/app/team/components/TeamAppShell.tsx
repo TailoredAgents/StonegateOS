@@ -554,6 +554,7 @@ export function TeamAppShell(props: {
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
   const [theme, setTheme] = React.useState<"light" | "dark">("light");
+  const mobileNavItems = React.useMemo(() => props.quickItems.slice(0, 5), [props.quickItems]);
 
   React.useEffect(() => {
     const stored = globalThis.localStorage?.getItem(SIDEBAR_STORAGE_KEY);
@@ -613,6 +614,7 @@ export function TeamAppShell(props: {
 
   const handleNavigate = React.useCallback(
     (href: string) => {
+      setMobileOpen(false);
       startTransition(() => {
         router.push(href as Route);
       });
@@ -805,7 +807,7 @@ export function TeamAppShell(props: {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-40 border-b border-[color:var(--team-border)] bg-[color:var(--team-header-bg)] backdrop-blur">
-            <div className="flex w-full items-center justify-between gap-4 px-4 py-3 sm:px-6">
+            <div className="flex w-full items-center justify-between gap-3 px-4 py-2.5 sm:gap-4 sm:px-6 sm:py-3">
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -815,11 +817,11 @@ export function TeamAppShell(props: {
                 >
                   <IconMenu className="h-5 w-5" />
                 </button>
-                <div>
+                <div className="min-w-0">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[color:var(--team-text-soft)]">Team</div>
-                  <div className="text-lg font-semibold text-[color:var(--team-text)]">{props.title}</div>
+                  <div className="truncate text-base font-semibold text-[color:var(--team-text)] sm:text-lg">{props.title}</div>
                 </div>
-                {isPending ? <span className="text-xs font-semibold text-[color:var(--team-text-soft)]">Loading...</span> : null}
+                {isPending ? <span className="hidden text-xs font-semibold text-[color:var(--team-text-soft)] sm:inline">Loading...</span> : null}
               </div>
               <div className="flex items-center gap-2 sm:gap-3">
                 <button
@@ -846,12 +848,48 @@ export function TeamAppShell(props: {
           </header>
 
           <div className="flex-1">
-            <main className="w-full space-y-6 px-4 py-6 sm:px-6 sm:py-8">
+            <main className="w-full space-y-5 px-4 py-5 pb-[calc(env(safe-area-inset-bottom,0px)+5.75rem)] sm:space-y-6 sm:px-6 sm:py-8 sm:pb-8">
               {props.children}
             </main>
           </div>
         </div>
       </div>
+
+      {mobileNavItems.length > 0 ? (
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[color:var(--team-border)] bg-[color:var(--team-header-bg)]/95 px-2 pb-[calc(env(safe-area-inset-bottom,0px)+0.5rem)] pt-2 backdrop-blur lg:hidden">
+          <div className="grid grid-cols-5 gap-1">
+            {mobileNavItems.map((item) => {
+              const active = item.id === props.activeId;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleNavigate(item.href)}
+                  className={cn(
+                    "flex min-h-[60px] flex-col items-center justify-center gap-1 rounded-2xl px-2 py-2 text-center text-[10px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-primary-200",
+                    active
+                      ? "bg-primary-50 text-primary-800 shadow-sm shadow-primary-100/70"
+                      : "text-[color:var(--team-text-muted)] hover:bg-[color:var(--team-surface)] hover:text-[color:var(--team-text)]"
+                  )}
+                  aria-current={active ? "page" : undefined}
+                >
+                  <span
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-2xl border",
+                      active
+                        ? "border-primary-100 bg-[color:var(--team-surface)] text-primary-700"
+                        : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-soft)]"
+                    )}
+                  >
+                    {iconForTab(item.id)}
+                  </span>
+                  <span className="line-clamp-1 max-w-full">{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      ) : null}
 
       {mobileOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">

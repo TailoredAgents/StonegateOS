@@ -789,7 +789,31 @@ export async function MarketingSection(props: {
             <div className="text-sm font-semibold text-slate-900">Top search terms</div>
             <div className="mt-1 text-xs text-slate-500">Sorted by conversions, then clicks (last 7 days).</div>
 
-            <div className="mt-3 overflow-x-auto">
+            <div className="mt-3 space-y-3 sm:hidden">
+              {(summary?.topSearchTerms ?? []).slice(0, 12).map((row) => (
+                <article key={`${row.campaignId}:${row.searchTerm}`} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm">
+                  <div className="font-semibold text-slate-900">{row.searchTerm}</div>
+                  <div className="mt-1 text-xs text-slate-500" title={row.campaignId}>
+                    {row.campaignName ?? row.campaignId}
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
+                    <div><span className="font-semibold text-slate-500">Impr</span><div className="mt-1 text-sm text-slate-900">{fmtNumber(row.impressions)}</div></div>
+                    <div><span className="font-semibold text-slate-500">Clicks</span><div className="mt-1 text-sm text-slate-900">{fmtNumber(row.clicks)}</div></div>
+                    <div><span className="font-semibold text-slate-500">Avg CPC</span><div className="mt-1 text-sm text-slate-900">{fmtAvgCpc(row.cost, row.clicks)}</div></div>
+                    <div><span className="font-semibold text-slate-500">Cost</span><div className="mt-1 text-sm text-slate-900">{fmtMoney(row.cost)}</div></div>
+                    <div><span className="font-semibold text-slate-500">Conv</span><div className="mt-1 text-sm text-slate-900">{parseNumeric(row.conversions).toFixed(0)}</div></div>
+                    <div><span className="font-semibold text-slate-500">Conv rate</span><div className="mt-1 text-sm text-slate-900">{fmtPercent(parseNumeric(row.conversions) / Math.max(row.clicks, 1))}</div></div>
+                  </div>
+                </article>
+              ))}
+              {(!summary?.topSearchTerms || summary.topSearchTerms.length === 0) && (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-5 text-sm text-slate-600">
+                  No search term rows yet. Click Sync now.
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 hidden overflow-x-auto sm:block">
               <table className="min-w-[860px] text-left text-sm">
                 <thead>
                   <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -843,7 +867,25 @@ export async function MarketingSection(props: {
               <div className="text-sm font-semibold text-slate-900">Top campaigns</div>
               <div className="mt-1 text-xs text-slate-500">Sorted by conversions (last 7 days).</div>
 
-              <div className="mt-3 overflow-x-auto">
+              <div className="mt-3 space-y-3 sm:hidden">
+                {(summary?.topCampaigns ?? []).slice(0, 10).map((row) => (
+                  <article key={row.campaignId} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 text-sm shadow-sm">
+                    <div className="font-semibold text-slate-900">{row.campaignName ?? row.campaignId}</div>
+                    <div className="mt-1 text-xs text-slate-500">{row.campaignId}</div>
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-slate-600">
+                      <div><span className="font-semibold text-slate-500">Conv</span><div className="mt-1 text-sm text-slate-900">{Number(row.conversions).toFixed(0)}</div></div>
+                      <div><span className="font-semibold text-slate-500">Cost</span><div className="mt-1 text-sm text-slate-900">{fmtMoney(row.cost)}</div></div>
+                    </div>
+                  </article>
+                ))}
+                {(!summary?.topCampaigns || summary.topCampaigns.length === 0) && (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-5 text-sm text-slate-600">
+                    No campaign rows yet. Click Sync now.
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-3 hidden overflow-x-auto sm:block">
                 <table className="min-w-full text-left text-sm">
                   <thead>
                     <tr className="text-xs font-semibold uppercase tracking-wide text-slate-500">

@@ -892,7 +892,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
           type="search"
           defaultValue={searchQuery}
           placeholder="Search name, phone, or email…"
-          className="min-w-[220px] flex-1 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+          className="w-full flex-1 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100 sm:min-w-[220px]"
         />
         <select
           name="status"
@@ -908,7 +908,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         </select>
         <button
           type="submit"
-          className={teamButtonClass("secondary")}
+          className={`${teamButtonClass("secondary")} w-full sm:w-auto`}
         >
           Search
         </button>
@@ -1411,6 +1411,77 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                   )}
                 </div>
               </div>
+
+              {activeContactId ? (
+                <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] p-4 lg:hidden">
+                  <summary className="cursor-pointer list-none text-sm font-semibold text-[color:var(--team-text)]">
+                    Contact details
+                  </summary>
+                  <div className="mt-4 space-y-4">
+                    <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-[0_10px_24px_var(--team-card-shadow)]">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="truncate text-sm font-semibold text-[color:var(--team-text)]">
+                              {activeContact?.name ?? "Unknown contact"}
+                            </div>
+                            <ContactNameEditorClient contactId={activeContactId} contactName={activeContact?.name ?? ""} />
+                          </div>
+                          <div className="mt-1 space-y-1 text-xs text-[color:var(--team-text-muted)]">
+                            {activeContact?.phone ? (
+                              <div>Phone: {activeContact.phone}</div>
+                            ) : (
+                              <div className="text-[color:var(--team-text-soft)]">Phone: not on file</div>
+                            )}
+                            {activeContact?.email ? (
+                              <div>Email: {activeContact.email}</div>
+                            ) : (
+                              <div className="text-[color:var(--team-text-soft)]">Email: not on file</div>
+                            )}
+                            {activeThreadSummary?.assignedTo?.name ? (
+                              <div>Assigned to: {activeThreadSummary.assignedTo.name}</div>
+                            ) : null}
+                            {activeContactSummary?.pipeline?.stage ? (
+                              <div>Stage: {activeContactSummary.pipeline.stage}</div>
+                            ) : null}
+                            {activeContactSummary?.stats ? (
+                              <div>
+                                Appointments: {activeContactSummary.stats.appointments} • Quotes: {activeContactSummary.stats.quotes}
+                              </div>
+                            ) : null}
+                            {activeContactSummary?.lastActivityAt ? (
+                              <div>Last activity: {formatTimestamp(activeContactSummary.lastActivityAt)}</div>
+                            ) : null}
+                          </div>
+                        </div>
+                        {activeProperty?.outOfArea ? (
+                          <span className="shrink-0 rounded-full bg-rose-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                            Out of area
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {activeProperty ? (
+                        <div className="mt-3 border-t border-[color:var(--team-border)] pt-3 text-xs text-[color:var(--team-text-muted)]">
+                          <div className="font-semibold text-[color:var(--team-text-muted)]">Address</div>
+                          <div className="mt-1">
+                            {activeProperty.addressLine1}
+                            <div className="text-[color:var(--team-text-soft)]">
+                              {activeProperty.city}, {activeProperty.state} {activeProperty.postalCode}
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <InboxContactRemindersClient contactId={activeContactId} initialReminders={contactReminders} />
+                    <InboxContactNotesClient contactId={activeContactId} initialNotes={contactNotes} />
+                    <ContactSalesAgentMemoryClient contactId={activeContactId} />
+                    <ContactMediaAnalysisClient contactId={activeContactId} />
+                    <ContactSalesAgentNextActionClient contactId={activeContactId} />
+                  </div>
+                </details>
+              ) : null}
 
               <div id="inbox-thread-scroll" className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                 {selectedThreadId && activeContactId ? (
