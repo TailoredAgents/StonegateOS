@@ -105,6 +105,25 @@ type CommissionSummaryPayload = {
   };
 };
 
+type OwnerView = "overview" | "revenue" | "expenses" | "payroll" | "pl" | "assistant";
+
+const OWNER_VIEWS: Array<{ id: OwnerView; label: string; description: string }> = [
+  { id: "overview", label: "Overview", description: "Cash flow, alerts, and next actions" },
+  { id: "revenue", label: "Revenue", description: "Completed jobs and collected totals" },
+  { id: "expenses", label: "Expenses", description: "Spend totals and recent receipts" },
+  { id: "payroll", label: "Payroll", description: "Commissions, tips, and payout timing" },
+  { id: "pl", label: "P&L", description: "Profit and margin snapshots" },
+  { id: "assistant", label: "Assistant", description: "Ask live owner questions" },
+];
+
+function isOwnerView(value: string | null | undefined): value is OwnerView {
+  return OWNER_VIEWS.some((view) => view.id === value);
+}
+
+function normalizeOwnerView(value: string | null | undefined): OwnerView {
+  return isOwnerView(value) ? value : "overview";
+}
+
 function fmtMoney(cents: number, currency: string) {
   try {
     return new Intl.NumberFormat("en-US", {
@@ -229,7 +248,12 @@ function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
       continue;
     }
 
-    if (hasRange && (collected < rangeMin! || collected > rangeMax!)) {
+    if (
+      hasRange &&
+      typeof rangeMin === "number" &&
+      typeof rangeMax === "number" &&
+      (collected < rangeMin || collected > rangeMax)
+    ) {
       pricingMismatchCount += 1;
     }
   }
@@ -240,7 +264,8 @@ function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
   };
 }
 
-export async function OwnerSection(): Promise<React.ReactElement> {
+export async function OwnerSection({ ownerView }: { ownerView?: string }): Promise<React.ReactElement> {
+  const activeOwnerView = normalizeOwnerView(ownerView);
   let revenue: RevenuePayload | null = null;
   let revenueError: string | null = null;
   try {
@@ -322,12 +347,44 @@ export async function OwnerSection(): Promise<React.ReactElement> {
 
   return (
     <section className="space-y-4">
-      <header className={TEAM_CARD_PADDED}>
-        <h2 className={TEAM_SECTION_TITLE}>Owner HQ</h2>
-        <p className={TEAM_SECTION_SUBTITLE}>Revenue, expenses, and tools.</p>
+      <header className={`${TEAM_CARD_PADDED} space-y-5`}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className={TEAM_SECTION_TITLE}>Owner HQ</h2>
+            <p className={TEAM_SECTION_SUBTITLE}>Revenue, expenses, payroll, profit, and owner tools.</p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Current view</div>
+            <div className="mt-1 font-semibold text-slate-900">
+              {OWNER_VIEWS.find((view) => view.id === activeOwnerView)?.label ?? "Overview"}
+            </div>
+          </div>
+        </div>
+
+        <nav className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6" aria-label="Owner HQ sections">
+          {OWNER_VIEWS.map((view) => {
+            const isActive = view.id === activeOwnerView;
+            return (
+              <a
+                key={view.id}
+                href={`/team?tab=owner&ownerView=${view.id}`}
+                className={`rounded-2xl border px-4 py-3 text-left transition ${
+                  isActive
+                    ? "border-primary-200 bg-primary-50 text-primary-900 shadow-sm"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-primary-200 hover:bg-slate-50"
+                }`}
+              >
+                <span className="block text-sm font-semibold">{view.label}</span>
+                <span className={`mt-1 block text-xs ${isActive ? "text-primary-700" : "text-slate-500"}`}>
+                  {view.description}
+                </span>
+              </a>
+            );
+          })}
+        </nav>
       </header>
 
-      <div className="grid gap-4 xl:grid-cols-[1.1fr,1.9fr]">
+      <div className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 xl:grid-cols-[1.1fr,1.9fr]`}>
         <div className={TEAM_CARD_PADDED}>
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -455,7 +512,36 @@ export async function OwnerSection(): Promise<React.ReactElement> {
         </div>
       </div>
 
-      <div className={TEAM_CARD_PADDED}>
+      <div className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 lg:grid-cols-4`}>
+        <a href="/team?tab=owner&ownerView=revenue" className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Revenue review</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{fmtMoney(weekRevenue, "USD")}</div>
+          <div className="mt-1 text-sm text-slate-600">
+            {revenue?.ok ? `${revenue.windows.weekToDate.count} completed jobs this week` : "Revenue data unavailable"}
+          </div>
+        </a>
+        <a href="/team?tab=owner&ownerView=expenses" className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Expense review</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{fmtMoney(weekExpenses, "USD")}</div>
+          <div className="mt-1 text-sm text-slate-600">
+            {expensesSummary?.ok ? `${expensesSummary.windows.weekToDate.count} expenses this week` : "Expense data unavailable"}
+          </div>
+        </a>
+        <a href="/team?tab=owner&ownerView=payroll" className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payroll review</div>
+          <div className="mt-2 text-2xl font-semibold text-amber-800">{fmtMoney(weekPayroll, "USD")}</div>
+          <div className="mt-1 text-sm text-slate-600">Current payout before card tips</div>
+        </a>
+        <a href="/team?tab=owner&ownerView=pl" className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">P&amp;L snapshot</div>
+          <div className={`mt-2 text-2xl font-semibold ${weekNetAfterPayroll >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+            {fmtMoney(weekNetAfterPayroll, "USD")}
+          </div>
+          <div className="mt-1 text-sm text-slate-600">Week net after expenses and payroll</div>
+        </a>
+      </div>
+
+      <div className={`${TEAM_CARD_PADDED} ${activeOwnerView === "revenue" ? "" : "hidden"}`}>
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold text-slate-900">Revenue</h3>
@@ -668,8 +754,8 @@ export async function OwnerSection(): Promise<React.ReactElement> {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className={TEAM_CARD_PADDED}>
+      <div className={`${activeOwnerView === "expenses" || activeOwnerView === "payroll" ? "grid" : "hidden"} gap-4`}>
+        <div className={`${TEAM_CARD_PADDED} ${activeOwnerView === "expenses" ? "" : "hidden"}`}>
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">Expenses</h3>
@@ -775,7 +861,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
           ) : null}
         </div>
 
-        <div className={TEAM_CARD_PADDED}>
+        <div className={`${TEAM_CARD_PADDED} ${activeOwnerView === "payroll" ? "" : "hidden"}`}>
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">
@@ -864,7 +950,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
         </div>
       </div>
 
-      <div className={TEAM_CARD_PADDED}>
+      <div className={`${TEAM_CARD_PADDED} ${activeOwnerView === "pl" ? "" : "hidden"}`}>
         <h3 className="text-lg font-semibold text-slate-900">P&amp;L</h3>
         <p className="mt-1 text-sm text-slate-600">
           Revenue (completed jobs) minus expenses (including commission payouts
@@ -932,7 +1018,7 @@ export async function OwnerSection(): Promise<React.ReactElement> {
         )}
       </div>
 
-      <OwnerAssistClient />
+      {activeOwnerView === "assistant" ? <OwnerAssistClient /> : null}
     </section>
   );
 }

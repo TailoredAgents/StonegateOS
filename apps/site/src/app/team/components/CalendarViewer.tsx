@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import type { Route } from "next";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CalendarGrid, type CalendarEvent } from "./CalendarGrid";
 import { CalendarMonthGrid } from "./CalendarMonthGrid";
@@ -83,7 +84,7 @@ export function CalendarViewer({
 
       const nextView = next.view ?? view;
       params.set("calView", nextView);
-      router.push(`${pathname}?${params.toString()}`);
+      router.push(`${pathname}?${params.toString()}` as Route);
     },
     [anchorDay, pathname, router, searchParams, view],
   );

@@ -112,6 +112,7 @@ export default async function TeamPage({
     saved?: string;
     error?: string;
     layout?: string;
+    ownerView?: string;
   }>;
 }) {
   const params = await searchParams;
@@ -493,7 +494,7 @@ export default async function TeamPage({
 
       {tab === "owner" && hasOwner ? (
         <React.Suspense fallback={<TeamSkeletonCard title="Loading owner tools" />}>
-          <OwnerSection />
+          <OwnerSection ownerView={params?.ownerView} />
         </React.Suspense>
       ) : null}
 
