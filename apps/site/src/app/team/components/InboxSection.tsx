@@ -836,14 +836,351 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
     const lastId = timelineMessages.length ? timelineMessages[timelineMessages.length - 1]?.id ?? "none" : "none";
     return `${selectedThreadId ?? "none"}:${timelineMessages.length}:${lastId}`;
   })();
+  const channelSwitchLinks = activeContactId ? (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      {(["sms", "dm", "email"] as const).map((ch) => {
+        const isActive = requestedChannel === ch;
+        const existingId = channelThreadMap.get(ch) ?? null;
+        const hasPhone = Boolean(activeContact?.phone);
+        const hasEmail = Boolean(activeContact?.email);
+        const disabled =
+          ch === "dm"
+            ? !existingId
+            : ch === "sms"
+              ? !hasPhone
+              : ch === "email"
+                ? !hasEmail
+                : false;
+
+        const label = ch === "dm" ? "Messenger" : ch.toUpperCase();
+        const href = buildInboxHref({
+          status: activeStatus === "all" ? null : activeStatus,
+          contactId: activeContactId,
+          channel: ch
+        });
+
+        return (
+          <a
+            key={ch}
+            href={disabled ? "#" : href}
+            className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
+              isActive
+                ? "border-primary-300 bg-primary-50 text-primary-800"
+                : "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
+            } ${disabled ? "pointer-events-none opacity-40" : ""}`}
+            title={
+              disabled
+                ? ch === "dm"
+                  ? "No Messenger thread yet"
+                  : ch === "sms"
+                    ? "No phone number on file"
+                    : "No email on file"
+                : undefined
+            }
+          >
+            {label}
+          </a>
+        );
+      })}
+    </div>
+  ) : null;
+  const contactActionControls = activeContactId ? (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <form action={startContactCallAction} className="inline">
+        <input type="hidden" name="contactId" value={activeContactId ?? ""} />
+        <SubmitButton
+          className={`rounded-full border px-3 py-2 text-xs font-semibold ${
+            canCall
+              ? "border-slate-200 text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+              : "pointer-events-none border-slate-100 text-slate-300"
+          }`}
+          disabled={!canCall}
+          pendingLabel="Calling..."
+        >
+          Call
+        </SubmitButton>
+      </form>
+      <form action={markSalesTouchAction} className="inline">
+        <input type="hidden" name="contactId" value={activeContactId} />
+        <SubmitButton
+          className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+          pendingLabel="Saving..."
+        >
+          Mark contacted
+        </SubmitButton>
+      </form>
+      <details className="relative">
+        <summary className="cursor-pointer list-none rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700">
+          Remove
+        </summary>
+        <div className="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
+          <form action={setSalesDispositionAction} className="space-y-2">
+            <input type="hidden" name="contactId" value={activeContactId} />
+            <select
+              name="disposition"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs"
+              defaultValue="handled"
+            >
+              <option value="spam">Spam</option>
+              <option value="not_a_lead">Not a lead</option>
+              <option value="out_of_state">Out of state</option>
+              <option value="out_of_area">Out of area</option>
+              <option value="bad_phone">Bad phone</option>
+              <option value="duplicate">Duplicate</option>
+              <option value="handled">Handled</option>
+              <option value="do_not_contact">Do not contact</option>
+            </select>
+            <SubmitButton
+              className="w-full rounded-full bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+              pendingLabel="Removing..."
+            >
+              Confirm remove
+            </SubmitButton>
+          </form>
+        </div>
+      </details>
+    </div>
+  ) : null;
+  const threadStatusControls = selectedThreadId ? (
+    <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
+      <input type="hidden" name="threadId" value={selectedThreadId} />
+      <select
+        name="state"
+        defaultValue={(selectedThread as { state?: string | null } | null)?.state ?? "new"}
+        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
+      >
+        {allowedStates.map((value) => (
+          <option key={value} value={value}>
+            {formatStateLabel(value)}
+          </option>
+        ))}
+      </select>
+      <select
+        name="status"
+        defaultValue={(selectedThread as { status?: string } | null)?.status ?? "open"}
+        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
+      >
+        {THREAD_STATUSES.map((value) => (
+          <option key={value} value={value}>
+            {formatStatusLabel(value)}
+          </option>
+        ))}
+      </select>
+      <SubmitButton
+        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+        pendingLabel="Saving..."
+      >
+        Update thread
+      </SubmitButton>
+    </form>
+  ) : (
+    <div className="text-xs text-slate-400">No {requestedChannel === "dm" ? "Messenger" : requestedChannel.toUpperCase()} thread yet.</div>
+  );
+  const agentPrimaryAction = agentExternalDraft ? (
+    <a
+      href={buildInboxHref({
+        status: activeStatus === "all" ? null : activeStatus,
+        threadId: agentExternalDraft.threadId,
+        contactId: activeContactId,
+        channel: agentExternalDraft.channel,
+        q: searchQuery || null,
+        offset: offset ?? null,
+      })}
+      className={teamButtonClass("primary", "sm")}
+    >
+      {agentPrimaryButtonLabel}
+    </a>
+  ) : currentThreadAiDraft ? (
+    <form action={sendDraftMessageAction}>
+      <input type="hidden" name="messageId" value={currentThreadAiDraft.id} />
+      <input type="hidden" name="threadId" value={selectedThreadId ?? ""} />
+      <input type="hidden" name="contactId" value={activeContactId ?? ""} />
+      <input type="hidden" name="channel" value={requestedChannel} />
+      <SubmitButton
+        className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-primary-700"
+        pendingLabel="Sending..."
+      >
+        {agentPrimaryButtonLabel}
+      </SubmitButton>
+    </form>
+  ) : (
+    <form action={suggestThreadReplyAction}>
+      <input type="hidden" name="threadId" value={selectedThreadId ?? ""} />
+      <input type="hidden" name="contactId" value={activeContactId ?? ""} />
+      <input type="hidden" name="channel" value={agentTargetChannel} />
+      <SubmitButton
+        className={teamButtonClass("primary", "sm")}
+        pendingLabel="Drafting..."
+      >
+        {agentPrimaryButtonLabel}
+      </SubmitButton>
+    </form>
+  );
+  const agentSecondaryAction = agentSecondaryButtonLabel ? (
+    <form action={suggestThreadReplyAction}>
+      <input type="hidden" name="threadId" value={selectedThreadId ?? ""} />
+      <input type="hidden" name="contactId" value={activeContactId ?? ""} />
+      <input type="hidden" name="channel" value={agentTargetChannel} />
+      <SubmitButton
+        className={teamButtonClass("secondary", "sm")}
+        pendingLabel="Refreshing..."
+      >
+        {agentSecondaryButtonLabel}
+      </SubmitButton>
+    </form>
+  ) : null;
+  const agentWorkspaceCard = selectedThreadId && activeContactId ? (
+    <div className="rounded-2xl border border-primary-200 bg-primary-50/60 p-4 text-sm text-slate-700">
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-primary-800">AI workspace</div>
+          <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-primary-800">
+            {currentThreadAiDraft ? "Draft ready" : "Watching this thread"}
+          </div>
+          {currentThreadAiDraftPlanner?.actionType ? (
+            <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-slate-700">
+              {currentThreadAiDraftPlanner.actionType}
+            </div>
+          ) : null}
+          {currentThreadAiDraftPlanner?.priority ? (
+            <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-slate-700">
+              {currentThreadAiDraftPlanner.priority}
+            </div>
+          ) : null}
+        </div>
+        <div className="text-sm font-semibold text-slate-900">{agentPrimaryTitle}</div>
+        <div className="text-sm text-slate-700">{agentPrimaryDescription}</div>
+        {currentThreadAiDraftPlanner?.summary ? (
+          <div className="text-sm text-slate-700">{currentThreadAiDraftPlanner.summary}</div>
+        ) : null}
+        {currentThreadAiDraftPlanner?.reason ? (
+          <div className="text-xs text-slate-600">
+            <span className="font-semibold text-slate-700">Why now:</span> {currentThreadAiDraftPlanner.reason}
+          </div>
+        ) : null}
+        {agentGateLabel ? (
+          <div className={`rounded-xl border px-3 py-2 text-xs ${tonePanelClasses(agentCloseLoopPolicy?.tone ?? "neutral")}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold">{agentGateLabel}</span>
+              {agentCloseLoopPolicy?.label ? (
+                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium">
+                  {agentCloseLoopPolicy.label}
+                </span>
+              ) : null}
+            </div>
+            {agentGateDetail ? <div className="mt-1">{agentGateDetail}</div> : null}
+          </div>
+        ) : null}
+        {agentMediaUsesVision && (agentMediaSummary || agentMediaMissingView) ? (
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-950">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold">Media-informed</span>
+              {agentMediaAnalysis?.videoCount && agentMediaAnalysis.videoCount > 0 ? (
+                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                  video + photo estimate
+                </span>
+              ) : (
+                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                  photo estimate
+                </span>
+              )}
+              {agentMediaConfidence ? (
+                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                  {agentMediaConfidence} confidence
+                </span>
+              ) : null}
+            </div>
+            {agentMediaSummary ? <div className="mt-1">{agentMediaSummary}</div> : null}
+            {agentMediaMissingView ? (
+              <div className="mt-1 text-[11px] text-sky-900">
+                Best next angle: {agentMediaMissingView}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {agentMediaIsWeak && agentWeakEstimateDetail ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+            <div className="font-semibold text-amber-900">{agentWeakEstimateHeadline}</div>
+            <div className="mt-1">{agentWeakEstimateDetail}</div>
+          </div>
+        ) : null}
+        <ContactSalesAgentNextActionClient contactId={activeContactId} compact />
+        {agentPassiveChoiceLabel && agentExecutionState?.detail ? (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+            <span className="font-semibold">{agentPassiveChoiceLabel}.</span> {agentExecutionState.detail}
+          </div>
+        ) : null}
+        {currentThreadAiDraft ? (
+          <div className="rounded-xl border border-white/80 bg-white/80 px-3 py-2 text-xs text-slate-700">
+            <div className="font-semibold text-slate-800">Current draft</div>
+            <div className="mt-1 whitespace-pre-wrap break-words">
+              {truncateText(currentThreadAiDraft.body, 280) ?? "Draft ready"}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+              <span>Updated {formatTimestamp(currentThreadAiDraft.createdAt)}</span>
+              {currentThreadAiDraftPlanner?.bookingReadiness ? <span>Booking: {currentThreadAiDraftPlanner.bookingReadiness}</span> : null}
+              {currentThreadAiDraftPlanner?.quoteConfidence ? <span>Quote confidence: {currentThreadAiDraftPlanner.quoteConfidence}</span> : null}
+              {currentThreadAiDraftPlanner?.confidence ? <span>Planner confidence: {currentThreadAiDraftPlanner.confidence}</span> : null}
+            </div>
+            {currentThreadAiDraftPlanner?.memorySummary ? (
+              <div className="mt-2 text-[11px] text-slate-500">{currentThreadAiDraftPlanner.memorySummary}</div>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {agentPrimaryAction}
+          {agentSecondaryAction}
+        </div>
+      </div>
+    </div>
+  ) : null;
+  const agentConversationStrip = selectedThreadId && activeContactId ? (
+    <div className="rounded-2xl border border-primary-200 bg-primary-50/60 p-4 text-sm text-slate-700">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-primary-800">AI workspace</span>
+            <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-primary-800">
+              {currentThreadAiDraft ? "Draft ready" : "Watching thread"}
+            </span>
+            {agentGateLabel ? (
+              <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                {agentGateLabel}
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-2 font-semibold text-slate-900">{agentPrimaryTitle}</div>
+          <div className="mt-1 text-sm text-slate-700">{truncateText(agentPrimaryDescription, 180)}</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {agentPrimaryAction}
+          {agentSecondaryAction}
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   return (
-    <section className="space-y-6">
-      <header className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
-        <h2 className="text-xl font-semibold text-slate-900">Unified Inbox</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Track every lead conversation in one place. Threads show delivery state and keep your team in sync.
-        </p>
+    <section className="space-y-4">
+      <header className="rounded-3xl border border-slate-200 bg-white/90 p-4 shadow-xl shadow-slate-200/60 backdrop-blur lg:p-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-900">Unified Inbox</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Work threads, send replies, and keep the next action visible without leaving the conversation.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-semibold text-slate-700">
+              {threads.length} active threads
+            </span>
+            {activeContactId ? (
+              <span className="rounded-full border border-primary-200 bg-primary-50 px-3 py-1 font-semibold text-primary-700">
+                Viewing {activeContact?.name ?? "contact"}
+              </span>
+            ) : null}
+          </div>
+        </div>
         {threadsError ? (
           <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <p className="font-semibold">Inbox unavailable</p>
@@ -882,7 +1219,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
 
       <form
         method="get"
-        className={`flex flex-wrap items-center gap-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] px-4 py-3 text-sm text-[color:var(--team-text-muted)] shadow-[0_18px_36px_var(--team-card-shadow)] ${
+        className={`flex flex-wrap items-center gap-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] px-4 py-3 text-sm text-[color:var(--team-text-muted)] shadow-[0_18px_36px_var(--team-card-shadow)] lg:px-5 ${
           showConversation ? "hidden lg:flex" : ""
         }`}
       >
@@ -914,14 +1251,17 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         </button>
       </form>
 
-      <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)_340px] xl:grid-cols-[400px_minmax(0,1fr)_380px]">
+      <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)_320px] xl:grid-cols-[340px_minmax(0,1fr)_340px] 2xl:grid-cols-[360px_minmax(0,1fr)_360px]">
         <div
-          className={`space-y-4 rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur ${
+          className={`space-y-4 rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur lg:sticky lg:top-4 lg:flex lg:max-h-[calc(100dvh-8rem)] lg:flex-col lg:overflow-hidden ${
             showConversation ? "hidden lg:block" : ""
           }`}
         >
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-[color:var(--team-text)]">Threads</h3>
+          <div className="flex items-center justify-between border-b border-[color:var(--team-border)] pb-3">
+            <div>
+              <h3 className="text-base font-semibold text-[color:var(--team-text)]">Threads</h3>
+              <p className="mt-1 text-xs text-[color:var(--team-text-soft)]">Choose the thread, then work from the center pane.</p>
+            </div>
             <span className="text-xs text-[color:var(--team-text-soft)]">
               {threads.length} {activeStatus === "all" ? "threads" : activeStatus}
             </span>
@@ -932,7 +1272,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
               No threads yet. Create a new conversation below.
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="min-h-0 space-y-2 overflow-y-auto pr-1">
               {(() => {
                 const nowMs = Date.now();
                 type ContactGroup = {
@@ -1056,7 +1396,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                   return (
                     <div
                       key={group.key}
-                      className={`rounded-2xl border px-4 py-3 text-sm transition duration-150 ${
+                      className={`rounded-2xl border px-3 py-3 text-sm transition duration-150 ${
                         isActive
                           ? "border-[color:var(--team-border-strong)] bg-[color:var(--team-list-item-active)] shadow-[0_14px_32px_var(--team-card-shadow)]"
                           : "border-[color:var(--team-border)] bg-[color:var(--team-list-item)] hover:border-[color:var(--team-border-strong)] hover:bg-[color:var(--team-list-item-hover)]"
@@ -1088,7 +1428,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                         </div>
                       </div>
 
-                      <p className="mt-1 text-xs text-slate-500">{group.lastPreview ?? "No messages yet"}</p>
+                      <p className="mt-1 line-clamp-2 text-xs text-slate-500">{group.lastPreview ?? "No messages yet"}</p>
 
                       <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
                         <span>{formatTimestamp(group.lastActivityAt)}</span>
@@ -1132,8 +1472,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
             </div>
           )}
 
-          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-            <h4 className="text-sm font-semibold text-slate-900">Start a thread</h4>
+          <details className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">
+              Start a thread
+            </summary>
             <form action={createThreadAction} className="mt-3 space-y-3">
               <label className="flex flex-col gap-1 text-xs text-slate-600">
                 <span>Contact ID</span>
@@ -1172,13 +1514,13 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                 Create thread
               </SubmitButton>
             </form>
-          </div>
+          </details>
 
-          <div className="rounded-2xl border border-slate-200 bg-white/90 p-4">
-            <div className="flex items-center justify-between">
-              <h4 className="text-sm font-semibold text-slate-900">Delivery issues</h4>
-              <span className="text-xs text-slate-500">{failedMessages.length} failed</span>
-            </div>
+          <details className="rounded-2xl border border-slate-200 bg-white/90 p-4">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-slate-900">
+              <span>Delivery issues</span>
+              <span className="text-xs font-medium text-slate-500">{failedMessages.length} failed</span>
+            </summary>
             {failedMessages.length === 0 ? (
               <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/80 p-3 text-xs text-slate-500">
                 No failed sends right now.
@@ -1221,7 +1563,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                 ))}
               </div>
             )}
-          </div>
+          </details>
         </div>
 
         <div
@@ -1230,9 +1572,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
           }`}
         >
           {activeContactId ? (
-            <div className="flex flex-col gap-4 overflow-hidden p-5">
-              <div className="flex flex-col gap-3 border-b border-[color:var(--team-border)] pb-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
+            <div className="flex min-h-[72dvh] flex-col gap-4 overflow-hidden p-5 lg:min-h-[calc(100dvh-8rem)]">
+              <div className="flex flex-col gap-4 border-b border-[color:var(--team-border)] pb-4">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="min-w-0">
                   <a
                     href={buildInboxHref({ status: activeStatus === "all" ? null : activeStatus })}
                     className="mb-3 inline-flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-primary-700 lg:hidden"
@@ -1266,149 +1609,20 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     </p>
                   ) : null}
                 </div>
-                <div className="flex flex-col gap-2 lg:hidden">
-                  {activeContactId ? (
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      {(["sms", "dm", "email"] as const).map((ch) => {
-                        const isActive = requestedChannel === ch;
-                        const existingId = channelThreadMap.get(ch) ?? null;
-                        const hasPhone = Boolean(activeContact?.phone);
-                        const hasEmail = Boolean(activeContact?.email);
-                        const disabled =
-                          ch === "dm"
-                            ? !existingId
-                            : ch === "sms"
-                              ? !hasPhone
-                              : ch === "email"
-                                ? !hasEmail
-                                : false;
-
-                        const label = ch === "dm" ? "Messenger" : ch.toUpperCase();
-                        const href = buildInboxHref({
-                          status: activeStatus === "all" ? null : activeStatus,
-                          contactId: activeContactId,
-                          channel: ch
-                        });
-
-                        return (
-                          <a
-                            key={ch}
-                            href={disabled ? "#" : href}
-                            className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
-                              isActive
-                                ? "border-primary-300 bg-primary-50 text-primary-800"
-                                : "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
-                            } ${disabled ? "pointer-events-none opacity-40" : ""}`}
-                            title={
-                              disabled
-                                ? ch === "dm"
-                                  ? "No Messenger thread yet"
-                                  : ch === "sms"
-                                    ? "No phone number on file"
-                                    : "No email on file"
-                                : undefined
-                            }
-                          >
-                            {label}
-                          </a>
-                        );
-                      })}
+                <div className="hidden min-w-[280px] xl:block">
+                  <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] p-4">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--team-text-soft)]">Workspace</div>
+                    <div className="mt-3 space-y-3">
+                      {channelSwitchLinks}
+                      {contactActionControls}
+                      {threadStatusControls}
                     </div>
-                  ) : null}
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <form action={startContactCallAction} className="inline">
-                      <input type="hidden" name="contactId" value={activeContactId ?? ""} />
-                      <SubmitButton
-                        className={`rounded-full border px-3 py-2 text-xs font-semibold ${
-                          canCall
-                            ? "border-slate-200 text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                            : "pointer-events-none border-slate-100 text-slate-300"
-                        }`}
-                        disabled={!canCall}
-                        pendingLabel="Calling..."
-                      >
-                        Call
-                      </SubmitButton>
-                    </form>
-                    {activeContactId ? (
-                      <form action={markSalesTouchAction} className="inline">
-                        <input type="hidden" name="contactId" value={activeContactId} />
-                        <SubmitButton
-                          className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                          pendingLabel="Saving..."
-                        >
-                          Mark contacted
-                        </SubmitButton>
-                      </form>
-                    ) : null}
-                    {activeContactId ? (
-                      <details className="relative">
-                        <summary className="cursor-pointer list-none rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700">
-                          Remove
-                        </summary>
-                        <div className="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
-                          <form action={setSalesDispositionAction} className="space-y-2">
-                            <input type="hidden" name="contactId" value={activeContactId} />
-                            <select
-                              name="disposition"
-                              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs"
-                              defaultValue="handled"
-                            >
-                              <option value="spam">Spam</option>
-                              <option value="not_a_lead">Not a lead</option>
-                              <option value="out_of_state">Out of state</option>
-                              <option value="out_of_area">Out of area</option>
-                              <option value="bad_phone">Bad phone</option>
-                              <option value="duplicate">Duplicate</option>
-                              <option value="handled">Handled</option>
-                              <option value="do_not_contact">Do not contact</option>
-                            </select>
-                            <SubmitButton
-                              className="w-full rounded-full bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
-                              pendingLabel="Removing..."
-                            >
-                              Confirm remove
-                            </SubmitButton>
-                          </form>
-                        </div>
-                      </details>
-                    ) : null}
                   </div>
-                  {selectedThreadId ? (
-                    <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
-                      <input type="hidden" name="threadId" value={selectedThreadId} />
-                      <select
-                        name="state"
-                        defaultValue={(selectedThread as { state?: string | null } | null)?.state ?? "new"}
-                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
-                      >
-                        {allowedStates.map((value) => (
-                          <option key={value} value={value}>
-                            {formatStateLabel(value)}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        name="status"
-                        defaultValue={(selectedThread as { status?: string } | null)?.status ?? "open"}
-                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
-                      >
-                        {THREAD_STATUSES.map((value) => (
-                          <option key={value} value={value}>
-                            {formatStatusLabel(value)}
-                          </option>
-                        ))}
-                      </select>
-                      <SubmitButton
-                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                        pendingLabel="Saving..."
-                      >
-                        Update thread
-                      </SubmitButton>
-                    </form>
-                  ) : (
-                    <div className="text-xs text-slate-400">No {requestedChannel === "dm" ? "Messenger" : requestedChannel.toUpperCase()} thread yet.</div>
-                  )}
+                </div>
+                <div className="flex flex-col gap-2 xl:hidden">
+                  {channelSwitchLinks}
+                  {contactActionControls}
+                  {threadStatusControls}
                 </div>
               </div>
 
@@ -1502,168 +1716,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     latestAiDraftAt={latestAiDraftAt}
                   />
                 ) : null}
-                {selectedThreadId && activeContactId ? (
-                  <div className="rounded-2xl border border-primary-200 bg-primary-50/60 p-4 text-sm text-slate-700">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className="text-xs font-semibold uppercase tracking-wide text-primary-800">Agent</div>
-                          <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-primary-800">
-                            {currentThreadAiDraft ? "Ready to review" : "Watching this thread"}
-                          </div>
-                          {currentThreadAiDraftPlanner?.actionType ? (
-                            <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-slate-700">
-                              {currentThreadAiDraftPlanner.actionType}
-                            </div>
-                          ) : null}
-                          {currentThreadAiDraftPlanner?.priority ? (
-                            <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-slate-700">
-                              {currentThreadAiDraftPlanner.priority}
-                            </div>
-                          ) : null}
-                        </div>
-                        <div className="mt-2 text-sm font-semibold text-slate-900">
-                          {agentPrimaryTitle}
-                        </div>
-                        <div className="mt-1 text-sm text-slate-700">{agentPrimaryDescription}</div>
-                        {currentThreadAiDraftPlanner?.summary ? (
-                          <div className="mt-2 text-sm text-slate-700">{currentThreadAiDraftPlanner.summary}</div>
-                        ) : null}
-                        {currentThreadAiDraftPlanner?.reason ? (
-                          <div className="mt-2 text-xs text-slate-600">
-                            <span className="font-semibold text-slate-700">Why now:</span> {currentThreadAiDraftPlanner.reason}
-                          </div>
-                        ) : null}
-                        {agentGateLabel ? (
-                          <div className={`mt-3 rounded-xl border px-3 py-2 text-xs ${tonePanelClasses(agentCloseLoopPolicy?.tone ?? "neutral")}`}>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-semibold">{agentGateLabel}</span>
-                              {agentCloseLoopPolicy?.label ? (
-                                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium">
-                                  {agentCloseLoopPolicy.label}
-                                </span>
-                              ) : null}
-                            </div>
-                            {agentGateDetail ? <div className="mt-1">{agentGateDetail}</div> : null}
-                          </div>
-                        ) : null}
-                        {agentMediaUsesVision && (agentMediaSummary || agentMediaMissingView) ? (
-                          <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-950">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-semibold">Media-informed</span>
-                              {agentMediaAnalysis?.videoCount && agentMediaAnalysis.videoCount > 0 ? (
-                                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium text-sky-800">
-                                  video + photo estimate
-                                </span>
-                              ) : (
-                                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium text-sky-800">
-                                  photo estimate
-                                </span>
-                              )}
-                              {agentMediaConfidence ? (
-                                <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium text-sky-800">
-                                  {agentMediaConfidence} confidence
-                                </span>
-                              ) : null}
-                            </div>
-                            {agentMediaSummary ? <div className="mt-1">{agentMediaSummary}</div> : null}
-                            {agentMediaMissingView ? (
-                              <div className="mt-1 text-[11px] text-sky-900">
-                                Best next angle: {agentMediaMissingView}
-                              </div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {agentMediaIsWeak && agentWeakEstimateDetail ? (
-                          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
-                            <div className="font-semibold text-amber-900">{agentWeakEstimateHeadline}</div>
-                            <div className="mt-1">{agentWeakEstimateDetail}</div>
-                          </div>
-                        ) : null}
-                        <div className="mt-3">
-                          <ContactSalesAgentNextActionClient contactId={activeContactId} compact />
-                        </div>
-                        {agentPassiveChoiceLabel && agentExecutionState?.detail ? (
-                          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
-                            <span className="font-semibold">{agentPassiveChoiceLabel}.</span> {agentExecutionState.detail}
-                          </div>
-                        ) : null}
-                        {currentThreadAiDraft ? (
-                          <div className="mt-3 rounded-xl border border-white/80 bg-white/80 px-3 py-2 text-xs text-slate-700">
-                            <div className="font-semibold text-slate-800">Current draft</div>
-                            <div className="mt-1 whitespace-pre-wrap break-words">
-                              {truncateText(currentThreadAiDraft.body, 280) ?? "Draft ready"}
-                            </div>
-                            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
-                              <span>Updated {formatTimestamp(currentThreadAiDraft.createdAt)}</span>
-                              {currentThreadAiDraftPlanner?.bookingReadiness ? <span>Booking: {currentThreadAiDraftPlanner.bookingReadiness}</span> : null}
-                              {currentThreadAiDraftPlanner?.quoteConfidence ? <span>Quote confidence: {currentThreadAiDraftPlanner.quoteConfidence}</span> : null}
-                              {currentThreadAiDraftPlanner?.confidence ? <span>Planner confidence: {currentThreadAiDraftPlanner.confidence}</span> : null}
-                            </div>
-                            {currentThreadAiDraftPlanner?.memorySummary ? (
-                              <div className="mt-2 text-[11px] text-slate-500">{currentThreadAiDraftPlanner.memorySummary}</div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </div>
-                      <div className="flex shrink-0 flex-wrap gap-2">
-                        {agentExternalDraft ? (
-                          <a
-                            href={buildInboxHref({
-                              status: activeStatus === "all" ? null : activeStatus,
-                              threadId: agentExternalDraft.threadId,
-                              contactId: activeContactId,
-                              channel: agentExternalDraft.channel,
-                              q: searchQuery || null,
-                              offset: offset ?? null,
-                            })}
-                            className={teamButtonClass("primary", "sm")}
-                          >
-                            {agentPrimaryButtonLabel}
-                          </a>
-                        ) : currentThreadAiDraft ? (
-                          <form action={sendDraftMessageAction}>
-                            <input type="hidden" name="messageId" value={currentThreadAiDraft.id} />
-                            <input type="hidden" name="threadId" value={selectedThreadId} />
-                            <input type="hidden" name="contactId" value={activeContactId} />
-                            <input type="hidden" name="channel" value={requestedChannel} />
-                            <SubmitButton
-                              className="rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-primary-700"
-                              pendingLabel="Sending..."
-                            >
-                              {agentPrimaryButtonLabel}
-                            </SubmitButton>
-                          </form>
-                        ) : (
-                          <form action={suggestThreadReplyAction}>
-                            <input type="hidden" name="threadId" value={selectedThreadId} />
-                            <input type="hidden" name="contactId" value={activeContactId} />
-                            <input type="hidden" name="channel" value={agentTargetChannel} />
-                            <SubmitButton
-                              className={teamButtonClass("primary", "sm")}
-                              pendingLabel="Drafting..."
-                            >
-                              {agentPrimaryButtonLabel}
-                            </SubmitButton>
-                          </form>
-                        )}
-                        {agentSecondaryButtonLabel ? (
-                          <form action={suggestThreadReplyAction}>
-                            <input type="hidden" name="threadId" value={selectedThreadId} />
-                            <input type="hidden" name="contactId" value={activeContactId} />
-                            <input type="hidden" name="channel" value={agentTargetChannel} />
-                            <SubmitButton
-                              className={teamButtonClass("secondary", "sm")}
-                              pendingLabel="Refreshing..."
-                            >
-                              {agentSecondaryButtonLabel}
-                            </SubmitButton>
-                          </form>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
+                {agentConversationStrip}
                 {timelineMessages.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-[color:var(--team-surface-muted)] p-4 text-sm text-slate-500">
                     No messages yet. Send the first touch below.
@@ -1722,7 +1775,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     return (
                       <div key={message.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                         <div
-                          className={`max-w-[85%] rounded-2xl border border-[color:var(--team-border)] px-4 py-3 text-sm shadow-[0_12px_28px_var(--team-card-shadow)] lg:max-w-[640px] ${
+                          className={`max-w-[92%] rounded-2xl border border-[color:var(--team-border)] px-4 py-3 text-sm shadow-[0_12px_28px_var(--team-card-shadow)] lg:max-w-[760px] xl:max-w-[860px] ${
                             isOutbound
                               ? "bg-[color:var(--team-bubble-outbound)] text-[color:var(--team-text)]"
                               : "bg-[color:var(--team-bubble-inbound)] text-[color:var(--team-text-muted)]"
@@ -1765,54 +1818,59 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                             </div>
                           ) : null}
                           {isDraft && isAiSuggested ? (
-                            <div className="mb-3 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-[11px] text-slate-600">
-                              {draftGateLabel && agentGateDetail ? (
-                                <div className={`mb-2 rounded-xl border px-2 py-2 ${tonePanelClasses(agentCloseLoopPolicy?.tone ?? "neutral")}`}>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <span className="font-semibold">{draftGateLabel}</span>
-                                    {agentCloseLoopPolicy?.label ? (
-                                      <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium">
-                                        {agentCloseLoopPolicy.label}
-                                      </span>
-                                    ) : null}
+                            <details className="mb-3 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-[11px] text-slate-600">
+                              <summary className="cursor-pointer list-none font-semibold text-slate-700">
+                                AI draft context
+                              </summary>
+                              <div className="mt-2">
+                                {draftGateLabel && agentGateDetail ? (
+                                  <div className={`mb-2 rounded-xl border px-2 py-2 ${tonePanelClasses(agentCloseLoopPolicy?.tone ?? "neutral")}`}>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="font-semibold">{draftGateLabel}</span>
+                                      {agentCloseLoopPolicy?.label ? (
+                                        <span className="rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-medium">
+                                          {agentCloseLoopPolicy.label}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <div className="mt-1">{agentGateDetail}</div>
                                   </div>
-                                  <div className="mt-1">{agentGateDetail}</div>
+                                ) : null}
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                  {aiPlannerActionType ? <span><span className="font-semibold text-slate-700">Planner:</span> {aiPlannerActionType}</span> : null}
+                                  {aiPlanIntent ? <span><span className="font-semibold text-slate-700">Goal:</span> {aiPlanIntent}</span> : null}
+                                  {aiPlanNextAction ? <span><span className="font-semibold text-slate-700">Trying to:</span> {aiPlanNextAction}</span> : null}
+                                  {aiBookingReadiness ? <span><span className="font-semibold text-slate-700">Booking:</span> {aiBookingReadiness}</span> : null}
+                                  {aiQuoteConfidence ? <span><span className="font-semibold text-slate-700">Confidence:</span> {aiQuoteConfidence}</span> : null}
+                                  {aiChannelPreference ? <span><span className="font-semibold text-slate-700">Best channel:</span> {aiChannelPreference}</span> : null}
+                                  {aiPlannerPriority ? <span><span className="font-semibold text-slate-700">Priority:</span> {aiPlannerPriority}</span> : null}
+                                  {aiPlannerConfidence ? <span><span className="font-semibold text-slate-700">Planner confidence:</span> {aiPlannerConfidence}</span> : null}
                                 </div>
-                              ) : null}
-                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                                {aiPlannerActionType ? <span><span className="font-semibold text-slate-700">Planner:</span> {aiPlannerActionType}</span> : null}
-                                {aiPlanIntent ? <span><span className="font-semibold text-slate-700">Goal:</span> {aiPlanIntent}</span> : null}
-                                {aiPlanNextAction ? <span><span className="font-semibold text-slate-700">Trying to:</span> {aiPlanNextAction}</span> : null}
-                                {aiBookingReadiness ? <span><span className="font-semibold text-slate-700">Booking:</span> {aiBookingReadiness}</span> : null}
-                                {aiQuoteConfidence ? <span><span className="font-semibold text-slate-700">Confidence:</span> {aiQuoteConfidence}</span> : null}
-                                {aiChannelPreference ? <span><span className="font-semibold text-slate-700">Best channel:</span> {aiChannelPreference}</span> : null}
-                                {aiPlannerPriority ? <span><span className="font-semibold text-slate-700">Priority:</span> {aiPlannerPriority}</span> : null}
-                                {aiPlannerConfidence ? <span><span className="font-semibold text-slate-700">Planner confidence:</span> {aiPlannerConfidence}</span> : null}
+                                {aiPlannerSummary ? (
+                                  <div className="mt-2">
+                                    <span className="font-semibold text-slate-700">Planner summary:</span>{" "}
+                                    {aiPlannerSummary}
+                                  </div>
+                                ) : null}
+                                {aiPlannerReason ? (
+                                  <div className="mt-2">
+                                    <span className="font-semibold text-slate-700">Why now:</span>{" "}
+                                    {aiPlannerReason}
+                                  </div>
+                                ) : null}
+                                {aiPlanQuestions.length > 0 ? (
+                                  <div className="mt-2">
+                                    <span className="font-semibold text-slate-700">Question focus:</span>{" "}
+                                    {aiPlanQuestions.join(" ")}
+                                  </div>
+                                ) : null}
+                                {aiMemorySummary ? (
+                                  <div className="mt-2 text-slate-500">
+                                    {aiMemorySummary}
+                                  </div>
+                                ) : null}
                               </div>
-                              {aiPlannerSummary ? (
-                                <div className="mt-2">
-                                  <span className="font-semibold text-slate-700">Planner summary:</span>{" "}
-                                  {aiPlannerSummary}
-                                </div>
-                              ) : null}
-                              {aiPlannerReason ? (
-                                <div className="mt-2">
-                                  <span className="font-semibold text-slate-700">Why now:</span>{" "}
-                                  {aiPlannerReason}
-                                </div>
-                              ) : null}
-                              {aiPlanQuestions.length > 0 ? (
-                                <div className="mt-2">
-                                  <span className="font-semibold text-slate-700">Question focus:</span>{" "}
-                                  {aiPlanQuestions.join(" ")}
-                                </div>
-                              ) : null}
-                              {aiMemorySummary ? (
-                                <div className="mt-2 text-slate-500">
-                                  {aiMemorySummary}
-                                </div>
-                              ) : null}
-                            </div>
+                            </details>
                           ) : null}
                           {showBody ? <p className="whitespace-pre-wrap break-words">{message.body}</p> : null}
                           {hasMedia ? <InboxMediaGallery messageId={message.id} count={message.mediaUrls!.length} /> : null}
@@ -1911,6 +1969,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                 </form>
               </div>
             </div>
+            </div>
           ) : (
             <div className="p-5">
               <div className={TEAM_EMPTY_STATE}>Select a thread to view the conversation.</div>
@@ -1918,17 +1977,17 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
           )}
         </div>
 
-        <div className="hidden rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur lg:block">
-          <div className="flex max-h-[78dvh] flex-col gap-4 overflow-hidden p-5">
+        <div className="hidden rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur lg:sticky lg:top-4 lg:block lg:max-h-[calc(100dvh-8rem)]">
+          <div className="flex max-h-[calc(100dvh-8rem)] flex-col gap-4 overflow-hidden p-5">
             <div className="flex items-start justify-between gap-3 border-b border-[color:var(--team-border)] pb-4">
               <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-[color:var(--team-text)]">Details</h3>
-                <p className="mt-1 text-xs text-[color:var(--team-text-soft)]">Keep context handy while you reply.</p>
+                <h3 className="text-sm font-semibold text-[color:var(--team-text)]">Workspace</h3>
+                <p className="mt-1 text-xs text-[color:var(--team-text-soft)]">Context, actions, and AI without crowding the thread.</p>
               </div>
             </div>
 
             {activeContactId ? (
-              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                 <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-[0_10px_24px_var(--team-card-shadow)]">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -1985,163 +2044,71 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                   ) : null}
                 </div>
 
-                <InboxContactRemindersClient contactId={activeContactId} initialReminders={contactReminders} />
+                {agentWorkspaceCard ? (
+                  <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                    <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      AI workspace
+                    </summary>
+                    <div className="mt-3">{agentWorkspaceCard}</div>
+                  </details>
+                ) : null}
 
-                <InboxContactNotesClient contactId={activeContactId} initialNotes={contactNotes} />
+                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Channels
+                  </summary>
+                  <div className="mt-3">{channelSwitchLinks}</div>
+                </details>
 
-                <ContactSalesAgentMemoryClient contactId={activeContactId} />
-                <ContactMediaAnalysisClient contactId={activeContactId} />
-                <ContactSalesAgentNextActionClient contactId={activeContactId} />
+                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Actions
+                  </summary>
+                  <div className="mt-3">{contactActionControls}</div>
+                </details>
 
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Channels</div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    {(["sms", "dm", "email"] as const).map((ch) => {
-                      const isActive = requestedChannel === ch;
-                      const existingId = channelThreadMap.get(ch) ?? null;
-                      const hasPhone = Boolean(activeContact?.phone);
-                      const hasEmail = Boolean(activeContact?.email);
-                      const disabled =
-                        ch === "dm"
-                          ? !existingId
-                          : ch === "sms"
-                            ? !hasPhone
-                            : ch === "email"
-                              ? !hasEmail
-                              : false;
+                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Thread status
+                  </summary>
+                  <div className="mt-3">{threadStatusControls}</div>
+                </details>
 
-                      const label = ch === "dm" ? "Messenger" : ch.toUpperCase();
-                      const href = buildInboxHref({
-                        status: activeStatus === "all" ? null : activeStatus,
-                        contactId: activeContactId,
-                        channel: ch
-                      });
-
-                      return (
-                        <a
-                          key={ch}
-                          href={disabled ? "#" : href}
-                          className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
-                            isActive
-                              ? "border-primary-300 bg-primary-50 text-primary-800"
-                              : "border-slate-200 text-slate-600 hover:border-primary-300 hover:text-primary-700"
-                          } ${disabled ? "pointer-events-none opacity-40" : ""}`}
-                          title={
-                            disabled
-                              ? ch === "dm"
-                                ? "No Messenger thread yet"
-                                : ch === "sms"
-                                  ? "No phone number on file"
-                                  : "No email on file"
-                              : undefined
-                          }
-                        >
-                          {label}
-                        </a>
-                      );
-                    })}
+                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Reminders
+                  </summary>
+                  <div className="mt-3">
+                    <InboxContactRemindersClient contactId={activeContactId} initialReminders={contactReminders} />
                   </div>
-                </div>
+                </details>
 
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <form action={startContactCallAction} method="post" className="inline">
-                      <input type="hidden" name="contactId" value={activeContactId ?? ""} />
-                      <SubmitButton
-                        className={`rounded-full border px-3 py-2 text-xs font-semibold ${
-                          canCall
-                            ? "border-slate-200 text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                            : "pointer-events-none border-slate-100 text-slate-300"
-                        }`}
-                        disabled={!canCall}
-                        pendingLabel="Calling..."
-                      >
-                        Call
-                      </SubmitButton>
-                    </form>
-                    <form action={markSalesTouchAction} className="inline">
-                      <input type="hidden" name="contactId" value={activeContactId} />
-                      <SubmitButton
-                        className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                        pendingLabel="Saving..."
-                      >
-                        Mark contacted
-                      </SubmitButton>
-                    </form>
-                    <details className="relative">
-                      <summary className="cursor-pointer list-none rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-primary-300 hover:text-primary-700">
-                        Remove
-                      </summary>
-                      <div className="absolute right-0 z-20 mt-2 w-56 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl">
-                        <form action={setSalesDispositionAction} className="space-y-2">
-                          <input type="hidden" name="contactId" value={activeContactId} />
-                          <select
-                            name="disposition"
-                            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs"
-                            defaultValue="handled"
-                          >
-                            <option value="spam">Spam</option>
-                            <option value="not_a_lead">Not a lead</option>
-                            <option value="out_of_state">Out of state</option>
-                            <option value="out_of_area">Out of area</option>
-                            <option value="bad_phone">Bad phone</option>
-                            <option value="duplicate">Duplicate</option>
-                            <option value="handled">Handled</option>
-                            <option value="do_not_contact">Do not contact</option>
-                          </select>
-                          <SubmitButton
-                            className="w-full rounded-full bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
-                            pendingLabel="Removing..."
-                          >
-                            Confirm remove
-                          </SubmitButton>
-                        </form>
-                      </div>
-                    </details>
+                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Notes
+                  </summary>
+                  <div className="mt-3">
+                    <InboxContactNotesClient contactId={activeContactId} initialNotes={contactNotes} />
                   </div>
-                </div>
+                </details>
 
-                {selectedThreadId ? (
-                  <div className="space-y-2">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Thread status</div>
-                    <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
-                      <input type="hidden" name="threadId" value={selectedThreadId} />
-                      <select
-                        name="state"
-                        defaultValue={(selectedThread as { state?: string | null } | null)?.state ?? "new"}
-                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
-                      >
-                        {allowedStates.map((value) => (
-                          <option key={value} value={value}>
-                            {formatStateLabel(value)}
-                          </option>
-                        ))}
-                      </select>
-                      <select
-                        name="status"
-                        defaultValue={(selectedThread as { status?: string } | null)?.status ?? "open"}
-                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600"
-                      >
-                        {THREAD_STATUSES.map((value) => (
-                          <option key={value} value={value}>
-                            {formatStatusLabel(value)}
-                          </option>
-                        ))}
-                      </select>
-                      <SubmitButton
-                        className="rounded-full border border-slate-200 px-3 py-2 text-xs text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                        pendingLabel="Saving..."
-                      >
-                        Update
-                      </SubmitButton>
-                    </form>
+                <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Memory
+                  </summary>
+                  <div className="mt-3">
+                    <ContactSalesAgentMemoryClient contactId={activeContactId} />
                   </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 text-xs text-slate-500">
-                    No {requestedChannel === "dm" ? "Messenger" : requestedChannel.toUpperCase()} thread yet.
+                </details>
+
+                <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Media analysis
+                  </summary>
+                  <div className="mt-3">
+                    <ContactMediaAnalysisClient contactId={activeContactId} />
                   </div>
-                )}
+                </details>
               </div>
             ) : (
               <div className="p-5">
