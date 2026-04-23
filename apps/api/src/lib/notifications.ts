@@ -146,6 +146,36 @@ function formatDateTime(date: Date | null): string {
     .toLocaleString(DateTime.DATETIME_MED);
 }
 
+export function formatAppointmentArrivalWindow(
+  date: Date | null,
+  windowMinutes = 30,
+  timeZone = DEFAULT_TIME_ZONE
+): string {
+  if (!date) {
+    return "TBD";
+  }
+
+  const start = DateTime.fromJSDate(date, { zone: "utc" }).setZone(timeZone);
+  if (!start.isValid) {
+    return "TBD";
+  }
+
+  const end = start.plus({ minutes: Math.max(1, windowMinutes) });
+  if (!end.isValid) {
+    return start.toLocaleString(DateTime.DATETIME_MED);
+  }
+
+  if (start.hasSame(end, "day")) {
+    return `${start.toLocaleString(DateTime.DATE_MED)}, ${start.toLocaleString(
+      DateTime.TIME_SIMPLE
+    )} - ${end.toLocaleString(DateTime.TIME_SIMPLE)}`;
+  }
+
+  return `${start.toLocaleString(DateTime.DATETIME_MED)} - ${end.toLocaleString(
+    DateTime.DATETIME_MED
+  )}`;
+}
+
 function escapeIcs(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/,/g, "\\,").replace(/;/g, "\\;").replace(/\n/g, "\\n");
 }
@@ -342,7 +372,7 @@ export async function sendEstimateConfirmation(
   reason: ConfirmationReason = "requested"
 ): Promise<void> {
   const { contact, appointment, property, scheduling } = payload;
-  const when = formatDateTime(appointment.startAt);
+  const when = formatAppointmentArrivalWindow(appointment.startAt);
   const rescheduleUrl = buildRescheduleUrl(appointment);
   const headline = reason === "requested" ? "You're booked!" : "Appointment updated";
 
@@ -424,7 +454,7 @@ async function sendEstimateReminderInternal(
   options: ReminderOptions
 ): Promise<void> {
   const { contact, appointment } = payload;
-  const when = formatDateTime(appointment.startAt);
+  const when = formatAppointmentArrivalWindow(appointment.startAt);
   const rescheduleUrl = buildRescheduleUrl(appointment);
   const windowHours = Math.round(options.windowMinutes / 60);
 
