@@ -148,7 +148,10 @@ export function CalendarEventDetail({
                 />
               </label>
 
-              <CrewPayoutSelector teamMembers={teamMembers} />
+              <CrewPayoutSelector
+                teamMembers={teamMembers}
+                showSplitPercentages={false}
+              />
 
               <div className="flex justify-end">
                 <SubmitButton

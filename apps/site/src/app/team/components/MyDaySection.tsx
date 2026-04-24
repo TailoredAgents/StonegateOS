@@ -337,6 +337,7 @@ type AppointmentSectionProps = {
   tone?: "emerald" | "amber" | "sky" | "slate";
   teamMembers: TeamMemberDto[];
   teamMemberNameById: Map<string, string>;
+  mode: "run" | "manage";
 };
 
 function AppointmentSection({
@@ -346,6 +347,7 @@ function AppointmentSection({
   tone = "slate",
   teamMembers,
   teamMemberNameById,
+  mode,
 }: AppointmentSectionProps): ReactElement | null {
   if (items.length === 0) return null;
 
@@ -360,10 +362,10 @@ function AppointmentSection({
 
   return (
     <section className={TEAM_CARD_PADDED}>
-      <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-2 border-b border-slate-200 pb-3 sm:gap-3 sm:pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className={TEAM_SECTION_TITLE}>{title}</h2>
-          <p className={TEAM_SECTION_SUBTITLE}>{subtitle}</p>
+          <h2 className="text-base font-semibold text-slate-900 sm:text-lg">{title}</h2>
+          <p className="mt-1 hidden text-sm text-slate-600 sm:block">{subtitle}</p>
         </div>
         <span
           className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-xs font-semibold ${badgeClassName}`}
@@ -378,6 +380,7 @@ function AppointmentSection({
             item={item}
             teamMembers={teamMembers}
             teamMemberNameById={teamMemberNameById}
+            mode={mode}
           />
         ))}
       </div>
@@ -389,12 +392,14 @@ type AppointmentCardProps = {
   item: AppointmentCardItem;
   teamMembers: TeamMemberDto[];
   teamMemberNameById: Map<string, string>;
+  mode: "run" | "manage";
 };
 
 function AppointmentCard({
   item,
   teamMembers,
   teamMemberNameById,
+  mode,
 }: AppointmentCardProps): ReactElement {
   const a = item.appointment;
   const sellerName = a.soldByMemberId
@@ -446,10 +451,89 @@ function AppointmentCard({
     : false;
   const showFollowUpPanel =
     item.isQuoteOnly && (quoteVisitHasPassed || Boolean(a.quoteFollowUp));
+  const mobilePrimaryActionLabel = item.isQuoteOnly ? "Quote done" : "Complete";
+  const mobileMetaRows = [
+    {
+      label: "Money",
+      value: moneySummary ?? (item.isQuoteOnly ? "Quote only" : "Not set"),
+      muted: !moneySummary,
+    },
+    {
+      label: "Source",
+      value:
+        item.leadSourceSummary ?? (item.isQuoteOnly ? "Optional for quote" : "Not set"),
+      muted: !item.leadSourceSummary,
+    },
+    item.isQuoteOnly
+      ? {
+          label: "Follow-up",
+          value: quoteFollowUpSummary,
+          muted: !a.quoteFollowUp,
+        }
+      : {
+          label: "Seller",
+          value: sellerName,
+          muted: !a.soldByMemberId,
+        },
+    !item.isQuoteOnly
+      ? {
+          label: "Details",
+          value: item.jobDetailsSummary ?? "Not set",
+          muted: !item.jobDetailsSummary,
+        }
+      : null,
+    !item.isQuoteOnly
+      ? {
+          label: "Pricing",
+          value: item.pricingSummary ?? "Not set",
+          muted: !item.pricingSummary,
+        }
+      : null,
+  ].filter(
+    (
+      row,
+    ): row is {
+      label: string;
+      value: string;
+      muted: boolean;
+    } => Boolean(row),
+  );
 
   return (
     <article className={`rounded-3xl border p-4 shadow-sm ${cardClassName}`}>
-      <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-wide">
+      <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-wide sm:hidden">
+        <span
+          className={`rounded-full px-3 py-1 ${
+            item.isQuoteOnly
+              ? "bg-sky-100 text-sky-700"
+              : "bg-emerald-100 text-emerald-700"
+          }`}
+        >
+          {item.isQuoteOnly ? "Quote" : "Job"}
+        </span>
+        {isCompleted ? (
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
+            Done
+          </span>
+        ) : null}
+        {item.attentionReasons.length ? (
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-700">
+            Needs attention
+          </span>
+        ) : null}
+        {item.isQuoteOnly && a.quoteFollowUp ? (
+          <span className="rounded-full bg-white px-3 py-1 text-slate-700">
+            Follow-up set
+          </span>
+        ) : null}
+        {item.isQuoteOnly && quoteVisitHasPassed && !a.quoteFollowUp ? (
+          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-700">
+            No follow-up
+          </span>
+        ) : null}
+      </div>
+
+      <div className="hidden flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-wide sm:flex">
         <span
           className={`rounded-full px-3 py-1 ${
             item.isQuoteOnly
@@ -512,7 +596,7 @@ function AppointmentCard({
         </div>
 
         {!isCompleted ? (
-          <div className="flex flex-wrap gap-2 lg:justify-end">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap lg:justify-end">
             <form action={startContactCallAction}>
               <input
                 type="hidden"
@@ -548,8 +632,44 @@ function AppointmentCard({
         ) : null}
       </div>
 
+      {!isCompleted ? (
+        <div className="mt-4 grid grid-cols-3 gap-2 sm:hidden">
+          <form action={startContactCallAction}>
+            <input type="hidden" name="contactId" value={a.contact.id ?? ""} />
+            <SubmitButton
+              className={teamButtonClass("secondary", "sm")}
+              pendingLabel="Calling..."
+              disabled={!hasPhone}
+            >
+              Call
+            </SubmitButton>
+          </form>
+
+          {hasAddress ? (
+            <a
+              href={mapsHref}
+              target="_blank"
+              rel="noreferrer"
+              className={teamButtonClass("secondary", "sm")}
+            >
+              Maps
+            </a>
+          ) : (
+            <span
+              className={`${teamButtonClass("secondary", "sm")} cursor-not-allowed opacity-60`}
+            >
+              Maps
+            </span>
+          )}
+
+          <a href={`#myday-complete-${a.id}`} className={teamButtonClass("primary", "sm")}>
+            {mobilePrimaryActionLabel}
+          </a>
+        </div>
+      ) : null}
+
       {item.attentionReasons.length ? (
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 hidden flex-wrap gap-2 sm:flex">
           {item.attentionReasons.map((reason) => (
             <span
               key={reason}
@@ -561,8 +681,30 @@ function AppointmentCard({
         </div>
       ) : null}
 
+      <div className="mt-4 space-y-2 rounded-2xl border border-slate-200 bg-white/80 px-3 py-3 text-sm sm:hidden">
+        {mobileMetaRows.map((row) => (
+          <div key={row.label} className="flex items-start justify-between gap-3">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              {row.label}
+            </span>
+            <span
+              className={`text-right text-sm ${
+                row.muted ? "text-slate-500" : "text-slate-900"
+              }`}
+            >
+              {row.value}
+            </span>
+          </div>
+        ))}
+        {item.attentionReasons.length ? (
+          <div className="border-t border-slate-200 pt-2 text-xs text-amber-700">
+            {item.attentionReasons.join(" • ")}
+          </div>
+        ) : null}
+      </div>
+
       <div
-        className={`mt-4 grid gap-2 ${
+        className={`mt-4 hidden gap-2 sm:grid ${
           item.isQuoteOnly
             ? "sm:grid-cols-2 xl:grid-cols-4"
             : "sm:grid-cols-2 xl:grid-cols-5"
@@ -615,26 +757,31 @@ function AppointmentCard({
         <div className="mt-4 space-y-3">
           {item.isQuoteOnly ? (
             <>
-              <form
-                action="/api/team/appointments/status"
-                method="post"
-                className="rounded-2xl border border-sky-200 bg-white p-3"
-              >
-                <input type="hidden" name="appointmentId" value={a.id} />
-                <input type="hidden" name="appointmentType" value={a.appointmentType ?? ""} />
-                <input type="hidden" name="status" value="completed" />
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <details id={`myday-complete-${a.id}`} className="group rounded-2xl border border-sky-200 bg-white p-3">
+                <summary className={summaryButtonClass("primary")}>
+                  Quote done
+                </summary>
+                <form
+                  action="/api/team/appointments/status"
+                  method="post"
+                  className="mt-3 space-y-3"
+                >
+                  <input type="hidden" name="appointmentId" value={a.id} />
+                  <input type="hidden" name="appointmentType" value={a.appointmentType ?? ""} />
+                  <input type="hidden" name="status" value="completed" />
                   <div className="text-sm text-slate-600">
                     Mark this in-person quote visit as done.
                   </div>
-                  <SubmitButton
-                    className={teamButtonClass("primary", "sm")}
-                    pendingLabel="Saving..."
-                  >
-                    Done
-                  </SubmitButton>
-                </div>
-              </form>
+                  <div className="flex justify-end">
+                    <SubmitButton
+                      className={teamButtonClass("primary", "sm")}
+                      pendingLabel="Saving..."
+                    >
+                      Done
+                    </SubmitButton>
+                  </div>
+                </form>
+              </details>
 
               {showFollowUpPanel ? (
                 <details className="group rounded-2xl border border-slate-200 bg-white p-3">
@@ -710,7 +857,7 @@ function AppointmentCard({
               ) : null}
             </>
           ) : (
-            <details className="group rounded-2xl border border-emerald-200 bg-white p-3">
+            <details id={`myday-complete-${a.id}`} className="group rounded-2xl border border-emerald-200 bg-white p-3">
               <summary className={summaryButtonClass("primary")}>
                 Complete job
               </summary>
@@ -765,7 +912,10 @@ function AppointmentCard({
                     Commissions
                   </summary>
                   <div className="mt-3 space-y-3">
-                    <CrewPayoutSelector teamMembers={teamMembers} />
+                    <CrewPayoutSelector
+                      teamMembers={teamMembers}
+                      showSplitPercentages={false}
+                    />
                   </div>
                 </details>
 
@@ -781,8 +931,11 @@ function AppointmentCard({
             </details>
           )}
 
+          {mode === "manage" ? (
           <details className="group rounded-2xl border border-slate-200 bg-white p-3">
-            <summary className={summaryButtonClass("secondary")}>More</summary>
+            <summary className={summaryButtonClass("secondary")}>
+              Manage
+            </summary>
 
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -819,10 +972,10 @@ function AppointmentCard({
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Reschedule in console
-                </div>
+              <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Reschedule
+                </summary>
                 <form
                   action={rescheduleAppointmentAction}
                   className="mt-3 flex flex-col gap-2"
@@ -859,13 +1012,13 @@ function AppointmentCard({
                     Save new time
                   </SubmitButton>
                 </form>
-              </div>
+              </details>
 
               {!item.isQuoteOnly ? (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
+                  <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Edit booking details
-                  </div>
+                  </summary>
                   <form
                     action={updateAppointmentBookingDetailsAction}
                     className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
@@ -888,14 +1041,14 @@ function AppointmentCard({
                       </SubmitButton>
                     </div>
                   </form>
-                </div>
+                </details>
               ) : null}
 
               {!item.isQuoteOnly ? (
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
+                  <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Edit seller
-                  </div>
+                  </summary>
                   <form
                     action={updateAppointmentSoldByAction}
                     className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
@@ -945,13 +1098,13 @@ function AppointmentCard({
                       </SubmitButton>
                     </div>
                   </form>
-                </div>
+                </details>
               ) : null}
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
+                <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                   Notes
-                </div>
+                </summary>
                 {a.notes.length ? (
                   <div className="mt-3 space-y-2">
                     {a.notes.map((note) => (
@@ -991,11 +1144,12 @@ function AppointmentCard({
                     Save note
                   </SubmitButton>
                 </form>
-              </div>
+              </details>
             </div>
           </details>
+          ) : null}
         </div>
-      ) : a.notes.length ? (
+      ) : a.notes.length && mode === "manage" ? (
         <details className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
           <summary className={summaryButtonClass("secondary")}>
             {notesLabel}
@@ -1130,7 +1284,11 @@ function toAppointmentCardItem(
   };
 }
 
-export async function MyDaySection(): Promise<ReactElement> {
+export async function MyDaySection({
+  mode = "run",
+}: {
+  mode?: "run" | "manage";
+} = {}): Promise<ReactElement> {
   const now = new Date();
   const todayKey = formatDayKey(now);
   const todayRange = getTeamDayRange(now);
@@ -1229,9 +1387,47 @@ export async function MyDaySection(): Promise<ReactElement> {
     laterToday.length > 0 ||
     comingUp.length > 0 ||
     completedTodayItems.length > 0;
+  const routeModeHref = "/team?tab=myday&myDayMode=run";
+  const manageModeHref = "/team?tab=myday&myDayMode=manage";
 
   return (
     <section className="space-y-6">
+      <div className={`${TEAM_CARD_PADDED} sm:hidden`}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">My Day</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              {mode === "manage"
+                ? "Edits, follow-up, notes, and completion history."
+                : "Route-first view with the next stop and field actions."}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-1">
+          <a
+            href={routeModeHref}
+            className={`inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition ${
+              mode === "run"
+                ? "bg-slate-900 text-white shadow-sm"
+                : "text-slate-600"
+            }`}
+          >
+            Run route
+          </a>
+          <a
+            href={manageModeHref}
+            className={`inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition ${
+              mode === "manage"
+                ? "bg-slate-900 text-white shadow-sm"
+                : "text-slate-600"
+            }`}
+          >
+            Manage
+          </a>
+        </div>
+      </div>
+
       {loadMessages.length ? (
         <div className="space-y-2">
           {loadMessages.map((message) => (
@@ -1257,6 +1453,7 @@ export async function MyDaySection(): Promise<ReactElement> {
           tone="emerald"
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
+          mode={mode}
         />
       ) : null}
 
@@ -1268,6 +1465,7 @@ export async function MyDaySection(): Promise<ReactElement> {
           tone="amber"
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
+          mode={mode}
         />
       ) : null}
 
@@ -1279,6 +1477,7 @@ export async function MyDaySection(): Promise<ReactElement> {
           tone="sky"
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
+          mode={mode}
         />
       ) : null}
 
@@ -1290,10 +1489,11 @@ export async function MyDaySection(): Promise<ReactElement> {
           tone="slate"
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
+          mode={mode}
         />
       ) : null}
 
-      {completedTodayItems.length ? (
+      {mode === "manage" && completedTodayItems.length ? (
         <AppointmentSection
           title="Done today"
           subtitle="Completed appointments scheduled for today."
@@ -1301,6 +1501,7 @@ export async function MyDaySection(): Promise<ReactElement> {
           tone="slate"
           teamMembers={teamMembers}
           teamMemberNameById={teamMemberNameById}
+          mode={mode}
         />
       ) : null}
     </section>

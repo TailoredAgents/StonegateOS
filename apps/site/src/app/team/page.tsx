@@ -108,6 +108,7 @@ export default async function TeamPage({
     waRangeDays?: string;
     cal?: string;
     calView?: string;
+    myDayMode?: string;
     setup?: string;
     saved?: string;
     error?: string;
@@ -233,6 +234,8 @@ export default async function TeamPage({
   const settingsError = typeof params?.error === "string" && params.error.trim().length ? params.error.trim() : null;
   const layoutMode = typeof params?.layout === "string" ? params.layout.trim().toLowerCase() : "";
   const useClassicLayout = layoutMode === "classic";
+  const myDayModeParam = typeof params?.myDayMode === "string" ? params.myDayMode.trim().toLowerCase() : "";
+  const myDayMode = myDayModeParam === "manage" ? "manage" : "run";
   const outboundFilters = {
     q: typeof params?.out_q === "string" ? params.out_q : undefined,
     campaign: typeof params?.out_campaign === "string" ? params.out_campaign : undefined,
@@ -675,7 +678,7 @@ export default async function TeamPage({
 
       {tab === "myday" && (hasCrew || hasOffice || hasOwner) ? (
         <React.Suspense fallback={<TeamSkeletonCard title="Loading My Day" />}>
-          <MyDaySection />
+          <MyDaySection mode={myDayMode} />
         </React.Suspense>
       ) : null}
     </>

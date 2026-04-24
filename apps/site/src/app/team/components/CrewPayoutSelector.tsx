@@ -13,6 +13,7 @@ type TeamMember = {
 
 type Props = {
   teamMembers: TeamMember[];
+  showSplitPercentages?: boolean;
 };
 
 function toggleSelection(current: string[], memberId: string): string[] {
@@ -25,7 +26,10 @@ function toggleSelection(current: string[], memberId: string): string[] {
   return Array.from(next);
 }
 
-export function CrewPayoutSelector({ teamMembers }: Props): React.ReactElement {
+export function CrewPayoutSelector({
+  teamMembers,
+  showSplitPercentages = true,
+}: Props): React.ReactElement {
   const [selectedMemberIds, setSelectedMemberIds] = React.useState<string[]>(
     [],
   );
@@ -102,17 +106,21 @@ export function CrewPayoutSelector({ teamMembers }: Props): React.ReactElement {
                 className="rounded-2xl border border-emerald-200 bg-white px-3 py-2"
               >
                 <div className="font-medium">{member.name}</div>
-                <div className="text-xs text-emerald-700">
-                  {formatLockedCrewSplitPercent(
-                    splitByMemberId.get(member.id) ?? 0,
-                    resolvedTotalSplitBps,
-                  )}
-                </div>
+                {showSplitPercentages ? (
+                  <div className="text-xs text-emerald-700">
+                    {formatLockedCrewSplitPercent(
+                      splitByMemberId.get(member.id) ?? 0,
+                      resolvedTotalSplitBps,
+                    )}
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>
           <div className="mt-2 text-[11px] text-emerald-700">
-            Crew payout is locked by this combo and cannot be edited manually.
+            {showSplitPercentages
+              ? "Crew payout is locked by this combo and cannot be edited manually."
+              : "Crew payout is locked by this combo. Split percentages stay in Payroll only."}
           </div>
         </div>
       ) : (
