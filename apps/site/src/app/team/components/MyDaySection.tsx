@@ -423,13 +423,11 @@ function AppointmentCard({
   const mapsHref = buildMapsHref(a.property);
   const hasPhone = Boolean(a.contact.phone && a.contact.id);
   const isCompleted = a.status === "completed";
-  const cardClassName = item.attentionReasons.length
-    ? "border-amber-200 bg-amber-50/40"
-    : item.isQuoteOnly
-      ? "border-sky-200 bg-sky-50/40"
-      : isCompleted
-        ? "border-slate-200 bg-slate-50/60"
-        : "border-emerald-200 bg-white";
+  const cardClassName = item.isQuoteOnly
+    ? "border-sky-200 bg-sky-50/40"
+    : isCompleted
+      ? "border-slate-200 bg-slate-50/60"
+      : "border-emerald-200 bg-white";
 
   const notesLabel = a.notes.length
     ? `${a.notes.length} ${a.notes.length === 1 ? "note" : "notes"}`
@@ -516,11 +514,6 @@ function AppointmentCard({
             Done
           </span>
         ) : null}
-        {item.attentionReasons.length ? (
-          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-700">
-            Needs attention
-          </span>
-        ) : null}
         {item.isQuoteOnly && a.quoteFollowUp ? (
           <span className="rounded-full bg-white px-3 py-1 text-slate-700">
             Follow-up set
@@ -546,11 +539,6 @@ function AppointmentCard({
         <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">
           {isCompleted ? "Done today" : fmtAppointmentSlot(a.startAt)}
         </span>
-        {item.attentionReasons.length ? (
-          <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-700">
-            Needs attention
-          </span>
-        ) : null}
         {a.pipelineStage ? (
           <span className="rounded-full bg-white px-3 py-1 text-slate-700">
             Pipeline: {labelForPipelineStage(a.pipelineStage)}
@@ -588,7 +576,7 @@ function AppointmentCard({
             ) : null}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600">
-            <span>{a.contact.phone ?? "Phone not set"}</span>
+            <span>{a.contact.phone?.trim() ? a.contact.phone : "Not available"}</span>
             {a.contact.phone ? (
               <CopyButton value={a.contact.phone} label="Copy" />
             ) : null}
@@ -596,7 +584,7 @@ function AppointmentCard({
         </div>
 
         {!isCompleted ? (
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap lg:justify-end">
+          <div className="hidden sm:flex sm:flex-wrap sm:gap-2 lg:justify-end">
             <form action={startContactCallAction}>
               <input
                 type="hidden"
@@ -668,19 +656,6 @@ function AppointmentCard({
         </div>
       ) : null}
 
-      {item.attentionReasons.length ? (
-        <div className="mt-4 hidden flex-wrap gap-2 sm:flex">
-          {item.attentionReasons.map((reason) => (
-            <span
-              key={reason}
-              className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700"
-            >
-              {reason}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
       <div className="mt-4 space-y-2 rounded-2xl border border-slate-200 bg-white/80 px-3 py-3 text-sm sm:hidden">
         {mobileMetaRows.map((row) => (
           <div key={row.label} className="flex items-start justify-between gap-3">
@@ -696,11 +671,6 @@ function AppointmentCard({
             </span>
           </div>
         ))}
-        {item.attentionReasons.length ? (
-          <div className="border-t border-slate-200 pt-2 text-xs text-amber-700">
-            {item.attentionReasons.join(" • ")}
-          </div>
-        ) : null}
       </div>
 
       <div
@@ -1193,10 +1163,6 @@ function buildAttentionReasons(
     quoteFollowUpDate && !Number.isNaN(quoteFollowUpDate.getTime())
       ? quoteFollowUpDate
       : null;
-
-  if (!appointment.contact.phone?.trim()) {
-    reasons.push("Missing phone");
-  }
 
   if (!appointment.property.addressLine1?.trim()) {
     reasons.push("Missing address");

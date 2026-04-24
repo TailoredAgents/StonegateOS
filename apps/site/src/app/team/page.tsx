@@ -383,7 +383,7 @@ export default async function TeamPage({
         </div>
       ) : null}
       {flash || flashError ? <FlashClearer /> : null}
-      {newLead ? (
+      {tab === "inbox" && newLead ? (
         <section className="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 p-4 shadow-sm shadow-emerald-100">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
