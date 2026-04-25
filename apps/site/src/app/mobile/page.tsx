@@ -521,6 +521,7 @@ export default async function MobileHomePage({
     quoteStatus?: string;
     account?: string;
     invite?: string;
+    password?: string;
     error?: string;
   }>;
 }) {
@@ -558,6 +559,7 @@ export default async function MobileHomePage({
   const accountCreated = params.account === "created";
   const accountUpdated = params.account === "updated";
   const inviteSent = params.invite === "sent";
+  const passwordSaved = params.password === "saved";
   const error = typeof params.error === "string" && params.error.trim().length ? params.error.trim() : null;
   const threads = activeScreen === "inbox" ? await loadMobileThreads({ status: inboxStatus, q: inboxQuery }) : [];
   const contacts = activeScreen === "contacts" ? await loadMobileContacts({ q: inboxQuery }) : [];
@@ -605,7 +607,30 @@ export default async function MobileHomePage({
 
           {needsPasswordSetup ? (
             <div className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-4 text-sm text-amber-100">
-              Set a password from the Team Console settings before relying on password sign-in.
+              <p className="font-semibold">Set your password</p>
+              <p className="mt-1 leading-6">Minimum 10 characters. This lets you sign in without waiting for a magic link.</p>
+              <form action="/mobile/password" method="post" className="mt-3 space-y-3">
+                <input type="hidden" name="next" value="/mobile?setup=1" />
+                <input
+                  name="password"
+                  type="password"
+                  minLength={10}
+                  required
+                  className="w-full rounded-md border border-amber-300/20 bg-slate-950 px-3 py-2 text-sm text-white"
+                  placeholder="New password"
+                />
+                <input
+                  name="confirmPassword"
+                  type="password"
+                  minLength={10}
+                  required
+                  className="w-full rounded-md border border-amber-300/20 bg-slate-950 px-3 py-2 text-sm text-white"
+                  placeholder="Confirm password"
+                />
+                <button type="submit" className="w-full rounded-md bg-amber-200 px-3 py-2 text-sm font-semibold text-slate-950">
+                  Save password
+                </button>
+              </form>
             </div>
           ) : null}
 
@@ -672,6 +697,11 @@ export default async function MobileHomePage({
           {inviteSent ? (
             <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
               Mobile login link requested.
+            </div>
+          ) : null}
+          {passwordSaved ? (
+            <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
+              Password saved.
             </div>
           ) : null}
           {error ? (
@@ -2076,6 +2106,35 @@ export default async function MobileHomePage({
                   ))}
                 </div>
               </div>
+
+              {!session.teamMember.passwordSet ? (
+                <div className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-4">
+                  <h2 className="text-base font-semibold text-amber-100">Set password</h2>
+                  <p className="mt-1 text-sm leading-6 text-amber-100">Minimum 10 characters.</p>
+                  <form action="/mobile/password" method="post" className="mt-3 space-y-3">
+                    <input type="hidden" name="next" value="/mobile?screen=settings" />
+                    <input
+                      name="password"
+                      type="password"
+                      minLength={10}
+                      required
+                      className="w-full rounded-md border border-amber-300/20 bg-slate-950 px-3 py-2 text-sm text-white"
+                      placeholder="New password"
+                    />
+                    <input
+                      name="confirmPassword"
+                      type="password"
+                      minLength={10}
+                      required
+                      className="w-full rounded-md border border-amber-300/20 bg-slate-950 px-3 py-2 text-sm text-white"
+                      placeholder="Confirm password"
+                    />
+                    <button type="submit" className="w-full rounded-md bg-amber-200 px-3 py-2 text-sm font-semibold text-slate-950">
+                      Save password
+                    </button>
+                  </form>
+                </div>
+              ) : null}
 
               <form action={mobileLogoutAction} className="rounded-lg border border-rose-300/30 bg-rose-300/10 p-4">
                 <button type="submit" className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-4 py-3 text-sm font-semibold text-rose-100">
