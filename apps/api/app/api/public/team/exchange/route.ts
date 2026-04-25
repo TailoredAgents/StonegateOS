@@ -9,7 +9,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "token_required" }, { status: 400 });
   }
 
-  const result = await exchangeTeamLoginToken(rawToken, request, 14);
+  const result = await exchangeTeamLoginToken(rawToken, request, 30);
   if (!result) {
     return NextResponse.json({ ok: false, error: "invalid_or_expired" }, { status: 401 });
   }
@@ -21,4 +21,3 @@ export async function POST(request: NextRequest): Promise<Response> {
     needsPasswordSetup: result.needsPasswordSetup
   });
 }
-

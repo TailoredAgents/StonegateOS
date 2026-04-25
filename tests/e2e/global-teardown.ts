@@ -16,7 +16,7 @@ function run(command: string, args: string[]): Promise<void> {
 
 export default async function globalTeardown(): Promise<void> {
   try {
-    await run("pnpm", ["cleanup:e2e"]);
+    await run("corepack", ["pnpm", "cleanup:e2e"]);
   } catch (error) {
     console.warn("[teardown] cleanup failed", error);
   }

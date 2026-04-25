@@ -12,11 +12,15 @@ import {
 
 export async function POST(request: NextRequest): Promise<Response> {
   const payload = (await request.json().catch(() => null)) as
-    | { email?: unknown; phone?: unknown; identifier?: unknown }
+    | { email?: unknown; phone?: unknown; identifier?: unknown; redirectPath?: unknown }
     | null;
 
   const email = normalizeEmail(payload?.email ?? payload?.identifier);
   const phoneE164 = normalizePhoneE164(payload?.phone ?? payload?.identifier);
+  const redirectPath =
+    payload?.redirectPath === "/mobile/auth" || payload?.redirectPath === "/team/auth"
+      ? payload.redirectPath
+      : "/team/auth";
   if (!email && !phoneE164) {
     return NextResponse.json({ ok: false, error: "email_or_phone_required" }, { status: 400 });
   }
@@ -31,7 +35,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (member?.id && siteBaseUrl) {
     try {
       const { rawToken, expiresAt } = await createTeamLoginToken(member.id, request, 30);
-      const url = new URL("/team/auth", siteBaseUrl);
+      const url = new URL(redirectPath, siteBaseUrl);
       url.searchParams.set("token", rawToken);
 
       const subject = "Your Stonegate Team Console login link";

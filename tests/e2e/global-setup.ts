@@ -4,6 +4,7 @@ import { bootstrapAdminStorage, bootstrapVisitorStorage } from "./support/auth";
 import { runE2ESeed } from "./support/seed";
 import { waitForHealthcheck } from "./support/health";
 import { ensureContentlayerGenerated } from "./support/contentlayer";
+import { bootstrapTeamStorage } from "./support/team-auth";
 
 export default async function globalSetup(_config: FullConfig): Promise<void> {
   ensureE2EEnv();
@@ -21,6 +22,20 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
 
   await Promise.all([
     bootstrapVisitorStorage("tests/e2e/storage/visitor.json"),
-    bootstrapAdminStorage("tests/e2e/storage/admin.json")
+    bootstrapAdminStorage("tests/e2e/storage/admin.json"),
+    bootstrapTeamStorage({
+      filename: "tests/e2e/storage/mobile-owner.json",
+      name: "E2E Mobile Owner",
+      email: "e2e-mobile-owner@mystos.test",
+      role: "owner",
+      siteBase
+    }),
+    bootstrapTeamStorage({
+      filename: "tests/e2e/storage/mobile-sales.json",
+      name: "E2E Mobile Sales",
+      email: "e2e-mobile-sales@mystos.test",
+      role: "sales",
+      siteBase
+    })
   ]);
 }

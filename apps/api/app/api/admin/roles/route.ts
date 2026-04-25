@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { asc, sql } from "drizzle-orm";
+import { asc } from "drizzle-orm";
 import { getDb, teamRoles } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../web/admin";
@@ -26,8 +26,28 @@ const DEFAULT_ROLES = [
       "audit.read",
       "appointments.read",
       "appointments.update",
+      "quotes.read",
+      "quotes.write",
+      "quotes.send",
+      "quotes.update",
+      "quotes.delete",
       "expenses.read",
       "expenses.write"
+    ]
+  },
+  {
+    name: "Sales",
+    slug: "sales",
+    permissions: [
+      "messages.read",
+      "messages.send",
+      "appointments.read",
+      "appointments.update",
+      "bookings.manage",
+      "quotes.read",
+      "quotes.write",
+      "quotes.send",
+      "quotes.update"
     ]
   },
   {
@@ -44,10 +64,6 @@ const DEFAULT_ROLES = [
 
 async function ensureDefaultRoles(): Promise<void> {
   const db = getDb();
-  const countResult = await db.select({ count: sql<number>`count(*)` }).from(teamRoles);
-  const total = Number(countResult[0]?.count ?? 0);
-  if (total > 0) return;
-
   await db.insert(teamRoles).values(
     DEFAULT_ROLES.map((role) => ({
       name: role.name,
@@ -56,7 +72,7 @@ async function ensureDefaultRoles(): Promise<void> {
       createdAt: new Date(),
       updatedAt: new Date()
     }))
-  );
+  ).onConflictDoNothing({ target: teamRoles.slug });
 }
 
 export async function GET(request: NextRequest): Promise<Response> {

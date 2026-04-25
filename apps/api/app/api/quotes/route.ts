@@ -6,6 +6,7 @@ import { serviceRates } from "@myst-os/pricing/src/config/defaults";
 import type { ConcreteSurfaceInput, ServiceCategory } from "@myst-os/pricing/src/types";
 import { getDb, quotes, contacts, properties } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../web/admin";
 import { eq, desc } from "drizzle-orm";
 
@@ -55,6 +56,8 @@ function formatQuoteResponse(row: {
   services: string[];
   addOns: string[] | null;
   total: unknown;
+  lineItems: unknown;
+  notes: string | null;
   createdAt: Date;
   updatedAt: Date;
   sentAt: Date | null;
@@ -79,6 +82,8 @@ function formatQuoteResponse(row: {
     services: row.services,
     addOns: row.addOns,
     total: Number(row.total),
+    lineItems: row.lineItems,
+    notes: row.notes,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     sentAt: row.sentAt ? row.sentAt.toISOString() : null,
@@ -101,6 +106,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "quotes.read");
+  if (permissionError) return permissionError;
 
   const statusParam = request.nextUrl.searchParams.get("status");
   const statusFilter: QuoteStatusFilter | null = STATUS_FILTERS.includes(
@@ -117,6 +124,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       services: quotes.services,
       addOns: quotes.addOns,
       total: quotes.total,
+      lineItems: quotes.lineItems,
+      notes: quotes.notes,
       createdAt: quotes.createdAt,
       updatedAt: quotes.updatedAt,
       sentAt: quotes.sentAt,
@@ -148,6 +157,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "quotes.write");
+  if (permissionError) return permissionError;
 
   const parsedBody = CreateQuoteSchema.safeParse(await request.json());
   if (!parsedBody.success) {
@@ -191,7 +202,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "property_contact_mismatch" }, { status: 400 });
   }
 
-  const selectedServices = body.selectedServices as ServiceCategory[];
+  const selectedServices = body.selectedServices;
   const sanitizedOverrides: Partial<Record<ServiceCategory, number>> = {};
   if (body.serviceOverrides) {
     for (const [serviceId, amount] of Object.entries(body.serviceOverrides)) {
@@ -276,4 +287,3 @@ export async function POST(request: NextRequest): Promise<Response> {
     breakdown
   });
 }
-

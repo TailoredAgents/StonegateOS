@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb, quotes, outboxEvents } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
@@ -39,6 +40,8 @@ export async function POST(
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "quotes.send");
+  if (permissionError) return permissionError;
 
   const { id } = await context.params;
   if (!id) {
@@ -144,4 +147,3 @@ export async function POST(
     expiresAt: updated.expiresAt ? updated.expiresAt.toISOString() : null
   });
 }
-

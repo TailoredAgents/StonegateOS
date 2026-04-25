@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 
 export async function runE2ESeed(): Promise<void> {
-  await runCommand("pnpm", ["seed:e2e"]);
+  await runCommand("corepack", ["pnpm", "seed:e2e"]);
 }
 
 async function runCommand(command: string, args: string[]): Promise<void> {

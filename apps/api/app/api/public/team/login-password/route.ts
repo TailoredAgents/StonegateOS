@@ -10,11 +10,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, error: "invalid_credentials" }, { status: 401 });
   }
 
-  const session = await loginWithPassword(email, password, request, 14);
+  const session = await loginWithPassword(email, password, request, 30);
   if (!session) {
     return NextResponse.json({ ok: false, error: "invalid_credentials" }, { status: 401 });
   }
 
   return NextResponse.json({ ok: true, sessionToken: session.sessionToken, teamMember: session.teamMember });
 }
-

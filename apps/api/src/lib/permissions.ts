@@ -25,12 +25,33 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "audit.read",
     "appointments.read",
     "appointments.update",
+    "quotes.read",
+    "quotes.write",
+    "quotes.send",
+    "quotes.update",
+    "quotes.delete",
     "expenses.read",
     "expenses.write"
+  ],
+  sales: [
+    "messages.read",
+    "messages.send",
+    "appointments.read",
+    "appointments.update",
+    "bookings.manage",
+    "quotes.read",
+    "quotes.write",
+    "quotes.send",
+    "quotes.update"
   ],
   crew: ["messages.read", "appointments.read", "appointments.update", "expenses.read", "expenses.write"],
   read_only: ["read"]
 };
+
+export function getDefaultPermissionsForRole(roleSlug: string | null | undefined): string[] {
+  const normalized = roleSlug ? roleSlug.trim().toLowerCase() : "";
+  return normalizePermissions(DEFAULT_ROLE_PERMISSIONS[normalized] ?? []);
+}
 
 function normalizePermissions(permissions: string[] | null | undefined): string[] {
   if (!permissions) return [];
@@ -115,11 +136,12 @@ export async function resolvePermissionContext(request: NextRequest): Promise<Pe
       .limit(1);
 
     if (row) {
+      const roleSlug = row.roleSlug ?? actorRole;
       return {
         enforce: true,
-        role: row.roleSlug ?? actorRole,
+        role: roleSlug,
         permissions: computeEffectivePermissions({
-          rolePermissions: row.permissions ?? [],
+          rolePermissions: mergePermissions(getDefaultPermissionsForRole(roleSlug), row.permissions ?? []),
           grant: row.permissionsGrant,
           deny: row.permissionsDeny
         })
@@ -140,7 +162,7 @@ export async function resolvePermissionContext(request: NextRequest): Promise<Pe
       return {
         enforce: true,
         role: actorRole,
-        permissions: normalizePermissions(roleRow.permissions)
+        permissions: mergePermissions(getDefaultPermissionsForRole(actorRole), roleRow.permissions)
       };
     }
   }

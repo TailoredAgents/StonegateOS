@@ -14,7 +14,7 @@ function extractPgCode(error: unknown): string | null {
   const direct = isRecord(error) ? error : null;
   const directCode = direct && typeof direct["code"] === "string" ? direct["code"] : null;
   if (directCode) return directCode;
-  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const cause = direct && isRecord(direct["cause"]) ? direct["cause"] : null;
   const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : null;
   return causeCode;
 }
@@ -55,6 +55,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     defaultCrewSplitBps: number | null;
     permissionsGrant?: string[] | null;
     permissionsDeny?: string[] | null;
+    passwordHash?: string | null;
     active: boolean | null;
     createdAt: Date;
     updatedAt: Date;
@@ -72,6 +73,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         defaultCrewSplitBps: teamMembers.defaultCrewSplitBps,
         permissionsGrant: teamMembers.permissionsGrant,
         permissionsDeny: teamMembers.permissionsDeny,
+        passwordHash: teamMembers.passwordHash,
         active: teamMembers.active,
         createdAt: teamMembers.createdAt,
         updatedAt: teamMembers.updatedAt,
@@ -126,8 +128,9 @@ export async function GET(request: NextRequest): Promise<Response> {
           slug: row.roleSlug ?? null
         }
       : null,
-    active: row.active ?? true,
-    createdAt: row.createdAt.toISOString(),
+      active: row.active ?? true,
+      passwordSet: Boolean(row.passwordHash),
+      createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString()
   }));
 

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
 import { eq, sql } from "drizzle-orm";
 import { getDb, policySettings, teamLoginTokens, teamMembers, teamRoles, teamSessions } from "@/db";
-import { computeEffectivePermissions } from "@/lib/permissions";
+import { computeEffectivePermissions, getDefaultPermissionsForRole } from "@/lib/permissions";
 import { resolvePublicSiteBaseUrl as resolvePublicSiteBaseUrlInternal } from "@/lib/public-site-url";
 import { normalizePhone } from "../../app/api/web/utils";
 
@@ -321,7 +321,10 @@ export async function requireTeamSession(
     roleSlug === "owner"
       ? ["*"]
       : computeEffectivePermissions({
-          rolePermissions: memberRow.rolePermissions ?? [],
+          rolePermissions: [
+            ...getDefaultPermissionsForRole(roleSlug),
+            ...(memberRow.rolePermissions ?? [])
+          ],
           grant: memberRow.permissionsGrant ?? [],
           deny: memberRow.permissionsDeny ?? []
         });
@@ -342,7 +345,7 @@ export async function requireTeamSession(
 const SCRYPT_KEYLEN = 64;
 
 function scryptHash(password: string, salt: Buffer): Buffer {
-  return crypto.scryptSync(password, salt, SCRYPT_KEYLEN) as Buffer;
+  return crypto.scryptSync(password, salt, SCRYPT_KEYLEN);
 }
 
 export function hashPassword(password: string): string {

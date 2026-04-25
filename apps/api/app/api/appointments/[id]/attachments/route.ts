@@ -82,8 +82,8 @@ export async function POST(
     .insert(appointmentAttachments)
     .values({
       appointmentId,
-      filename: filename!,
-      url: url!,
+      filename,
+      url,
       contentType: storedContentType
     })
     .returning();
