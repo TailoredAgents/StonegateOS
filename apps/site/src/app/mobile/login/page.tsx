@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
-import { requestMobileMagicLinkAction, mobilePasswordLoginAction } from "./actions";
 import { resolveMobileSessionFromCookies } from "../lib/session";
+
+export const dynamic = "force-dynamic";
 
 export default async function MobileLoginPage({
   searchParams
@@ -36,7 +37,7 @@ export default async function MobileLoginPage({
 
         <section className="rounded-lg border border-white/10 bg-white/[0.08] p-4 shadow-2xl shadow-black/30">
           <h2 className="text-base font-semibold">Password</h2>
-          <form action={mobilePasswordLoginAction} className="mt-4 space-y-3">
+          <form action="/mobile/login/password" method="post" className="mt-4 space-y-3">
             <label className="block">
               <span className="text-xs font-semibold text-slate-300">Email</span>
               <input
@@ -64,7 +65,7 @@ export default async function MobileLoginPage({
 
         <section className="mt-4 rounded-lg border border-white/10 bg-slate-900 p-4">
           <h2 className="text-base font-semibold">Magic link</h2>
-          <form action={requestMobileMagicLinkAction} className="mt-4 space-y-3">
+          <form action="/mobile/login/magic-link" method="post" className="mt-4 space-y-3">
             <label className="block">
               <span className="text-xs font-semibold text-slate-300">Email or phone</span>
               <input
