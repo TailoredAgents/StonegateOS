@@ -8,7 +8,6 @@ import {
   addMobileContactNoteAction,
   addMobileAppointmentAttachmentAction,
   bookMobileAppointmentAction,
-  completeMobileTaskAction,
   createMobileTeamMemberAction,
   createMobileQuoteAction,
   mobileLogoutAction,
@@ -24,17 +23,18 @@ import {
 } from "./actions";
 import { formatDayKey, TEAM_TIME_ZONE } from "../team/lib/timezone";
 import { OfflineBanner } from "./OfflineBanner";
+import { InboxRefresh } from "./InboxRefresh";
 import { loadMobileOwnerSummary, type MobileOwnerSummary } from "./lib/owner-summary";
 
 const navItems: Array<{ id: string; label: string; href: Route; icon: typeof Inbox }> = [
   { id: "inbox", label: "Inbox", href: "/mobile", icon: Inbox },
-  { id: "myday", label: "My Day", href: "/mobile?screen=myday", icon: Home },
-  { id: "contacts", label: "Contacts", href: "/mobile?screen=contacts", icon: ContactRound },
-  { id: "calendar", label: "Calendar", href: "/mobile?screen=calendar", icon: CalendarDays },
+  { id: "myday", label: "Today", href: "/mobile?screen=myday", icon: Home },
+  { id: "contacts", label: "People", href: "/mobile?screen=contacts", icon: ContactRound },
+  { id: "calendar", label: "Cal", href: "/mobile?screen=calendar", icon: CalendarDays },
   { id: "quotes", label: "Quotes", href: "/mobile?screen=quotes", icon: FileText },
   { id: "owner", label: "Owner", href: "/mobile?screen=owner", icon: ShieldCheck },
   { id: "access", label: "Access", href: "/mobile?screen=access", icon: UserCog },
-  { id: "settings", label: "Settings", href: "/mobile?screen=settings", icon: Settings }
+  { id: "settings", label: "More", href: "/mobile?screen=settings", icon: Settings }
 ];
 
 function labelForRole(role: string | null): string {
@@ -188,22 +188,6 @@ type QuotesResponse = {
   quotes?: QuoteSummary[];
 };
 
-type TaskSummary = {
-  id: string;
-  contactId: string | null;
-  title: string;
-  dueAt: string | null;
-  assignedTo: string | null;
-  status: string;
-  notes: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type TasksResponse = {
-  tasks?: TaskSummary[];
-};
-
 type OwnerHealthStatus = MobileOwnerSummary["health"]["providers"][number]["status"];
 
 type RoleSummary = {
@@ -230,6 +214,13 @@ type TeamMemberSummary = {
 type AccessResponse = {
   roles?: RoleSummary[];
   members?: TeamMemberSummary[];
+};
+
+type DetectedAddress = {
+  addressLine1: string;
+  city: string;
+  state: string;
+  postalCode: string;
 };
 
 const quoteStatusFilters = ["all", "pending", "sent", "accepted", "declined"] as const;
@@ -328,13 +319,6 @@ function addDaysToKey(dayKey: string, days: number): string {
   return formatDayKey(date);
 }
 
-function isDueTodayOrEarlier(value: string | null): boolean {
-  if (!value) return true;
-  const dueKey = formatDayKey(new Date(value));
-  if (!dueKey) return true;
-  return dueKey <= formatDayKey(new Date());
-}
-
 function getProjectedEventCents(event: CalendarEvent): number {
   if (event.source !== "db") return 0;
   const status = (event.status ?? "").trim().toLowerCase();
@@ -384,6 +368,125 @@ function phoneHref(phone: string | null | undefined): string | null {
   if (!phone) return null;
   const normalized = phone.replace(/[^\d+]/g, "");
   return normalized ? `tel:${normalized}` : null;
+}
+
+function isQuoteOnlyAppointmentType(value: string | null | undefined): boolean {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return normalized === "in_person_quote" || normalized === "in_person_estimate";
+}
+
+function detectAddressFromMessages(messages: MessageDetail[] | undefined): DetectedAddress | null {
+  if (!Array.isArray(messages)) return null;
+  const statePattern = "AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY";
+  const addressPattern = new RegExp(
+    `\\b(\\d{1,6}\\s+[A-Za-z0-9.'#\\-\\s]+?)\\s*,\\s*([A-Za-z.'\\-\\s]+?)\\s*,\\s*(${statePattern})\\s+(\\d{5}(?:-\\d{4})?)\\b`,
+    "i"
+  );
+
+  for (const message of [...messages].reverse()) {
+    const match = addressPattern.exec(message.body);
+    if (!match) continue;
+    return {
+      addressLine1: match[1]?.replace(/\s+/g, " ").trim() ?? "",
+      city: match[2]?.replace(/\s+/g, " ").trim() ?? "",
+      state: (match[3] ?? "").toUpperCase(),
+      postalCode: match[4] ?? ""
+    };
+  }
+  return null;
+}
+
+function MobileCompleteAppointmentForm({
+  event,
+  appointmentId,
+  calendarDay,
+  teamMembers
+}: {
+  event: CalendarEvent;
+  appointmentId: string;
+  calendarDay: string;
+  teamMembers: TeamMemberSummary[];
+}) {
+  const status = (event.status ?? "").trim().toLowerCase();
+  if (!appointmentId || status === "completed") return null;
+
+  const isQuoteOnly = isQuoteOnlyAppointmentType(event.appointmentType);
+  const amountDefault =
+    normalizeCents(event.finalTotalCents) !== null
+      ? (normalizeCents(event.finalTotalCents)! / 100).toFixed(2)
+      : normalizeCents(event.quotedTotalCents) !== null
+        ? (normalizeCents(event.quotedTotalCents)! / 100).toFixed(2)
+        : "";
+
+  if (isQuoteOnly) {
+    return (
+      <form action={updateMobileAppointmentStatusAction}>
+        <input type="hidden" name="appointmentId" value={appointmentId} />
+        <input type="hidden" name="date" value={calendarDay} />
+        <input type="hidden" name="appointmentType" value={event.appointmentType ?? ""} />
+        <button
+          type="submit"
+          name="status"
+          value="completed"
+          className="w-full rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-100"
+        >
+          Quote done
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <details className="rounded-md border border-emerald-300/30 bg-emerald-300/10 p-3">
+      <summary className="cursor-pointer list-none text-sm font-semibold text-emerald-100">Complete job</summary>
+      <form action={updateMobileAppointmentStatusAction} className="mt-3 space-y-3">
+        <input type="hidden" name="appointmentId" value={appointmentId} />
+        <input type="hidden" name="date" value={calendarDay} />
+        <input type="hidden" name="appointmentType" value={event.appointmentType ?? ""} />
+        <input type="hidden" name="status" value="completed" />
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block">
+            <span className="text-xs font-semibold text-slate-300">Collected $</span>
+            <input
+              name="finalTotal"
+              type="number"
+              min={0}
+              step="0.01"
+              required
+              defaultValue={amountDefault}
+              className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+              placeholder="350"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs font-semibold text-slate-300">Card tip</span>
+            <input
+              name="cardTip"
+              type="number"
+              min={0}
+              step="0.01"
+              className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+              placeholder="0"
+            />
+          </label>
+        </div>
+        <div className="rounded-md border border-white/10 bg-slate-950 p-3">
+          <p className="text-xs font-semibold text-slate-300">Crew</p>
+          <div className="mt-2 grid grid-cols-1 gap-2">
+            {teamMembers.map((member) => (
+              <label key={member.id} className="flex items-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-200">
+                <input name="crewMemberId" type="checkbox" value={member.id} className="rounded border-slate-600 bg-slate-950" />
+                <span className="min-w-0 truncate">{member.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        <button type="submit" className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950">
+          Mark complete
+        </button>
+      </form>
+    </details>
+  );
 }
 
 async function loadMobileThreads(input: { status: string; q: string }): Promise<ThreadSummary[]> {
@@ -453,22 +556,6 @@ async function loadMobileQuotes(status: string): Promise<QuoteSummary[]> {
   return Array.isArray(payload?.quotes) ? payload.quotes : [];
 }
 
-async function loadMobileTasks(): Promise<TaskSummary[]> {
-  const response = await callAdminApi("/api/admin/crm/tasks?status=open", { method: "GET" });
-  if (!response.ok) return [];
-  const payload = (await response.json().catch(() => null)) as TasksResponse | null;
-  const tasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
-  return tasks
-    .filter((task) => task.status === "open")
-    .sort((a, b) => {
-      const aDue = a.dueAt ? Date.parse(a.dueAt) : Number.MAX_SAFE_INTEGER;
-      const bDue = b.dueAt ? Date.parse(b.dueAt) : Number.MAX_SAFE_INTEGER;
-      if (aDue !== bDue) return aDue - bDue;
-      return Date.parse(b.createdAt) - Date.parse(a.createdAt);
-    })
-    .slice(0, 20);
-}
-
 async function loadMobileAccess(): Promise<{ roles: RoleSummary[]; members: TeamMemberSummary[] }> {
   const [rolesResponse, membersResponse] = await Promise.all([
     callAdminApi("/api/admin/roles", { method: "GET" }),
@@ -486,6 +573,13 @@ async function loadMobileAccess(): Promise<{ roles: RoleSummary[]; members: Team
     roles: Array.isArray(rolesPayload?.roles) ? rolesPayload.roles : [],
     members: Array.isArray(membersPayload?.members) ? membersPayload.members : []
   };
+}
+
+async function loadMobileTeamMembers(): Promise<TeamMemberSummary[]> {
+  const response = await callAdminApi("/api/admin/team/members", { method: "GET" });
+  if (!response.ok) return [];
+  const payload = (await response.json().catch(() => null)) as AccessResponse | null;
+  return Array.isArray(payload?.members) ? payload.members.filter((member) => member.active !== false) : [];
 }
 
 function findLaunchMember(members: TeamMemberSummary[], name: string): TeamMemberSummary | null {
@@ -548,7 +642,6 @@ export default async function MobileHomePage({
       : "all";
   const sent = params.sent === "1";
   const noteSaved = params.note === "1";
-  const taskSaved = params.task === "1";
   const contactSaved = params.contact === "1";
   const appointmentSaved = params.appointment === "1";
   const appointmentBooked = params.booked === "1";
@@ -565,8 +658,7 @@ export default async function MobileHomePage({
   const contacts = activeScreen === "contacts" ? await loadMobileContacts({ q: inboxQuery }) : [];
   const contactDetail = activeScreen === "contacts" && contactId ? await loadMobileContact(contactId) : null;
   const calendarEvents = activeScreen === "calendar" || activeScreen === "myday" ? await loadMobileCalendar(calendarDay) : [];
-  const myDayTasks = activeScreen === "myday" ? await loadMobileTasks() : [];
-  const dueTasks = myDayTasks.filter((task) => isDueTodayOrEarlier(task.dueAt));
+  const teamMembers = activeScreen === "calendar" || activeScreen === "myday" ? await loadMobileTeamMembers() : [];
   const quotes = activeScreen === "quotes" ? await loadMobileQuotes(quoteStatus) : [];
   const ownerSummary = activeScreen === "owner" && session.isOwner ? await loadMobileOwnerSummary() : null;
   const accessData = activeScreen === "access" && session.isOwner ? await loadMobileAccess() : null;
@@ -575,6 +667,7 @@ export default async function MobileHomePage({
   const selectedContact = selectedThread?.thread?.contact?.id
     ? await loadMobileContact(selectedThread.thread.contact.id)
     : null;
+  const detectedThreadAddress = selectedThread ? detectAddressFromMessages(selectedThread.messages) : null;
   const selectedPhone = phoneHref(selectedThread?.thread?.contact?.phone);
   const ownerRole = accessData?.roles.find((role) => role.slug === "owner") ?? null;
   const salesRole = accessData?.roles.find((role) => role.slug === "sales") ?? null;
@@ -585,6 +678,7 @@ export default async function MobileHomePage({
         { name: "Devon", expectedRole: "sales", role: salesRole, member: findLaunchMember(accessData.members, "Devon") }
       ]
     : [];
+  const mobileJobEvents = calendarEvents.filter((event) => event.source === "db" && !isQuoteOnlyAppointmentType(event.appointmentType));
 
   return (
     <main className="min-h-dvh bg-slate-950 text-white">
@@ -604,6 +698,7 @@ export default async function MobileHomePage({
 
         <section className="flex-1 space-y-4 px-4 py-4">
           <OfflineBanner />
+          {activeScreen === "inbox" ? <InboxRefresh threadId={threadId} /> : null}
 
           {needsPasswordSetup ? (
             <div className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-4 text-sm text-amber-100">
@@ -642,11 +737,6 @@ export default async function MobileHomePage({
           {noteSaved ? (
             <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
               Note saved.
-            </div>
-          ) : null}
-          {taskSaved ? (
-            <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
-              Task completed.
             </div>
           ) : null}
           {contactSaved ? (
@@ -971,7 +1061,80 @@ export default async function MobileHomePage({
                     <form action={bookMobileAppointmentAction} className="mt-3 space-y-3">
                       <input type="hidden" name="contactId" value={selectedContact.id} />
                       <input type="hidden" name="threadId" value={threadId} />
-                      <input type="hidden" name="propertyId" value={selectedContact.properties?.[0]?.id ?? ""} />
+                      {selectedContact.properties?.length ? (
+                        <label className="block">
+                          <span className="text-xs font-semibold text-slate-300">Property</span>
+                          <select
+                            name="propertyId"
+                            defaultValue={selectedContact.properties[0]?.id ?? ""}
+                            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                          >
+                            {selectedContact.properties.map((property) => (
+                              <option key={property.id} value={property.id}>
+                                {[property.addressLine1, property.city, property.state].filter(Boolean).join(", ")}
+                              </option>
+                            ))}
+                            <option value="">Add new property below</option>
+                          </select>
+                        </label>
+                      ) : (
+                        <input type="hidden" name="propertyId" value="" />
+                      )}
+                      <div className="rounded-md border border-white/10 bg-slate-950 p-3">
+                        <p className="text-xs font-semibold text-slate-300">New property address</p>
+                        {detectedThreadAddress ? (
+                          <p className="mt-1 text-xs leading-5 text-cyan-100">
+                            Found in the thread and prefilled. Booking will save it to the contact.
+                          </p>
+                        ) : null}
+                        <div className="mt-2 space-y-2">
+                          <label className="block">
+                            <span className="text-xs font-semibold text-slate-400">Street</span>
+                            <input
+                              name="addressLine1"
+                              defaultValue={detectedThreadAddress?.addressLine1 ?? ""}
+                              className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                              placeholder="123 Main St"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-slate-400">Unit / details</span>
+                            <input
+                              name="addressLine2"
+                              className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                              placeholder="Apt, gate, building..."
+                            />
+                          </label>
+                          <div className="grid grid-cols-[1fr_4rem_6rem] gap-2">
+                            <label className="block">
+                              <span className="text-xs font-semibold text-slate-400">City</span>
+                              <input
+                                name="city"
+                                defaultValue={detectedThreadAddress?.city ?? ""}
+                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold text-slate-400">State</span>
+                              <input
+                                name="state"
+                                defaultValue={detectedThreadAddress?.state ?? "GA"}
+                                maxLength={2}
+                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-base uppercase text-white outline-none focus:border-cyan-300"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold text-slate-400">ZIP</span>
+                              <input
+                                name="postalCode"
+                                defaultValue={detectedThreadAddress?.postalCode ?? ""}
+                                inputMode="numeric"
+                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-base text-white outline-none focus:border-cyan-300"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      </div>
                       <label className="block">
                         <span className="text-xs font-semibold text-slate-300">Type</span>
                         <select
@@ -1116,8 +1279,8 @@ export default async function MobileHomePage({
                     <p className="mt-1 text-xl font-semibold">{calendarEvents.length}</p>
                   </div>
                   <div className="rounded-md border border-white/10 bg-slate-900 p-3">
-                    <p className="text-xs text-slate-400">Due</p>
-                    <p className="mt-1 text-xl font-semibold">{dueTasks.length}</p>
+                    <p className="text-xs text-slate-400">Jobs</p>
+                    <p className="mt-1 text-xl font-semibold">{mobileJobEvents.length}</p>
                   </div>
                   <div className="rounded-md border border-white/10 bg-slate-900 p-3">
                     <p className="text-xs text-slate-400">Projected</p>
@@ -1143,6 +1306,8 @@ export default async function MobileHomePage({
                   {calendarEvents.length > 0 ? (
                     calendarEvents.map((event) => {
                       const appointmentId = event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : "");
+                      const status = (event.status ?? "").trim().toLowerCase();
+                      const canUpdate = Boolean(appointmentId && event.source === "db");
                       const eventAmount = getProjectedEventCents(event);
                       const mapsHref = event.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.address)}` : null;
                       return (
@@ -1176,7 +1341,7 @@ export default async function MobileHomePage({
                                 Map
                               </a>
                             ) : null}
-                            {appointmentId ? (
+                            {canUpdate && status !== "confirmed" && status !== "completed" ? (
                               <form action={updateMobileAppointmentStatusAction}>
                                 <input type="hidden" name="appointmentId" value={appointmentId} />
                                 <input type="hidden" name="date" value={calendarDay} />
@@ -1192,58 +1357,22 @@ export default async function MobileHomePage({
                             ) : null}
                             {eventAmount > 0 ? <span className="ml-auto py-2 text-xs font-semibold text-cyan-200">{formatUsdCents(eventAmount)}</span> : null}
                           </div>
+                          {canUpdate ? (
+                            <div className="mt-3">
+                              <MobileCompleteAppointmentForm
+                                event={event}
+                                appointmentId={appointmentId}
+                                calendarDay={calendarDay}
+                                teamMembers={teamMembers}
+                              />
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })
                   ) : (
                     <div className="rounded-md border border-dashed border-white/15 bg-slate-900 p-4 text-sm leading-6 text-slate-300">
                       No appointments today.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-base font-semibold">Open Tasks</h2>
-                  <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">{myDayTasks.length}</span>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {myDayTasks.length > 0 ? (
-                    myDayTasks.slice(0, 10).map((task) => (
-                      <div key={task.id} className="rounded-md border border-white/10 bg-slate-900 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-white">{task.title}</p>
-                            {task.notes ? <p className="mt-1 text-sm leading-5 text-slate-300">{task.notes}</p> : null}
-                            <p className={`mt-1 text-xs ${isDueTodayOrEarlier(task.dueAt) ? "text-amber-200" : "text-slate-500"}`}>
-                              {task.dueAt ? `Due ${formatRelativeTime(task.dueAt)}` : "No due date"}
-                            </p>
-                          </div>
-                          <form action={completeMobileTaskAction} className="shrink-0">
-                            <input type="hidden" name="taskId" value={task.id} />
-                            <input type="hidden" name="screen" value="myday" />
-                            <button
-                              type="submit"
-                              className="rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-100"
-                            >
-                              Done
-                            </button>
-                          </form>
-                        </div>
-                        {task.contactId ? (
-                          <Link
-                            href={`/mobile?screen=contacts&contactId=${encodeURIComponent(task.contactId)}` as Route}
-                            className="mt-3 inline-block text-xs font-semibold text-cyan-200"
-                          >
-                            Open contact
-                          </Link>
-                        ) : null}
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded-md border border-dashed border-white/15 bg-slate-900 p-4 text-sm leading-6 text-slate-300">
-                      No open tasks.
                     </div>
                   )}
                 </div>
@@ -1677,6 +1806,14 @@ export default async function MobileHomePage({
                                 </button>
                               </form>
                             ) : null}
+                            <div className="col-span-2">
+                              <MobileCompleteAppointmentForm
+                                event={event}
+                                appointmentId={appointmentId}
+                                calendarDay={calendarDay}
+                                teamMembers={teamMembers}
+                              />
+                            </div>
                             <details className="col-span-2 rounded-md border border-white/10 bg-slate-900 p-3">
                               <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
                                 Reschedule
@@ -2167,7 +2304,7 @@ export default async function MobileHomePage({
         </section>
 
         <nav className="sticky bottom-0 border-t border-white/10 bg-slate-950/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur">
-          <div className="flex gap-1 overflow-x-auto">
+          <div className="grid grid-flow-col auto-cols-[minmax(3.75rem,1fr)] gap-1 overflow-x-auto">
             {visibleNav.map((item) => {
               const Icon = item.icon;
               const active = item.id === activeScreen;
@@ -2175,12 +2312,12 @@ export default async function MobileHomePage({
                 <Link
                   key={item.id}
                   href={item.href}
-                  className={`flex min-h-14 min-w-16 flex-col items-center justify-center rounded-md px-1 text-[11px] font-semibold ${
+                  className={`flex min-h-14 flex-col items-center justify-center rounded-md px-1 text-[10px] font-semibold leading-none ${
                     active ? "bg-cyan-300 text-slate-950" : "text-slate-300"
                   }`}
                 >
                   <Icon className="mb-1 h-5 w-5" aria-hidden="true" />
-                  <span>{item.label}</span>
+                  <span className="max-w-full truncate whitespace-nowrap">{item.label}</span>
                 </Link>
               );
             })}

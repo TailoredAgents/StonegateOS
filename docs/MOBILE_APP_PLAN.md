@@ -25,9 +25,9 @@ Status options:
 - `[~]` Add automated tests proving owner accounts can access owner-only screens and APIs.
 - `[~]` Mobile Inbox: live threads, detail, replies, search/filter, call button.
 - `[~]` Mobile Contacts: live search, detail, basic edit, notes.
-- `[~]` Mobile Calendar: day view, projected daily amount, create/reschedule/cancel, upload attachment.
+- `[~]` Mobile Calendar: day view, projected daily amount, create/reschedule/cancel/complete, upload attachment.
 - `[~]` Mobile Quotes: list, create, edit, send, accepted/declined status.
-- `[~]` Mobile My Day screen: assigned appointments, open tasks, reminders, quick actions.
+- `[~]` Mobile My Day screen: assigned appointments, projected jobs, map/status/complete quick actions.
 - `[~]` Mobile Owner Snapshot: collected today, projected work, booked jobs, open leads, follow-ups, provider health.
 - `[~]` Mobile Access screen: launch account readiness for Jeffrey, Austin, and Devon.
 - `[~]` Mobile Settings screen: account info, logout, session status.
@@ -45,6 +45,8 @@ Status options:
 - `[ ]` Contact-level quote media/photo gallery workflow.
 - `[ ]` Better quote detail view: line items, customer preview, share-link copy.
 - `[ ]` Convert accepted quotes into booked jobs from mobile, if desired.
+- `[ ]` Inbox done/snooze workflow where completed messages leave the active inbox after 24 hours.
+- `[ ]` Push-style inbox updates if polling is not smooth enough after real-device testing.
 - `[ ]` Face ID/passkey unlock layer after baseline auth is stable.
 - `[ ]` Advanced offline queue with pending-sync labels and retry.
 
@@ -83,7 +85,7 @@ Build phone workflows that matter in the field and during daily operations:
 
 - First launch users: Jeffrey, Austin, and Devon.
 - First screen: Inbox.
-- My Day: assigned appointments, open tasks, reminders, quick actions.
+- My Day: assigned appointments, projected jobs, maps, completion, quick actions.
 - Inbox: SMS, Messenger, email threads, replies, calls, assignment, snooze/done states.
 - Contacts: search, profile, notes, message history, appointment/quote context.
 - Calendar: day view, appointment detail, reschedule/cancel, map navigation.
@@ -605,3 +607,14 @@ Desktop protection tests:
 - Whether biometric unlock is implemented during first launch or later.
 - Exact notification split between existing Twilio SMS alerts and future app notifications.
 - Whether mobile photo uploads attach to appointments, contacts, inbox threads, or all three by default.
+
+## April 26, 2026 Mobile Fix Pass
+
+- `[x]` Added property/address capture to mobile booking from an inbox thread.
+- `[x]` Added simple full-address detection from recent thread messages and prefill during booking.
+- `[x]` Booking a new address now saves it to the contact before creating the appointment.
+- `[x]` Added inbox auto-refresh on an interval, focus, and return-from-background.
+- `[x]` Tightened bottom navigation labels and sizing to avoid overlapping text.
+- `[x]` Hid the Open Tasks card from mobile My Day until a 24-hour inbox cleanup workflow exists.
+- `[x]` Added mobile job/quote completion controls in My Day and Calendar.
+- `[x]` Consolidated duplicate Jeffrey records in production data and updated commission/crew constants to the single Jeffrey account.

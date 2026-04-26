@@ -363,13 +363,45 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
   if (!appointmentId) {
     redirect(`${redirectPath}&error=appointment_required` as Route);
   }
-  if (!["requested", "confirmed", "no_show", "canceled"].includes(status)) {
+  if (!["requested", "confirmed", "completed", "no_show", "canceled"].includes(status)) {
     redirect(`${redirectPath}&error=invalid_status` as Route);
+  }
+
+  const payload: Record<string, unknown> = { status };
+  if (status === "completed") {
+    const appointmentTypeRaw = formData.get("appointmentType");
+    const appointmentType = typeof appointmentTypeRaw === "string" ? appointmentTypeRaw.trim().toLowerCase() : "";
+    const isQuoteOnly = appointmentType === "in_person_quote" || appointmentType === "in_person_estimate";
+    if (!isQuoteOnly) {
+      const finalTotalCents = parseUsdToCents(formData.get("finalTotal"));
+      if (finalTotalCents === null) {
+        redirect(`${redirectPath}&error=amount_required` as Route);
+      }
+      payload["finalTotalCents"] = finalTotalCents;
+
+      const cardTipRaw = formData.get("cardTip");
+      const cardTipCents = parseUsdToCents(cardTipRaw);
+      if (typeof cardTipRaw === "string" && cardTipRaw.trim() && cardTipCents === null) {
+        redirect(`${redirectPath}&error=invalid_card_tip` as Route);
+      }
+      if (cardTipCents !== null) {
+        payload["cardTipCents"] = cardTipCents;
+      }
+
+      const crewMembers = formData
+        .getAll("crewMemberId")
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((memberId) => ({ memberId: memberId.trim(), splitBps: 10000 }));
+      if (crewMembers.length === 0) {
+        redirect(`${redirectPath}&error=crew_required` as Route);
+      }
+      payload["crewMembers"] = crewMembers;
+    }
   }
 
   const response = await callAdminApi(`/api/appointments/${encodeURIComponent(appointmentId)}/status`, {
     method: "POST",
-    body: JSON.stringify({ status })
+    body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
@@ -472,8 +504,13 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   const durationRaw = formData.get("durationMinutes");
   const quotedTotalRaw = formData.get("quotedTotal");
   const notesRaw = formData.get("notes");
+  const addressLine1Raw = formData.get("addressLine1");
+  const addressLine2Raw = formData.get("addressLine2");
+  const cityRaw = formData.get("city");
+  const stateRaw = formData.get("state");
+  const postalCodeRaw = formData.get("postalCode");
   const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
-  const propertyId = typeof propertyIdRaw === "string" ? propertyIdRaw.trim() : "";
+  let propertyId = typeof propertyIdRaw === "string" ? propertyIdRaw.trim() : "";
   const threadId = typeof threadIdRaw === "string" ? threadIdRaw.trim() : "";
   const appointmentType =
     typeof appointmentTypeRaw === "string" && appointmentTypeRaw.trim() === "in_person_quote"
@@ -483,6 +520,11 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   const durationMinutes = typeof durationRaw === "string" ? Number(durationRaw) : NaN;
   const quotedTotalCents = parseUsdToCents(quotedTotalRaw);
   const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
+  const addressLine1 = typeof addressLine1Raw === "string" ? addressLine1Raw.trim() : "";
+  const addressLine2 = typeof addressLine2Raw === "string" ? addressLine2Raw.trim() : "";
+  const city = typeof cityRaw === "string" ? cityRaw.trim() : "";
+  const state = typeof stateRaw === "string" ? stateRaw.trim() : "";
+  const postalCode = typeof postalCodeRaw === "string" ? postalCodeRaw.trim() : "";
   const threadParam = threadId ? `&threadId=${encodeURIComponent(threadId)}` : "";
   const errorRedirect = (message: string): Route => `/mobile?${threadParam ? `threadId=${encodeURIComponent(threadId)}&` : ""}error=${encodeURIComponent(message)}` as Route;
 
@@ -492,9 +534,41 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   if (!startAt) {
     redirect(errorRedirect("start_time_required"));
   }
+  const hasNewAddress = Boolean(addressLine1 || city || state || postalCode);
+  if (!propertyId && !hasNewAddress) {
+    redirect(errorRedirect("property_required"));
+  }
+  if (!propertyId && (!addressLine1 || !city || !state || !postalCode)) {
+    redirect(errorRedirect("complete_address_required"));
+  }
+
+  if (!propertyId) {
+    const propertyResponse = await callAdminApi(`/api/admin/contacts/${encodeURIComponent(contactId)}/properties`, {
+      method: "POST",
+      body: JSON.stringify({
+        addressLine1,
+        addressLine2: addressLine2 || null,
+        city,
+        state,
+        postalCode
+      })
+    });
+
+    if (!propertyResponse.ok) {
+      const message = await readErrorMessage(propertyResponse, "property_save_failed");
+      redirect(errorRedirect(message));
+    }
+
+    const propertyPayload = (await propertyResponse.json().catch(() => null)) as { property?: { id?: string } } | null;
+    propertyId = typeof propertyPayload?.property?.id === "string" ? propertyPayload.property.id : "";
+    if (!propertyId) {
+      redirect(errorRedirect("property_save_failed"));
+    }
+  }
 
   const payload: Record<string, unknown> = {
     contactId,
+    propertyId,
     appointmentType,
     startAt,
     durationMinutes: Number.isFinite(durationMinutes) && durationMinutes > 0 ? durationMinutes : 60,
@@ -502,7 +576,6 @@ export async function bookMobileAppointmentAction(formData: FormData) {
     source: "mobile"
   };
 
-  if (propertyId) payload["propertyId"] = propertyId;
   if (quotedTotalCents !== null) payload["quotedTotalCents"] = quotedTotalCents;
   if (notes) payload["notes"] = notes;
 

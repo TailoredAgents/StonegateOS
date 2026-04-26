@@ -19,7 +19,7 @@ export type LockedCrewPayoutResolution =
 const TEAM_MEMBER_IDS = {
   austin: "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
   devon: "b45988bb-7417-48c5-af6d-fcdf71088282",
-  jeffreyHacker: "d52dafcd-c571-40ac-ac20-527e4031bc05",
+  jeffrey: "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
 } as const;
 
 type ExactCrewRule = {
@@ -31,10 +31,10 @@ type ExactCrewRule = {
 const EXACT_CREW_RULES: readonly ExactCrewRule[] = [
   {
     key: "austin+jeffrey",
-    memberIds: [TEAM_MEMBER_IDS.austin, TEAM_MEMBER_IDS.jeffreyHacker],
+    memberIds: [TEAM_MEMBER_IDS.austin, TEAM_MEMBER_IDS.jeffrey],
     splitBpsByMemberId: {
       [TEAM_MEMBER_IDS.austin]: 5000,
-      [TEAM_MEMBER_IDS.jeffreyHacker]: 5000,
+      [TEAM_MEMBER_IDS.jeffrey]: 5000,
     },
   },
   {
@@ -50,12 +50,12 @@ const EXACT_CREW_RULES: readonly ExactCrewRule[] = [
     memberIds: [
       TEAM_MEMBER_IDS.austin,
       TEAM_MEMBER_IDS.devon,
-      TEAM_MEMBER_IDS.jeffreyHacker,
+      TEAM_MEMBER_IDS.jeffrey,
     ],
     splitBpsByMemberId: {
       [TEAM_MEMBER_IDS.austin]: 4000,
       [TEAM_MEMBER_IDS.devon]: 2000,
-      [TEAM_MEMBER_IDS.jeffreyHacker]: 4000,
+      [TEAM_MEMBER_IDS.jeffrey]: 4000,
     },
   },
 ] as const;

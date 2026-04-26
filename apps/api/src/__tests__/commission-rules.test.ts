@@ -47,7 +47,7 @@ describe("commission rules", () => {
   it("pays Austin and Jeffrey at an even 50/50 split", () => {
     const resolved = resolveLockedCrewPayout([
       "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
-      "d52dafcd-c571-40ac-ac20-527e4031bc05",
+      "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
     ]);
 
     expect(resolved.ok).toBe(true);
@@ -64,7 +64,7 @@ describe("commission rules", () => {
     expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
       36000,
     );
-    expect(amountByMemberId.get("d52dafcd-c571-40ac-ac20-527e4031bc05")).toBe(
+    expect(amountByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3")).toBe(
       36000,
     );
   });
@@ -73,7 +73,7 @@ describe("commission rules", () => {
     const resolved = resolveLockedCrewPayout([
       "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
       "b45988bb-7417-48c5-af6d-fcdf71088282",
-      "d52dafcd-c571-40ac-ac20-527e4031bc05",
+      "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
     ]);
 
     expect(resolved.ok).toBe(true);
@@ -89,7 +89,7 @@ describe("commission rules", () => {
     expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
       4000,
     );
-    expect(amountByMemberId.get("d52dafcd-c571-40ac-ac20-527e4031bc05")).toBe(
+    expect(amountByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3")).toBe(
       4000,
     );
     expect(amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282")).toBe(

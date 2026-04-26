@@ -35,16 +35,16 @@ const DEFAULT_MANAGEMENT_RATE_BPS = 500;
 const TEAM_MEMBER_IDS = {
   austin: "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
   devon: "b45988bb-7417-48c5-af6d-fcdf71088282",
-  jeffreyHacker: "d52dafcd-c571-40ac-ac20-527e4031bc05",
+  jeffrey: "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
 } as const;
 const MANAGEMENT_SPLITS = [
-  { memberId: TEAM_MEMBER_IDS.jeffreyHacker, splitBps: 5000 },
+  { memberId: TEAM_MEMBER_IDS.jeffrey, splitBps: 5000 },
   { memberId: TEAM_MEMBER_IDS.austin, splitBps: 5000 },
 ] as const;
 const THIRTY_PERCENT_DAY_CREW_MEMBER_IDS = [
   TEAM_MEMBER_IDS.austin,
   TEAM_MEMBER_IDS.devon,
-  TEAM_MEMBER_IDS.jeffreyHacker,
+  TEAM_MEMBER_IDS.jeffrey,
 ] as const;
 
 function asWeekday(value: number): 1 | 2 | 3 | 4 | 5 | 6 | 7 {
