@@ -454,6 +454,38 @@ export async function addMobileAppointmentAttachmentAction(formData: FormData) {
   redirect(`${redirectPath}&upload=1` as Route);
 }
 
+export async function addMobileAppointmentNoteAction(formData: FormData) {
+  await requireMobilePermission("appointments.update");
+
+  const appointmentIdRaw = formData.get("appointmentId");
+  const dateRaw = formData.get("date");
+  const bodyRaw = formData.get("body");
+  const appointmentId = typeof appointmentIdRaw === "string" ? appointmentIdRaw.trim() : "";
+  const date = typeof dateRaw === "string" ? dateRaw.trim() : "";
+  const body = typeof bodyRaw === "string" ? bodyRaw.trim() : "";
+  const redirectPath = (date ? `/mobile?screen=myday&date=${encodeURIComponent(date)}` : "/mobile?screen=myday") as Route;
+
+  if (!appointmentId) {
+    redirect(`${redirectPath}&error=appointment_required` as Route);
+  }
+  if (!body) {
+    redirect(`${redirectPath}&error=note_required` as Route);
+  }
+
+  const response = await callAdminApi(`/api/appointments/${encodeURIComponent(appointmentId)}/notes`, {
+    method: "POST",
+    body: JSON.stringify({ body })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "note_save_failed");
+    redirect(`${redirectPath}&error=${encodeURIComponent(message)}` as Route);
+  }
+
+  revalidatePath("/mobile");
+  redirect(`${redirectPath}&note=1` as Route);
+}
+
 export async function rescheduleMobileAppointmentAction(formData: FormData) {
   await requireMobilePermission("appointments.update");
 

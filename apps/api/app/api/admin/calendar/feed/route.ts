@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { and, gte, inArray, lte, eq, desc } from "drizzle-orm";
-import { getDb, appointments, contacts, crmTasks, properties } from "@/db";
+import { getDb, appointmentNotes, appointments, contacts, crmTasks, properties } from "@/db";
 import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "@/lib/calendar";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { isAdminRequest } from "../../../web/admin";
@@ -79,6 +79,31 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
         .filter((id): id is string => typeof id === "string" && id.length > 0)
     )
   );
+  const appointmentIds = dbRows.map((row) => row.id).filter((id): id is string => typeof id === "string" && id.length > 0);
+  const notesByAppointmentId = new Map<string, Array<{ id: string; body: string; createdAt: string }>>();
+  if (appointmentIds.length) {
+    const noteRows = await db
+      .select({
+        id: appointmentNotes.id,
+        appointmentId: appointmentNotes.appointmentId,
+        body: appointmentNotes.body,
+        createdAt: appointmentNotes.createdAt
+      })
+      .from(appointmentNotes)
+      .where(inArray(appointmentNotes.appointmentId, appointmentIds))
+      .orderBy(desc(appointmentNotes.createdAt));
+
+    for (const row of noteRows) {
+      const list = notesByAppointmentId.get(row.appointmentId) ?? [];
+      list.push({
+        id: `appointment:${row.id}`,
+        body: row.body,
+        createdAt: row.createdAt.toISOString()
+      });
+      notesByAppointmentId.set(row.appointmentId, list);
+    }
+  }
+
   const notesByContactId = new Map<string, Array<{ id: string; body: string; createdAt: string }>>();
   if (contactIds.length) {
     const noteRows = await db
@@ -101,7 +126,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
       if (row.dueAt) continue;
       const list = notesByContactId.get(row.contactId) ?? [];
       list.push({
-        id: row.id,
+        id: `contact:${row.id}`,
         body: row.body,
         createdAt: row.createdAt.toISOString()
       });
@@ -121,6 +146,15 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
       const addressParts = [row.addressLine1, row.city, row.state, row.postalCode]
         .filter((part) => typeof part === "string" && part.trim().length > 0)
         .join(", ");
+      const notes = [
+        ...(notesByAppointmentId.get(row.id) ?? []),
+        ...(row.contactId ? notesByContactId.get(row.contactId) ?? [] : [])
+      ]
+        .filter((note, index, all) => {
+          const key = `${note.body.trim().toLowerCase()}|${note.createdAt}`;
+          return all.findIndex((candidate) => `${candidate.body.trim().toLowerCase()}|${candidate.createdAt}` === key) === index;
+        })
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
       return {
         id: `db:${row.id}`,
         appointmentId: row.id,
@@ -135,7 +169,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
         status: row.status ?? null,
         quotedTotalCents: row.quotedTotalCents ?? null,
         finalTotalCents: row.finalTotalCents ?? null,
-        notes: row.contactId ? notesByContactId.get(row.contactId) ?? [] : []
+        notes
       };
     });
 

@@ -7,6 +7,7 @@ import { callAdminApi } from "../team/lib/api";
 import {
   addMobileContactNoteAction,
   addMobileAppointmentAttachmentAction,
+  addMobileAppointmentNoteAction,
   bookMobileAppointmentAction,
   createMobileTeamMemberAction,
   createMobileQuoteAction,
@@ -1324,6 +1325,48 @@ export default async function MobileHomePage({
                               {event.status ?? event.source}
                             </span>
                           </div>
+                          {event.notes?.length ? (
+                            <details className="mt-3 rounded-md border border-white/10 bg-slate-950 p-3" open={event.notes.length <= 2}>
+                              <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+                                Notes ({event.notes.length})
+                              </summary>
+                              <div className="mt-2 space-y-2">
+                                {event.notes.slice(0, 5).map((note) => (
+                                  <div key={note.id} className="rounded-md border border-white/10 bg-slate-900 px-3 py-2">
+                                    <p className="whitespace-pre-wrap text-sm leading-5 text-slate-200">{note.body}</p>
+                                    <p className="mt-1 text-[11px] text-slate-500">
+                                      {new Date(note.createdAt).toLocaleString("en-US", {
+                                        timeZone: TEAM_TIME_ZONE,
+                                        month: "short",
+                                        day: "numeric",
+                                        hour: "numeric",
+                                        minute: "2-digit"
+                                      })}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            </details>
+                          ) : null}
+                          {canUpdate ? (
+                            <details className="mt-3 rounded-md border border-white/10 bg-slate-950 p-3">
+                              <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">Add note</summary>
+                              <form action={addMobileAppointmentNoteAction} className="mt-3 space-y-3">
+                                <input type="hidden" name="appointmentId" value={appointmentId} />
+                                <input type="hidden" name="date" value={calendarDay} />
+                                <textarea
+                                  name="body"
+                                  required
+                                  rows={3}
+                                  className="w-full resize-none rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                                  placeholder="Gate code, call notes, customer context..."
+                                />
+                                <button type="submit" className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950">
+                                  Save note
+                                </button>
+                              </form>
+                            </details>
+                          ) : null}
                           <div className="mt-3 flex flex-wrap gap-2">
                             <Link
                               href={`/mobile?screen=calendar&date=${encodeURIComponent(calendarDay)}` as Route}
