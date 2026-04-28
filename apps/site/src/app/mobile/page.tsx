@@ -27,6 +27,7 @@ import { formatDayKey, TEAM_TIME_ZONE } from "../team/lib/timezone";
 import { OfflineBanner } from "./OfflineBanner";
 import { InboxRefresh } from "./InboxRefresh";
 import { MobileInboxMediaGallery } from "./MobileInboxMediaGallery";
+import { MobileAppointmentBookingFields } from "./MobileAppointmentBookingFields";
 import { loadMobileOwnerSummary, type MobileOwnerSummary } from "./lib/owner-summary";
 
 const navItems: Array<{ id: string; label: string; href: Route; icon: typeof Inbox }> = [
@@ -1204,17 +1205,9 @@ export default async function MobileHomePage({
                           </div>
                         </div>
                       </div>
-                      <label className="block">
-                        <span className="text-xs font-semibold text-slate-300">Type</span>
-                        <select
-                          name="appointmentType"
-                          defaultValue="job"
-                          className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                        >
-                          <option value="job">Job</option>
-                          <option value="in_person_quote">In-person quote</option>
-                        </select>
-                      </label>
+                      <MobileAppointmentBookingFields
+                        threadChannel={selectedThread?.thread?.channel}
+                      />
                       <label className="block">
                         <span className="text-xs font-semibold text-slate-300">Start</span>
                         <input
@@ -1224,28 +1217,17 @@ export default async function MobileHomePage({
                           className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
                         />
                       </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <label className="block">
-                          <span className="text-xs font-semibold text-slate-300">Minutes</span>
-                          <input
-                            name="durationMinutes"
-                            type="number"
-                            min="15"
-                            step="15"
-                            defaultValue="60"
-                            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="text-xs font-semibold text-slate-300">Quoted $</span>
-                          <input
-                            name="quotedTotal"
-                            inputMode="decimal"
-                            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                            placeholder="450"
-                          />
-                        </label>
-                      </div>
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-300">Minutes</span>
+                        <input
+                          name="durationMinutes"
+                          type="number"
+                          min="15"
+                          step="15"
+                          defaultValue="60"
+                          className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                        />
+                      </label>
                       <label className="block">
                         <span className="text-xs font-semibold text-slate-300">Notes</span>
                         <textarea

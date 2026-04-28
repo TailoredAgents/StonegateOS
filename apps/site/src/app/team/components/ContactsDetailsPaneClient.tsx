@@ -687,12 +687,30 @@ export function ContactsDetailsPaneClient({
                   commission payouts, and changing it later requires the secret
                   code.
                 </p>
-                <AppointmentBookingDetailsFields
-                  teamMembers={teamMembers}
-                  serviceType={bookingAppointmentType}
-                  labelClassName="flex flex-col gap-1"
-                  fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                />
+                <section className="sm:col-span-2 rounded-2xl border border-primary-100 bg-primary-50/40 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-slate-900">
+                        Quote and job size
+                      </h4>
+                      <p className="mt-1 text-xs leading-5 text-slate-600">
+                        Save the price style, exact quote or range, and the size
+                        details that drive projections and job notes.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-primary-200 bg-white px-3 py-1 text-[11px] font-semibold text-primary-700">
+                      Required for jobs
+                    </span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <AppointmentBookingDetailsFields
+                      teamMembers={teamMembers}
+                      serviceType={bookingAppointmentType}
+                      labelClassName="flex flex-col gap-1"
+                      fieldClassName="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                    />
+                  </div>
+                </section>
 
                 <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
                   Range-only jobs stay out of exact revenue projections until an
