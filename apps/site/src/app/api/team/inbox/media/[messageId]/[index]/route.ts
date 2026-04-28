@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { requireTeamRole } from "@/app/api/team/auth";
 import { callAdminApi } from "@/app/team/lib/api";
 
 type RouteContext = {
@@ -7,6 +8,9 @@ type RouteContext = {
 };
 
 async function proxy(request: NextRequest, context: RouteContext): Promise<Response> {
+  const auth = await requireTeamRole(request, { returnJson: true, roles: ["owner", "office", "crew"] });
+  if (!auth.ok) return auth.response;
+
   const { messageId, index } = await context.params;
   if (!messageId || !index) {
     return NextResponse.json({ error: "missing_params" }, { status: 400 });
