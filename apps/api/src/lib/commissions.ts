@@ -31,7 +31,7 @@ export type CommissionSettingsRow = {
 const SETTINGS_KEY = "default";
 export const DEMO_CREW_POOL_RATE_BPS = 3000;
 const DEFAULT_SALES_RATE_BPS = 500;
-const DEFAULT_MANAGEMENT_RATE_BPS = 500;
+const DEFAULT_MANAGEMENT_RATE_BPS = 1000;
 const TEAM_MEMBER_IDS = {
   austin: "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
   devon: "b45988bb-7417-48c5-af6d-fcdf71088282",

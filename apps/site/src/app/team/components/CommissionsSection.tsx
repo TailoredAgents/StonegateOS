@@ -209,7 +209,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         <p className={TEAM_SECTION_SUBTITLE}>
           Weekly payouts use the current Monday-Sunday week and final amount
           paid. Sales is assigned on each appointment through Who sold the job,
-          management pays Jeffrey and Austin 2.5% each, and crews are selected
+          management pays Jeffrey and Austin 5% each, and crews are selected
           when marking a job complete.
         </p>
       </header>

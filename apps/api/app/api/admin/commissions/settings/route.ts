@@ -67,7 +67,7 @@ export async function PUT(request: NextRequest): Promise<Response> {
   const settings = {
     ...parsed.data,
     salesRateBps: 500,
-    marketingRateBps: 500,
+    marketingRateBps: 1000,
     marketingMemberId: null,
   };
   await db

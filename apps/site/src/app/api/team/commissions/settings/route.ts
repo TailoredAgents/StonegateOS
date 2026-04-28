@@ -5,7 +5,7 @@ import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const SALES_RATE_BPS = 500;
-const MANAGEMENT_RATE_BPS = 500;
+const MANAGEMENT_RATE_BPS = 1000;
 
 export const dynamic = "force-dynamic";
 

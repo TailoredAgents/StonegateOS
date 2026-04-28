@@ -18,14 +18,14 @@ describe("describeCommissionMath", () => {
       describeCommissionMath({
         role: "marketing",
         meta: {
-          totalRateBps: 500,
+          totalRateBps: 1000,
           splitBps: 5000,
           totalSplitBps: 10000,
         },
       }),
     ).toEqual({
-      mathLabel: "5% management pool x 50% split",
-      effectivePercentLabel: "2.5%",
+      mathLabel: "10% management pool x 50% split",
+      effectivePercentLabel: "5%",
     });
   });
 
