@@ -25,6 +25,7 @@ import {
 import { formatDayKey, TEAM_TIME_ZONE } from "../team/lib/timezone";
 import { OfflineBanner } from "./OfflineBanner";
 import { InboxRefresh } from "./InboxRefresh";
+import { MobileInboxMediaGallery } from "./MobileInboxMediaGallery";
 import { loadMobileOwnerSummary, type MobileOwnerSummary } from "./lib/owner-summary";
 
 const navItems: Array<{ id: string; label: string; href: Route; icon: typeof Inbox }> = [
@@ -359,6 +360,11 @@ function formatProviderLabel(value: string): string {
     .join(" ");
 }
 
+function isMediaPlaceholderBody(value: string | null | undefined): boolean {
+  const normalized = (value ?? "").trim().toLowerCase();
+  return normalized === "" || normalized === "media message" || normalized === "message received";
+}
+
 function ownerHealthClass(status: OwnerHealthStatus): string {
   if (status === "healthy") return "border-emerald-300/30 bg-emerald-300/10 text-emerald-100";
   if (status === "degraded") return "border-rose-300/30 bg-rose-300/10 text-rose-100";
@@ -677,6 +683,8 @@ export default async function MobileHomePage({
     ? await loadMobileContact(selectedThread.thread.contact.id)
     : null;
   const detectedThreadAddress = selectedThread ? detectAddressFromMessages(selectedThread.messages) : null;
+  const selectedThreadMediaMessages =
+    selectedThread?.messages?.filter((message) => Array.isArray(message.mediaUrls) && message.mediaUrls.length > 0) ?? [];
   const selectedPhone = phoneHref(selectedThread?.thread?.contact?.phone);
   const ownerRole = accessData?.roles.find((role) => role.slug === "owner") ?? null;
   const salesRole = accessData?.roles.find((role) => role.slug === "sales") ?? null;
@@ -840,10 +848,29 @@ export default async function MobileHomePage({
                     </div>
                   </div>
 
+                  {selectedThreadMediaMessages.length ? (
+                    <div className="border-b border-white/10 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="text-sm font-semibold text-white">Thread photos</h3>
+                        <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">
+                          {selectedThreadMediaMessages.reduce((sum, message) => sum + (message.mediaUrls?.length ?? 0), 0)}
+                        </span>
+                      </div>
+                      <div className="mt-3 space-y-3">
+                        {selectedThreadMediaMessages.slice(-8).map((message) => (
+                          <MobileInboxMediaGallery key={`strip-${message.id}`} messageId={message.id} count={message.mediaUrls?.length ?? 0} compact />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
                   <div className="space-y-3 p-4">
                     {(selectedThread.messages ?? []).length > 0 ? (
                       selectedThread.messages?.map((message) => {
                         const outbound = message.direction === "outbound";
+                        const mediaCount = message.mediaUrls?.length ?? 0;
+                        const hasMedia = mediaCount > 0;
+                        const showBody = !isMediaPlaceholderBody(message.body) || !hasMedia;
                         return (
                           <div key={message.id} className={`flex ${outbound ? "justify-end" : "justify-start"}`}>
                             <div
@@ -851,12 +878,8 @@ export default async function MobileHomePage({
                                 outbound ? "bg-cyan-300 text-slate-950" : "bg-slate-800 text-slate-100"
                               }`}
                             >
-                              <p className="whitespace-pre-wrap">{message.body || "Media message"}</p>
-                              {message.mediaUrls?.length ? (
-                                <p className={`mt-1 text-xs ${outbound ? "text-slate-700" : "text-slate-400"}`}>
-                                  {message.mediaUrls.length} attachment{message.mediaUrls.length === 1 ? "" : "s"}
-                                </p>
-                              ) : null}
+                              {showBody ? <p className="whitespace-pre-wrap break-words">{message.body || "Message received"}</p> : null}
+                              {hasMedia ? <MobileInboxMediaGallery messageId={message.id} count={mediaCount} /> : null}
                               <p className={`mt-1 text-[11px] ${outbound ? "text-slate-700" : "text-slate-400"}`}>
                                 {formatRelativeTime(message.createdAt)} • {message.deliveryStatus}
                               </p>
