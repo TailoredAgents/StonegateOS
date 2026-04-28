@@ -355,10 +355,12 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
   const appointmentIdRaw = formData.get("appointmentId");
   const statusRaw = formData.get("status");
   const dateRaw = formData.get("date");
+  const screenRaw = formData.get("screen");
   const appointmentId = typeof appointmentIdRaw === "string" ? appointmentIdRaw.trim() : "";
   const status = typeof statusRaw === "string" ? statusRaw.trim() : "";
   const date = typeof dateRaw === "string" ? dateRaw.trim() : "";
-  const redirectPath = (date ? `/mobile?screen=calendar&date=${encodeURIComponent(date)}` : "/mobile?screen=calendar") as Route;
+  const screen = typeof screenRaw === "string" && screenRaw.trim() === "myday" ? "myday" : "calendar";
+  const redirectPath = (date ? `/mobile?screen=${screen}&date=${encodeURIComponent(date)}` : `/mobile?screen=${screen}`) as Route;
 
   if (!appointmentId) {
     redirect(`${redirectPath}&error=appointment_required` as Route);

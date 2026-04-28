@@ -104,8 +104,8 @@ function getProjectedRevenueCents(event: CalendarRevenueEvent): number {
   if (isQuoteOnlyAppointment(event.appointmentType)) return 0;
 
   return (
-    normalizeCents(event.quotedTotalCents) ??
     normalizeCents(event.finalTotalCents) ??
+    normalizeCents(event.quotedTotalCents) ??
     0
   );
 }

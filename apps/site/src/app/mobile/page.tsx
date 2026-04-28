@@ -326,7 +326,7 @@ function getProjectedEventCents(event: CalendarEvent): number {
   if (status === "canceled" || status === "cancelled") return 0;
   const type = (event.appointmentType ?? "").trim().toLowerCase();
   if (type === "in_person_quote" || type === "in_person_estimate") return 0;
-  return normalizeCents(event.quotedTotalCents) ?? normalizeCents(event.finalTotalCents) ?? 0;
+  return normalizeCents(event.finalTotalCents) ?? normalizeCents(event.quotedTotalCents) ?? 0;
 }
 
 function normalizeCents(value: number | null | undefined): number | null {
@@ -401,11 +401,13 @@ function MobileCompleteAppointmentForm({
   event,
   appointmentId,
   calendarDay,
+  screen,
   teamMembers
 }: {
   event: CalendarEvent;
   appointmentId: string;
   calendarDay: string;
+  screen: "myday" | "calendar";
   teamMembers: TeamMemberSummary[];
 }) {
   const status = (event.status ?? "").trim().toLowerCase();
@@ -424,6 +426,7 @@ function MobileCompleteAppointmentForm({
       <form action={updateMobileAppointmentStatusAction}>
         <input type="hidden" name="appointmentId" value={appointmentId} />
         <input type="hidden" name="date" value={calendarDay} />
+        <input type="hidden" name="screen" value={screen} />
         <input type="hidden" name="appointmentType" value={event.appointmentType ?? ""} />
         <button
           type="submit"
@@ -443,6 +446,7 @@ function MobileCompleteAppointmentForm({
       <form action={updateMobileAppointmentStatusAction} className="mt-3 space-y-3">
         <input type="hidden" name="appointmentId" value={appointmentId} />
         <input type="hidden" name="date" value={calendarDay} />
+        <input type="hidden" name="screen" value={screen} />
         <input type="hidden" name="appointmentType" value={event.appointmentType ?? ""} />
         <input type="hidden" name="status" value="completed" />
         <div className="grid grid-cols-2 gap-2">
@@ -472,14 +476,18 @@ function MobileCompleteAppointmentForm({
           </label>
         </div>
         <div className="rounded-md border border-white/10 bg-slate-950 p-3">
-          <p className="text-xs font-semibold text-slate-300">Crew</p>
+          <p className="text-xs font-semibold text-slate-300">Select who worked</p>
           <div className="mt-2 grid grid-cols-1 gap-2">
-            {teamMembers.map((member) => (
-              <label key={member.id} className="flex items-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-200">
-                <input name="crewMemberId" type="checkbox" value={member.id} className="rounded border-slate-600 bg-slate-950" />
+            {teamMembers.length ? teamMembers.map((member) => (
+              <label key={member.id} className="flex cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-sm text-slate-200">
+                <input name="crewMemberId" type="checkbox" value={member.id} className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300" />
                 <span className="min-w-0 truncate">{member.name}</span>
               </label>
-            ))}
+            )) : (
+              <p className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                No active team members loaded. Refresh before marking this job complete.
+              </p>
+            )}
           </div>
         </div>
         <button type="submit" className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950">
@@ -1307,7 +1315,6 @@ export default async function MobileHomePage({
                   {calendarEvents.length > 0 ? (
                     calendarEvents.map((event) => {
                       const appointmentId = event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : "");
-                      const status = (event.status ?? "").trim().toLowerCase();
                       const canUpdate = Boolean(appointmentId && event.source === "db");
                       const eventAmount = getProjectedEventCents(event);
                       const mapsHref = event.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.address)}` : null;
@@ -1384,20 +1391,6 @@ export default async function MobileHomePage({
                                 Map
                               </a>
                             ) : null}
-                            {canUpdate && status !== "confirmed" && status !== "completed" ? (
-                              <form action={updateMobileAppointmentStatusAction}>
-                                <input type="hidden" name="appointmentId" value={appointmentId} />
-                                <input type="hidden" name="date" value={calendarDay} />
-                                <button
-                                  type="submit"
-                                  name="status"
-                                  value="confirmed"
-                                  className="rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-xs font-semibold text-emerald-100"
-                                >
-                                  Confirm
-                                </button>
-                              </form>
-                            ) : null}
                             {eventAmount > 0 ? <span className="ml-auto py-2 text-xs font-semibold text-cyan-200">{formatUsdCents(eventAmount)}</span> : null}
                           </div>
                           {canUpdate ? (
@@ -1406,6 +1399,7 @@ export default async function MobileHomePage({
                                 event={event}
                                 appointmentId={appointmentId}
                                 calendarDay={calendarDay}
+                                screen="myday"
                                 teamMembers={teamMembers}
                               />
                             </div>
@@ -1821,20 +1815,6 @@ export default async function MobileHomePage({
                         ) : null}
                         {canUpdate ? (
                           <div className="mt-3 grid grid-cols-2 gap-2">
-                            {status !== "confirmed" ? (
-                              <form action={updateMobileAppointmentStatusAction}>
-                                <input type="hidden" name="appointmentId" value={appointmentId} />
-                                <input type="hidden" name="date" value={calendarDay} />
-                                <button
-                                  type="submit"
-                                  name="status"
-                                  value="confirmed"
-                                  className="w-full rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-100"
-                                >
-                                  Confirm
-                                </button>
-                              </form>
-                            ) : null}
                             {status !== "canceled" ? (
                               <form action={updateMobileAppointmentStatusAction}>
                                 <input type="hidden" name="appointmentId" value={appointmentId} />
@@ -1854,6 +1834,7 @@ export default async function MobileHomePage({
                                 event={event}
                                 appointmentId={appointmentId}
                                 calendarDay={calendarDay}
+                                screen="calendar"
                                 teamMembers={teamMembers}
                               />
                             </div>

@@ -113,13 +113,17 @@ function normalizeCents(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+function normalizeCentsOrNull(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function projectedEventCents(event: CalendarEvent): number {
   if (event.source !== "db") return 0;
   const status = (event.status ?? "").trim().toLowerCase();
   if (status === "canceled" || status === "cancelled" || status === "no_show") return 0;
   const type = (event.appointmentType ?? "").trim().toLowerCase();
   if (type === "in_person_quote" || type === "in_person_estimate") return 0;
-  return normalizeCents(event.quotedTotalCents) || normalizeCents(event.finalTotalCents);
+  return normalizeCentsOrNull(event.finalTotalCents) ?? normalizeCentsOrNull(event.quotedTotalCents) ?? 0;
 }
 
 function isDueTodayOrEarlier(value: string | null, todayKey: string): boolean {
