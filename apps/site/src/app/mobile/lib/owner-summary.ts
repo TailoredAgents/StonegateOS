@@ -20,20 +20,15 @@ type CalendarFeedResponse = {
   externalEvents?: CalendarEvent[];
 };
 
-type RevenueForecastResponse = {
+type RevenueSummaryResponse = {
   ok?: boolean;
-  totalCents?: number;
-  count?: number;
   currency?: string | null;
-};
-
-type TasksResponse = {
-  tasks?: Array<{
-    id: string;
-    title: string;
-    dueAt: string | null;
-    status: string;
-  }>;
+  windows?: {
+    weekToDate?: { totalCents?: number; count?: number; startsAt?: string; jobs?: unknown[] };
+    monthToDate?: { totalCents?: number; count?: number };
+    last30Days?: { totalCents?: number; count?: number };
+    yearToDate?: { totalCents?: number; count?: number };
+  };
 };
 
 type ThreadsResponse = {
@@ -62,10 +57,15 @@ export type MobileOwnerSummary = {
   todayKey: string;
   collectedTodayCents: number;
   collectedTodayCount: number;
+  collectedWeekCents: number;
+  collectedWeekCount: number;
+  collectedMonthCents: number;
+  collectedMonthCount: number;
+  collectedLast30DaysCents: number;
+  collectedLast30DaysCount: number;
   projectedTodayCents: number;
   bookedJobsToday: number;
   openInboxLeads: number;
-  openFollowUps: number;
   health: {
     blockers: number;
     warnings: number;
@@ -90,11 +90,45 @@ export type MobileOwnerSummary = {
     preview: string;
     lastMessageAt: string | null;
   }>;
-  followUps: Array<{
-    id: string;
-    title: string;
-    dueAt: string | null;
-  }>;
+  currentPayout: MobileCommissionSummary | null;
+  payoutRuns: MobilePayoutRun[];
+};
+
+export type MobileCommissionSummary = {
+  timezone: string;
+  periodStart: string;
+  periodEnd: string;
+  scheduledPayoutAt: string;
+  cardTipsCents: number;
+  totalsCents: {
+    sales: number;
+    marketing: number;
+    crew: number;
+    adjustments: number;
+    total: number;
+  };
+};
+
+export type MobilePayoutRun = {
+  id: string;
+  timezone: string;
+  periodStart: string;
+  periodEnd: string;
+  scheduledPayoutAt: string;
+  status: "draft" | "locked" | "paid";
+  createdAt: string;
+  lockedAt: string | null;
+  paidAt: string | null;
+  totalCents: number;
+  reimbursementTotalCents: number;
+  otherAdjustmentsTotalCents: number;
+};
+
+type CommissionSummaryResponse = ({ ok: true } & MobileCommissionSummary) | { ok?: false };
+
+type PayoutRunsResponse = {
+  ok?: boolean;
+  payoutRuns?: MobilePayoutRun[];
 };
 
 async function readJson<T>(path: string): Promise<T | null> {
@@ -126,11 +160,6 @@ function projectedEventCents(event: CalendarEvent): number {
   return normalizeCentsOrNull(event.finalTotalCents) ?? normalizeCentsOrNull(event.quotedTotalCents) ?? 0;
 }
 
-function isDueTodayOrEarlier(value: string | null, todayKey: string): boolean {
-  if (!value) return true;
-  return formatDayKey(new Date(value)) <= todayKey;
-}
-
 export async function loadMobileOwnerSummary(): Promise<MobileOwnerSummary> {
   const todayKey = formatDayKey(new Date());
   const start = parseDayKey(todayKey);
@@ -138,14 +167,15 @@ export async function loadMobileOwnerSummary(): Promise<MobileOwnerSummary> {
   const end = new Date(start.getTime());
   end.setUTCDate(end.getUTCDate() + 2);
 
-  const [forecast, calendar, tasks, inbox, health] = await Promise.all([
-    readJson<RevenueForecastResponse>("/api/admin/revenue/forecast?range=today"),
+  const [revenue, calendar, inbox, health, commissionSummary, payoutRuns] = await Promise.all([
+    readJson<RevenueSummaryResponse>("/api/revenue/summary"),
     readJson<CalendarFeedResponse>(
       `/api/admin/calendar/feed?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`
     ),
-    readJson<TasksResponse>("/api/admin/crm/tasks?status=open"),
     readJson<ThreadsResponse>("/api/admin/inbox/threads?status=open&limit=10"),
-    readJson<SystemHealthResponse>("/api/admin/system/health")
+    readJson<SystemHealthResponse>("/api/admin/system/health"),
+    readJson<CommissionSummaryResponse>("/api/admin/commissions/summary"),
+    readJson<PayoutRunsResponse>("/api/admin/commissions/payout-runs?limit=5")
   ]);
 
   const todayEvents = [...(calendar?.appointments ?? []), ...(calendar?.externalEvents ?? [])]
@@ -157,24 +187,28 @@ export async function loadMobileOwnerSummary(): Promise<MobileOwnerSummary> {
     return status !== "canceled" && status !== "cancelled" && status !== "no_show";
   });
   const projectedTodayCents = bookedEvents.reduce((sum, event) => sum + projectedEventCents(event), 0);
-  const openTasks = (tasks?.tasks ?? []).filter((task) => task.status === "open");
-  const dueTasks = openTasks
-    .filter((task) => isDueTodayOrEarlier(task.dueAt, todayKey))
-    .sort((a, b) => {
-      const aDue = a.dueAt ? Date.parse(a.dueAt) : Number.MAX_SAFE_INTEGER;
-      const bDue = b.dueAt ? Date.parse(b.dueAt) : Number.MAX_SAFE_INTEGER;
-      return aDue - bDue;
-    });
+  const completedTodayEvents = todayEvents.filter((event) => {
+    if (event.source !== "db") return false;
+    const status = (event.status ?? "").trim().toLowerCase();
+    return status === "completed" && normalizeCentsOrNull(event.finalTotalCents) !== null;
+  });
+  const collectedTodayCents = completedTodayEvents.reduce((sum, event) => sum + (normalizeCentsOrNull(event.finalTotalCents) ?? 0), 0);
+  const currentPayout = commissionSummary?.ok ? commissionSummary : null;
 
   return {
     generatedAt: new Date().toISOString(),
     todayKey,
-    collectedTodayCents: normalizeCents(forecast?.totalCents),
-    collectedTodayCount: typeof forecast?.count === "number" ? forecast.count : 0,
+    collectedTodayCents,
+    collectedTodayCount: completedTodayEvents.length,
+    collectedWeekCents: normalizeCents(revenue?.windows?.weekToDate?.totalCents),
+    collectedWeekCount: typeof revenue?.windows?.weekToDate?.count === "number" ? revenue.windows.weekToDate.count : 0,
+    collectedMonthCents: normalizeCents(revenue?.windows?.monthToDate?.totalCents),
+    collectedMonthCount: typeof revenue?.windows?.monthToDate?.count === "number" ? revenue.windows.monthToDate.count : 0,
+    collectedLast30DaysCents: normalizeCents(revenue?.windows?.last30Days?.totalCents),
+    collectedLast30DaysCount: typeof revenue?.windows?.last30Days?.count === "number" ? revenue.windows.last30Days.count : 0,
     projectedTodayCents,
     bookedJobsToday: bookedEvents.length,
     openInboxLeads: inbox?.threads?.length ?? 0,
-    openFollowUps: dueTasks.length,
     health: {
       blockers: health?.blockers?.length ?? 0,
       warnings: health?.warnings?.length ?? 0,
@@ -203,10 +237,7 @@ export async function loadMobileOwnerSummary(): Promise<MobileOwnerSummary> {
       preview: thread.lastMessagePreview ?? thread.subject ?? "No preview",
       lastMessageAt: thread.lastMessageAt ?? null
     })),
-    followUps: dueTasks.slice(0, 4).map((task) => ({
-      id: task.id,
-      title: task.title,
-      dueAt: task.dueAt
-    }))
+    currentPayout,
+    payoutRuns: payoutRuns?.payoutRuns ?? []
   };
 }

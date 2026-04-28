@@ -19,6 +19,16 @@ async function requireMobilePermission(required: string): Promise<void> {
   }
 }
 
+async function requireMobileOwner(): Promise<void> {
+  const session = await resolveMobileSessionFromCookies();
+  if (!session) {
+    redirect("/mobile/login");
+  }
+  if (!session.isOwner) {
+    redirect(`/mobile?screen=owner&error=${encodeURIComponent("owner_required")}` as Route);
+  }
+}
+
 async function readErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const text = await response.text();
@@ -295,6 +305,40 @@ export async function sendMobileTeamInviteAction(formData: FormData) {
   }
 
   redirect("/mobile?screen=access&invite=sent");
+}
+
+export async function runMobilePayoutAction(formData: FormData) {
+  await requireMobileOwner();
+
+  const actionRaw = formData.get("action");
+  const payoutRunIdRaw = formData.get("payoutRunId");
+  const action = typeof actionRaw === "string" ? actionRaw.trim() : "";
+  const payoutRunId = typeof payoutRunIdRaw === "string" ? payoutRunIdRaw.trim() : "";
+
+  let response: Response;
+  if (action === "create") {
+    response = await callAdminApi("/api/admin/commissions/payout-runs", { method: "POST" });
+  } else if (action === "lock") {
+    if (!payoutRunId) redirect("/mobile?screen=owner&error=payout_run_required");
+    response = await callAdminApi(`/api/admin/commissions/payout-runs/${encodeURIComponent(payoutRunId)}/lock`, {
+      method: "POST"
+    });
+  } else if (action === "paid") {
+    if (!payoutRunId) redirect("/mobile?screen=owner&error=payout_run_required");
+    response = await callAdminApi(`/api/admin/commissions/payout-runs/${encodeURIComponent(payoutRunId)}/mark-paid`, {
+      method: "POST"
+    });
+  } else {
+    redirect("/mobile?screen=owner&error=unknown_payout_action");
+  }
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "payout_action_failed");
+    redirect(`/mobile?screen=owner&error=${encodeURIComponent(message)}` as Route);
+  }
+
+  revalidatePath("/mobile");
+  redirect(`/mobile?screen=owner&payout=${encodeURIComponent(action)}` as Route);
 }
 
 export async function updateMobileContactAction(formData: FormData) {

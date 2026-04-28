@@ -1,8 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { requireTeamRole } from "@/app/api/team/auth";
 import { callAdminApi } from "@/app/team/lib/api";
-
-const ADMIN_COOKIE = "myst-admin-session";
 
 export const dynamic = "force-dynamic";
 
@@ -10,11 +9,8 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ payoutRunId: string }> }
 ): Promise<Response> {
-  const jar = request.cookies;
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
-  if (!hasOwner) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const auth = await requireTeamRole(request, { roles: ["owner"], returnJson: true });
+  if (!auth.ok) return auth.response;
 
   const { payoutRunId } = await context.params;
   if (!payoutRunId) {
@@ -31,4 +27,3 @@ export async function GET(
   if (contentDisposition) response.headers.set("Content-Disposition", contentDisposition);
   return response;
 }
-

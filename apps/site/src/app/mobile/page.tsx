@@ -12,6 +12,7 @@ import {
   createMobileTeamMemberAction,
   createMobileQuoteAction,
   mobileLogoutAction,
+  runMobilePayoutAction,
   rescheduleMobileAppointmentAction,
   sendMobileTeamInviteAction,
   sendMobileThreadMessageAction,
@@ -267,6 +268,18 @@ function formatTime(value: string): string {
   if (Number.isNaN(date.getTime())) return "";
   return new Intl.DateTimeFormat("en-US", {
     timeZone: TEAM_TIME_ZONE,
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function formatMobileDateTime(value: string, timezone = TEAM_TIME_ZONE): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    month: "short",
+    day: "numeric",
     hour: "numeric",
     minute: "2-digit"
   }).format(date);
@@ -628,6 +641,7 @@ export default async function MobileHomePage({
     upload?: string;
     quote?: string;
     quoteStatus?: string;
+    payout?: string;
     account?: string;
     invite?: string;
     password?: string;
@@ -664,6 +678,7 @@ export default async function MobileHomePage({
   const quoteSaved = params.quote === "1";
   const quoteSent = params.quote === "sent";
   const quoteUpdated = params.quote === "updated";
+  const payoutAction = typeof params.payout === "string" ? params.payout : "";
   const accountCreated = params.account === "created";
   const accountUpdated = params.account === "updated";
   const inviteSent = params.invite === "sent";
@@ -674,7 +689,8 @@ export default async function MobileHomePage({
   const contactDetail = activeScreen === "contacts" && contactId ? await loadMobileContact(contactId) : null;
   const calendarEvents = activeScreen === "calendar" || activeScreen === "myday" ? await loadMobileCalendar(calendarDay) : [];
   const teamMembers = activeScreen === "calendar" || activeScreen === "myday" ? await loadMobileTeamMembers() : [];
-  const quotes = activeScreen === "quotes" ? await loadMobileQuotes(quoteStatus) : [];
+  const allQuotes = activeScreen === "quotes" ? await loadMobileQuotes("all") : [];
+  const quotes = quoteStatus === "all" ? allQuotes : allQuotes.filter((quote) => quote.status === quoteStatus);
   const ownerSummary = activeScreen === "owner" && session.isOwner ? await loadMobileOwnerSummary() : null;
   const accessData = activeScreen === "access" && session.isOwner ? await loadMobileAccess() : null;
   const projectedCents = calendarEvents.reduce((sum, event) => sum + getProjectedEventCents(event), 0);
@@ -686,6 +702,16 @@ export default async function MobileHomePage({
   const selectedThreadMediaMessages =
     selectedThread?.messages?.filter((message) => Array.isArray(message.mediaUrls) && message.mediaUrls.length > 0) ?? [];
   const selectedPhone = phoneHref(selectedThread?.thread?.contact?.phone);
+  const quoteStatusCounts = quoteStatusFilters.reduce(
+    (counts, status) => ({
+      ...counts,
+      [status]: status === "all" ? allQuotes.length : allQuotes.filter((quote) => quote.status === status).length
+    }),
+    {} as Record<(typeof quoteStatusFilters)[number], number>
+  );
+  const openQuoteValue = allQuotes
+    .filter((quote) => quote.status === "pending" || quote.status === "sent")
+    .reduce((sum, quote) => sum + (typeof quote.total === "number" && Number.isFinite(quote.total) ? quote.total : 0), 0);
   const ownerRole = accessData?.roles.find((role) => role.slug === "owner") ?? null;
   const salesRole = accessData?.roles.find((role) => role.slug === "sales") ?? null;
   const launchAccounts = accessData
@@ -789,6 +815,17 @@ export default async function MobileHomePage({
           {quoteUpdated ? (
             <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
               Quote updated.
+            </div>
+          ) : null}
+          {payoutAction ? (
+            <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
+              {payoutAction === "create"
+                ? "Payout run created."
+                : payoutAction === "lock"
+                  ? "Payout run locked."
+                  : payoutAction === "paid"
+                    ? "Payout run marked paid."
+                    : "Payout updated."}
             </div>
           ) : null}
           {accountCreated ? (
@@ -1620,7 +1657,10 @@ export default async function MobileHomePage({
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Quotes</p>
-                    <h2 className="mt-1 text-lg font-semibold">Mobile quote list</h2>
+                    <h2 className="mt-1 text-lg font-semibold">Quote pipeline</h2>
+                    <p className="mt-1 text-sm text-slate-300">
+                      {quoteStatusCounts.pending + quoteStatusCounts.sent} open worth {formatUsdDollars(openQuoteValue)}
+                    </p>
                   </div>
                   <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">{quotes.length}</span>
                 </div>
@@ -1635,7 +1675,8 @@ export default async function MobileHomePage({
                           : "border-white/10 bg-slate-900 text-slate-200"
                       }`}
                     >
-                      {status}
+                      <span className="block capitalize">{status}</span>
+                      <span className="mt-0.5 block text-[10px] opacity-75">{quoteStatusCounts[status]}</span>
                     </Link>
                   ))}
                 </div>
@@ -1654,6 +1695,7 @@ export default async function MobileHomePage({
                             <p className="text-sm font-semibold text-cyan-200">{quote.contact.name}</p>
                             <h3 className="mt-1 text-xl font-semibold">{formatUsdDollars(quote.total)}</h3>
                             {address ? <p className="mt-1 text-sm leading-5 text-slate-300">{address}</p> : null}
+                            {quote.contact.email ? <p className="mt-1 truncate text-xs text-slate-500">{quote.contact.email}</p> : null}
                           </div>
                           <span className="shrink-0 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold capitalize text-slate-300">
                             {quote.status}
@@ -1661,10 +1703,18 @@ export default async function MobileHomePage({
                         </div>
                         <p className="mt-3 text-sm text-slate-300">{quote.services.map(formatStage).join(", ")}</p>
                         {quote.notes ? <p className="mt-2 text-sm leading-5 text-slate-400">{quote.notes}</p> : null}
-                        <p className="mt-1 text-xs text-slate-500">
-                          Updated {formatRelativeTime(quote.updatedAt)}
-                          {quote.sentAt ? ` • Sent ${formatRelativeTime(quote.sentAt)}` : ""}
-                        </p>
+                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
+                          <div className="rounded-md border border-white/10 bg-slate-900 px-3 py-2">
+                            <p className="text-slate-500">Updated</p>
+                            <p className="mt-0.5 font-semibold text-slate-200">{formatRelativeTime(quote.updatedAt) || "Unknown"}</p>
+                          </div>
+                          <div className="rounded-md border border-white/10 bg-slate-900 px-3 py-2">
+                            <p className="text-slate-500">{quote.sentAt ? "Sent" : "Expires"}</p>
+                            <p className="mt-0.5 font-semibold text-slate-200">
+                              {quote.sentAt ? formatRelativeTime(quote.sentAt) : quote.expiresAt ? formatMobileDateTime(quote.expiresAt) : "Not sent"}
+                            </p>
+                          </div>
+                        </div>
                         {quote.status === "pending" || quote.status === "sent" ? (
                           <details className="mt-3 rounded-md border border-white/10 bg-slate-900 p-3">
                             <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
@@ -1949,30 +1999,146 @@ export default async function MobileHomePage({
               <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Owner Snapshot</p>
                 <h2 className="mt-1 text-lg font-semibold">{formatDateLabel(ownerSummary.todayKey)}</h2>
-                <p className="mt-1 text-sm text-slate-300">Collected cash, projected work, leads, follow-ups, and provider health.</p>
+                <p className="mt-1 text-sm text-slate-300">Collected cash, projected work, payouts, leads, and provider health.</p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-200">Collected</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-200">Today Collected</p>
                   <p className="mt-2 text-2xl font-semibold">{formatUsdCents(ownerSummary.collectedTodayCents)}</p>
-                  <p className="mt-1 text-xs text-emerald-100">{ownerSummary.collectedTodayCount} payments today</p>
+                  <p className="mt-1 text-xs text-emerald-100">{ownerSummary.collectedTodayCount} completed jobs</p>
                 </div>
                 <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-200">Projected</p>
                   <p className="mt-2 text-2xl font-semibold">{formatUsdCents(ownerSummary.projectedTodayCents)}</p>
                   <p className="mt-1 text-xs text-cyan-100">{ownerSummary.bookedJobsToday} booked jobs today</p>
                 </div>
+                <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">Week Collected</p>
+                  <p className="mt-2 text-2xl font-semibold">{formatUsdCents(ownerSummary.collectedWeekCents)}</p>
+                  <p className="mt-1 text-xs text-slate-400">{ownerSummary.collectedWeekCount} completed jobs</p>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">Month Collected</p>
+                  <p className="mt-2 text-2xl font-semibold">{formatUsdCents(ownerSummary.collectedMonthCents)}</p>
+                  <p className="mt-1 text-xs text-slate-400">{ownerSummary.collectedMonthCount} completed jobs</p>
+                </div>
                 <Link href="/mobile" className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
                   <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">Open Leads</p>
                   <p className="mt-2 text-2xl font-semibold">{ownerSummary.openInboxLeads}</p>
                   <p className="mt-1 text-xs text-slate-400">Inbox threads</p>
                 </Link>
-                <Link href="/mobile?screen=myday" className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">Follow-ups</p>
-                  <p className="mt-2 text-2xl font-semibold">{ownerSummary.openFollowUps}</p>
-                  <p className="mt-1 text-xs text-slate-400">Due now</p>
-                </Link>
+                <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">30 Days</p>
+                  <p className="mt-2 text-2xl font-semibold">{formatUsdCents(ownerSummary.collectedLast30DaysCents)}</p>
+                  <p className="mt-1 text-xs text-slate-400">{ownerSummary.collectedLast30DaysCount} completed jobs</p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-semibold">Payout Runs</h2>
+                    <p className="mt-1 text-sm text-slate-300">
+                      Current payout due {ownerSummary.currentPayout ? formatUsdCents(ownerSummary.currentPayout.totalsCents.total) : "$0"} before card tips.
+                    </p>
+                  </div>
+                  <form action={runMobilePayoutAction}>
+                    <input type="hidden" name="action" value="create" />
+                    <button type="submit" className="rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-xs font-semibold text-slate-950">
+                      Create
+                    </button>
+                  </form>
+                </div>
+                {ownerSummary.currentPayout ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-md border border-white/10 bg-slate-900 p-3">
+                      <p className="text-slate-500">Sales</p>
+                      <p className="mt-1 font-semibold text-slate-100">{formatUsdCents(ownerSummary.currentPayout.totalsCents.sales)}</p>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-slate-900 p-3">
+                      <p className="text-slate-500">Crew</p>
+                      <p className="mt-1 font-semibold text-slate-100">{formatUsdCents(ownerSummary.currentPayout.totalsCents.crew)}</p>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-slate-900 p-3">
+                      <p className="text-slate-500">Management</p>
+                      <p className="mt-1 font-semibold text-slate-100">{formatUsdCents(ownerSummary.currentPayout.totalsCents.marketing)}</p>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-slate-900 p-3">
+                      <p className="text-slate-500">Card tips</p>
+                      <p className="mt-1 font-semibold text-slate-100">{formatUsdCents(ownerSummary.currentPayout.cardTipsCents)}</p>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="mt-4 space-y-3">
+                  {ownerSummary.payoutRuns.length > 0 ? (
+                    ownerSummary.payoutRuns.map((run) => (
+                      <div key={run.id} className="rounded-md border border-white/10 bg-slate-900 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-semibold">
+                              {run.status.toUpperCase()} - {formatUsdCents(run.totalCents)}
+                            </p>
+                            <p className="mt-1 text-xs text-slate-400">
+                              {formatMobileDateTime(run.periodStart, run.timezone)} to {formatMobileDateTime(run.periodEnd, run.timezone)}
+                            </p>
+                          </div>
+                          <span className="shrink-0 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold capitalize text-slate-300">
+                            {run.status}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                          <span className="rounded-md border border-white/10 px-2 py-1 text-slate-300">
+                            Reimbursements {formatUsdCents(run.reimbursementTotalCents)}
+                          </span>
+                          <span className="rounded-md border border-white/10 px-2 py-1 text-slate-300">
+                            Adjustments {formatUsdCents(run.otherAdjustmentsTotalCents)}
+                          </span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <a
+                            href={`/api/team/commissions/payout-runs/${run.id}/report`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-center text-sm font-semibold text-slate-200"
+                          >
+                            Report
+                          </a>
+                          {run.status !== "draft" ? (
+                            <a
+                              href={`/api/team/commissions/payout-runs/${run.id}/export`}
+                              className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-center text-sm font-semibold text-slate-200"
+                            >
+                              CSV
+                            </a>
+                          ) : null}
+                          {run.status === "draft" ? (
+                            <form action={runMobilePayoutAction}>
+                              <input type="hidden" name="action" value="lock" />
+                              <input type="hidden" name="payoutRunId" value={run.id} />
+                              <button type="submit" className="w-full rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-sm font-semibold text-amber-100">
+                                Lock
+                              </button>
+                            </form>
+                          ) : null}
+                          {run.status === "locked" ? (
+                            <form action={runMobilePayoutAction}>
+                              <input type="hidden" name="action" value="paid" />
+                              <input type="hidden" name="payoutRunId" value={run.id} />
+                              <button type="submit" className="w-full rounded-md border border-emerald-300 bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950">
+                                Mark Paid
+                              </button>
+                            </form>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="rounded-md border border-dashed border-white/15 bg-slate-900 p-3 text-sm text-slate-300">
+                      No payout runs yet.
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
@@ -2065,30 +2231,6 @@ export default async function MobileHomePage({
                 </div>
               </div>
 
-              <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-base font-semibold">Follow-ups</h2>
-                  <Link href="/mobile?screen=myday" className="text-sm font-semibold text-cyan-200">
-                    My Day
-                  </Link>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {ownerSummary.followUps.length > 0 ? (
-                    ownerSummary.followUps.map((task) => (
-                      <div key={task.id} className="rounded-md border border-white/10 bg-slate-900 p-3">
-                        <p className="text-sm font-semibold">{task.title}</p>
-                        <p className="mt-1 text-xs text-slate-400">
-                          {task.dueAt ? `Due ${formatDateLabel(formatDayKey(new Date(task.dueAt)))}` : "No due date"}
-                        </p>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="rounded-md border border-dashed border-white/15 bg-slate-900 p-3 text-sm text-slate-300">
-                      No due follow-ups.
-                    </p>
-                  )}
-                </div>
-              </div>
             </div>
           ) : activeScreen === "access" && accessData ? (
             <div className="space-y-4">
