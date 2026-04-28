@@ -46,10 +46,13 @@ test.describe("Mobile role gating", () => {
         ok: true,
         summary: {
           collectedTodayCents: expect.any(Number),
+          collectedWeekCents: expect.any(Number),
+          collectedMonthCents: expect.any(Number),
+          collectedLast30DaysCents: expect.any(Number),
           projectedTodayCents: expect.any(Number),
           bookedJobsToday: expect.any(Number),
           openInboxLeads: expect.any(Number),
-          openFollowUps: expect.any(Number)
+          payoutRuns: expect.any(Array)
         }
       });
     });
