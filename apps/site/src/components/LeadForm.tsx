@@ -44,6 +44,8 @@ type QuoteState =
     }
   | { status: "error"; message: string };
 
+type QuoteMediaAnalysis = Extract<QuoteState, { status: "ready" }>["mediaAnalysis"];
+
 type AvailabilitySlot = { startAt: string; endAt: string; reason: string };
 type AvailabilityDay = { date: string; slots: AvailabilitySlot[] };
 
@@ -143,6 +145,15 @@ const JUNK_SECONDARY_OPTIONS = JUNK_SECONDARY_TYPE_IDS.map((id) => JUNK_OPTIONS.
 const JUNK_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
   { id: "single_item", label: "Single item", hint: "One couch, mattress, appliance, or bulky item ($175)" },
   { id: "min_pickup", label: "Small pickup", hint: "A few items or a small pile ($220-$400 depending on weight)" },
+  { id: "half_trailer", label: "Medium load", hint: "1 room OR 1-2 bulky items + boxes/bags" },
+  { id: "three_quarter_trailer", label: "Large load", hint: "2 rooms OR several bulky items" },
+  { id: "big_cleanout", label: "Huge cleanout", hint: "Full garage, basement, or multiple rooms" },
+  { id: "not_sure", label: "Not sure", hint: "No problem — photos help us tighten the range." }
+];
+
+const JUNK_SIZE_OPTIONS_NO_PRICE: Array<{ id: PerceivedSize; label: string; hint: string }> = [
+  { id: "single_item", label: "Single item", hint: "One couch, mattress, appliance, or bulky item" },
+  { id: "min_pickup", label: "Small pickup", hint: "A few items or a small pile" },
   { id: "half_trailer", label: "Medium load", hint: "1 room OR 1-2 bulky items + boxes/bags" },
   { id: "three_quarter_trailer", label: "Large load", hint: "2 rooms OR several bulky items" },
   { id: "big_cleanout", label: "Huge cleanout", hint: "Full garage, basement, or multiple rooms" },
@@ -258,9 +269,10 @@ const GOOGLE_REVIEW_COUNT = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"] ?? "1
 
 export function LeadForm({
   variant = "junk",
+  contactFirst = false,
   className,
   ...props
-}: React.HTMLAttributes<HTMLDivElement> & { variant?: LeadFormVariant }) {
+}: React.HTMLAttributes<HTMLDivElement> & { variant?: LeadFormVariant; contactFirst?: boolean }) {
   const utm = useUTM();
   const isBrush = variant === "brush";
   const isDemo = variant === "demo";
@@ -318,6 +330,8 @@ export function LeadForm({
   const holdInFlightRef = React.useRef<string | null>(null);
   const [bookingStatus, setBookingStatus] = React.useState<"idle" | "loading" | "success" | "error">("idle");
   const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
+  const [showBookingDetails, setShowBookingDetails] = React.useState(!contactFirst);
+  const [textEstimateMessage, setTextEstimateMessage] = React.useState<string | null>(null);
   const [photoSkipped, setPhotoSkipped] = React.useState(false);
   const trackedScheduleRef = React.useRef(false);
   const trackedLeadQuoteIdRef = React.useRef<string | null>(null);
@@ -586,7 +600,7 @@ export function LeadForm({
       });
     }
 
-    if (missingPhone || missingZip) {
+    if ((contactFirst && missingName) || missingPhone || missingZip) {
       if (isBookAnalyticsPath(analyticsPath)) {
         trackWebEvent({
           event: "book_quote_blocked_missing_fields",
@@ -595,7 +609,13 @@ export function LeadForm({
           meta: { missingName, missingPhone, missingZip, hasEmail: Boolean(email.trim()) }
         });
       }
-      setError(isDemo || isBrush ? "Please enter your mobile number to see your estimate." : "Please enter your mobile number to see your price.");
+      setError(
+        contactFirst && missingName
+          ? "Please enter your first name to continue."
+          : isDemo || isBrush
+            ? "Please enter your mobile number to see your estimate."
+            : "Please enter your mobile number to see your price."
+      );
       return;
     }
 
@@ -1295,6 +1315,44 @@ export function LeadForm({
     return path === "/book" || path === "/bookbrush" || path === "/bookdemo";
   }, []);
 
+  const displayedJunkSizeOptions = contactFirst ? JUNK_SIZE_OPTIONS_NO_PRICE : JUNK_SIZE_OPTIONS;
+
+  const validateJobDetails = React.useCallback(() => {
+    if (!isBrush && !isDemo && !types.length && !otherSelected) {
+      setError("Pick at least one type of junk.");
+      return false;
+    }
+    if (isBrush && brushPrimary === "other" && brushOtherDetails.trim().length < 3) {
+      setError("Please describe what you need cleared.");
+      return false;
+    }
+    if (isDemo) {
+      if (demoType === "other" && demoOtherDetails.trim().length < 3) {
+        setError("Please describe what you need demolished.");
+        return false;
+      }
+      if (!demoSize) {
+        setError("Pick an approximate project size.");
+        return false;
+      }
+    } else if (!perceivedSize) {
+      setError(isBrush ? "Pick an approximate job size." : "Pick an approximate amount.");
+      return false;
+    }
+    return true;
+  }, [
+    brushOtherDetails,
+    brushPrimary,
+    demoOtherDetails,
+    demoSize,
+    demoType,
+    isBrush,
+    isDemo,
+    otherSelected,
+    perceivedSize,
+    types
+  ]);
+
   React.useEffect(() => {
     const path = getAnalyticsPath();
     if (isBookAnalyticsPath(path)) {
@@ -1316,26 +1374,34 @@ export function LeadForm({
       </div>
 
       <h2 className="font-display text-2xl text-primary-800">
-        {step === 1
-          ? isBrush
+        {contactFirst
+          ? step === 1
+            ? "Who should we text?"
+            : "What needs to go?"
+          : step === 1
+            ? isBrush
             ? "Show us what you need cleared"
             : isDemo
               ? "Show us what you want demolished"
               : "Show us what you need gone"
-          : isBrush
+            : isBrush
             ? "Where should we text your estimate?"
             : isDemo
               ? "Where should we text your demo estimate?"
               : "Where should we text your estimate?"}
       </h2>
       <p className="mt-1 text-sm text-neutral-600">
-        {step === 1
-          ? isBrush
+        {contactFirst
+          ? step === 1
+            ? "Enter your name, mobile number, and ZIP so we can save your quote request before showing an estimate."
+            : "Answer a few quick job questions. You can add photos if you want a tighter estimate."
+          : step === 1
+            ? isBrush
             ? "Answer a few quick questions to see a ballpark range before booking."
             : isDemo
               ? "Answer a few quick questions to see a ballpark range before booking."
               : "Answer a few quick questions to see a ballpark range before booking."
-          : isDemo
+            : isDemo
             ? "Enter a mobile number to see your estimate range. Name is optional."
             : "Enter a mobile number to see your rough estimate range. Name is optional."}
       </p>
@@ -1379,25 +1445,38 @@ export function LeadForm({
           e.preventDefault();
           if (step === 1) {
             const path = getAnalyticsPath();
-            if (!isBrush && !isDemo && !types.length && !otherSelected) {
-              setError("Pick at least one type of junk.");
-              return;
-            }
-            if (isBrush && brushPrimary === "other" && brushOtherDetails.trim().length < 3) {
-              setError("Please describe what you need cleared.");
-              return;
-            }
-            if (isDemo) {
-              if (demoType === "other" && demoOtherDetails.trim().length < 3) {
-                setError("Please describe what you need demolished.");
+            if (contactFirst) {
+              if (!name.trim()) {
+                setError("Please enter your first name to continue.");
                 return;
               }
-              if (!demoSize) {
-                setError("Pick an approximate project size.");
+              if (!phone.trim()) {
+                setError("Please enter your mobile number to continue.");
                 return;
               }
-            } else if (!perceivedSize) {
-              setError(isBrush ? "Pick an approximate job size." : "Pick an approximate amount.");
+              if (!zip.trim()) {
+                setError("Please enter the job ZIP code to continue.");
+                return;
+              }
+              if (isBookAnalyticsPath(path)) {
+                trackWebEvent({
+                  event: "book_step1_submit",
+                  path,
+                  zip: zip.trim(),
+                  meta: { hasName: true, hasPhone: true, contactFirst: true }
+                });
+              } else {
+                trackWebEvent({
+                  event: "lead_form_step1_submit",
+                  path,
+                  meta: { hasName: true, hasPhone: true, hasZip: true, contactFirst: true }
+                });
+              }
+              setError(null);
+              setStep(2);
+              return;
+            }
+            if (!validateJobDetails()) {
               return;
             }
             const baseMeta = isBrush
@@ -1441,11 +1520,66 @@ export function LeadForm({
             setError(null);
             setStep(2);
           } else {
+            if (contactFirst && !validateJobDetails()) {
+              return;
+            }
             void submitQuote();
           }
         }}
       >
-        {step === 1 ? (
+        {contactFirst && step === 1 ? (
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="text-sm font-semibold text-neutral-800">First name</label>
+                <input
+                  name="name"
+                  type="text"
+                  autoComplete="given-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                  placeholder="Jamie"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-neutral-800">Mobile number</label>
+                <input
+                  ref={phoneInputRef}
+                  name="phone"
+                  type="tel"
+                  autoComplete="tel"
+                  inputMode="tel"
+                  required
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                  placeholder="(404) 777-2631"
+                />
+                <p className="mt-1 text-[11px] text-neutral-500">We will text your estimate here. No spam.</p>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
+                <input
+                  name="zip"
+                  type="text"
+                  autoComplete="postal-code"
+                  inputMode="numeric"
+                  value={zip}
+                  onChange={(e) => setZip(e.target.value)}
+                  required
+                  placeholder="30189"
+                  className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                />
+              </div>
+            </div>
+
+            <Button type="submit" className="w-full justify-center">
+              Start my quote
+            </Button>
+          </div>
+        ) : step === 1 || contactFirst ? (
           <div className="space-y-4">
             {isBrush ? (
               <div>
@@ -1853,7 +1987,7 @@ export function LeadForm({
                 role="radiogroup"
                 aria-label={isBrush ? "How big is the area?" : "How much junk are we hauling away?"}
               >
-                {(isBrush ? BRUSH_SIZE_OPTIONS : JUNK_SIZE_OPTIONS).map((opt) => {
+                {(isBrush ? BRUSH_SIZE_OPTIONS : displayedJunkSizeOptions).map((opt) => {
                   const selected = perceivedSize === opt.id;
                   return (
                     <button
@@ -1863,7 +1997,7 @@ export function LeadForm({
                       aria-checked={selected}
                       onClick={() => setPerceivedSize(opt.id)}
                       className={cn(
-                        "group relative flex items-start gap-3 rounded-lg border p-3 text-sm transition",
+                        "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
                         selected
                           ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
                           : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
@@ -1878,9 +2012,9 @@ export function LeadForm({
                       >
                         <Check className="h-3.5 w-3.5" strokeWidth={3} />
                       </span>
-                      <div className="space-y-0.5">
-                        <div className="font-semibold text-neutral-900">{opt.label}</div>
-                        {opt.hint ? <div className="text-xs text-neutral-500">{opt.hint}</div> : null}
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="font-semibold leading-snug text-neutral-900">{opt.label}</div>
+                        {opt.hint ? <div className="text-xs leading-snug text-neutral-500">{opt.hint}</div> : null}
                       </div>
                     </button>
                   );
@@ -2060,34 +2194,99 @@ export function LeadForm({
               ) : null}
             </div>
 
-            <div className="space-y-1">
-              <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
-              <input
-                name="zip"
-                type="text"
-                autoComplete="postal-code"
-                inputMode="numeric"
-                value={zip}
-                onChange={(e) => setZip(e.target.value)}
-                required
-                placeholder="30189"
-                className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-              />
-              <p className="text-xs text-neutral-500">
-                No travel fees in our core area. Half-load and larger jobs are
-                covered up to 25 miles from Woodstock, and small pickups up to
-                15 miles.
-              </p>
-            </div>
+            {!contactFirst ? (
+              <div className="space-y-1">
+                <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
+                <input
+                  name="zip"
+                  type="text"
+                  autoComplete="postal-code"
+                  inputMode="numeric"
+                  value={zip}
+                  onChange={(e) => setZip(e.target.value)}
+                  required
+                  placeholder="30189"
+                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                />
+                <p className="text-xs text-neutral-500">
+                  No travel fees in our core area. Half-load and larger jobs are
+                  covered up to 25 miles from Woodstock, and small pickups up to
+                  15 miles.
+                </p>
+              </div>
+            ) : null}
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <Button type="submit" className="w-full justify-center sm:w-auto">
-                {isBrush || isDemo ? "Continue to my estimate" : "Continue to my price"}
+              <Button type="submit" className="w-full justify-center sm:w-auto" disabled={quoteState.status === "loading"}>
+                {quoteState.status === "loading"
+                  ? "Calculating your estimate..."
+                  : contactFirst
+                    ? "Get my estimate"
+                    : isBrush || isDemo
+                      ? "Continue to my estimate"
+                      : "Continue to my price"}
               </Button>
-              <p className="text-xs text-neutral-500">
-                Next: enter your mobile number to see your {isBrush || isDemo ? "estimate" : "price"}.
-              </p>
+              {!contactFirst ? (
+                <p className="text-xs text-neutral-500">
+                  Next: enter your mobile number to see your {isBrush || isDemo ? "estimate" : "price"}.
+                </p>
+              ) : null}
             </div>
+
+            {contactFirst ? (
+              <QuoteResult
+                quoteState={quoteState}
+                quoteCardRef={quoteCardRef}
+                discountLabel={discountLabel}
+                discountedRange={discountedRange}
+                baseRange={baseRange}
+                isBrush={isBrush}
+                isDemo={isDemo}
+                junkWeightLabel={junkWeightLabel}
+                junkEstimateDisclaimer={junkEstimateDisclaimer}
+                quoteMediaAnalysis={quoteMediaAnalysis}
+                quoteVisibleRangeLabel={quoteVisibleRangeLabel}
+                quoteMergedRangeLabel={quoteMergedRangeLabel}
+                quoteRangeWasWidened={quoteRangeWasWidened}
+                quoteAddOnSummary={quoteAddOnSummary}
+                quoteMissingViews={quoteMissingViews}
+                showBookingDetails={showBookingDetails}
+                setShowBookingDetails={setShowBookingDetails}
+                textEstimateMessage={textEstimateMessage}
+                setTextEstimateMessage={setTextEstimateMessage}
+                addressLine1={addressLine1}
+                setAddressLine1={setAddressLine1}
+                city={city}
+                setCity={setCity}
+                stateField={stateField}
+                setStateField={setStateField}
+                postalCode={postalCode}
+                setPostalCode={setPostalCode}
+                addressComplete={addressComplete}
+                availabilityStatus={availabilityStatus}
+                availabilityMessage={availabilityMessage}
+                availabilityDurationMinutes={availabilityDurationMinutes}
+                availabilitySlots={availabilitySlots}
+                availabilityDays={availabilityDays}
+                availabilitySelectedDay={availabilitySelectedDay}
+                setAvailabilitySelectedDay={setAvailabilitySelectedDay}
+                selectedSlotStartAt={selectedSlotStartAt}
+                setSelectedSlotStartAt={setSelectedSlotStartAt}
+                availabilityShowMore={availabilityShowMore}
+                setAvailabilityShowMore={setAvailabilityShowMore}
+                holdStatus={holdStatus}
+                holdExpiresAt={holdExpiresAt}
+                holdMessage={holdMessage}
+                bookingStatus={bookingStatus}
+                bookingMessage={bookingMessage}
+                fetchAvailability={fetchAvailability}
+                submitBooking={submitBooking}
+                formatSlotLabel={formatSlotLabel}
+                formatSlotTimeLabel={formatSlotTimeLabel}
+                formatHoldExpiry={formatHoldExpiry}
+                formatDayLabel={formatDayLabel}
+              />
+            ) : null}
           </div>
         ) : (
           <div className="space-y-4">
@@ -2557,6 +2756,465 @@ export function LeadForm({
           </div>
         )}
       </form>
+    </div>
+  );
+}
+
+function QuoteResult({
+  quoteState,
+  quoteCardRef,
+  discountLabel,
+  discountedRange,
+  baseRange,
+  isBrush,
+  isDemo,
+  junkWeightLabel,
+  junkEstimateDisclaimer,
+  quoteMediaAnalysis,
+  quoteVisibleRangeLabel,
+  quoteMergedRangeLabel,
+  quoteRangeWasWidened,
+  quoteAddOnSummary,
+  quoteMissingViews,
+  showBookingDetails,
+  setShowBookingDetails,
+  textEstimateMessage,
+  setTextEstimateMessage,
+  addressLine1,
+  setAddressLine1,
+  city,
+  setCity,
+  stateField,
+  setStateField,
+  postalCode,
+  setPostalCode,
+  addressComplete,
+  availabilityStatus,
+  availabilityMessage,
+  availabilityDurationMinutes,
+  availabilitySlots,
+  availabilityDays,
+  availabilitySelectedDay,
+  setAvailabilitySelectedDay,
+  selectedSlotStartAt,
+  setSelectedSlotStartAt,
+  availabilityShowMore,
+  setAvailabilityShowMore,
+  holdStatus,
+  holdExpiresAt,
+  holdMessage,
+  bookingStatus,
+  bookingMessage,
+  fetchAvailability,
+  submitBooking,
+  formatSlotLabel,
+  formatSlotTimeLabel,
+  formatHoldExpiry,
+  formatDayLabel
+}: {
+  quoteState: QuoteState;
+  quoteCardRef: React.RefObject<HTMLDivElement | null>;
+  discountLabel: string | null;
+  discountedRange: string | null;
+  baseRange: string | null;
+  isBrush: boolean;
+  isDemo: boolean;
+  junkWeightLabel: string | null;
+  junkEstimateDisclaimer: string | null;
+  quoteMediaAnalysis: QuoteMediaAnalysis;
+  quoteVisibleRangeLabel: string | null;
+  quoteMergedRangeLabel: string | null;
+  quoteRangeWasWidened: boolean;
+  quoteAddOnSummary: string;
+  quoteMissingViews: string[];
+  showBookingDetails: boolean;
+  setShowBookingDetails: React.Dispatch<React.SetStateAction<boolean>>;
+  textEstimateMessage: string | null;
+  setTextEstimateMessage: React.Dispatch<React.SetStateAction<string | null>>;
+  addressLine1: string;
+  setAddressLine1: React.Dispatch<React.SetStateAction<string>>;
+  city: string;
+  setCity: React.Dispatch<React.SetStateAction<string>>;
+  stateField: string;
+  setStateField: React.Dispatch<React.SetStateAction<string>>;
+  postalCode: string;
+  setPostalCode: React.Dispatch<React.SetStateAction<string>>;
+  addressComplete: boolean;
+  availabilityStatus: "idle" | "loading" | "ready" | "error";
+  availabilityMessage: string | null;
+  availabilityDurationMinutes: number | null;
+  availabilitySlots: AvailabilitySlot[];
+  availabilityDays: AvailabilityDay[];
+  availabilitySelectedDay: string | null;
+  setAvailabilitySelectedDay: React.Dispatch<React.SetStateAction<string | null>>;
+  selectedSlotStartAt: string | null;
+  setSelectedSlotStartAt: React.Dispatch<React.SetStateAction<string | null>>;
+  availabilityShowMore: boolean;
+  setAvailabilityShowMore: React.Dispatch<React.SetStateAction<boolean>>;
+  holdStatus: "idle" | "loading" | "ready" | "error";
+  holdExpiresAt: string | null;
+  holdMessage: string | null;
+  bookingStatus: "idle" | "loading" | "success" | "error";
+  bookingMessage: string | null;
+  fetchAvailability: () => Promise<void>;
+  submitBooking: () => Promise<void>;
+  formatSlotLabel: (iso: string) => string;
+  formatSlotTimeLabel: (iso: string) => string;
+  formatHoldExpiry: (iso: string) => string;
+  formatDayLabel: (dayIso: string) => string;
+}) {
+  if (quoteState.status === "error") {
+    return (
+      <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        {quoteState.message}
+      </div>
+    );
+  }
+
+  if (quoteState.status !== "ready") return null;
+
+  return (
+    <div ref={quoteCardRef} className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/70 p-4">
+      <div className="flex items-center gap-2 text-sm font-semibold text-primary-900">
+        {discountLabel ? (
+          <span className="rounded-full bg-primary-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
+            {discountLabel}
+          </span>
+        ) : null}
+        {isBrush || isDemo ? "Here's your estimate" : "Here's your rough estimate"}
+        {!isBrush && !isDemo && junkWeightLabel ? (
+          <span className="rounded-full border border-primary-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-primary-900">
+            {junkWeightLabel}
+          </span>
+        ) : null}
+      </div>
+      <div className="text-2xl font-semibold text-primary-900">
+        {discountedRange}
+        <span className="ml-2 text-sm font-normal text-neutral-500 line-through">{discountLabel ? baseRange : null}</span>
+      </div>
+      <div className="text-sm text-neutral-700">{quoteState.tier}</div>
+      <div className="text-xs text-neutral-600">{quoteState.reason}</div>
+      {!isBrush && !isDemo && junkEstimateDisclaimer ? (
+        <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <div>
+            <div className="font-semibold">Rough estimate only</div>
+            <div>{junkEstimateDisclaimer}</div>
+          </div>
+        </div>
+      ) : null}
+      {!isBrush && !isDemo && quoteMediaAnalysis ? (
+        <div className="space-y-2 rounded-md border border-primary-100 bg-white/70 px-3 py-2 text-xs text-neutral-700">
+          {quoteVisibleRangeLabel ? (
+            <div>
+              Photos look like about <span className="font-semibold text-primary-900">{quoteVisibleRangeLabel}</span>.
+              {quoteMergedRangeLabel ? (
+                <>
+                  {" "}
+                  We priced this around <span className="font-semibold text-primary-900">{quoteMergedRangeLabel}</span>
+                  {quoteMediaAnalysis.confidence ? <> with {quoteMediaAnalysis.confidence} confidence.</> : <>.</>}
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {quoteRangeWasWidened ? (
+            <div>
+              We widened the range a bit because your notes or selections suggest there may be more items than what is visible in the photos.
+            </div>
+          ) : null}
+          {quoteState.addOnTotal > 0 && quoteAddOnSummary ? (
+            <div>
+              This already includes visible disposal add-ons for <span className="font-semibold text-primary-900">{quoteAddOnSummary}</span>.
+            </div>
+          ) : (
+            <div>
+              Disposal add-ons apply only when visible or confirmed, such as mattresses at +$35 each and paint cans at +$10 each.
+            </div>
+          )}
+          {quoteMissingViews.length > 0 ? <div>Want a tighter number? Send {quoteMissingViews[0]}</div> : null}
+        </div>
+      ) : !isBrush ? (
+        <div className="text-xs text-neutral-600">
+          Disposal add-ons apply only when needed, such as mattresses at +$35 each and paint cans at +$10 each.
+        </div>
+      ) : null}
+      <div className="text-xs text-neutral-600">
+        {isBrush && quoteState.needsInPersonEstimate
+          ? "This is a ballpark range. We'll call/text to confirm details and finalize before we arrive."
+          : isDemo
+            ? "This is a range. We'll confirm details on-site before we start."
+            : "Your estimate is saved. You can book online now, call us, or have us follow up by text."}
+      </div>
+
+      {!showBookingDetails ? (
+        <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
+          <div className="text-sm font-semibold text-primary-900">Want to move forward?</div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <Button type="button" className="justify-center" onClick={() => setShowBookingDetails(true)}>
+              Book online
+            </Button>
+            <Button asChild variant="secondary" className="justify-center">
+              <a href="tel:+14047772631" aria-label="Call to confirm and book">
+                Call to confirm
+              </a>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="justify-center"
+              onClick={() => setTextEstimateMessage("Your estimate is saved with your phone number. We'll follow up by text if you do not book online.")}
+            >
+              Text me this estimate
+            </Button>
+          </div>
+          {textEstimateMessage ? <div className="text-xs text-emerald-700">{textEstimateMessage}</div> : null}
+          <div className="text-[11px] text-neutral-500">
+            We already saved your quote request, so calling or texting does not make you start over.
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold text-neutral-700">
+              {isBrush && quoteState.needsInPersonEstimate
+                ? "Request a time (pending confirmation)"
+                : isBrush
+                  ? "Book this clearing"
+                  : isDemo
+                    ? "Book a demo estimate"
+                    : "Book this pickup"}
+            </div>
+            <button type="button" className="text-[11px] font-semibold text-primary-700 underline" onClick={() => setShowBookingDetails(false)}>
+              Back to options
+            </button>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            <input
+              name="addressLine1"
+              type="text"
+              autoComplete="address-line1"
+              placeholder="Street address"
+              value={addressLine1}
+              onChange={(e) => setAddressLine1(e.target.value)}
+              className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+            />
+            <div className="grid grid-cols-3 gap-2">
+              <input
+                name="city"
+                type="text"
+                autoComplete="address-level2"
+                placeholder="City"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                className="col-span-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+              />
+              <input
+                name="state"
+                type="text"
+                autoComplete="address-level1"
+                placeholder="GA"
+                maxLength={2}
+                value={stateField}
+                onChange={(e) => setStateField(e.target.value.toUpperCase())}
+                className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 uppercase"
+              />
+            </div>
+            <input
+              name="postalCode"
+              type="text"
+              autoComplete="postal-code"
+              inputMode="numeric"
+              placeholder="ZIP"
+              value={postalCode}
+              onChange={(e) => setPostalCode(e.target.value)}
+              className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+            />
+            <div className="space-y-2 rounded-md border border-neutral-200 bg-white p-3 md:col-span-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold text-neutral-700">Choose a time</div>
+                <button
+                  type="button"
+                  onClick={() => void fetchAvailability()}
+                  disabled={!addressComplete || availabilityStatus === "loading"}
+                  className="text-[11px] font-semibold text-primary-700 transition hover:text-primary-800 disabled:text-neutral-400"
+                >
+                  {availabilityStatus === "loading" ? "Checking..." : "Refresh"}
+                </button>
+              </div>
+              {availabilityDurationMinutes ? (
+                <div className="text-[11px] text-neutral-500">Estimated job time: {availabilityDurationMinutes} min</div>
+              ) : null}
+              {!addressComplete ? (
+                <div className="text-xs text-neutral-600">Enter your address to see available times.</div>
+              ) : availabilityStatus === "loading" ? (
+                <div className="text-xs text-neutral-600">Checking availability...</div>
+              ) : availabilityStatus === "error" ? (
+                <div className="text-xs text-amber-700">{availabilityMessage ?? "Availability check failed. Please try again."}</div>
+              ) : availabilitySlots.length || availabilityDays.some((d) => d.slots.length > 0) ? (
+                <div className="space-y-3">
+                  {availabilitySlots.length ? (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">Recommended times</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {availabilitySlots.map((slot) => {
+                          const selected = slot.startAt === selectedSlotStartAt;
+                          return (
+                            <button
+                              key={slot.startAt}
+                              type="button"
+                              onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                              aria-pressed={selected}
+                              className={cn(
+                                "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
+                                selected
+                                  ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
+                                  : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50"
+                              )}
+                            >
+                              <div className={cn("text-sm font-semibold", selected ? "text-white" : "text-neutral-900")}>
+                                {formatSlotLabel(slot.startAt)}
+                              </div>
+                              <div className={cn("text-[11px]", selected ? "text-primary-100" : "text-neutral-600")}>{slot.reason}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {selectedSlotStartAt ? (
+                    <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-900">
+                      Selected time: <span className="font-semibold">{formatSlotLabel(selectedSlotStartAt)}</span>
+                    </div>
+                  ) : null}
+                  {holdStatus === "loading" ? (
+                    <div className="text-[11px] text-neutral-500">Holding that time for you...</div>
+                  ) : holdStatus === "ready" && holdExpiresAt ? (
+                    <div className="text-[11px] text-neutral-500">Held until {formatHoldExpiry(holdExpiresAt)}.</div>
+                  ) : holdStatus === "error" && holdMessage ? (
+                    <div className="text-[11px] text-amber-700">{holdMessage}</div>
+                  ) : null}
+
+                  {(() => {
+                    const availableDays = availabilityDays.filter((d) => d.slots.length > 0);
+                    if (!availableDays.length) return null;
+                    const selectedDay =
+                      typeof availabilitySelectedDay === "string" && availabilitySelectedDay.length
+                        ? availabilitySelectedDay
+                        : availableDays[0]?.date ?? null;
+                    const selectedDaySlots = selectedDay ? availableDays.find((d) => d.date === selectedDay)?.slots ?? [] : [];
+
+                    return (
+                      <div className="space-y-2">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          aria-expanded={availabilityShowMore}
+                          onClick={() => setAvailabilityShowMore((prev) => !prev)}
+                          className="w-full justify-center sm:w-auto"
+                        >
+                          {availabilityShowMore ? "Hide more times" : "See more times"}
+                        </Button>
+
+                        {availabilityShowMore ? (
+                          <div className="space-y-2">
+                            <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">Pick a day</label>
+                            <select
+                              value={selectedDay ?? ""}
+                              onChange={(e) => {
+                                const next = e.target.value;
+                                setAvailabilitySelectedDay(next);
+                                const daySlots = availableDays.find((d) => d.date === next)?.slots ?? [];
+                                setSelectedSlotStartAt((prev) => {
+                                  if (typeof prev === "string" && daySlots.some((s) => s.startAt === prev)) return prev;
+                                  return daySlots[0]?.startAt ?? null;
+                                });
+                              }}
+                              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                            >
+                              {availableDays.map((day) => (
+                                <option key={day.date} value={day.date}>
+                                  {formatDayLabel(day.date)}
+                                </option>
+                              ))}
+                            </select>
+
+                            {selectedDaySlots.length ? (
+                              <div className="grid gap-2 sm:grid-cols-3">
+                                {selectedDaySlots.map((slot) => {
+                                  const selected = slot.startAt === selectedSlotStartAt;
+                                  return (
+                                    <button
+                                      key={slot.startAt}
+                                      type="button"
+                                      onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                                      aria-pressed={selected}
+                                      className={cn(
+                                        "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
+                                        selected
+                                          ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
+                                          : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50"
+                                      )}
+                                      title={slot.reason}
+                                    >
+                                      <div className={cn("text-sm font-semibold", selected ? "text-white" : "text-neutral-900")}>
+                                        {formatSlotTimeLabel(slot.startAt)}
+                                      </div>
+                                      <div className={cn("truncate text-[11px]", selected ? "text-primary-100" : "text-neutral-600")}>
+                                        {slot.reason}
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-neutral-600">No times available on this day.</div>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
+                </div>
+              ) : (
+                <div className="text-xs text-neutral-600">
+                  {availabilityMessage ?? "No times available right now. Please call to confirm & book."}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              type="button"
+              className="justify-center"
+              onClick={() => void submitBooking()}
+              disabled={bookingStatus === "loading" || !selectedSlotStartAt || availabilityStatus === "loading"}
+            >
+              {bookingStatus === "loading"
+                ? "Booking..."
+                : isBrush && quoteState.needsInPersonEstimate
+                  ? "Request this time"
+                  : isBrush
+                    ? "Book this clearing"
+                    : isDemo
+                      ? "Book a demo estimate"
+                      : "Book this pickup"}
+            </Button>
+            <Button asChild variant="secondary" className="justify-center">
+              <a href="tel:+14047772631" aria-label="Call to confirm and book">
+                Call to confirm &amp; book
+              </a>
+            </Button>
+          </div>
+          {bookingMessage ? (
+            <div className={cn("text-xs", bookingStatus === "error" ? "text-amber-700" : "text-emerald-700")}>{bookingMessage}</div>
+          ) : null}
+          <div className="text-[11px] text-neutral-500">
+            We&apos;ve saved your estimate with your contact info so we can help if you have questions.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

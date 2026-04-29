@@ -5,6 +5,11 @@ import {
   formatUsdCents,
   type CalendarDayRevenueSummary,
 } from "./calendarEventAmounts";
+import {
+  getCalendarEventBadgeClass,
+  getCalendarEventDotClass,
+  getCalendarEventSurfaceClass,
+} from "./calendarEventTone";
 
 type CalendarEvent = {
   id: string;
@@ -128,13 +133,7 @@ export function CalendarMonthGrid({
                 {bucket.slice(0, 3).map((evt) => (
                   <span
                     key={evt.id}
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      evt.source === "db"
-                        ? isInPersonQuote(evt)
-                          ? "bg-fuchsia-500"
-                          : "bg-primary-500"
-                        : "bg-slate-400"
-                    } ${isConflict(evt.id) ? "ring-1 ring-rose-400" : ""}`}
+                    className={`h-1.5 w-1.5 rounded-full ${getCalendarEventDotClass(evt)} ${isConflict(evt.id) ? "ring-1 ring-rose-400" : ""}`}
                   />
                 ))}
                 {bucket.length > 3 ? (
@@ -159,13 +158,7 @@ export function CalendarMonthGrid({
                       return (
                         <button
                           key={evt.id}
-                          className={`block w-full max-w-full overflow-hidden rounded border px-1 py-0.5 text-left text-[11px] ${
-                            evt.source === "db"
-                              ? isInPersonQuote(evt)
-                                ? "border-fuchsia-200 bg-fuchsia-50/70"
-                                : "border-primary-200 bg-primary-50/70"
-                              : "border-slate-200 bg-slate-100"
-                          } ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
+                          className={`block w-full max-w-full overflow-hidden rounded border px-1 py-0.5 text-left text-[11px] ${getCalendarEventSurfaceClass(evt)} ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
                           onClick={() => onSelectEvent?.(evt.id)}
                           type="button"
                         >
@@ -177,13 +170,13 @@ export function CalendarMonthGrid({
                               {evt.title}
                             </span>
                             {isInPersonQuote(evt) ? (
-                              <span className="rounded bg-white px-1 text-[10px] uppercase text-fuchsia-700">
+                              <span className={`rounded px-1 text-[10px] uppercase ${getCalendarEventBadgeClass(evt)}`}>
                                 quote
                               </span>
                             ) : null}
                             {evt.status ? (
                               <span
-                                className={`rounded bg-white px-1 text-[10px] uppercase ${isInPersonQuote(evt) ? "text-fuchsia-700" : "text-primary-700"}`}
+                                className={`rounded px-1 text-[10px] uppercase ${getCalendarEventBadgeClass(evt)}`}
                               >
                                 {evt.status}
                               </span>

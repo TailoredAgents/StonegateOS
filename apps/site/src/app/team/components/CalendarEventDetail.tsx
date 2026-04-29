@@ -4,6 +4,7 @@ import type { CalendarEvent } from "./CalendarGrid";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
 import { formatCalendarEventAmounts } from "./calendarEventAmounts";
 import { CrewPayoutSelector } from "./CrewPayoutSelector";
+import { getCalendarEventBadgeClass } from "./calendarEventTone";
 import { TEAM_INPUT_COMPACT, teamButtonClass } from "./team-ui";
 
 type Props = {
@@ -55,15 +56,13 @@ export function CalendarEventDetail({
           {event.source === "db" ? "Appointment" : "Google"}
         </span>
         {isInPersonQuote ? (
-          <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-fuchsia-700">
+          <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${getCalendarEventBadgeClass(event)}`}>
             In-person quote
           </span>
         ) : null}
         {event.status ? (
           <span
-            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${
-              isInPersonQuote ? "bg-fuchsia-50 text-fuchsia-700" : "bg-primary-50 text-primary-700"
-            }`}
+            className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${getCalendarEventBadgeClass(event)}`}
           >
             {event.status}
           </span>

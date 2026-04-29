@@ -5,6 +5,10 @@ import {
   formatUsdCents,
   type CalendarDayRevenueSummary,
 } from "./calendarEventAmounts";
+import {
+  getCalendarEventBadgeClass,
+  getCalendarEventSurfaceClass,
+} from "./calendarEventTone";
 
 export type CalendarEvent = {
   id: string;
@@ -136,13 +140,7 @@ export function CalendarGrid({
                     return (
                       <button
                         key={evt.id}
-                        className={`block w-full max-w-full overflow-hidden rounded-lg border px-2 py-1 text-left ${
-                          evt.source === "db"
-                            ? isInPersonQuote(evt)
-                              ? "border-fuchsia-200 bg-fuchsia-50/70"
-                              : "border-primary-200 bg-primary-50/70"
-                            : "border-slate-200 bg-slate-50"
-                        } ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
+                        className={`block w-full max-w-full overflow-hidden rounded-lg border px-2 py-1 text-left ${getCalendarEventSurfaceClass(evt)} ${isConflict(evt.id) ? "ring-2 ring-rose-300" : ""}`}
                         onClick={() => onSelectEvent?.(evt.id)}
                         type="button"
                       >
@@ -155,17 +153,13 @@ export function CalendarGrid({
                               {evt.source === "db" ? "appt" : "google"}
                             </span>
                             {isInPersonQuote(evt) ? (
-                              <span className="rounded-full bg-white px-1.5 text-[10px] uppercase text-fuchsia-700">
+                              <span className={`rounded-full px-1.5 text-[10px] uppercase ${getCalendarEventBadgeClass(evt)}`}>
                                 quote
                               </span>
                             ) : null}
                             {evt.status ? (
                               <span
-                                className={`rounded-full bg-white px-1.5 text-[10px] uppercase ${
-                                  isInPersonQuote(evt)
-                                    ? "text-fuchsia-700"
-                                    : "text-primary-700"
-                                }`}
+                                className={`rounded-full px-1.5 text-[10px] uppercase ${getCalendarEventBadgeClass(evt)}`}
                               >
                                 {evt.status}
                               </span>

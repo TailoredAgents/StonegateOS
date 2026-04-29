@@ -13,6 +13,11 @@ import {
   formatCalendarEventAmounts,
   formatUsdCents,
 } from "./calendarEventAmounts";
+import {
+  getCalendarEventBadgeClass,
+  getCalendarEventSelectedRingClass,
+  getCalendarEventSurfaceClass,
+} from "./calendarEventTone";
 
 type Props = {
   initialView: "week" | "month" | "day";
@@ -213,6 +218,20 @@ export function CalendarViewer({
         </div>
 
         <div className="flex flex-wrap gap-2">
+          <div className="hidden items-center gap-2 pr-2 text-[11px] font-semibold text-slate-600 sm:flex">
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              Confirmed
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-sky-500" />
+              Quotes
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-rose-500" />
+              Canceled
+            </span>
+          </div>
           <button
             type="button"
             onClick={() => {
@@ -296,10 +315,8 @@ export function CalendarViewer({
                         key={evt.id}
                         type="button"
                         onClick={() => handleSelectEvent(evt.id)}
-                        className={`block w-full overflow-hidden rounded-lg border px-3 py-3 text-left ${
-                          evt.id === selectedId
-                            ? "border-primary-300 bg-primary-50/70"
-                            : "border-slate-200 bg-white hover:bg-slate-50"
+                        className={`block w-full overflow-hidden rounded-lg border px-3 py-3 text-left ${getCalendarEventSurfaceClass(evt)} ${
+                          evt.id === selectedId ? getCalendarEventSelectedRingClass(evt) : ""
                         }`}
                       >
                         <div className="flex items-start justify-between gap-2">
@@ -310,20 +327,13 @@ export function CalendarViewer({
                             {evt.source === "db" &&
                             (evt.appointmentType ?? "").trim().toLowerCase() ===
                               "in_person_quote" ? (
-                              <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-fuchsia-700">
+                              <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${getCalendarEventBadgeClass(evt)}`}>
                                 quote
                               </span>
                             ) : null}
                             {evt.status ? (
                               <span
-                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${
-                                  evt.source === "db" &&
-                                  (evt.appointmentType ?? "")
-                                    .trim()
-                                    .toLowerCase() === "in_person_quote"
-                                    ? "bg-fuchsia-50 text-fuchsia-700"
-                                    : "bg-primary-50 text-primary-700"
-                                }`}
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ${getCalendarEventBadgeClass(evt)}`}
                               >
                                 {evt.status}
                               </span>
@@ -399,10 +409,8 @@ export function CalendarViewer({
                       key={evt.id}
                       type="button"
                       onClick={() => handleSelectEvent(evt.id)}
-                      className={`block w-full overflow-hidden rounded-xl border px-3 py-2 text-left text-sm ${
-                        evt.id === selectedId
-                          ? "border-primary-300 bg-primary-50/70"
-                          : "border-slate-200 bg-white hover:bg-slate-50"
+                      className={`block w-full overflow-hidden rounded-xl border px-3 py-2 text-left text-sm ${getCalendarEventSurfaceClass(evt)} ${
+                        evt.id === selectedId ? getCalendarEventSelectedRingClass(evt) : ""
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -416,8 +424,13 @@ export function CalendarViewer({
                           {evt.source === "db" &&
                           (evt.appointmentType ?? "").trim().toLowerCase() ===
                             "in_person_quote" ? (
-                            <span className="rounded-full bg-fuchsia-50 px-2 py-0.5 text-[10px] font-semibold uppercase text-fuchsia-700">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${getCalendarEventBadgeClass(evt)}`}>
                               quote
+                            </span>
+                          ) : null}
+                          {evt.status ? (
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${getCalendarEventBadgeClass(evt)}`}>
+                              {evt.status}
                             </span>
                           ) : null}
                         </div>
