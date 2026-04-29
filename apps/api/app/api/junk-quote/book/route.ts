@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -74,7 +75,7 @@ function extractPgMeta(error: unknown): { code?: string; constraint?: string } {
     direct && typeof direct["constraint_name"] === "string" ? direct["constraint_name"] : undefined;
   if (directCode || directConstraint) return { code: directCode, constraint: directConstraint };
 
-  const cause = direct && isRecord(direct["cause"]) ? (direct["cause"] as Record<string, unknown>) : null;
+  const cause = direct && isRecord(direct["cause"]) ? direct["cause"] : null;
   const causeCode = cause && typeof cause["code"] === "string" ? cause["code"] : undefined;
   const causeConstraint = cause && typeof cause["constraint_name"] === "string" ? cause["constraint_name"] : undefined;
   return { code: causeCode, constraint: causeConstraint };
@@ -98,11 +99,20 @@ function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string
   if (isDemoEstimate) return 45;
 
   const ai = isRecord(quote.aiResult) ? quote.aiResult : null;
+  const loadFractionEstimate =
+    typeof ai?.["loadFractionEstimate"] === "number" &&
+    Number.isFinite(ai["loadFractionEstimate"]) &&
+    ai["loadFractionEstimate"] > 0
+      ? ai["loadFractionEstimate"]
+      : null;
+  const maxUnitsFromLoad =
+    typeof loadFractionEstimate === "number" ? Math.max(1, Math.round(loadFractionEstimate * 4)) : null;
   const priceHigh = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
-  const maxUnits =
+  const maxUnitsFromPrice =
     typeof priceHigh === "number" && Number.isFinite(priceHigh) && priceHigh > 0
       ? Math.round(priceHigh / JUNK_VOLUME_UNIT_PRICE)
       : null;
+  const maxUnits = maxUnitsFromLoad ?? maxUnitsFromPrice;
 
   const fallbackUnits = (() => {
     switch (quote.perceivedSize) {
@@ -500,7 +510,7 @@ export async function POST(request: NextRequest) {
 
         const previousPayload =
           existingLead.formPayload && typeof existingLead.formPayload === "object"
-            ? (existingLead.formPayload as Record<string, unknown>)
+            ? existingLead.formPayload
             : {};
 
         const nextPayload = {
@@ -650,7 +660,7 @@ export async function POST(request: NextRequest) {
       const holdBlocks = nearbyHolds
         .filter((row) => row.startAt)
         .map((row) => {
-          const start = row.startAt as Date;
+          const start = row.startAt;
           const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
           return { start, end: new Date(start.getTime() + dur * 60_000) };
         });

@@ -9,7 +9,7 @@ import { trackWebEvent } from "../lib/web-analytics";
 
 declare global {
   interface Window {
-    fbq?: (...args: any[]) => void;
+    fbq?: (...args: unknown[]) => void;
   }
 }
 
@@ -28,6 +28,10 @@ type QuoteState =
       reason: string;
       needsInPersonEstimate: boolean;
       addOnTotal: number;
+      isRoughEstimate?: boolean;
+      estimateDisclaimer?: string;
+      weightRisk?: "normal" | "low" | "medium" | "high";
+      pricingFactors?: string[];
       mediaAnalysis?: {
         source?: string;
         visibleVolumeRange?: string;
@@ -137,7 +141,8 @@ const JUNK_PRIMARY_OPTIONS = JUNK_PRIMARY_TYPE_IDS.map((id) => JUNK_OPTIONS.find
 const JUNK_SECONDARY_OPTIONS = JUNK_SECONDARY_TYPE_IDS.map((id) => JUNK_OPTIONS.find((opt) => opt.id === id)!).filter(Boolean);
 
 const JUNK_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
-  { id: "min_pickup", label: "Small pickup (1-4 items)", hint: "A few items or a small pile (minimum pickup starts at $150)" },
+  { id: "single_item", label: "Single item", hint: "One couch, mattress, appliance, or bulky item ($175)" },
+  { id: "min_pickup", label: "Small pickup", hint: "A few items or a small pile ($220-$400 depending on weight)" },
   { id: "half_trailer", label: "Medium load", hint: "1 room OR 1-2 bulky items + boxes/bags" },
   { id: "three_quarter_trailer", label: "Large load", hint: "2 rooms OR several bulky items" },
   { id: "big_cleanout", label: "Huge cleanout", hint: "Full garage, basement, or multiple rooms" },
@@ -697,6 +702,10 @@ export function LeadForm({
           discountAmount?: number;
           addOnTotal?: number;
           needsInPersonEstimate?: boolean;
+          isRoughEstimate?: boolean;
+          estimateDisclaimer?: string;
+          weightRisk?: "normal" | "low" | "medium" | "high";
+          pricingFactors?: string[];
           mediaAnalysis?: {
             source?: string;
             visibleVolumeRange?: string;
@@ -732,6 +741,10 @@ export function LeadForm({
         reason: data.quote.reasonSummary,
         needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate),
         addOnTotal: data.quote.addOnTotal ?? 0,
+        isRoughEstimate: Boolean(data.quote.isRoughEstimate),
+        estimateDisclaimer: data.quote.estimateDisclaimer,
+        weightRisk: data.quote.weightRisk,
+        pricingFactors: data.quote.pricingFactors,
         mediaAnalysis: data.quote.mediaAnalysis
       });
       applyEnhancedConversionsUserData({
@@ -865,7 +878,7 @@ export function LeadForm({
             : "No times available in the next two weeks. Please call to confirm & book."
         );
       } catch (err) {
-        if ((err as any)?.name === "AbortError") return;
+        if (isAbortError(err)) return;
         setAvailabilityStatus("error");
         setAvailabilityMessage("Availability check failed. Please try again.");
         setAvailabilitySlots([]);
@@ -980,7 +993,7 @@ export function LeadForm({
         setHoldMessage(null);
         holdSlotRef.current = slotStartAt;
       } catch (err) {
-        if ((err as any)?.name === "AbortError") return;
+        if (isAbortError(err)) return;
         if (requestId !== holdRequestRef.current) return;
         setHoldStatus("error");
         setHoldMessage("We couldn't hold that time. Please try again.");
@@ -1205,17 +1218,11 @@ export function LeadForm({
     }
   };
 
-  const JUNK_PRESENTED_MIN = 150;
-  const JUNK_PRESENTED_STEP = 175;
-
   const baseRange =
     quoteState.status === "ready"
       ? (() => {
           const high = quoteState.baseHigh;
-          const low =
-            !isBrush && !isDemo && quoteState.baseLow === quoteState.baseHigh
-              ? Math.min(high, Math.max(JUNK_PRESENTED_MIN, high - JUNK_PRESENTED_STEP))
-              : quoteState.baseLow;
+          const low = quoteState.baseLow;
           return low === high ? `$${low}` : `$${low} - $${high}`;
         })()
       : null;
@@ -1223,10 +1230,7 @@ export function LeadForm({
     quoteState.status === "ready"
       ? (() => {
           const high = quoteState.high;
-          const low =
-            !isBrush && !isDemo && quoteState.low === quoteState.high
-              ? Math.min(high, Math.max(JUNK_PRESENTED_MIN, high - JUNK_PRESENTED_STEP))
-              : quoteState.low;
+          const low = quoteState.low;
           return low === high ? `$${low}` : `$${low} - $${high}`;
         })()
       : null;
@@ -1268,6 +1272,19 @@ export function LeadForm({
           .filter((value): value is string => Boolean(value))
           .join(" and ")
       : "";
+  const junkEstimateDisclaimer =
+    quoteState.status === "ready"
+      ? quoteState.estimateDisclaimer ??
+        "This is a rough estimate based on your description and any photos provided. Final pricing is confirmed in person before work starts and may change if volume, weight, access, or materials differ from what was described."
+      : null;
+  const junkWeightLabel =
+    quoteState.status === "ready" && quoteState.weightRisk && quoteState.weightRisk !== "normal"
+      ? quoteState.weightRisk === "high"
+        ? "Heavy material likely"
+        : quoteState.weightRisk === "medium"
+          ? "Weight-sensitive material"
+          : "Some weight risk"
+      : null;
 
   const getAnalyticsPath = React.useCallback(() => {
     if (typeof window === "undefined") return "/";
@@ -1309,7 +1326,7 @@ export function LeadForm({
             ? "Where should we text your estimate?"
             : isDemo
               ? "Where should we text your demo estimate?"
-              : "Where should we text your quote?"}
+              : "Where should we text your estimate?"}
       </h2>
       <p className="mt-1 text-sm text-neutral-600">
         {step === 1
@@ -1320,7 +1337,7 @@ export function LeadForm({
               : "Answer a few quick questions to see a ballpark range before booking."
           : isDemo
             ? "Enter a mobile number to see your estimate range. Name is optional."
-            : "Enter a mobile number so we can text you your range (and confirm a couple details). Name is optional."}
+            : "Enter a mobile number to see your rough estimate range. Name is optional."}
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700">
@@ -2157,12 +2174,10 @@ export function LeadForm({
 
             <Button type="submit" className="w-full justify-center" disabled={quoteState.status === "loading"}>
               {quoteState.status === "loading"
-                ? isBrush || isDemo
-                  ? "Calculating your estimate..."
-                  : "Calculating your quote..."
+                ? "Calculating your estimate..."
                 : isBrush || isDemo
                   ? "Get my estimate"
-                  : "Get my instant quote"}
+                  : "Get my instant estimate"}
             </Button>
 
             {quoteState.status === "ready" ? (
@@ -2173,7 +2188,12 @@ export function LeadForm({
                       {discountLabel}
                     </span>
                   ) : null}
-                  {isBrush || isDemo ? "Here's your estimate" : "Here's your instant quote"}
+                  {isBrush || isDemo ? "Here's your estimate" : "Here's your rough estimate"}
+                  {!isBrush && !isDemo && junkWeightLabel ? (
+                    <span className="rounded-full border border-primary-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-primary-900">
+                      {junkWeightLabel}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="text-2xl font-semibold text-primary-900">
                   {discountedRange}
@@ -2183,6 +2203,15 @@ export function LeadForm({
                 </div>
                 <div className="text-sm text-neutral-700">{quoteState.tier}</div>
                 <div className="text-xs text-neutral-600">{quoteState.reason}</div>
+                {!isBrush && !isDemo && junkEstimateDisclaimer ? (
+                  <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <div>
+                      <div className="font-semibold">Rough estimate only</div>
+                      <div>{junkEstimateDisclaimer}</div>
+                    </div>
+                  </div>
+                ) : null}
                 {!isBrush && !isDemo && quoteMediaAnalysis ? (
                   <div className="space-y-2 rounded-md border border-primary-100 bg-white/70 px-3 py-2 text-xs text-neutral-700">
                     {quoteVisibleRangeLabel ? (
@@ -2231,7 +2260,7 @@ export function LeadForm({
                     ? "This is a ballpark range. We\u2019ll call/text to confirm details and finalize before we arrive."
                     : isDemo
                       ? "This is a range. We’ll confirm details on-site before we start."
-                      : "This is a range. We\u2019ll call to confirm a couple details and lock in the exact price."}
+                      : "You can still book now. The crew will review the job in person and confirm the set price before loading begins."}
                 </div>
                   <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
                     <div className="text-xs font-semibold text-neutral-700">
@@ -2509,7 +2538,7 @@ export function LeadForm({
                     </div>
                   ) : null}
                   <div className="text-[11px] text-neutral-500">
-                    We've saved your {isBrush || isDemo ? "estimate" : "quote"} with your contact info so we can help if you have questions.
+                    We&apos;ve saved your estimate with your contact info so we can help if you have questions.
                   </div>
                 </div>
               </div>
@@ -2523,7 +2552,7 @@ export function LeadForm({
               <Button type="button" variant="ghost" onClick={() => setStep(1)}>
                 Back
               </Button>
-              <p className="text-xs text-neutral-500">We'll save this {isBrush ? "estimate" : "quote"} for follow-up.</p>
+              <p className="text-xs text-neutral-500">We&apos;ll save this estimate for follow-up.</p>
             </div>
           </div>
         )}
@@ -2536,9 +2565,9 @@ function bucketWebAnalyticsError(err: unknown): string {
   const message =
     typeof err === "string"
       ? err
-      : err && typeof err === "object" && "message" in err
-        ? String((err as any).message)
-        : String(err ?? "");
+      : err instanceof Error
+        ? err.message
+        : "";
   const text = message.trim().toLowerCase();
   if (!text) return "unknown";
   if (text.includes("413") || text.includes("too large") || text.includes("payload")) return "payload_too_large";
@@ -2551,6 +2580,10 @@ function bucketWebAnalyticsError(err: unknown): string {
   if (text.includes("quote")) return "quote_failed";
   if (text.includes("booking")) return "booking_failed";
   return text.slice(0, 60).replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "") || "unknown";
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
 }
 
 function formatEnumLabel(value: string | null | undefined): string | null {

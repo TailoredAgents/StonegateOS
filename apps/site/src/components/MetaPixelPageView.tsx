@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 
 declare global {
   interface Window {
-    fbq?: (...args: any[]) => void;
+    fbq?: (...args: unknown[]) => void;
   }
 }
 

@@ -93,11 +93,20 @@ function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string
   if (isDemoEstimate) return 45;
 
   const ai = isRecord(quote.aiResult) ? quote.aiResult : null;
+  const loadFractionEstimate =
+    typeof ai?.["loadFractionEstimate"] === "number" &&
+    Number.isFinite(ai["loadFractionEstimate"]) &&
+    ai["loadFractionEstimate"] > 0
+      ? ai["loadFractionEstimate"]
+      : null;
+  const maxUnitsFromLoad =
+    typeof loadFractionEstimate === "number" ? Math.max(1, Math.round(loadFractionEstimate * 4)) : null;
   const priceHigh = typeof ai?.["priceHigh"] === "number" ? ai["priceHigh"] : null;
-  const maxUnits =
+  const maxUnitsFromPrice =
     typeof priceHigh === "number" && Number.isFinite(priceHigh) && priceHigh > 0
       ? Math.round(priceHigh / JUNK_VOLUME_UNIT_PRICE)
       : null;
+  const maxUnits = maxUnitsFromLoad ?? maxUnitsFromPrice;
 
   const fallbackUnits = (() => {
     switch (quote.perceivedSize) {
@@ -336,7 +345,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       const holdBlocks = nearbyHolds
         .filter((row) => row.startAt)
         .map((row) => {
-          const start = row.startAt as Date;
+          const start = row.startAt;
           const dur = (row.durationMinutes ?? durationMinutes) + (row.travelBufferMinutes ?? travelBufferMinutes);
           return { start, end: new Date(start.getTime() + dur * 60_000) };
         });

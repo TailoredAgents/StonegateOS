@@ -1,11 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
-import { getCompanyProfilePolicy, isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
+import { isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
 import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
 import { normalizeName, normalizePhone } from "../web/utils";
-import { JUNK_VOLUME_PRICING, JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
+import { JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
 import {
   buildMediaJobAnalysisWithVision,
   type MediaJobAnalysisRecord,
@@ -40,20 +41,6 @@ function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseIn
 
 export function OPTIONS(request: NextRequest): NextResponse {
   return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
-}
-
-async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>): Promise<number> {
-  const envRaw = process.env["INSTANT_QUOTE_DISCOUNT"];
-  const envValue = envRaw ? Number(envRaw) : NaN;
-  if (Number.isFinite(envValue) && envValue > 0 && envValue < 1) {
-    return envValue;
-  }
-
-  const profile = await getCompanyProfilePolicy(db);
-  const percent = profile.discountPercent;
-  if (!Number.isFinite(percent)) return 0;
-  if (percent <= 0 || percent >= 1) return 0;
-  return percent;
 }
 
 function resolveJunkFixedDiscountDollars(): number {
@@ -159,12 +146,12 @@ const QuoteResultSchema = z
     }
   });
 
-const VOLUME_PRICING = JUNK_VOLUME_PRICING;
 const UNIT_PRICE = JUNK_VOLUME_UNIT_PRICE;
 const PUBLIC_MATTRESS_FEE = 35;
 const PUBLIC_PAINT_CAN_FEE = 10;
 type JobInput = z.infer<typeof RequestSchema>["job"];
 type QuoteResult = z.infer<typeof QuoteResultSchema>;
+type WeightRisk = "normal" | "low" | "medium" | "high";
 
 type QuoteBounds = {
   minUnits: number;
@@ -177,6 +164,25 @@ type MediaPricingContext = {
   addOnTotal: number;
 };
 
+type WeightPricingContext = {
+  risk: WeightRisk;
+  signals: string[];
+  rangePosition: number;
+  disclaimer: string;
+  pricingFactors: string[];
+};
+
+const ROUGH_ESTIMATE_DISCLAIMER =
+  "This is a rough estimate based on your description and any photos provided. Final pricing is confirmed in person before work starts and may change if volume, weight, access, or materials differ from what was described.";
+
+const JUNK_TIER_PRICE_BANDS: Record<number, { min: number; max: number }> = {
+  0: { min: 175, max: 175 },
+  1: { min: 220, max: 400 },
+  2: { min: 350, max: 600 },
+  3: { min: 500, max: 800 },
+  4: { min: 750, max: 1050 }
+};
+
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   if (value < min) return min;
@@ -184,9 +190,23 @@ function clampInt(value: number, min: number, max: number): number {
   return Math.trunc(value);
 }
 
+function getTierPriceBand(units: number): { min: number; max: number } {
+  const normalizedUnits = Math.max(0, Math.trunc(units));
+  const known = JUNK_TIER_PRICE_BANDS[normalizedUnits];
+  if (known) return known;
+
+  const fullLoads = Math.floor(normalizedUnits / 4);
+  const remainderUnits = normalizedUnits % 4;
+  const fullBand = JUNK_TIER_PRICE_BANDS[4]!;
+  const remainderBand = remainderUnits > 0 ? JUNK_TIER_PRICE_BANDS[remainderUnits]! : { min: 0, max: 0 };
+  return {
+    min: fullLoads * fullBand.min + remainderBand.min,
+    max: fullLoads * fullBand.max + remainderBand.max
+  };
+}
+
 function unitsToPrice(units: number): number {
-  if (units <= 0) return VOLUME_PRICING.singleItem;
-  return units * UNIT_PRICE;
+  return getTierPriceBand(units).min;
 }
 
 function buildQuoteRequestOmniContext(body: z.infer<typeof RequestSchema>): OmniLeadContext {
@@ -358,9 +378,127 @@ function applyMediaAddOnsToQuote(quote: QuoteResult, addOnTotal: number): QuoteR
   };
 }
 
+function roundToNearest(value: number, increment: number): number {
+  if (!Number.isFinite(value)) return increment;
+  return Math.round(value / increment) * increment;
+}
+
+function inferWeightPricingContext(job: JobInput, mediaAnalysis: MediaJobAnalysisRecord | null): WeightPricingContext {
+  const signals: string[] = [];
+  let score = 0;
+  const types = new Set(job.types);
+  const notes = typeof job.notes === "string" ? job.notes.toLowerCase() : "";
+
+  const addSignal = (signal: string, points: number) => {
+    signals.push(signal);
+    score += points;
+  };
+
+  if (types.has("construction_debris")) {
+    addSignal("construction or renovation debris can price differently because dense material adds weight", 2);
+  }
+  if (types.has("appliances")) {
+    addSignal("appliances add some weight and disposal uncertainty", 1);
+  }
+  if (types.has("hot_tub_playset")) {
+    addSignal("hot tubs and playsets can add weight, teardown, and disposal uncertainty", 2);
+  }
+  if (types.has("yard_waste")) {
+    addSignal("yard debris can be heavier when wet or mixed with soil/logs", 1);
+  }
+  if (types.has("business_commercial")) {
+    addSignal("commercial cleanouts may include denser material than household junk", 1);
+  }
+
+  const highWeightPatterns = [
+    /\b(concrete|cement|brick|bricks|block|cinder\s*block|tile|stone|rock|rocks|gravel|dirt|soil|sand|asphalt|pavers?)\b/u,
+    /\b(roofing|shingles|mortar|granite|marble)\b/u
+  ];
+  const mediumWeightPatterns = [
+    /\b(books?|magazines?|paper files?|filing cabinets?|safe|piano|washer|dryer|refrigerator|freezer|stove)\b/u,
+    /\b(metal|scrap|lumber|drywall|plaster|cabinets?|bathtub|vanity|toilets?)\b/u
+  ];
+
+  if (highWeightPatterns.some((pattern) => pattern.test(notes))) {
+    addSignal("notes mention very dense material such as concrete, dirt, brick, tile, roofing, or stone", 3);
+  }
+  if (mediumWeightPatterns.some((pattern) => pattern.test(notes))) {
+    addSignal("notes mention heavier household or renovation material", 2);
+  }
+  if (/\b(lot|lots|heavy|dense|tons?|pallets?|full of)\b/u.test(notes)) {
+    addSignal("notes suggest heavier-than-normal volume", 1);
+  }
+  if ((mediaAnalysis?.visibleTireCount ?? 0) > 0) {
+    addSignal("photos show tires, which can add disposal and weight considerations", 1);
+  }
+
+  const risk: WeightRisk = score >= 4 ? "high" : score >= 2 ? "medium" : score >= 1 ? "low" : "normal";
+  const rangePosition: Record<WeightRisk, number> = {
+    normal: 0,
+    low: 0.3,
+    medium: 0.65,
+    high: 1
+  };
+
+  const pricingFactors = [
+    "Estimated junk volume",
+    "Expected material weight",
+    ...(signals.length ? signals : ["No heavy-material signals from the selected category or notes"]),
+    "On-site review before final price"
+  ];
+
+  return {
+    risk,
+    signals,
+    rangePosition: rangePosition[risk],
+    disclaimer: ROUGH_ESTIMATE_DISCLAIMER,
+    pricingFactors
+  };
+}
+
+function applyTierBandPricingToQuote(quote: QuoteResult, context: WeightPricingContext): QuoteResult {
+  const lowUnits = priceToUnits(quote.priceLow);
+  const highUnits = Math.max(lowUnits, priceToUnits(quote.priceHigh));
+  const lowerBand = getTierPriceBand(lowUnits);
+  const upperBand = getTierPriceBand(highUnits);
+  const band = { min: lowerBand.min, max: upperBand.max };
+  const span = Math.max(0, band.max - band.min);
+  const rangeWidth = span <= 100 ? span : 100;
+  const maxStart = band.max - rangeWidth;
+  const rawStart = band.min + (maxStart - band.min) * context.rangePosition;
+  const low = span <= 0 ? band.min : roundToNearest(rawStart, 25);
+  const clampedLow = clampInt(low, band.min, maxStart);
+  const high = clampedLow + rangeWidth;
+  const reasonBase = typeof quote.reasonSummary === "string" ? quote.reasonSummary.trim() : "";
+  const weightSentence =
+    context.risk === "high"
+      ? " Dense or heavy materials can move the final price after the on-site review."
+      : context.risk === "medium"
+        ? " Weight-sensitive materials are included in this rough range."
+        : "";
+  const reasonSummary = `${reasonBase || "This rough range is based on your selected volume and material type."}${weightSentence}`;
+
+  return {
+    ...quote,
+    priceLow: clampedLow,
+    priceHigh: high,
+    reasonSummary,
+    needsInPersonEstimate: quote.needsInPersonEstimate || context.risk === "high"
+  };
+}
+
 function priceToUnits(price: number): number {
-  if (price === VOLUME_PRICING.singleItem) return 0;
-  return Math.round(price / UNIT_PRICE);
+  for (const [unit, band] of Object.entries(JUNK_TIER_PRICE_BANDS)) {
+    if (price === band.min) {
+      return Number(unit);
+    }
+  }
+  for (const [unit, band] of Object.entries(JUNK_TIER_PRICE_BANDS)) {
+    if (price >= band.min && price <= band.max) {
+      return Number(unit);
+    }
+  }
+  return Math.max(0, Math.round(price / UNIT_PRICE));
 }
 
 function getQuoteBounds(job: JobInput): QuoteBounds {
@@ -383,10 +521,8 @@ function getQuoteBounds(job: JobInput): QuoteBounds {
       maxUnits = 2;
       break;
     case "three_quarter_trailer":
-      // Many customers interpret "large" as "about a full trailer" (especially when items are spread out).
-      // Allow a 3/4-to-full range to reduce accidental oversizing into the multi-load category.
       minUnits = 3;
-      maxUnits = 4;
+      maxUnits = 3;
       break;
     case "small_area":
       minUnits = 1;
@@ -462,7 +598,7 @@ function formatTierLabel(minUnits: number, maxUnits: number): string {
 function shouldMentionMultiLoad(job: JobInput, bounds: QuoteBounds, priceHigh: number): boolean {
   if (job.perceivedSize === "big_cleanout") return true;
   if ((bounds.minHighUnits ?? 0) > 4) return true;
-  return priceHigh > VOLUME_PRICING.full;
+  return priceHigh > getTierPriceBand(4).min;
 }
 
 function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBounds): QuoteResult {
@@ -656,9 +792,10 @@ export async function POST(request: NextRequest) {
     const mediaBounds = canUseMediaAnalysisForBounds(mediaPricing?.analysis)
       ? mediaRangeToBounds(mediaPricing?.analysis.mergedVolumeRange ?? null)
       : null;
+    const weightPricing = inferWeightPricingContext(body.job, mediaPricing?.analysis ?? null);
     const bounds = mergeQuoteBoundsWithMedia(originalBounds, mediaBounds, body.job);
     const fallback = getFallbackQuote(body.job, bounds);
-    const aiResult = await getQuoteFromAi(body, bounds, mediaPricing?.analysis ?? null).catch((err) => {
+    const aiResult = await getQuoteFromAi(body, bounds, mediaPricing?.analysis ?? null, weightPricing).catch((err) => {
       console.error("[junk-quote] ai_failed", err instanceof Error ? err.message : err);
       return fallback;
     });
@@ -668,10 +805,18 @@ export async function POST(request: NextRequest) {
       console.error("[junk-quote] ai_invalid_response", aiResult);
     }
 
-    const base = applyMediaAddOnsToQuote(applyBoundsToQuote(baseCandidate, body.job, bounds), mediaPricing?.addOnTotal ?? 0);
+    const base = applyMediaAddOnsToQuote(
+      applyTierBandPricingToQuote(applyBoundsToQuote(baseCandidate, body.job, bounds), weightPricing),
+      mediaPricing?.addOnTotal ?? 0
+    );
 
     const storedAiResult = {
       ...base,
+      isRoughEstimate: true,
+      estimateDisclaimer: weightPricing.disclaimer,
+      weightRisk: weightPricing.risk,
+      weightSignals: weightPricing.signals,
+      pricingFactors: weightPricing.pricingFactors,
       mediaAnalysis:
         mediaPricing?.analysis
           ? {
@@ -829,7 +974,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const discountAmount = resolveJunkFixedDiscountDollars();
+    const minimumPickupPrice = JUNK_TIER_PRICE_BANDS[0]!.min;
+    const discountAmount = base.priceHigh > minimumPickupPrice ? resolveJunkFixedDiscountDollars() : 0;
     const priceLowDiscounted = discountAmount > 0 ? Math.max(0, base.priceLow - discountAmount) : undefined;
     const priceHighDiscounted = discountAmount > 0 ? Math.max(0, base.priceHigh - discountAmount) : undefined;
 
@@ -840,6 +986,11 @@ export async function POST(request: NextRequest) {
         quote: {
           ...base,
           addOnTotal: mediaPricing?.addOnTotal ?? 0,
+          isRoughEstimate: true,
+          estimateDisclaimer: weightPricing.disclaimer,
+          weightRisk: weightPricing.risk,
+          weightSignals: weightPricing.signals,
+          pricingFactors: weightPricing.pricingFactors,
           mediaAnalysis:
             mediaPricing?.analysis
               ? {
@@ -869,7 +1020,8 @@ async function getQuoteFromAi(
   body: z.infer<typeof RequestSchema>,
   bounds: QuoteBounds,
   mediaAnalysis: MediaJobAnalysisRecord | null,
-) {
+  weightPricing: WeightPricingContext,
+): Promise<unknown> {
   const apiKey = process.env["OPENAI_API_KEY"];
   const model = (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
   if (!apiKey) {
@@ -927,21 +1079,33 @@ async function getQuoteFromAi(
           summary: mediaAnalysis.summary,
         }
       : null,
+    weightPricing: {
+      risk: weightPricing.risk,
+      signals: weightPricing.signals,
+      rangePosition: weightPricing.rangePosition,
+    },
   };
   const jobForAiInput = JSON.stringify(jobForAi);
 
-  async function requestOpenAi(format: TextFormat) {
+  async function requestOpenAi(format: TextFormat): Promise<unknown> {
     const allowedUnits = Array.from(
       { length: Math.max(0, bounds.maxUnits - bounds.minUnits + 1) },
       (_, i) => bounds.minUnits + i
     );
-    const allowedPrices = allowedUnits.map((u) => unitsToPrice(u));
+    const allowedPriceBands = allowedUnits.map((u) => {
+      const band = getTierPriceBand(u);
+      return `${formatFraction(u)}=${band.min}-${band.max}`;
+    });
     const minHighPrice = typeof bounds.minHighUnits === "number" ? unitsToPrice(bounds.minHighUnits) : null;
 
     const mustMentionMultiLoad = shouldMentionMultiLoad(body.job, bounds, minHighPrice ?? unitsToPrice(bounds.maxUnits));
     const dynamicRules = [
-      `Allowed prices for this request are ONLY: ${allowedPrices.join(", ")}.`,
+      `Allowed customer-facing tier bands for this request are ONLY: ${allowedPriceBands.join(", ")}.`,
+      "Choose the most likely tier from the customer description. The backend will dial the displayed estimate into a roughly $100 range inside that tier band.",
       minHighPrice ? `Because of the job size/type, priceHigh MUST be >= ${minHighPrice}.` : null,
+      weightPricing.risk === "medium" || weightPricing.risk === "high"
+        ? `Weight risk is ${weightPricing.risk}. Mention weight-sensitive material briefly in reasonSummary.`
+        : null,
       mustMentionMultiLoad
         ? `Your reasonSummary MUST mention that the job may require more than one trailer load.`
         : `Do NOT mention multi-loads unless it could realistically be multiple loads.`
@@ -1055,12 +1219,14 @@ async function getQuoteFromAi(
     const raw = outputTextParts.join("\n").trim() || anyTextParts.join("\n").trim();
     if (raw) {
       try {
-        return JSON.parse(raw);
+        const parsed: unknown = JSON.parse(raw);
+        return parsed;
       } catch {
         const start = raw.indexOf("{");
         const end = raw.lastIndexOf("}");
         if (start !== -1 && end !== -1 && end > start) {
-          return JSON.parse(raw.slice(start, end + 1));
+          const parsed: unknown = JSON.parse(raw.slice(start, end + 1));
+          return parsed;
         }
         throw new Error("ai_invalid_json_output");
       }
@@ -1069,7 +1235,8 @@ async function getQuoteFromAi(
     if (outputJsonParts.length) {
       const candidate = outputJsonParts[0];
       if (typeof candidate === "string") {
-        return JSON.parse(candidate);
+        const parsed: unknown = JSON.parse(candidate);
+        return parsed;
       }
       return candidate;
     }
@@ -1112,7 +1279,9 @@ async function getQuoteFromAi(
           outputLen: outputItems.length,
           outputSummary
         });
-      } catch {}
+      } catch {
+        // Best-effort diagnostic logging only.
+      }
     };
 
     if (status !== "completed") {
@@ -1145,32 +1314,36 @@ async function getQuoteFromAi(
 
 const SYSTEM_PROMPT = `
 You are the quoting assistant for Stonegate Junk Removal in Woodstock, Georgia.
-Stonegate uses one large 7x16x4 dump trailer. Pricing is based on a minimum pickup or trailer volume.
-Do NOT add charges for weight, stairs, distance, time, urgency, heavy/bulky items, or difficulty.
+Stonegate uses one large 7x16x4 dump trailer. Pricing is based on trailer volume plus weight-sensitive material.
+Do NOT add charges for stairs, distance, time, urgency, or general difficulty.
 
-Base prices:
-- Minimum pickup: $150
-- 1/4 trailer: $175
-- 1/2 trailer: $350
-- 3/4 trailer: $525
-- Full trailer: $700
+Customer-facing tier bands:
+- Single item / minimum pickup: $175
+- 1/4 trailer: $220-$400 depending on weight
+- 1/2 trailer: $350-$600 depending on weight
+- 3/4 trailer: $500-$800 depending on weight
+- Full trailer: $750-$1050 depending on weight
+
+Weight:
+- Dense materials like concrete, dirt, tile, brick, stone, roofing, or large amounts of books/paper can change the final price.
+- The backend provides weight risk and dials the final displayed estimate into a roughly $100 range inside the tier band. Your job is to choose the right tier and explain weight risk when present.
 
 Multi-load jobs:
-- If you believe the job can require more than one trailer load, you may quote above $600.
-- Use the base prices above as reference and keep priceLow/priceHigh aligned to realistic trailer-load amounts (avoid odd, non-tier numbers).
+- If you believe the job can require more than one trailer load, you may quote above the full-load band.
+- Use the tier bands above as reference and avoid unrelated pricing schemes.
 
 Rules:
 - Respond ONLY with JSON: { "loadFractionEstimate": number, "priceLow": number, "priceHigh": number, "displayTierLabel": string, "reasonSummary": string, "needsInPersonEstimate": boolean }
 - Always return priceLow and priceHigh. They may be equal if the range is very tight.
 - Map perceived size to trailer fraction:
   single_item -> minimum pickup
-  min_pickup -> 1/4 trailer minimum pickup
+  min_pickup -> 1/4 trailer
   half_trailer -> 1/2 trailer
   three_quarter_trailer -> 3/4 trailer
   big_cleanout -> 1.0-2.0 trailer loads (can be multiple loads)
   not_sure -> err on 0.5+ unless clearly tiny
-- Use the base prices above; do not invent unrelated pricing schemes.
+- Use the tier bands above; do not invent unrelated pricing schemes.
 - If the job seems uncertain or could be multiple loads, widen the range and set needsInPersonEstimate=true.
 - displayTierLabel: short category like "Small load", "Half trailer", "Large to full trailer", "Multi-trailer project".
-- reasonSummary: one friendly sentence.
+- reasonSummary: one friendly sentence that describes the rough estimate basis, not a guaranteed final price.
 `.trim();
