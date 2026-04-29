@@ -20,13 +20,12 @@ import {
 } from "../lib/booking-details";
 import { formatDayKey, TEAM_TIME_ZONE } from "../lib/timezone";
 import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFields";
+import { CrewCompletionBookingDetailsEditor } from "./CrewCompletionBookingDetailsEditor";
 import { CrewPayoutSelector } from "./CrewPayoutSelector";
 import { labelForPipelineStage } from "./pipeline.stages";
 import {
   TEAM_CARD_PADDED,
   TEAM_EMPTY_STATE,
-  TEAM_SECTION_SUBTITLE,
-  TEAM_SECTION_TITLE,
   teamButtonClass,
 } from "./team-ui";
 
@@ -876,6 +875,12 @@ function AppointmentCard({
                     ? `Quoted amount is prefilled at ${fmtUsdCents(a.quotedTotalCents)} for speed. Card tips are tracked separately and are not counted in revenue.`
                     : "Card tips are tracked separately and are not counted in revenue."}
                 </div>
+
+                <CrewCompletionBookingDetailsEditor
+                  teamMembers={teamMembers}
+                  bookingDetails={a.bookingDetails}
+                  quotedTotalCents={a.quotedTotalCents}
+                />
 
                 <details className="sm:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
                   <summary className="cursor-pointer font-medium select-none">

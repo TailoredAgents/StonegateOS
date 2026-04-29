@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 import { requireTeamRole } from "@/app/api/team/auth";
+import { parseAppointmentBookingFormData } from "@/app/team/lib/booking-details";
 import { resolveLockedCrewPayout } from "@/app/team/lib/locked-crew-payout";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +28,21 @@ function parseUsdToCents(value: unknown): number | null {
 
 function hasEnteredValue(value: FormDataEntryValue | null): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function wantsBookingDetailsUpdate(formData: FormData): boolean {
+  const value = formData.get("updateBookingDetails");
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function redirectWithFlash(
+  redirectTo: URL,
+  name: "myst-flash" | "myst-flash-error",
+  value: string,
+): NextResponse {
+  const response = NextResponse.redirect(redirectTo, 303);
+  response.cookies.set({ name, value, path: "/" });
+  return response;
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -66,6 +82,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   const statusValue = status.trim();
   const payload: Record<string, unknown> = { status: statusValue };
   const isQuoteOnly = isQuoteOnlyAppointmentType(appointmentType);
+  const shouldUpdateBookingDetails =
+    statusValue === "completed" &&
+    !isQuoteOnly &&
+    wantsBookingDetailsUpdate(formData);
 
   if (statusValue === "completed" && !isQuoteOnly) {
     const cents = parseUsdToCents(formData.get("finalTotal"));
@@ -120,6 +140,45 @@ export async function POST(request: NextRequest): Promise<Response> {
       return response;
     }
     payload["crewMembers"] = resolvedCrewPayout.splits;
+  }
+
+  if (shouldUpdateBookingDetails) {
+    const bookingDetailsResult = parseAppointmentBookingFormData(formData);
+    if (!bookingDetailsResult.ok) {
+      return redirectWithFlash(
+        redirectTo,
+        "myst-flash-error",
+        bookingDetailsResult.error,
+      );
+    }
+
+    const bookingUpdateResponse = await callAdminApi(
+      `/api/appointments/${appointmentId.trim()}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          quotedTotalCents: bookingDetailsResult.quotedTotalCents,
+          bookingDetails: bookingDetailsResult.bookingDetails,
+        }),
+      },
+    );
+
+    if (!bookingUpdateResponse.ok) {
+      let message = "Unable to update quote and job size";
+      try {
+        const data = (await bookingUpdateResponse.json()) as {
+          error?: string;
+          message?: string;
+        };
+        const candidate = data.message ?? data.error;
+        if (typeof candidate === "string" && candidate.trim().length > 0) {
+          message = candidate.replace(/_/g, " ");
+        }
+      } catch {
+        // ignore
+      }
+      return redirectWithFlash(redirectTo, "myst-flash-error", message);
+    }
   }
 
   const apiResponse = await callAdminApi(
