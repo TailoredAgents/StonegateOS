@@ -6,10 +6,6 @@ import { revalidatePath } from "next/cache";
 import type { Route } from "next";
 import { TEAM_SESSION_COOKIE } from "@/lib/team-session";
 import { callAdminApi } from "../team/lib/api";
-import {
-  parseAppointmentBookingFormData,
-  resolveBookingSelection,
-} from "../team/lib/booking-details";
 import { callTeamApi, callTeamPublicApi } from "../team/login/lib/api";
 import { hasMobilePermission, resolveMobileSessionFromCookies } from "./lib/session";
 
@@ -584,6 +580,7 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   const appointmentTypeRaw = formData.get("appointmentType");
   const startAtRaw = formData.get("startAt");
   const durationRaw = formData.get("durationMinutes");
+  const quotedTotalRaw = formData.get("quotedTotal");
   const notesRaw = formData.get("notes");
   const addressLine1Raw = formData.get("addressLine1");
   const addressLine2Raw = formData.get("addressLine2");
@@ -593,13 +590,13 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
   let propertyId = typeof propertyIdRaw === "string" ? propertyIdRaw.trim() : "";
   const threadId = typeof threadIdRaw === "string" ? threadIdRaw.trim() : "";
-  const bookingSelection = resolveBookingSelection(
-    typeof appointmentTypeRaw === "string" ? appointmentTypeRaw.trim() : "",
-  );
-  const isInPersonQuote = bookingSelection === "in_person_quote";
-  const appointmentType = isInPersonQuote ? "in_person_quote" : "job";
+  const appointmentType =
+    typeof appointmentTypeRaw === "string" && appointmentTypeRaw.trim() === "in_person_quote"
+      ? "in_person_quote"
+      : "job";
   const startAt = typeof startAtRaw === "string" ? startAtRaw.trim() : "";
   const durationMinutes = typeof durationRaw === "string" ? Number(durationRaw) : NaN;
+  const quotedTotalCents = parseUsdToCents(quotedTotalRaw);
   const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
   const addressLine1 = typeof addressLine1Raw === "string" ? addressLine1Raw.trim() : "";
   const addressLine2 = typeof addressLine2Raw === "string" ? addressLine2Raw.trim() : "";
@@ -621,23 +618,6 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   }
   if (!propertyId && (!addressLine1 || !city || !state || !postalCode)) {
     redirect(errorRedirect("complete_address_required"));
-  }
-
-  let bookingDetailsResult:
-    | ReturnType<typeof parseAppointmentBookingFormData>
-    | { ok: true; bookingDetails: null; quotedTotalCents: null };
-
-  if (isInPersonQuote) {
-    bookingDetailsResult = {
-      ok: true,
-      bookingDetails: null,
-      quotedTotalCents: null,
-    };
-  } else {
-    bookingDetailsResult = parseAppointmentBookingFormData(formData);
-    if (!bookingDetailsResult.ok) {
-      redirect(errorRedirect(bookingDetailsResult.error));
-    }
   }
 
   if (!propertyId) {
@@ -671,16 +651,10 @@ export async function bookMobileAppointmentAction(formData: FormData) {
     startAt,
     durationMinutes: Number.isFinite(durationMinutes) && durationMinutes > 0 ? durationMinutes : 60,
     travelBufferMinutes: 30,
-    services: isInPersonQuote ? [] : [bookingSelection],
     source: "mobile"
   };
 
-  if (bookingDetailsResult.quotedTotalCents !== null) {
-    payload["quotedTotalCents"] = bookingDetailsResult.quotedTotalCents;
-  }
-  if (bookingDetailsResult.bookingDetails) {
-    payload["bookingDetails"] = bookingDetailsResult.bookingDetails;
-  }
+  if (quotedTotalCents !== null) payload["quotedTotalCents"] = quotedTotalCents;
   if (notes) payload["notes"] = notes;
 
   const response = await callAdminApi("/api/admin/booking/book", {
