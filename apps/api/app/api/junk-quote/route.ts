@@ -1,7 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
+import {
+  getDb,
+  crmPipeline,
+  instantQuotes,
+  leads,
+  outboxEvents,
+  properties,
+} from "@/db";
 import { isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
 import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
@@ -14,18 +21,26 @@ import {
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 
 const RAW_ALLOWED_ORIGINS =
-  process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+  process.env["CORS_ALLOW_ORIGINS"] ??
+  process.env["NEXT_PUBLIC_SITE_URL"] ??
+  process.env["SITE_URL"] ??
+  "*";
 
 function resolveOrigin(requestOrigin: string | null): string {
   if (RAW_ALLOWED_ORIGINS === "*") return "*";
-  const allowed = RAW_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/+$/u, "")).filter(Boolean);
+  const allowed = RAW_ALLOWED_ORIGINS.split(",")
+    .map((o) => o.trim().replace(/\/+$/u, ""))
+    .filter(Boolean);
   if (!allowed.length) return "*";
   const origin = requestOrigin?.trim().replace(/\/+$/u, "") ?? null;
   if (origin && allowed.includes(origin)) return origin;
   return allowed[0] ?? "*";
 }
 
-function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
+function applyCors(
+  response: NextResponse,
+  requestOrigin: string | null,
+): NextResponse {
   const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.set("Vary", "Origin");
@@ -35,19 +50,48 @@ function applyCors(response: NextResponse, requestOrigin: string | null): NextRe
   return response;
 }
 
-function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseInit): NextResponse {
+function corsJson(
+  body: unknown,
+  requestOrigin: string | null,
+  init?: ResponseInit,
+): NextResponse {
   return applyCors(NextResponse.json(body, init), requestOrigin);
 }
 
 export function OPTIONS(request: NextRequest): NextResponse {
-  return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+  return applyCors(
+    new NextResponse(null, { status: 204 }),
+    request.headers.get("origin"),
+  );
 }
 
-function resolveJunkFixedDiscountDollars(): number {
-  const envRaw = process.env["INSTANT_QUOTE_DISCOUNT_JUNK_AMOUNT"];
+function resolveJunkDisplayDiscountPercent(): number {
+  const envRaw = process.env["INSTANT_QUOTE_DISCOUNT_JUNK_PERCENT"];
   const envValue = envRaw ? Number(envRaw) : NaN;
-  if (Number.isFinite(envValue) && envValue > 0) return Math.round(envValue);
-  return 40;
+  if (Number.isFinite(envValue) && envValue > 0 && envValue < 1)
+    return envValue;
+  return 0.25;
+}
+
+function roundUpToNearestDollars(value: number, increment: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (!Number.isFinite(increment) || increment <= 0) return Math.ceil(value);
+  return Math.ceil(value / increment) * increment;
+}
+
+function getPreDiscountPrice(
+  discountedPrice: number,
+  discountPercent: number,
+): number {
+  if (!Number.isFinite(discountedPrice)) return 0;
+  if (
+    !Number.isFinite(discountPercent) ||
+    discountPercent <= 0 ||
+    discountPercent >= 1
+  ) {
+    return Math.round(discountedPrice);
+  }
+  return roundUpToNearestDollars(discountedPrice / (1 - discountPercent), 25);
 }
 
 const RequestSchema = z.object({
@@ -55,7 +99,10 @@ const RequestSchema = z.object({
   contact: z.object({
     name: z.string().min(2),
     phone: z.string().min(7),
-    timeframe: z.enum(["today", "tomorrow", "this_week", "flexible"]).optional().default("flexible")
+    timeframe: z
+      .enum(["today", "tomorrow", "this_week", "flexible"])
+      .optional()
+      .default("flexible"),
   }),
   job: z.object({
     types: z
@@ -67,8 +114,8 @@ const RequestSchema = z.object({
           "yard_waste",
           "construction_debris",
           "hot_tub_playset",
-          "business_commercial"
-        ])
+          "business_commercial",
+        ]),
       )
       .optional()
       .default([]),
@@ -85,26 +132,31 @@ const RequestSchema = z.object({
         "one_room_or_half_garage",
         // Shared
         "big_cleanout",
-        "not_sure"
+        "not_sure",
       ])
       .optional()
       .default("not_sure"),
     notes: z.string().optional().nullable(),
     zip: z.string().min(3),
     photoUrls: z
-      .preprocess((value) => (value == null ? undefined : value), z.array(z.string().url().max(2048)).max(10).default([]))
+      .preprocess(
+        (value) => (value == null ? undefined : value),
+        z.array(z.string().url().max(2048)).max(10).default([]),
+      )
       .refine(
         (urls) =>
           urls.every((url) => {
             try {
               const parsed = new URL(url);
-              return parsed.protocol === "http:" || parsed.protocol === "https:";
+              return (
+                parsed.protocol === "http:" || parsed.protocol === "https:"
+              );
             } catch {
               return false;
             }
           }),
-        { message: "Photo URLs must be http(s) links." }
-      )
+        { message: "Photo URLs must be http(s) links." },
+      ),
   }),
   utm: z
     .object({
@@ -114,9 +166,9 @@ const RequestSchema = z.object({
       term: z.string().optional(),
       content: z.string().optional(),
       gclid: z.string().optional(),
-      fbclid: z.string().optional()
+      fbclid: z.string().optional(),
     })
-    .optional()
+    .optional(),
 });
 
 const QuoteResultSchema = z
@@ -126,22 +178,23 @@ const QuoteResultSchema = z
     priceHigh: z.number(),
     displayTierLabel: z.string(),
     reasonSummary: z.string(),
-    needsInPersonEstimate: z.boolean()
+    needsInPersonEstimate: z.boolean(),
   })
   .superRefine((value, ctx) => {
-    if (!Number.isFinite(value.priceLow) || !Number.isFinite(value.priceHigh)) return;
+    if (!Number.isFinite(value.priceLow) || !Number.isFinite(value.priceHigh))
+      return;
     if (value.priceLow > value.priceHigh) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "priceLow must be <= priceHigh",
-        path: ["priceLow"]
+        path: ["priceLow"],
       });
     }
     if (value.priceLow < 150 || value.priceHigh < 150) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "prices must be >= 150",
-        path: ["priceLow"]
+        path: ["priceLow"],
       });
     }
   });
@@ -173,14 +226,14 @@ type WeightPricingContext = {
 };
 
 const ROUGH_ESTIMATE_DISCLAIMER =
-  "This is a rough estimate based on your description and any photos provided. Final pricing is confirmed in person before work starts and may change if volume, weight, access, or materials differ from what was described.";
+  "We review the job in person first. The estimate only changes if volume, weight, access, or materials differ from what was entered.";
 
 const JUNK_TIER_PRICE_BANDS: Record<number, { min: number; max: number }> = {
   0: { min: 175, max: 175 },
   1: { min: 220, max: 400 },
   2: { min: 350, max: 600 },
   3: { min: 500, max: 800 },
-  4: { min: 750, max: 1050 }
+  4: { min: 750, max: 1050 },
 };
 
 function clampInt(value: number, min: number, max: number): number {
@@ -198,10 +251,13 @@ function getTierPriceBand(units: number): { min: number; max: number } {
   const fullLoads = Math.floor(normalizedUnits / 4);
   const remainderUnits = normalizedUnits % 4;
   const fullBand = JUNK_TIER_PRICE_BANDS[4]!;
-  const remainderBand = remainderUnits > 0 ? JUNK_TIER_PRICE_BANDS[remainderUnits]! : { min: 0, max: 0 };
+  const remainderBand =
+    remainderUnits > 0
+      ? JUNK_TIER_PRICE_BANDS[remainderUnits]!
+      : { min: 0, max: 0 };
   return {
     min: fullLoads * fullBand.min + remainderBand.min,
-    max: fullLoads * fullBand.max + remainderBand.max
+    max: fullLoads * fullBand.max + remainderBand.max,
   };
 }
 
@@ -209,8 +265,11 @@ function unitsToPrice(units: number): number {
   return getTierPriceBand(units).min;
 }
 
-function buildQuoteRequestOmniContext(body: z.infer<typeof RequestSchema>): OmniLeadContext {
-  const trimmedNotes = typeof body.job.notes === "string" ? body.job.notes.trim() : "";
+function buildQuoteRequestOmniContext(
+  body: z.infer<typeof RequestSchema>,
+): OmniLeadContext {
+  const trimmedNotes =
+    typeof body.job.notes === "string" ? body.job.notes.trim() : "";
   return {
     contact: {
       id: "00000000-0000-0000-0000-000000000000",
@@ -283,7 +342,8 @@ function buildQuoteRequestOmniContext(body: z.infer<typeof RequestSchema>): Omni
       knownCity: null,
       knownZip: normalizePostalCode(body.job.zip),
       hasKnownJob: body.job.types.length > 0 || trimmedNotes.length > 0,
-      hasPhotos: Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0,
+      hasPhotos:
+        Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0,
       missingFields: [],
     },
     derived: {
@@ -297,14 +357,19 @@ function buildQuoteRequestOmniContext(body: z.infer<typeof RequestSchema>): Omni
       lastPromisedNextStep: null,
       lastHumanSummary: null,
       bookingReadiness: "low",
-      quoteConfidence: Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0 ? "medium" : "low",
+      quoteConfidence:
+        Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0
+          ? "medium"
+          : "low",
       missingFields: [],
       exceptionSignals: [],
     },
   };
 }
 
-function mediaRangeToBounds(range: string | null | undefined): QuoteBounds | null {
+function mediaRangeToBounds(
+  range: string | null | undefined,
+): QuoteBounds | null {
   switch ((range ?? "").trim()) {
     case "under_quarter":
       return { minUnits: 0, maxUnits: 1 };
@@ -329,11 +394,17 @@ function mediaRangeToBounds(range: string | null | undefined): QuoteBounds | nul
   }
 }
 
-function canUseMediaAnalysisForBounds(analysis: MediaJobAnalysisRecord | null | undefined): boolean {
+function canUseMediaAnalysisForBounds(
+  analysis: MediaJobAnalysisRecord | null | undefined,
+): boolean {
   return analysis?.source === "vision_v1";
 }
 
-function mergeQuoteBoundsWithMedia(base: QuoteBounds, media: QuoteBounds | null, job: JobInput): QuoteBounds {
+function mergeQuoteBoundsWithMedia(
+  base: QuoteBounds,
+  media: QuoteBounds | null,
+  job: JobInput,
+): QuoteBounds {
   if (!media) return base;
 
   const merged: QuoteBounds = {
@@ -347,29 +418,39 @@ function mergeQuoteBoundsWithMedia(base: QuoteBounds, media: QuoteBounds | null,
     return {
       minUnits: Math.max(merged.minUnits, base.minUnits),
       maxUnits: Math.max(merged.maxUnits, base.maxUnits),
-      minHighUnits: Math.max(merged.minHighUnits ?? 0, base.minHighUnits ?? 0) || undefined,
+      minHighUnits:
+        Math.max(merged.minHighUnits ?? 0, base.minHighUnits ?? 0) || undefined,
     };
   }
 
-  if (types.has("business_commercial") && job.perceivedSize === "big_cleanout") {
+  if (
+    types.has("business_commercial") &&
+    job.perceivedSize === "big_cleanout"
+  ) {
     return {
       minUnits: Math.max(merged.minUnits, base.minUnits),
       maxUnits: Math.max(merged.maxUnits, base.maxUnits),
-      minHighUnits: Math.max(merged.minHighUnits ?? 0, base.minHighUnits ?? 0) || undefined,
+      minHighUnits:
+        Math.max(merged.minHighUnits ?? 0, base.minHighUnits ?? 0) || undefined,
     };
   }
 
   return merged;
 }
 
-function calculateMediaAddOnTotal(analysis: MediaJobAnalysisRecord | null | undefined): number {
+function calculateMediaAddOnTotal(
+  analysis: MediaJobAnalysisRecord | null | undefined,
+): number {
   if (!analysis) return 0;
   const mattresses = Math.max(0, analysis.visibleMattressCount ?? 0);
   const paintCans = Math.max(0, analysis.visiblePaintCanCount ?? 0);
   return mattresses * PUBLIC_MATTRESS_FEE + paintCans * PUBLIC_PAINT_CAN_FEE;
 }
 
-function applyMediaAddOnsToQuote(quote: QuoteResult, addOnTotal: number): QuoteResult {
+function applyMediaAddOnsToQuote(
+  quote: QuoteResult,
+  addOnTotal: number,
+): QuoteResult {
   if (!Number.isFinite(addOnTotal) || addOnTotal <= 0) return quote;
   return {
     ...quote,
@@ -383,7 +464,10 @@ function roundToNearest(value: number, increment: number): number {
   return Math.round(value / increment) * increment;
 }
 
-function inferWeightPricingContext(job: JobInput, mediaAnalysis: MediaJobAnalysisRecord | null): WeightPricingContext {
+function inferWeightPricingContext(
+  job: JobInput,
+  mediaAnalysis: MediaJobAnalysisRecord | null,
+): WeightPricingContext {
   const signals: string[] = [];
   let score = 0;
   const types = new Set(job.types);
@@ -395,32 +479,44 @@ function inferWeightPricingContext(job: JobInput, mediaAnalysis: MediaJobAnalysi
   };
 
   if (types.has("construction_debris")) {
-    addSignal("construction or renovation debris can price differently because dense material adds weight", 2);
+    addSignal(
+      "construction or renovation debris can price differently because dense material adds weight",
+      2,
+    );
   }
   if (types.has("appliances")) {
     addSignal("appliances add some weight and disposal uncertainty", 1);
   }
   if (types.has("hot_tub_playset")) {
-    addSignal("hot tubs and playsets can add weight, teardown, and disposal uncertainty", 2);
+    addSignal(
+      "hot tubs and playsets can add weight, teardown, and disposal uncertainty",
+      2,
+    );
   }
   if (types.has("yard_waste")) {
     addSignal("yard debris can be heavier when wet or mixed with soil/logs", 1);
   }
   if (types.has("business_commercial")) {
-    addSignal("commercial cleanouts may include denser material than household junk", 1);
+    addSignal(
+      "commercial cleanouts may include denser material than household junk",
+      1,
+    );
   }
 
   const highWeightPatterns = [
     /\b(concrete|cement|brick|bricks|block|cinder\s*block|tile|stone|rock|rocks|gravel|dirt|soil|sand|asphalt|pavers?)\b/u,
-    /\b(roofing|shingles|mortar|granite|marble)\b/u
+    /\b(roofing|shingles|mortar|granite|marble)\b/u,
   ];
   const mediumWeightPatterns = [
     /\b(books?|magazines?|paper files?|filing cabinets?|safe|piano|washer|dryer|refrigerator|freezer|stove)\b/u,
-    /\b(metal|scrap|lumber|drywall|plaster|cabinets?|bathtub|vanity|toilets?)\b/u
+    /\b(metal|scrap|lumber|drywall|plaster|cabinets?|bathtub|vanity|toilets?)\b/u,
   ];
 
   if (highWeightPatterns.some((pattern) => pattern.test(notes))) {
-    addSignal("notes mention very dense material such as concrete, dirt, brick, tile, roofing, or stone", 3);
+    addSignal(
+      "notes mention very dense material such as concrete, dirt, brick, tile, roofing, or stone",
+      3,
+    );
   }
   if (mediumWeightPatterns.some((pattern) => pattern.test(notes))) {
     addSignal("notes mention heavier household or renovation material", 2);
@@ -429,22 +525,28 @@ function inferWeightPricingContext(job: JobInput, mediaAnalysis: MediaJobAnalysi
     addSignal("notes suggest heavier-than-normal volume", 1);
   }
   if ((mediaAnalysis?.visibleTireCount ?? 0) > 0) {
-    addSignal("photos show tires, which can add disposal and weight considerations", 1);
+    addSignal(
+      "photos show tires, which can add disposal and weight considerations",
+      1,
+    );
   }
 
-  const risk: WeightRisk = score >= 4 ? "high" : score >= 2 ? "medium" : score >= 1 ? "low" : "normal";
+  const risk: WeightRisk =
+    score >= 4 ? "high" : score >= 2 ? "medium" : score >= 1 ? "low" : "normal";
   const rangePosition: Record<WeightRisk, number> = {
     normal: 0,
     low: 0.3,
     medium: 0.65,
-    high: 1
+    high: 1,
   };
 
   const pricingFactors = [
     "Estimated junk volume",
     "Expected material weight",
-    ...(signals.length ? signals : ["No heavy-material signals from the selected category or notes"]),
-    "On-site review before final price"
+    ...(signals.length
+      ? signals
+      : ["No heavy-material signals from the selected category or notes"]),
+    "On-site review before final price",
   ];
 
   return {
@@ -452,11 +554,14 @@ function inferWeightPricingContext(job: JobInput, mediaAnalysis: MediaJobAnalysi
     signals,
     rangePosition: rangePosition[risk],
     disclaimer: ROUGH_ESTIMATE_DISCLAIMER,
-    pricingFactors
+    pricingFactors,
   };
 }
 
-function applyTierBandPricingToQuote(quote: QuoteResult, context: WeightPricingContext): QuoteResult {
+function applyTierBandPricingToQuote(
+  quote: QuoteResult,
+  context: WeightPricingContext,
+): QuoteResult {
   const lowUnits = priceToUnits(quote.priceLow);
   const highUnits = Math.max(lowUnits, priceToUnits(quote.priceHigh));
   const lowerBand = getTierPriceBand(lowUnits);
@@ -469,21 +574,23 @@ function applyTierBandPricingToQuote(quote: QuoteResult, context: WeightPricingC
   const low = span <= 0 ? band.min : roundToNearest(rawStart, 25);
   const clampedLow = clampInt(low, band.min, maxStart);
   const high = clampedLow + rangeWidth;
-  const reasonBase = typeof quote.reasonSummary === "string" ? quote.reasonSummary.trim() : "";
+  const reasonBase =
+    typeof quote.reasonSummary === "string" ? quote.reasonSummary.trim() : "";
   const weightSentence =
     context.risk === "high"
-      ? " Dense or heavy materials can move the final price after the on-site review."
+      ? " Heavy materials may affect the final price after the on-site review."
       : context.risk === "medium"
-        ? " Weight-sensitive materials are included in this rough range."
+        ? " Heavier materials are included in this estimate range."
         : "";
-  const reasonSummary = `${reasonBase || "This rough range is based on your selected volume and material type."}${weightSentence}`;
+  const reasonSummary = `${reasonBase || "This estimate is based on your selected volume and material type."}${weightSentence}`;
 
   return {
     ...quote,
     priceLow: clampedLow,
     priceHigh: high,
     reasonSummary,
-    needsInPersonEstimate: quote.needsInPersonEstimate || context.risk === "high"
+    needsInPersonEstimate:
+      quote.needsInPersonEstimate || context.risk === "high",
   };
 }
 
@@ -550,7 +657,10 @@ function getQuoteBounds(job: JobInput): QuoteBounds {
     minHighUnits = Math.max(minHighUnits ?? 0, 4) || undefined;
   }
 
-  if (types.has("business_commercial") && job.perceivedSize === "big_cleanout") {
+  if (
+    types.has("business_commercial") &&
+    job.perceivedSize === "big_cleanout"
+  ) {
     minUnits = Math.max(minUnits, 4);
     maxUnits = Math.max(maxUnits, 8);
     minHighUnits = Math.max(minHighUnits ?? 0, 6) || undefined;
@@ -559,13 +669,18 @@ function getQuoteBounds(job: JobInput): QuoteBounds {
   return {
     minUnits: clampInt(minUnits, 0, 50),
     maxUnits: clampInt(maxUnits, 0, 50),
-    minHighUnits: typeof minHighUnits === "number" ? clampInt(minHighUnits, 0, 50) : undefined
+    minHighUnits:
+      typeof minHighUnits === "number"
+        ? clampInt(minHighUnits, 0, 50)
+        : undefined,
   };
 }
 
 function formatLoadCount(units: number): string {
   const loads = units / 4;
-  return Number.isInteger(loads) ? String(loads) : loads.toFixed(2).replace(/\.?0+$/u, "");
+  return Number.isInteger(loads)
+    ? String(loads)
+    : loads.toFixed(2).replace(/\.?0+$/u, "");
 }
 
 function formatFraction(units: number): string {
@@ -581,7 +696,10 @@ function formatTierLabel(minUnits: number, maxUnits: number): string {
   if (minUnits === maxUnits) {
     if (minUnits === 0) return "Minimum pickup";
     if (minUnits === 1) return "Small pickup (1-4 items)";
-    if (minUnits <= 4) return minUnits === 4 ? "Full trailer" : `${formatFraction(minUnits)} trailer`;
+    if (minUnits <= 4)
+      return minUnits === 4
+        ? "Full trailer"
+        : `${formatFraction(minUnits)} trailer`;
     return `${formatLoadCount(minUnits)} trailer loads`;
   }
 
@@ -591,23 +709,39 @@ function formatTierLabel(minUnits: number, maxUnits: number): string {
     return `${left} to ${right} trailer`;
   }
 
-  const left = minUnits === 4 ? "1" : minUnits < 4 ? formatFraction(minUnits) : formatLoadCount(minUnits);
+  const left =
+    minUnits === 4
+      ? "1"
+      : minUnits < 4
+        ? formatFraction(minUnits)
+        : formatLoadCount(minUnits);
   return `${left} to ${formatLoadCount(maxUnits)} trailer loads`;
 }
 
-function shouldMentionMultiLoad(job: JobInput, bounds: QuoteBounds, priceHigh: number): boolean {
+function shouldMentionMultiLoad(
+  job: JobInput,
+  bounds: QuoteBounds,
+  priceHigh: number,
+): boolean {
   if (job.perceivedSize === "big_cleanout") return true;
   if ((bounds.minHighUnits ?? 0) > 4) return true;
   return priceHigh > getTierPriceBand(4).min;
 }
 
-function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBounds): QuoteResult {
+function applyBoundsToQuote(
+  quote: QuoteResult,
+  job: JobInput,
+  bounds: QuoteBounds,
+): QuoteResult {
   const minUnits = Math.max(0, bounds.minUnits);
   const maxUnits = Math.max(minUnits, bounds.maxUnits);
   const minPrice = unitsToPrice(minUnits);
   const maxPrice = unitsToPrice(maxUnits);
-  const minHighUnits = bounds.minHighUnits ? clampInt(bounds.minHighUnits, minUnits, maxUnits) : undefined;
-  const minHighPrice = typeof minHighUnits === "number" ? unitsToPrice(minHighUnits) : null;
+  const minHighUnits = bounds.minHighUnits
+    ? clampInt(bounds.minHighUnits, minUnits, maxUnits)
+    : undefined;
+  const minHighPrice =
+    typeof minHighUnits === "number" ? unitsToPrice(minHighUnits) : null;
 
   const allowedPrices: number[] = [];
   for (let units = minUnits; units <= maxUnits; units++) {
@@ -619,7 +753,10 @@ function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBoun
     let bestDistance = Math.abs(best - value);
     for (const candidate of allowedPrices) {
       const distance = Math.abs(candidate - value);
-      if (distance < bestDistance || (distance === bestDistance && candidate > best)) {
+      if (
+        distance < bestDistance ||
+        (distance === bestDistance && candidate > best)
+      ) {
         best = candidate;
         bestDistance = distance;
       }
@@ -667,7 +804,7 @@ function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBoun
   const needsInPersonEstimate = Boolean(
     quote.needsInPersonEstimate ||
       job.perceivedSize === "not_sure" ||
-      job.perceivedSize === "big_cleanout"
+      job.perceivedSize === "big_cleanout",
   );
 
   const forcedMultiLoad = shouldMentionMultiLoad(job, bounds, priceHigh);
@@ -679,13 +816,23 @@ function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBoun
     const normalized = text.toLowerCase();
     if (normalized.includes("more than one")) return true;
     if (normalized.includes("multiple")) return true;
-    if (normalized.includes("multi-trailer") || normalized.includes("multi trailer")) return true;
-    if (/\b([2-9]|[1-9]\d+|two|three|four|five)\s*(trailer\s*)?loads?\b/iu.test(normalized)) return true;
+    if (
+      normalized.includes("multi-trailer") ||
+      normalized.includes("multi trailer")
+    )
+      return true;
+    if (
+      /\b([2-9]|[1-9]\d+|two|three|four|five)\s*(trailer\s*)?loads?\b/iu.test(
+        normalized,
+      )
+    )
+      return true;
     if (/\b1\.\d+\s*(trailer\s*)?loads?\b/iu.test(normalized)) return true;
     return false;
   };
 
-  const providedReason = typeof quote.reasonSummary === "string" ? quote.reasonSummary.trim() : "";
+  const providedReason =
+    typeof quote.reasonSummary === "string" ? quote.reasonSummary.trim() : "";
   let reasonSummary = providedReason || genericReason;
 
   if (forcedMultiLoad && !mentionsMultipleLoads(reasonSummary)) {
@@ -702,14 +849,16 @@ function applyBoundsToQuote(quote: QuoteResult, job: JobInput, bounds: QuoteBoun
     priceHigh,
     displayTierLabel: tier,
     reasonSummary,
-    needsInPersonEstimate
+    needsInPersonEstimate,
   };
 }
 
 function getFallbackQuote(job: JobInput, bounds: QuoteBounds): QuoteResult {
   const minUnits = Math.max(0, bounds.minUnits);
   const maxUnits = Math.max(minUnits, bounds.maxUnits);
-  const minHighUnits = bounds.minHighUnits ? clampInt(bounds.minHighUnits, minUnits, maxUnits) : undefined;
+  const minHighUnits = bounds.minHighUnits
+    ? clampInt(bounds.minHighUnits, minUnits, maxUnits)
+    : undefined;
   const highUnits = Math.max(maxUnits, minHighUnits ?? maxUnits);
 
   const priceLow = unitsToPrice(minUnits);
@@ -720,8 +869,7 @@ function getFallbackQuote(job: JobInput, bounds: QuoteBounds): QuoteResult {
   const loadFractionEstimate = Math.round((avgUnits / 4) * 100) / 100;
 
   const needsInPersonEstimate =
-    job.perceivedSize === "not_sure" ||
-    job.perceivedSize === "big_cleanout";
+    job.perceivedSize === "not_sure" || job.perceivedSize === "big_cleanout";
 
   const mentionMultiLoad = shouldMentionMultiLoad(job, bounds, priceHigh);
   const reasonSummary = mentionMultiLoad
@@ -734,7 +882,7 @@ function getFallbackQuote(job: JobInput, bounds: QuoteBounds): QuoteResult {
     priceHigh,
     displayTierLabel: tier,
     reasonSummary,
-    needsInPersonEstimate
+    needsInPersonEstimate,
   };
 }
 
@@ -742,61 +890,93 @@ export async function POST(request: NextRequest) {
   try {
     const requestOrigin = request.headers.get("origin");
     const parsed = RequestSchema.safeParse(await request.json());
-      if (!parsed.success) {
-        const details = parsed.error.flatten();
-        console.warn("[junk-quote] invalid_payload", details);
+    if (!parsed.success) {
+      const details = parsed.error.flatten();
+      console.warn("[junk-quote] invalid_payload", details);
 
-        let message = "Invalid request. Please check the form and try again.";
-        const contactErrors = details.fieldErrors.contact ?? [];
-        const jobErrors = details.fieldErrors.job ?? [];
+      let message = "Invalid request. Please check the form and try again.";
+      const contactErrors = details.fieldErrors.contact ?? [];
+      const jobErrors = details.fieldErrors.job ?? [];
 
-        const hasPhotoIssue = parsed.error.issues.some(
-          (issue) => issue.path?.[0] === "job" && issue.path?.[1] === "photoUrls"
-        );
+      const hasPhotoIssue = parsed.error.issues.some(
+        (issue) => issue.path?.[0] === "job" && issue.path?.[1] === "photoUrls",
+      );
 
-        if (hasPhotoIssue) {
-          message = "Those photos were too large to attach. Please try smaller photos or skip photos for now.";
-        } else if (contactErrors.some((err) => /at least 7 character/u.test(err))) {
-          message = "Please enter a valid phone number.";
-        } else if (contactErrors.some((err) => /at least 2 character/u.test(err))) {
-          message = "Please enter your name.";
-        } else if (jobErrors.some((err) => /at least 3 character/u.test(err))) {
-          message = "Please enter a valid ZIP code.";
-        }
-
-        return corsJson({ ok: false, error: "invalid_payload", message, details }, requestOrigin, { status: 400 });
+      if (hasPhotoIssue) {
+        message =
+          "Those photos were too large to attach. Please try smaller photos or skip photos for now.";
+      } else if (
+        contactErrors.some((err) => /at least 7 character/u.test(err))
+      ) {
+        message = "Please enter a valid phone number.";
+      } else if (
+        contactErrors.some((err) => /at least 2 character/u.test(err))
+      ) {
+        message = "Please enter your name.";
+      } else if (jobErrors.some((err) => /at least 3 character/u.test(err))) {
+        message = "Please enter a valid ZIP code.";
       }
-      const body = parsed.data;
 
-      const normalizedPostalCode = normalizePostalCode(body.job.zip);
-      if (normalizedPostalCode && !isGeorgiaPostalCode(normalizedPostalCode)) {
-        return corsJson({
+      return corsJson(
+        { ok: false, error: "invalid_payload", message, details },
+        requestOrigin,
+        { status: 400 },
+      );
+    }
+    const body = parsed.data;
+
+    const normalizedPostalCode = normalizePostalCode(body.job.zip);
+    if (normalizedPostalCode && !isGeorgiaPostalCode(normalizedPostalCode)) {
+      return corsJson(
+        {
           ok: false,
           error: "out_of_area",
-          message: "Thanks for reaching out. We currently serve Georgia only."
-        }, requestOrigin);
-      }
-      const originalBounds = getQuoteBounds(body.job);
+          message: "Thanks for reaching out. We currently serve Georgia only.",
+        },
+        requestOrigin,
+      );
+    }
+    const originalBounds = getQuoteBounds(body.job);
     let mediaPricing: MediaPricingContext | null = null;
     if (Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0) {
       try {
-        const mediaAnalysis = await buildMediaJobAnalysisWithVision(buildQuoteRequestOmniContext(body));
+        const mediaAnalysis = await buildMediaJobAnalysisWithVision(
+          buildQuoteRequestOmniContext(body),
+        );
         mediaPricing = {
           analysis: mediaAnalysis,
           addOnTotal: calculateMediaAddOnTotal(mediaAnalysis),
         };
       } catch (error) {
-        console.error("[junk-quote] media_analysis_failed", error instanceof Error ? error.message : error);
+        console.error(
+          "[junk-quote] media_analysis_failed",
+          error instanceof Error ? error.message : error,
+        );
       }
     }
     const mediaBounds = canUseMediaAnalysisForBounds(mediaPricing?.analysis)
       ? mediaRangeToBounds(mediaPricing?.analysis.mergedVolumeRange ?? null)
       : null;
-    const weightPricing = inferWeightPricingContext(body.job, mediaPricing?.analysis ?? null);
-    const bounds = mergeQuoteBoundsWithMedia(originalBounds, mediaBounds, body.job);
+    const weightPricing = inferWeightPricingContext(
+      body.job,
+      mediaPricing?.analysis ?? null,
+    );
+    const bounds = mergeQuoteBoundsWithMedia(
+      originalBounds,
+      mediaBounds,
+      body.job,
+    );
     const fallback = getFallbackQuote(body.job, bounds);
-    const aiResult = await getQuoteFromAi(body, bounds, mediaPricing?.analysis ?? null, weightPricing).catch((err) => {
-      console.error("[junk-quote] ai_failed", err instanceof Error ? err.message : err);
+    const aiResult = await getQuoteFromAi(
+      body,
+      bounds,
+      mediaPricing?.analysis ?? null,
+      weightPricing,
+    ).catch((err) => {
+      console.error(
+        "[junk-quote] ai_failed",
+        err instanceof Error ? err.message : err,
+      );
       return fallback;
     });
     const aiValidated = QuoteResultSchema.safeParse(aiResult);
@@ -806,29 +986,54 @@ export async function POST(request: NextRequest) {
     }
 
     const base = applyMediaAddOnsToQuote(
-      applyTierBandPricingToQuote(applyBoundsToQuote(baseCandidate, body.job, bounds), weightPricing),
-      mediaPricing?.addOnTotal ?? 0
+      applyTierBandPricingToQuote(
+        applyBoundsToQuote(baseCandidate, body.job, bounds),
+        weightPricing,
+      ),
+      mediaPricing?.addOnTotal ?? 0,
     );
+    const discountPercent = resolveJunkDisplayDiscountPercent();
+    const preDiscountLow =
+      discountPercent > 0
+        ? getPreDiscountPrice(base.priceLow, discountPercent)
+        : base.priceLow;
+    const preDiscountHigh =
+      discountPercent > 0
+        ? Math.max(
+            preDiscountLow,
+            getPreDiscountPrice(base.priceHigh, discountPercent),
+          )
+        : base.priceHigh;
+    const quoteWithDisplayDiscount =
+      discountPercent > 0
+        ? {
+            ...base,
+            priceLow: preDiscountLow,
+            priceHigh: preDiscountHigh,
+            discountPercent,
+            priceLowDiscounted: base.priceLow,
+            priceHighDiscounted: base.priceHigh,
+          }
+        : base;
 
     const storedAiResult = {
-      ...base,
+      ...quoteWithDisplayDiscount,
       isRoughEstimate: true,
       estimateDisclaimer: weightPricing.disclaimer,
       weightRisk: weightPricing.risk,
       weightSignals: weightPricing.signals,
       pricingFactors: weightPricing.pricingFactors,
-      mediaAnalysis:
-        mediaPricing?.analysis
-          ? {
-              source: mediaPricing.analysis.source,
-              visibleVolumeRange: mediaPricing.analysis.visibleVolumeRange,
-              mergedVolumeRange: mediaPricing.analysis.mergedVolumeRange,
-              visibleMattressCount: mediaPricing.analysis.visibleMattressCount,
-              visiblePaintCanCount: mediaPricing.analysis.visiblePaintCanCount,
-              confidence: mediaPricing.analysis.confidence,
-              missingViews: mediaPricing.analysis.missingViews,
-            }
-          : null,
+      mediaAnalysis: mediaPricing?.analysis
+        ? {
+            source: mediaPricing.analysis.source,
+            visibleVolumeRange: mediaPricing.analysis.visibleVolumeRange,
+            mergedVolumeRange: mediaPricing.analysis.mergedVolumeRange,
+            visibleMattressCount: mediaPricing.analysis.visibleMattressCount,
+            visiblePaintCanCount: mediaPricing.analysis.visiblePaintCanCount,
+            confidence: mediaPricing.analysis.confidence,
+            missingViews: mediaPricing.analysis.missingViews,
+          }
+        : null,
       addOnTotal: mediaPricing?.addOnTotal ?? 0,
     };
 
@@ -846,7 +1051,7 @@ export async function POST(request: NextRequest) {
         perceivedSize: body.job.perceivedSize,
         notes: body.job.notes ?? null,
         photoUrls: body.job.photoUrls ?? [],
-        aiResult: storedAiResult
+        aiResult: storedAiResult,
       })
       .returning({ id: instantQuotes.id });
 
@@ -864,7 +1069,7 @@ export async function POST(request: NextRequest) {
             lastName,
             phoneRaw: normalizedPhone.raw,
             phoneE164: normalizedPhone.e164,
-            source: "instant_quote"
+            source: "instant_quote",
           });
 
           const [existingProperty] = await tx
@@ -874,17 +1079,16 @@ export async function POST(request: NextRequest) {
             .orderBy(desc(properties.createdAt))
             .limit(1);
 
-          const property =
-            existingProperty?.id
-              ? { id: existingProperty.id }
-              : await upsertProperty(tx, {
-                  contactId: contact.id,
-                  addressLine1: `[Instant Quote ${quoteId.split("-")[0] ?? quoteId}] ZIP ${body.job.zip.trim()} (address pending)`,
-                  city: "Unknown",
-                  state: "GA",
-                  postalCode: body.job.zip.trim(),
-                  gated: false
-                });
+          const property = existingProperty?.id
+            ? { id: existingProperty.id }
+            : await upsertProperty(tx, {
+                contactId: contact.id,
+                addressLine1: `[Instant Quote ${quoteId.split("-")[0] ?? quoteId}] ZIP ${body.job.zip.trim()} (address pending)`,
+                city: "Unknown",
+                state: "GA",
+                postalCode: body.job.zip.trim(),
+                gated: false,
+              });
 
           const [leadRow] = await tx
             .insert(leads)
@@ -911,9 +1115,9 @@ export async function POST(request: NextRequest) {
                 perceivedSize: body.job.perceivedSize,
                 notes: body.job.notes ?? null,
                 aiResult: storedAiResult,
-                utm
+                utm,
               },
-              instantQuoteId: quoteId
+              instantQuoteId: quoteId,
             })
             .returning({ id: leads.id });
 
@@ -922,8 +1126,8 @@ export async function POST(request: NextRequest) {
               type: "lead.alert",
               payload: {
                 leadId: leadRow.id,
-                source: "instant_quote"
-              }
+                source: "instant_quote",
+              },
             });
           }
 
@@ -933,14 +1137,15 @@ export async function POST(request: NextRequest) {
             .where(eq(crmPipeline.contactId, contact.id))
             .limit(1);
 
-          const previousStage = typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
+          const previousStage =
+            typeof pipelineRow?.stage === "string" ? pipelineRow.stage : null;
           if (previousStage !== "quoted") {
             await tx
               .insert(crmPipeline)
               .values({ contactId: contact.id, stage: "quoted" })
               .onConflictDoUpdate({
                 target: crmPipeline.contactId,
-                set: { stage: "quoted", updatedAt: new Date() }
+                set: { stage: "quoted", updatedAt: new Date() },
               });
 
             await tx.insert(outboxEvents).values({
@@ -952,9 +1157,9 @@ export async function POST(request: NextRequest) {
                 reason: "instant_quote.created",
                 meta: {
                   instantQuoteId: quoteId,
-                  leadId: leadRow?.id ?? null
-                }
-              }
+                  leadId: leadRow?.id ?? null,
+                },
+              },
             });
           }
 
@@ -964,51 +1169,47 @@ export async function POST(request: NextRequest) {
               payload: {
                 leadId: leadRow.id,
                 contactId: contact.id,
-                reason: "instant_quote.created"
-              }
+                reason: "instant_quote.created",
+              },
             });
           }
         });
       } catch (error) {
-        console.error("[junk-quote] lead_create_failed", { quoteId, error: String(error) });
+        console.error("[junk-quote] lead_create_failed", {
+          quoteId,
+          error: String(error),
+        });
       }
     }
-
-    const minimumPickupPrice = JUNK_TIER_PRICE_BANDS[0]!.min;
-    const discountAmount = base.priceHigh > minimumPickupPrice ? resolveJunkFixedDiscountDollars() : 0;
-    const priceLowDiscounted = discountAmount > 0 ? Math.max(0, base.priceLow - discountAmount) : undefined;
-    const priceHighDiscounted = discountAmount > 0 ? Math.max(0, base.priceHigh - discountAmount) : undefined;
 
     return corsJson(
       {
         ok: true,
         quoteId,
         quote: {
-          ...base,
+          ...quoteWithDisplayDiscount,
           addOnTotal: mediaPricing?.addOnTotal ?? 0,
           isRoughEstimate: true,
           estimateDisclaimer: weightPricing.disclaimer,
           weightRisk: weightPricing.risk,
           weightSignals: weightPricing.signals,
           pricingFactors: weightPricing.pricingFactors,
-          mediaAnalysis:
-            mediaPricing?.analysis
-              ? {
-                  source: mediaPricing.analysis.source,
-                  visibleVolumeRange: mediaPricing.analysis.visibleVolumeRange,
-                  mergedVolumeRange: mediaPricing.analysis.mergedVolumeRange,
-                  visibleMattressCount: mediaPricing.analysis.visibleMattressCount,
-                  visiblePaintCanCount: mediaPricing.analysis.visiblePaintCanCount,
-                  confidence: mediaPricing.analysis.confidence,
-                  missingViews: mediaPricing.analysis.missingViews,
-                }
-              : undefined,
-          discountAmount: discountAmount > 0 ? discountAmount : undefined,
-          priceLowDiscounted: priceLowDiscounted ?? undefined,
-          priceHighDiscounted: priceHighDiscounted ?? undefined
-        }
+          mediaAnalysis: mediaPricing?.analysis
+            ? {
+                source: mediaPricing.analysis.source,
+                visibleVolumeRange: mediaPricing.analysis.visibleVolumeRange,
+                mergedVolumeRange: mediaPricing.analysis.mergedVolumeRange,
+                visibleMattressCount:
+                  mediaPricing.analysis.visibleMattressCount,
+                visiblePaintCanCount:
+                  mediaPricing.analysis.visiblePaintCanCount,
+                confidence: mediaPricing.analysis.confidence,
+                missingViews: mediaPricing.analysis.missingViews,
+              }
+            : undefined,
+        },
       },
-      requestOrigin
+      requestOrigin,
     );
   } catch (error) {
     console.error("[junk-quote] server_error", error);
@@ -1023,7 +1224,8 @@ async function getQuoteFromAi(
   weightPricing: WeightPricingContext,
 ): Promise<unknown> {
   const apiKey = process.env["OPENAI_API_KEY"];
-  const model = (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
+  const model =
+    (process.env["OPENAI_MODEL"] ?? "gpt-5-mini").trim() || "gpt-5-mini";
   if (!apiKey) {
     throw new Error("missing_api_key");
   }
@@ -1043,7 +1245,7 @@ async function getQuoteFromAi(
         priceHigh: { type: "number" },
         displayTierLabel: { type: "string" },
         reasonSummary: { type: "string" },
-        needsInPersonEstimate: { type: "boolean" }
+        needsInPersonEstimate: { type: "boolean" },
       },
       required: [
         "loadFractionEstimate",
@@ -1051,9 +1253,9 @@ async function getQuoteFromAi(
         "priceHigh",
         "displayTierLabel",
         "reasonSummary",
-        "needsInPersonEstimate"
-      ]
-    }
+        "needsInPersonEstimate",
+      ],
+    },
   } as const;
 
   const jobForAi = {
@@ -1064,7 +1266,9 @@ async function getQuoteFromAi(
       typeof body.job.notes === "string" && body.job.notes.trim().length > 0
         ? body.job.notes.trim().slice(0, 600)
         : undefined,
-    photoCount: Array.isArray(body.job.photoUrls) ? body.job.photoUrls.length : 0,
+    photoCount: Array.isArray(body.job.photoUrls)
+      ? body.job.photoUrls.length
+      : 0,
     mediaAnalysis: mediaAnalysis
       ? {
           source: mediaAnalysis.source,
@@ -1090,25 +1294,34 @@ async function getQuoteFromAi(
   async function requestOpenAi(format: TextFormat): Promise<unknown> {
     const allowedUnits = Array.from(
       { length: Math.max(0, bounds.maxUnits - bounds.minUnits + 1) },
-      (_, i) => bounds.minUnits + i
+      (_, i) => bounds.minUnits + i,
     );
     const allowedPriceBands = allowedUnits.map((u) => {
       const band = getTierPriceBand(u);
       return `${formatFraction(u)}=${band.min}-${band.max}`;
     });
-    const minHighPrice = typeof bounds.minHighUnits === "number" ? unitsToPrice(bounds.minHighUnits) : null;
+    const minHighPrice =
+      typeof bounds.minHighUnits === "number"
+        ? unitsToPrice(bounds.minHighUnits)
+        : null;
 
-    const mustMentionMultiLoad = shouldMentionMultiLoad(body.job, bounds, minHighPrice ?? unitsToPrice(bounds.maxUnits));
+    const mustMentionMultiLoad = shouldMentionMultiLoad(
+      body.job,
+      bounds,
+      minHighPrice ?? unitsToPrice(bounds.maxUnits),
+    );
     const dynamicRules = [
       `Allowed customer-facing tier bands for this request are ONLY: ${allowedPriceBands.join(", ")}.`,
       "Choose the most likely tier from the customer description. The backend will dial the displayed estimate into a roughly $100 range inside that tier band.",
-      minHighPrice ? `Because of the job size/type, priceHigh MUST be >= ${minHighPrice}.` : null,
+      minHighPrice
+        ? `Because of the job size/type, priceHigh MUST be >= ${minHighPrice}.`
+        : null,
       weightPricing.risk === "medium" || weightPricing.risk === "high"
-        ? `Weight risk is ${weightPricing.risk}. Mention weight-sensitive material briefly in reasonSummary.`
+        ? `Heavier-material likelihood is ${weightPricing.risk}. Mention heavier material briefly in reasonSummary using customer-friendly wording.`
         : null,
       mustMentionMultiLoad
         ? `Your reasonSummary MUST mention that the job may require more than one trailer load.`
-        : `Do NOT mention multi-loads unless it could realistically be multiple loads.`
+        : `Do NOT mention multi-loads unless it could realistically be multiple loads.`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -1117,7 +1330,7 @@ async function getQuoteFromAi(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model,
@@ -1126,13 +1339,16 @@ async function getQuoteFromAi(
         tools: [],
         tool_choice: "none",
         reasoning: {
-          effort: "minimal"
+          effort: "minimal",
         },
         text: {
-          format: format === "json_schema" ? jsonSchemaFormat : { type: "json_object" }
+          format:
+            format === "json_schema"
+              ? jsonSchemaFormat
+              : { type: "json_object" },
         },
-        max_output_tokens: 1200
-      })
+        max_output_tokens: 1200,
+      }),
     });
 
     if (!res.ok) {
@@ -1152,9 +1368,15 @@ async function getQuoteFromAi(
     const responseId = typeof data.id === "string" ? data.id : "unknown";
     const status = typeof data.status === "string" ? data.status : "unknown";
     const incompleteReason =
-      typeof data.incomplete_details?.reason === "string" ? data.incomplete_details.reason : "unknown";
-    const code = typeof data.error?.code === "string" ? data.error.code : "unknown";
-    const message = typeof data.error?.message === "string" ? data.error.message : "no_message";
+      typeof data.incomplete_details?.reason === "string"
+        ? data.incomplete_details.reason
+        : "unknown";
+    const code =
+      typeof data.error?.code === "string" ? data.error.code : "unknown";
+    const message =
+      typeof data.error?.message === "string"
+        ? data.error.message
+        : "no_message";
 
     const outputItems = Array.isArray(data.output) ? data.output : [];
     const outputTextParts: string[] = [];
@@ -1187,14 +1409,16 @@ async function getQuoteFromAi(
         for (const part of content) {
           if (!part || typeof part !== "object") continue;
           const typed = part as Record<string, unknown>;
-          const partType = typeof typed["type"] === "string" ? typed["type"] : "";
+          const partType =
+            typeof typed["type"] === "string" ? typed["type"] : "";
 
           const text = getText(typed["text"]);
           if (partType === "output_text" && text) {
             outputTextParts.push(text);
           }
           if (partType === "output_json") {
-            const jsonValue = typed["json"] ?? typed["output"] ?? typed["value"];
+            const jsonValue =
+              typed["json"] ?? typed["output"] ?? typed["value"];
             if (jsonValue != null) {
               outputJsonParts.push(jsonValue);
             }
@@ -1216,7 +1440,8 @@ async function getQuoteFromAi(
       }
     }
 
-    const raw = outputTextParts.join("\n").trim() || anyTextParts.join("\n").trim();
+    const raw =
+      outputTextParts.join("\n").trim() || anyTextParts.join("\n").trim();
     if (raw) {
       try {
         const parsed: unknown = JSON.parse(raw);
@@ -1246,8 +1471,10 @@ async function getQuoteFromAi(
         const outputSummary = outputItems.slice(0, 3).map((item) => {
           if (!item || typeof item !== "object") return { kind: typeof item };
           const record = item as Record<string, unknown>;
-          const itemType = typeof record["type"] === "string" ? record["type"] : "unknown";
-          const itemStatus = typeof record["status"] === "string" ? record["status"] : undefined;
+          const itemType =
+            typeof record["type"] === "string" ? record["type"] : "unknown";
+          const itemStatus =
+            typeof record["status"] === "string" ? record["status"] : undefined;
           const content = record["content"];
           const summary = record["summary"];
           return {
@@ -1258,16 +1485,20 @@ async function getQuoteFromAi(
               ? content
                   .slice(0, 5)
                   .map((part) =>
-                    part && typeof part === "object" ? (part as Record<string, unknown>)["type"] : typeof part
+                    part && typeof part === "object"
+                      ? (part as Record<string, unknown>)["type"]
+                      : typeof part,
                   )
               : undefined,
             summaryTypes: Array.isArray(summary)
               ? summary
                   .slice(0, 5)
                   .map((part) =>
-                    part && typeof part === "object" ? (part as Record<string, unknown>)["type"] : typeof part
+                    part && typeof part === "object"
+                      ? (part as Record<string, unknown>)["type"]
+                      : typeof part,
                   )
-              : undefined
+              : undefined,
           };
         });
         console.error(label, {
@@ -1277,7 +1508,7 @@ async function getQuoteFromAi(
           error: data.error,
           usage: data.usage,
           outputLen: outputItems.length,
-          outputSummary
+          outputSummary,
         });
       } catch {
         // Best-effort diagnostic logging only.
@@ -1286,7 +1517,8 @@ async function getQuoteFromAi(
 
     if (status !== "completed") {
       logDebug("[junk-quote] ai_noncompleted_debug");
-      const suffix = status === "incomplete" ? `_${incompleteReason}` : `_${code}`;
+      const suffix =
+        status === "incomplete" ? `_${incompleteReason}` : `_${code}`;
       throw new Error(`ai_${status}${suffix}: ${message}`.slice(0, 220));
     }
 
@@ -1304,10 +1536,16 @@ async function getQuoteFromAi(
     if (error instanceof Error && error.message === "missing_api_key") {
       throw error;
     }
-    if (error instanceof Error && /exceeds the context window/u.test(error.message)) {
+    if (
+      error instanceof Error &&
+      /exceeds the context window/u.test(error.message)
+    ) {
       throw error;
     }
-    console.error("[junk-quote] ai_retrying_with_json_object", error instanceof Error ? error.message : error);
+    console.error(
+      "[junk-quote] ai_retrying_with_json_object",
+      error instanceof Error ? error.message : error,
+    );
     return await requestOpenAi("json_object");
   }
 }
@@ -1326,7 +1564,7 @@ Customer-facing tier bands:
 
 Weight:
 - Dense materials like concrete, dirt, tile, brick, stone, roofing, or large amounts of books/paper can change the final price.
-- The backend provides weight risk and dials the final displayed estimate into a roughly $100 range inside the tier band. Your job is to choose the right tier and explain weight risk when present.
+- The backend provides heavier-material context and dials the final displayed estimate into a roughly $100 range inside the tier band. Your job is to choose the right tier and explain heavier material in customer-friendly wording when present.
 
 Multi-load jobs:
 - If you believe the job can require more than one trailer load, you may quote above the full-load band.
@@ -1345,5 +1583,5 @@ Rules:
 - Use the tier bands above; do not invent unrelated pricing schemes.
 - If the job seems uncertain or could be multiple loads, widen the range and set needsInPersonEstimate=true.
 - displayTierLabel: short category like "Small load", "Half trailer", "Large to full trailer", "Multi-trailer project".
-- reasonSummary: one friendly sentence that describes the rough estimate basis, not a guaranteed final price.
+- reasonSummary: one friendly sentence that describes the estimate basis without sounding like a guaranteed final price.
 `.trim();

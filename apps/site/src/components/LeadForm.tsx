@@ -1,10 +1,13 @@
-'use client';
+"use client";
 
 import * as React from "react";
 import { Button, cn } from "@myst-os/ui";
 import { Check, MessageSquare, ShieldCheck, Star } from "lucide-react";
 import { useUTM } from "../lib/use-utm";
-import { setGoogleAdsEnhancedConversionsUserData, trackGoogleAdsConversion } from "../lib/google-ads";
+import {
+  setGoogleAdsEnhancedConversionsUserData,
+  trackGoogleAdsConversion,
+} from "../lib/google-ads";
 import { trackWebEvent } from "../lib/web-analytics";
 
 declare global {
@@ -44,7 +47,10 @@ type QuoteState =
     }
   | { status: "error"; message: string };
 
-type QuoteMediaAnalysis = Extract<QuoteState, { status: "ready" }>["mediaAnalysis"];
+type QuoteMediaAnalysis = Extract<
+  QuoteState,
+  { status: "ready" }
+>["mediaAnalysis"];
 
 type AvailabilitySlot = { startAt: string; endAt: string; reason: string };
 type AvailabilityDay = { date: string; slots: AvailabilitySlot[] };
@@ -126,7 +132,7 @@ const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
   { id: "yard_waste", label: "Yard debris / outdoor items" },
   { id: "construction_debris", label: "Construction / renovation debris" },
   { id: "hot_tub_playset", label: "Hot tub / playset" },
-  { id: "business_commercial", label: "Office / business items" }
+  { id: "business_commercial", label: "Office / business items" },
 ];
 
 const JUNK_PRIMARY_TYPE_IDS: readonly JunkType[] = [
@@ -134,145 +140,375 @@ const JUNK_PRIMARY_TYPE_IDS: readonly JunkType[] = [
   "appliances",
   "general_junk",
   "yard_waste",
-  "construction_debris"
+  "construction_debris",
 ] as const;
 
-const JUNK_SECONDARY_TYPE_IDS: readonly JunkType[] = ["hot_tub_playset", "business_commercial"] as const;
+const JUNK_SECONDARY_TYPE_IDS: readonly JunkType[] = [
+  "hot_tub_playset",
+  "business_commercial",
+] as const;
 
-const JUNK_PRIMARY_OPTIONS = JUNK_PRIMARY_TYPE_IDS.map((id) => JUNK_OPTIONS.find((opt) => opt.id === id)!).filter(Boolean);
-const JUNK_SECONDARY_OPTIONS = JUNK_SECONDARY_TYPE_IDS.map((id) => JUNK_OPTIONS.find((opt) => opt.id === id)!).filter(Boolean);
+const JUNK_PRIMARY_OPTIONS = JUNK_PRIMARY_TYPE_IDS.map(
+  (id) => JUNK_OPTIONS.find((opt) => opt.id === id)!,
+).filter(Boolean);
+const JUNK_SECONDARY_OPTIONS = JUNK_SECONDARY_TYPE_IDS.map(
+  (id) => JUNK_OPTIONS.find((opt) => opt.id === id)!,
+).filter(Boolean);
 
-const JUNK_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
-  { id: "single_item", label: "Single item", hint: "One couch, mattress, appliance, or bulky item ($175)" },
-  { id: "min_pickup", label: "Small pickup", hint: "A few items or a small pile ($220-$400 depending on weight)" },
-  { id: "half_trailer", label: "Medium load", hint: "1 room OR 1-2 bulky items + boxes/bags" },
-  { id: "three_quarter_trailer", label: "Large load", hint: "2 rooms OR several bulky items" },
-  { id: "big_cleanout", label: "Huge cleanout", hint: "Full garage, basement, or multiple rooms" },
-  { id: "not_sure", label: "Not sure", hint: "No problem — photos help us tighten the range." }
+const JUNK_SIZE_OPTIONS: Array<{
+  id: PerceivedSize;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: "single_item",
+    label: "Single item",
+    hint: "One couch, mattress, appliance, or bulky item ($175)",
+  },
+  {
+    id: "min_pickup",
+    label: "Small pickup",
+    hint: "A few items or a small pile ($220-$400 depending on weight)",
+  },
+  {
+    id: "half_trailer",
+    label: "Medium load",
+    hint: "1 room OR 1-2 bulky items + boxes/bags",
+  },
+  {
+    id: "three_quarter_trailer",
+    label: "Large load",
+    hint: "2 rooms OR several bulky items",
+  },
+  {
+    id: "big_cleanout",
+    label: "Huge cleanout",
+    hint: "Full garage, basement, or multiple rooms",
+  },
+  {
+    id: "not_sure",
+    label: "Not sure",
+    hint: "No problem — photos help us tighten the range.",
+  },
 ];
 
-const JUNK_SIZE_OPTIONS_NO_PRICE: Array<{ id: PerceivedSize; label: string; hint: string }> = [
-  { id: "single_item", label: "Single item", hint: "One couch, mattress, appliance, or bulky item" },
-  { id: "min_pickup", label: "Small pickup", hint: "A few items or a small pile" },
-  { id: "half_trailer", label: "Medium load", hint: "1 room OR 1-2 bulky items + boxes/bags" },
-  { id: "three_quarter_trailer", label: "Large load", hint: "2 rooms OR several bulky items" },
-  { id: "big_cleanout", label: "Huge cleanout", hint: "Full garage, basement, or multiple rooms" },
-  { id: "not_sure", label: "Not sure", hint: "No problem — photos help us tighten the range." }
+const JUNK_SIZE_OPTIONS_NO_PRICE: Array<{
+  id: PerceivedSize;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: "single_item",
+    label: "Single item",
+    hint: "One couch, mattress, appliance, or bulky item",
+  },
+  {
+    id: "min_pickup",
+    label: "Small pickup",
+    hint: "A few items or a small pile",
+  },
+  {
+    id: "half_trailer",
+    label: "Medium load",
+    hint: "1 room OR 1-2 bulky items + boxes/bags",
+  },
+  {
+    id: "three_quarter_trailer",
+    label: "Large load",
+    hint: "2 rooms OR several bulky items",
+  },
+  {
+    id: "big_cleanout",
+    label: "Huge cleanout",
+    hint: "Full garage, basement, or multiple rooms",
+  },
+  {
+    id: "not_sure",
+    label: "Not sure",
+    hint: "No problem — photos help us tighten the range.",
+  },
 ];
 
-const BRUSH_PRIMARY_OPTIONS: Array<{ id: BrushScope; label: string; hint: string }> = [
-  { id: "overgrowth", label: "Overgrowth / thick brush", hint: "Thick brush, tangled growth, etc." },
-  { id: "weeds_vines", label: "Weeds / vines", hint: "Vines, weeds, kudzu, etc." },
-  { id: "light_brush", label: "Light brush", hint: "Light brush or small patches" },
-  { id: "downed_branches", label: "Downed branches", hint: "Branches, limbs, storm cleanup" },
-  { id: "storm_debris", label: "Storm debris", hint: "Mixed yard debris after a storm" },
-  { id: "small_saplings", label: "Small saplings", hint: "Small trees / saplings (may need estimate)" }
+const BRUSH_PRIMARY_OPTIONS: Array<{
+  id: BrushScope;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: "overgrowth",
+    label: "Overgrowth / thick brush",
+    hint: "Thick brush, tangled growth, etc.",
+  },
+  {
+    id: "weeds_vines",
+    label: "Weeds / vines",
+    hint: "Vines, weeds, kudzu, etc.",
+  },
+  {
+    id: "light_brush",
+    label: "Light brush",
+    hint: "Light brush or small patches",
+  },
+  {
+    id: "downed_branches",
+    label: "Downed branches",
+    hint: "Branches, limbs, storm cleanup",
+  },
+  {
+    id: "storm_debris",
+    label: "Storm debris",
+    hint: "Mixed yard debris after a storm",
+  },
+  {
+    id: "small_saplings",
+    label: "Small saplings",
+    hint: "Small trees / saplings (may need estimate)",
+  },
 ];
 
-const BRUSH_SIZE_OPTIONS: Array<{ id: PerceivedSize; label: string; hint: string }> = [
-  { id: "single_item", label: "Small patch", hint: "One small area (around a shed, corner, etc.)" },
-  { id: "min_pickup", label: "Fence line / side yard", hint: "A strip of brush or narrow area" },
-  { id: "half_trailer", label: "Backyard section", hint: "One section of a yard or a larger patch" },
-  { id: "three_quarter_trailer", label: "Most of a yard", hint: "Multiple sections or a bigger area" },
-  { id: "big_cleanout", label: "Full lot / heavy clearing", hint: "Large area or very thick brush" },
-  { id: "not_sure", label: "Not sure", hint: "No problem. Photos help us tighten the estimate." }
+const BRUSH_SIZE_OPTIONS: Array<{
+  id: PerceivedSize;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: "single_item",
+    label: "Small patch",
+    hint: "One small area (around a shed, corner, etc.)",
+  },
+  {
+    id: "min_pickup",
+    label: "Fence line / side yard",
+    hint: "A strip of brush or narrow area",
+  },
+  {
+    id: "half_trailer",
+    label: "Backyard section",
+    hint: "One section of a yard or a larger patch",
+  },
+  {
+    id: "three_quarter_trailer",
+    label: "Most of a yard",
+    hint: "Multiple sections or a bigger area",
+  },
+  {
+    id: "big_cleanout",
+    label: "Full lot / heavy clearing",
+    hint: "Large area or very thick brush",
+  },
+  {
+    id: "not_sure",
+    label: "Not sure",
+    hint: "No problem. Photos help us tighten the estimate.",
+  },
 ];
 
-const BRUSH_DIFFICULTY_OPTIONS: Array<{ id: BrushDifficulty; label: string; hint: string }> = [
-  { id: "easy", label: "Easy", hint: "Open access, mostly flat, light/medium brush" },
-  { id: "moderate", label: "Moderate", hint: "Some thick spots, light slope, normal access" },
-  { id: "hard", label: "Hard", hint: "Very thick, steep, tight access, or lots of saplings" },
-  { id: "not_sure", label: "Not sure", hint: "No problem — photos help us confirm" }
+const BRUSH_DIFFICULTY_OPTIONS: Array<{
+  id: BrushDifficulty;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: "easy",
+    label: "Easy",
+    hint: "Open access, mostly flat, light/medium brush",
+  },
+  {
+    id: "moderate",
+    label: "Moderate",
+    hint: "Some thick spots, light slope, normal access",
+  },
+  {
+    id: "hard",
+    label: "Hard",
+    hint: "Very thick, steep, tight access, or lots of saplings",
+  },
+  {
+    id: "not_sure",
+    label: "Not sure",
+    hint: "No problem — photos help us confirm",
+  },
 ];
 
-const BRUSH_ACCESS_OPTIONS: Array<{ id: BrushAccess; label: string; hint: string }> = [
-  { id: "open", label: "Open access (6ft+)", hint: "Equipment can reach the area" },
-  { id: "standard_gate", label: "Standard gate (4ft)", hint: "Typical backyard gate" },
-  { id: "tight_gate", label: "Tight gate (3ft)", hint: "Narrow access (may be hand-clearing)" },
-  { id: "not_sure", label: "Not sure", hint: "No problem — photos help us confirm" }
+const BRUSH_ACCESS_OPTIONS: Array<{
+  id: BrushAccess;
+  label: string;
+  hint: string;
+}> = [
+  {
+    id: "open",
+    label: "Open access (6ft+)",
+    hint: "Equipment can reach the area",
+  },
+  {
+    id: "standard_gate",
+    label: "Standard gate (4ft)",
+    hint: "Typical backyard gate",
+  },
+  {
+    id: "tight_gate",
+    label: "Tight gate (3ft)",
+    hint: "Narrow access (may be hand-clearing)",
+  },
+  {
+    id: "not_sure",
+    label: "Not sure",
+    hint: "No problem — photos help us confirm",
+  },
 ];
 
-const DEMO_TYPE_OPTIONS: Array<{ id: DemoType; label: string; hint: string }> = [
-  { id: "deck", label: "Deck / porch", hint: "Tear-out + cleanup" },
-  { id: "fence", label: "Fence", hint: "Wood, vinyl, chain-link, etc." },
-  { id: "shed", label: "Shed", hint: "Small to large sheds" },
-  { id: "kitchen_bath", label: "Kitchen / bath demo", hint: "Cabinets, tile, fixtures" },
-  { id: "drywall", label: "Drywall removal", hint: "Room(s) or a whole floor" },
-  { id: "concrete", label: "Concrete removal", hint: "Driveway, patio, walkway, slab" },
-  { id: "hot_tub_playset", label: "Hot tub / playset", hint: "Disassembly + haul-off" },
-  { id: "other", label: "Other", hint: "Tell us what you need demolished" }
-];
+const DEMO_TYPE_OPTIONS: Array<{ id: DemoType; label: string; hint: string }> =
+  [
+    { id: "deck", label: "Deck / porch", hint: "Tear-out + cleanup" },
+    { id: "fence", label: "Fence", hint: "Wood, vinyl, chain-link, etc." },
+    { id: "shed", label: "Shed", hint: "Small to large sheds" },
+    {
+      id: "kitchen_bath",
+      label: "Kitchen / bath demo",
+      hint: "Cabinets, tile, fixtures",
+    },
+    {
+      id: "drywall",
+      label: "Drywall removal",
+      hint: "Room(s) or a whole floor",
+    },
+    {
+      id: "concrete",
+      label: "Concrete removal",
+      hint: "Driveway, patio, walkway, slab",
+    },
+    {
+      id: "hot_tub_playset",
+      label: "Hot tub / playset",
+      hint: "Disassembly + haul-off",
+    },
+    { id: "other", label: "Other", hint: "Tell us what you need demolished" },
+  ];
 
-const DEMO_SIZE_OPTIONS: Record<DemoType, Array<{ id: DemoSize; label: string; hint: string }>> = {
+const DEMO_SIZE_OPTIONS: Record<
+  DemoType,
+  Array<{ id: DemoSize; label: string; hint: string }>
+> = {
   deck: [
     { id: "deck_small", label: "Small", hint: "Small porch / small deck" },
     { id: "deck_medium", label: "Medium", hint: "Typical deck size" },
     { id: "deck_large", label: "Large", hint: "Large deck / big tear-out" },
-    { id: "deck_xl", label: "XL", hint: "Multi-level or very large" }
+    { id: "deck_xl", label: "XL", hint: "Multi-level or very large" },
   ],
   fence: [
     { id: "fence_0_50", label: "0–50 ft", hint: "Small section" },
     { id: "fence_50_150", label: "50–150 ft", hint: "Most yards" },
-    { id: "fence_150_300", label: "150–300 ft", hint: "Large yard / multiple sides" },
-    { id: "fence_300_plus", label: "300+ ft", hint: "Very large / multiple yards" }
+    {
+      id: "fence_150_300",
+      label: "150–300 ft",
+      hint: "Large yard / multiple sides",
+    },
+    {
+      id: "fence_300_plus",
+      label: "300+ ft",
+      hint: "Very large / multiple yards",
+    },
   ],
   shed: [
     { id: "shed_small", label: "Small", hint: "Small shed" },
     { id: "shed_medium", label: "Medium", hint: "Most sheds" },
     { id: "shed_large", label: "Large", hint: "Large shed" },
-    { id: "shed_xl", label: "XL", hint: "Very large shed / barn-style" }
+    { id: "shed_xl", label: "XL", hint: "Very large shed / barn-style" },
   ],
   kitchen_bath: [
     { id: "rooms_1", label: "1 room", hint: "One kitchen or one bath" },
     { id: "rooms_2", label: "2 rooms", hint: "Two rooms" },
-    { id: "rooms_3_plus", label: "3+ rooms", hint: "Multiple rooms" }
+    { id: "rooms_3_plus", label: "3+ rooms", hint: "Multiple rooms" },
   ],
   drywall: [
     { id: "drywall_1_room", label: "1 room", hint: "One room" },
     { id: "drywall_2_3_rooms", label: "2–3 rooms", hint: "Multiple rooms" },
-    { id: "drywall_whole_floor", label: "Whole floor", hint: "A whole floor / big area" }
+    {
+      id: "drywall_whole_floor",
+      label: "Whole floor",
+      hint: "A whole floor / big area",
+    },
   ],
   concrete: [
     { id: "concrete_0_100", label: "0–100 sq ft", hint: "Small pad / walkway" },
     { id: "concrete_100_250", label: "100–250 sq ft", hint: "Patio-size" },
-    { id: "concrete_250_600", label: "250–600 sq ft", hint: "Large patio / partial driveway" },
-    { id: "concrete_600_plus", label: "600+ sq ft", hint: "Driveway-size or larger" }
+    {
+      id: "concrete_250_600",
+      label: "250–600 sq ft",
+      hint: "Large patio / partial driveway",
+    },
+    {
+      id: "concrete_600_plus",
+      label: "600+ sq ft",
+      hint: "Driveway-size or larger",
+    },
   ],
   hot_tub_playset: [
-    { id: "hot_tub_small", label: "Small", hint: "Small playset or compact hot tub" },
-    { id: "hot_tub_standard", label: "Standard", hint: "Most hot tubs / playsets" },
-    { id: "hot_tub_large", label: "Large", hint: "Large hot tub / big structure" },
-    { id: "hot_tub_not_sure", label: "Not sure", hint: "No problem — photos help" }
+    {
+      id: "hot_tub_small",
+      label: "Small",
+      hint: "Small playset or compact hot tub",
+    },
+    {
+      id: "hot_tub_standard",
+      label: "Standard",
+      hint: "Most hot tubs / playsets",
+    },
+    {
+      id: "hot_tub_large",
+      label: "Large",
+      hint: "Large hot tub / big structure",
+    },
+    {
+      id: "hot_tub_not_sure",
+      label: "Not sure",
+      hint: "No problem — photos help",
+    },
   ],
   other: [
     { id: "other_small", label: "Small", hint: "Small demo" },
     { id: "other_medium", label: "Medium", hint: "Medium demo" },
     { id: "other_large", label: "Large", hint: "Large demo" },
-    { id: "other_not_sure", label: "Not sure", hint: "No problem — photos help" }
-  ]
+    {
+      id: "other_not_sure",
+      label: "Not sure",
+      hint: "No problem — photos help",
+    },
+  ],
 };
 
 const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
   { id: "today", label: "Today" },
   { id: "tomorrow", label: "Tomorrow" },
   { id: "this_week", label: "This week" },
-  { id: "flexible", label: "Flexible" }
+  { id: "flexible", label: "Flexible" },
 ];
 
-const GOOGLE_ADS_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_LEAD_SEND_TO"] ?? "";
-const GOOGLE_ADS_BRUSH_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_BRUSH_LEAD_SEND_TO"] ?? "";
-const GOOGLE_ADS_DEMO_LEAD_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_DEMO_LEAD_SEND_TO"] ?? "";
-const GOOGLE_ADS_CONTACT_SEND_TO = process.env["NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO"] ?? "";
-const GOOGLE_REVIEW_URL = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_URL"] ?? "https://g.page/r/Ce6kQH50C8_dEAI/review";
-const GOOGLE_REVIEW_RATING = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_RATING"] ?? "5.0";
-const GOOGLE_REVIEW_COUNT = process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"] ?? "15";
+const GOOGLE_ADS_LEAD_SEND_TO =
+  process.env["NEXT_PUBLIC_GOOGLE_ADS_LEAD_SEND_TO"] ?? "";
+const GOOGLE_ADS_BRUSH_LEAD_SEND_TO =
+  process.env["NEXT_PUBLIC_GOOGLE_ADS_BRUSH_LEAD_SEND_TO"] ?? "";
+const GOOGLE_ADS_DEMO_LEAD_SEND_TO =
+  process.env["NEXT_PUBLIC_GOOGLE_ADS_DEMO_LEAD_SEND_TO"] ?? "";
+const GOOGLE_ADS_CONTACT_SEND_TO =
+  process.env["NEXT_PUBLIC_GOOGLE_ADS_CONTACT_SEND_TO"] ?? "";
+const GOOGLE_REVIEW_URL =
+  process.env["NEXT_PUBLIC_GOOGLE_REVIEW_URL"] ??
+  "https://g.page/r/Ce6kQH50C8_dEAI/review";
+const GOOGLE_REVIEW_RATING =
+  process.env["NEXT_PUBLIC_GOOGLE_REVIEW_RATING"] ?? "5.0";
+const GOOGLE_REVIEW_COUNT =
+  process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"] ?? "15";
 
 export function LeadForm({
   variant = "junk",
   contactFirst = false,
   className,
   ...props
-}: React.HTMLAttributes<HTMLDivElement> & { variant?: LeadFormVariant; contactFirst?: boolean }) {
+}: React.HTMLAttributes<HTMLDivElement> & {
+  variant?: LeadFormVariant;
+  contactFirst?: boolean;
+}) {
   const utm = useUTM();
   const isBrush = variant === "brush";
   const isDemo = variant === "demo";
@@ -281,10 +517,15 @@ export function LeadForm({
   const [showMoreJunkTypes, setShowMoreJunkTypes] = React.useState(false);
   const [otherSelected, setOtherSelected] = React.useState(false);
   const [otherDetails, setOtherDetails] = React.useState("");
-  const [perceivedSize, setPerceivedSize] = React.useState<PerceivedSize | null>(() => (variant === "brush" ? "min_pickup" : null));
-  const [brushPrimary, setBrushPrimary] = React.useState<BrushPrimary>("overgrowth");
+  const [perceivedSize, setPerceivedSize] =
+    React.useState<PerceivedSize | null>(() =>
+      variant === "brush" ? "min_pickup" : null,
+    );
+  const [brushPrimary, setBrushPrimary] =
+    React.useState<BrushPrimary>("overgrowth");
   const [brushOtherDetails, setBrushOtherDetails] = React.useState("");
-  const [brushDifficulty, setBrushDifficulty] = React.useState<BrushDifficulty>("not_sure");
+  const [brushDifficulty, setBrushDifficulty] =
+    React.useState<BrushDifficulty>("not_sure");
   const [brushAccess, setBrushAccess] = React.useState<BrushAccess>("not_sure");
   const [brushHaulAway, setBrushHaulAway] = React.useState(true);
   const [demoType, setDemoType] = React.useState<DemoType>("deck");
@@ -293,17 +534,24 @@ export function LeadForm({
   const [demoOtherDetails, setDemoOtherDetails] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [showPhotoUploader, setShowPhotoUploader] = React.useState(false);
-  const [showBrushPlanningDetails, setShowBrushPlanningDetails] = React.useState(false);
+  const [showBrushPlanningDetails, setShowBrushPlanningDetails] =
+    React.useState(false);
   const [showNotes, setShowNotes] = React.useState(false);
   const [zip, setZip] = React.useState("");
   const [photos, setPhotos] = React.useState<string[]>([]);
-  const [photoUploadStatus, setPhotoUploadStatus] = React.useState<"idle" | "uploading" | "error">("idle");
-  const [photoUploadMessage, setPhotoUploadMessage] = React.useState<string | null>(null);
+  const [photoUploadStatus, setPhotoUploadStatus] = React.useState<
+    "idle" | "uploading" | "error"
+  >("idle");
+  const [photoUploadMessage, setPhotoUploadMessage] = React.useState<
+    string | null
+  >(null);
   const [name, setName] = React.useState("");
   const [phone, setPhone] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [timeframe, setTimeframe] = React.useState<Timeframe>("this_week");
-  const [quoteState, setQuoteState] = React.useState<QuoteState>({ status: "idle" });
+  const [quoteState, setQuoteState] = React.useState<QuoteState>({
+    status: "idle",
+  });
   const [error, setError] = React.useState<string | null>(null);
   const [addressLine1, setAddressLine1] = React.useState("");
   const [city, setCity] = React.useState("");
@@ -312,26 +560,47 @@ export function LeadForm({
   const [availabilityStatus, setAvailabilityStatus] = React.useState<
     "idle" | "loading" | "ready" | "error"
   >("idle");
-  const [availabilityMessage, setAvailabilityMessage] = React.useState<string | null>(null);
-  const [availabilityTimezone, setAvailabilityTimezone] = React.useState("America/New_York");
-  const [availabilityDurationMinutes, setAvailabilityDurationMinutes] = React.useState<number | null>(null);
-  const [availabilitySlots, setAvailabilitySlots] = React.useState<AvailabilitySlot[]>([]);
-  const [availabilityDays, setAvailabilityDays] = React.useState<AvailabilityDay[]>([]);
+  const [availabilityMessage, setAvailabilityMessage] = React.useState<
+    string | null
+  >(null);
+  const [availabilityTimezone, setAvailabilityTimezone] =
+    React.useState("America/New_York");
+  const [availabilityDurationMinutes, setAvailabilityDurationMinutes] =
+    React.useState<number | null>(null);
+  const [availabilitySlots, setAvailabilitySlots] = React.useState<
+    AvailabilitySlot[]
+  >([]);
+  const [availabilityDays, setAvailabilityDays] = React.useState<
+    AvailabilityDay[]
+  >([]);
   const [availabilityShowMore, setAvailabilityShowMore] = React.useState(false);
-  const [availabilitySelectedDay, setAvailabilitySelectedDay] = React.useState<string | null>(null);
-  const [selectedSlotStartAt, setSelectedSlotStartAt] = React.useState<string | null>(null);
+  const [availabilitySelectedDay, setAvailabilitySelectedDay] = React.useState<
+    string | null
+  >(null);
+  const [selectedSlotStartAt, setSelectedSlotStartAt] = React.useState<
+    string | null
+  >(null);
   const selectedSlotStartAtRef = React.useRef<string | null>(null);
   const [holdId, setHoldId] = React.useState<string | null>(null);
   const [holdExpiresAt, setHoldExpiresAt] = React.useState<string | null>(null);
-  const [holdStatus, setHoldStatus] = React.useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [holdStatus, setHoldStatus] = React.useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
   const [holdMessage, setHoldMessage] = React.useState<string | null>(null);
   const holdSlotRef = React.useRef<string | null>(null);
   const holdRequestRef = React.useRef(0);
   const holdInFlightRef = React.useRef<string | null>(null);
-  const [bookingStatus, setBookingStatus] = React.useState<"idle" | "loading" | "success" | "error">("idle");
-  const [bookingMessage, setBookingMessage] = React.useState<string | null>(null);
-  const [showBookingDetails, setShowBookingDetails] = React.useState(!contactFirst);
-  const [textEstimateMessage, setTextEstimateMessage] = React.useState<string | null>(null);
+  const [bookingStatus, setBookingStatus] = React.useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+  const [bookingMessage, setBookingMessage] = React.useState<string | null>(
+    null,
+  );
+  const [showBookingDetails, setShowBookingDetails] =
+    React.useState(!contactFirst);
+  const [textEstimateMessage, setTextEstimateMessage] = React.useState<
+    string | null
+  >(null);
   const [photoSkipped, setPhotoSkipped] = React.useState(false);
   const trackedScheduleRef = React.useRef(false);
   const trackedLeadQuoteIdRef = React.useRef<string | null>(null);
@@ -342,7 +611,8 @@ export function LeadForm({
   const prevStepRef = React.useRef<1 | 2 | null>(null);
   const prevQuoteStatusRef = React.useRef<QuoteState["status"] | null>(null);
 
-  const apiBase = process.env["NEXT_PUBLIC_API_BASE_URL"]?.replace(/\/$/, "") ?? "";
+  const apiBase =
+    process.env["NEXT_PUBLIC_API_BASE_URL"]?.replace(/\/$/, "") ?? "";
   const quoteId = quoteState.status === "ready" ? quoteState.quoteId : null;
   const addressComplete =
     addressLine1.trim().length >= 5 &&
@@ -363,14 +633,29 @@ export function LeadForm({
   const scrollToElement = React.useCallback(
     (el: HTMLElement | null) => {
       if (!el) return;
-      const behavior: ScrollBehavior = prefersReducedMotion() ? "auto" : "smooth";
+      const behavior: ScrollBehavior = prefersReducedMotion()
+        ? "auto"
+        : "smooth";
+      if (
+        typeof window !== "undefined" &&
+        typeof window.getComputedStyle === "function"
+      ) {
+        const scrollMarginTop =
+          Number.parseFloat(window.getComputedStyle(el).scrollMarginTop) || 0;
+        const top = Math.max(
+          0,
+          el.getBoundingClientRect().top + window.scrollY - scrollMarginTop,
+        );
+        window.scrollTo({ top, behavior });
+        return;
+      }
       try {
         el.scrollIntoView({ behavior, block: "start" });
       } catch {
         el.scrollIntoView();
       }
     },
-    [prefersReducedMotion]
+    [prefersReducedMotion],
   );
 
   React.useEffect(() => {
@@ -382,9 +667,12 @@ export function LeadForm({
     scrollToElement(containerRef.current);
 
     if (step === 2) {
-      window.setTimeout(() => {
-        phoneInputRef.current?.focus();
-      }, prefersReducedMotion() ? 0 : 100);
+      window.setTimeout(
+        () => {
+          phoneInputRef.current?.focus();
+        },
+        prefersReducedMotion() ? 0 : 100,
+      );
     }
   }, [prefersReducedMotion, scrollToElement, step]);
 
@@ -392,55 +680,83 @@ export function LeadForm({
     const previousStatus = prevQuoteStatusRef.current;
     prevQuoteStatusRef.current = quoteState.status;
     if (previousStatus === null) return;
-    if (previousStatus !== "ready" && quoteState.status === "ready" && step === 2) {
-      window.setTimeout(() => {
-        scrollToElement(quoteCardRef.current);
-      }, prefersReducedMotion() ? 0 : 100);
+    if (
+      previousStatus !== "ready" &&
+      quoteState.status === "ready" &&
+      step === 2
+    ) {
+      window.setTimeout(
+        () => {
+          scrollToElement(quoteCardRef.current);
+        },
+        prefersReducedMotion() ? 0 : 100,
+      );
     }
   }, [prefersReducedMotion, quoteState.status, scrollToElement, step]);
 
-  const trackMetaEvent = React.useCallback((
-    eventName: string,
-    params?: Record<string, unknown>,
-    options?: { eventID?: string }
-  ) => {
-    if (typeof window === "undefined") return;
-    if (typeof window.fbq !== "function") return;
-    try {
-      if (options?.eventID && options.eventID.trim().length > 0) {
-        window.fbq("track", eventName, params ?? {}, { eventID: options.eventID });
-        return;
+  const trackMetaEvent = React.useCallback(
+    (
+      eventName: string,
+      params?: Record<string, unknown>,
+      options?: { eventID?: string },
+    ) => {
+      if (typeof window === "undefined") return;
+      if (typeof window.fbq !== "function") return;
+      try {
+        if (options?.eventID && options.eventID.trim().length > 0) {
+          window.fbq("track", eventName, params ?? {}, {
+            eventID: options.eventID,
+          });
+          return;
+        }
+        window.fbq("track", eventName, params ?? {});
+      } catch {
+        // ignore
       }
-      window.fbq("track", eventName, params ?? {});
-    } catch {
-      // ignore
-    }
-  }, []);
+    },
+    [],
+  );
 
   const trackGoogleContactConversion = React.useCallback(() => {
     if (!GOOGLE_ADS_CONTACT_SEND_TO) return;
-    trackGoogleAdsConversion(GOOGLE_ADS_CONTACT_SEND_TO, { value: 1, currency: "USD" });
-  }, []);
-
-  const trackGoogleLeadConversion = React.useCallback((quoteId: string | null) => {
-    const sendTo = isBrush ? GOOGLE_ADS_BRUSH_LEAD_SEND_TO : isDemo ? GOOGLE_ADS_DEMO_LEAD_SEND_TO : GOOGLE_ADS_LEAD_SEND_TO;
-    if (!sendTo) return;
-    if (!quoteId) return;
-    if (trackedLeadQuoteIdRef.current === quoteId) return;
-    trackedLeadQuoteIdRef.current = quoteId;
-    trackGoogleAdsConversion(sendTo, {
+    trackGoogleAdsConversion(GOOGLE_ADS_CONTACT_SEND_TO, {
       value: 1,
       currency: "USD",
-      transaction_id: quoteId
     });
-  }, [isBrush, isDemo]);
+  }, []);
+
+  const trackGoogleLeadConversion = React.useCallback(
+    (quoteId: string | null) => {
+      const sendTo = isBrush
+        ? GOOGLE_ADS_BRUSH_LEAD_SEND_TO
+        : isDemo
+          ? GOOGLE_ADS_DEMO_LEAD_SEND_TO
+          : GOOGLE_ADS_LEAD_SEND_TO;
+      if (!sendTo) return;
+      if (!quoteId) return;
+      if (trackedLeadQuoteIdRef.current === quoteId) return;
+      trackedLeadQuoteIdRef.current = quoteId;
+      trackGoogleAdsConversion(sendTo, {
+        value: 1,
+        currency: "USD",
+        transaction_id: quoteId,
+      });
+    },
+    [isBrush, isDemo],
+  );
 
   const applyEnhancedConversionsUserData = React.useCallback(
     (input: {
       name: string;
       phone: string;
       email?: string;
-      address?: { addressLine1?: string; city?: string; region?: string; postalCode?: string; country?: string };
+      address?: {
+        addressLine1?: string;
+        city?: string;
+        region?: string;
+        postalCode?: string;
+        country?: string;
+      };
     }) => {
       const fullName = input.name.trim();
       const parts = fullName.split(/\s+/u).filter(Boolean);
@@ -457,11 +773,11 @@ export function LeadForm({
           city: input.address?.city,
           region: input.address?.region,
           postal_code: input.address?.postalCode,
-          country: input.address?.country
-        }
+          country: input.address?.country,
+        },
       });
     },
-    []
+    [],
   );
 
   const formatSlotLabel = React.useCallback(
@@ -474,10 +790,10 @@ export function LeadForm({
         day: "numeric",
         hour: "numeric",
         minute: "2-digit",
-        timeZone: availabilityTimezone
+        timeZone: availabilityTimezone,
       }).format(date);
     },
-    [availabilityTimezone]
+    [availabilityTimezone],
   );
 
   const formatSlotTimeLabel = React.useCallback(
@@ -487,10 +803,10 @@ export function LeadForm({
       return new Intl.DateTimeFormat("en-US", {
         hour: "numeric",
         minute: "2-digit",
-        timeZone: availabilityTimezone
+        timeZone: availabilityTimezone,
       }).format(date);
     },
-    [availabilityTimezone]
+    [availabilityTimezone],
   );
 
   const formatHoldExpiry = React.useCallback(
@@ -500,10 +816,10 @@ export function LeadForm({
       return new Intl.DateTimeFormat("en-US", {
         hour: "numeric",
         minute: "2-digit",
-        timeZone: availabilityTimezone
+        timeZone: availabilityTimezone,
       }).format(date);
     },
-    [availabilityTimezone]
+    [availabilityTimezone],
   );
 
   const formatDayLabel = React.useCallback(
@@ -514,20 +830,24 @@ export function LeadForm({
         weekday: "short",
         month: "short",
         day: "numeric",
-        timeZone: availabilityTimezone
+        timeZone: availabilityTimezone,
       }).format(date);
     },
-    [availabilityTimezone]
+    [availabilityTimezone],
   );
 
   const toggleType = (id: JunkType) => {
-    setTypes((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
+    setTypes((prev) =>
+      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
+    );
   };
 
   React.useEffect(() => {
     if (!isDemo) return;
     const options = DEMO_SIZE_OPTIONS[demoType] ?? [];
-    const allowed = demoSize ? options.some((opt) => opt.id === demoSize) : true;
+    const allowed = demoSize
+      ? options.some((opt) => opt.id === demoSize)
+      : true;
     if (!allowed) setDemoSize(null);
   }, [demoSize, demoType, isDemo]);
 
@@ -536,11 +856,21 @@ export function LeadForm({
     const selected = Array.from(files).slice(0, 4);
     const path = getAnalyticsPath();
     const eventPrefix = isBookAnalyticsPath(path) ? "book" : "lead_form";
-    trackWebEvent({ event: `${eventPrefix}_photo_upload_start`, path, meta: { count: selected.length } });
+    trackWebEvent({
+      event: `${eventPrefix}_photo_upload_start`,
+      path,
+      meta: { count: selected.length },
+    });
     if (!apiBase) {
       setPhotoUploadStatus("error");
-      setPhotoUploadMessage("Photo upload is unavailable right now. Please skip photos or try again later.");
-      trackWebEvent({ event: `${eventPrefix}_photo_upload_fail`, path, key: "missing_api_base_url" });
+      setPhotoUploadMessage(
+        "Photo upload is unavailable right now. Please skip photos or try again later.",
+      );
+      trackWebEvent({
+        event: `${eventPrefix}_photo_upload_fail`,
+        path,
+        key: "missing_api_base_url",
+      });
       return;
     }
     setPhotoUploadStatus("uploading");
@@ -556,11 +886,19 @@ export function LeadForm({
       }
       const res = await fetch(`${apiBase}/api/public/junk-quote/uploads`, {
         method: "POST",
-        body: uploadForm
+        body: uploadForm,
       });
-      const payload = (await res.json().catch(() => null)) as { ok?: boolean; uploads?: { url?: unknown }[]; error?: string } | null;
+      const payload = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        uploads?: { url?: unknown }[];
+        error?: string;
+      } | null;
       if (!res.ok || !payload?.ok) {
-        throw new Error(typeof payload?.error === "string" ? payload.error : `Upload failed (HTTP ${res.status})`);
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : `Upload failed (HTTP ${res.status})`,
+        );
       }
       const urls =
         payload.uploads
@@ -570,17 +908,30 @@ export function LeadForm({
       setPhotos(urls);
       setPhotoSkipped(false);
       setPhotoUploadStatus("idle");
-      const sourceVideoCount = selected.filter((file) => file.type.startsWith("video/")).length;
+      const sourceVideoCount = selected.filter((file) =>
+        file.type.startsWith("video/"),
+      ).length;
       setPhotoUploadMessage(
         sourceVideoCount > 0
           ? `Uploaded ${urls.length} estimating frame${urls.length === 1 ? "" : "s"} from your photo/video selection.`
-          : null
+          : null,
       );
-      trackWebEvent({ event: `${eventPrefix}_photo_upload_success`, path, meta: { photoCount: urls.length } });
+      trackWebEvent({
+        event: `${eventPrefix}_photo_upload_success`,
+        path,
+        meta: { photoCount: urls.length },
+      });
     } catch (err) {
       setPhotoUploadStatus("error");
-      setPhotoUploadMessage((err as Error).message || "Unable to upload photos. Please try smaller photos or skip for now.");
-      trackWebEvent({ event: `${eventPrefix}_photo_upload_fail`, path, key: bucketWebAnalyticsError(err) });
+      setPhotoUploadMessage(
+        (err as Error).message ||
+          "Unable to upload photos. Please try smaller photos or skip for now.",
+      );
+      trackWebEvent({
+        event: `${eventPrefix}_photo_upload_fail`,
+        path,
+        key: bucketWebAnalyticsError(err),
+      });
     }
   };
 
@@ -596,7 +947,12 @@ export function LeadForm({
         event: "book_quote_attempt",
         path: analyticsPath,
         zip: analyticsZip,
-        meta: { missingName, missingPhone, missingZip, hasEmail: Boolean(email.trim()) }
+        meta: {
+          missingName,
+          missingPhone,
+          missingZip,
+          hasEmail: Boolean(email.trim()),
+        },
       });
     }
 
@@ -606,7 +962,12 @@ export function LeadForm({
           event: "book_quote_blocked_missing_fields",
           path: analyticsPath,
           zip: analyticsZip,
-          meta: { missingName, missingPhone, missingZip, hasEmail: Boolean(email.trim()) }
+          meta: {
+            missingName,
+            missingPhone,
+            missingZip,
+            hasEmail: Boolean(email.trim()),
+          },
         });
       }
       setError(
@@ -614,7 +975,7 @@ export function LeadForm({
           ? "Please enter your first name to continue."
           : isDemo || isBrush
             ? "Please enter your mobile number to see your estimate."
-            : "Please enter your mobile number to see your price."
+            : "Please enter your mobile number to see your price.",
       );
       return;
     }
@@ -623,13 +984,23 @@ export function LeadForm({
     setError(null);
     setQuoteState({ status: "loading" });
     if (isBookAnalyticsPath(analyticsPath)) {
-      trackWebEvent({ event: "book_quote_start", path: analyticsPath, zip: analyticsZip });
+      trackWebEvent({
+        event: "book_quote_start",
+        path: analyticsPath,
+        zip: analyticsZip,
+      });
     } else {
       trackWebEvent({ event: "lead_form_quote_start", path: analyticsPath });
     }
     try {
       const resolvedTypes: JunkType[] =
-        !isBrush && !isDemo ? (types.length ? types : otherSelected ? ["general_junk"] : []) : [];
+        !isBrush && !isDemo
+          ? types.length
+            ? types
+            : otherSelected
+              ? ["general_junk"]
+              : []
+          : [];
       if (!isBrush && !isDemo && !resolvedTypes.length) {
         setStep(1);
         setQuoteState({ status: "idle" });
@@ -644,12 +1015,27 @@ export function LeadForm({
       }
 
       const otherLine =
-        !isBrush && !isDemo && otherSelected && otherDetails.trim().length > 0 ? `Other: ${otherDetails.trim()}` : "";
+        !isBrush && !isDemo && otherSelected && otherDetails.trim().length > 0
+          ? `Other: ${otherDetails.trim()}`
+          : "";
       const brushOtherLine =
-        isBrush && brushPrimary === "other" && brushOtherDetails.trim().length > 0 ? `Other: ${brushOtherDetails.trim()}` : "";
+        isBrush &&
+        brushPrimary === "other" &&
+        brushOtherDetails.trim().length > 0
+          ? `Other: ${brushOtherDetails.trim()}`
+          : "";
       const demoOtherLine =
-        isDemo && demoType === "other" && demoOtherDetails.trim().length > 0 ? `Other: ${demoOtherDetails.trim()}` : "";
-      const combinedNotes = [notes.trim(), otherLine, brushOtherLine, demoOtherLine].filter((v) => v.length > 0).join("\n");
+        isDemo && demoType === "other" && demoOtherDetails.trim().length > 0
+          ? `Other: ${demoOtherDetails.trim()}`
+          : "";
+      const combinedNotes = [
+        notes.trim(),
+        otherLine,
+        brushOtherLine,
+        demoOtherLine,
+      ]
+        .filter((v) => v.length > 0)
+        .join("\n");
       const quoteEndpoint = isBrush
         ? `${apiBase}/api/brush-quote`
         : isDemo
@@ -663,18 +1049,21 @@ export function LeadForm({
             ? {
                 source: "public_site",
                 contact: { name: safeName, phone: phone.trim(), timeframe },
-                 job: {
-                   primary: brushPrimary,
-                   perceivedSize: perceivedSize ?? "not_sure",
-                   difficulty: brushDifficulty,
-                   access: brushAccess,
-                   haulAway: brushHaulAway,
-                   notes: combinedNotes || undefined,
-                   zip: zip.trim(),
+                job: {
+                  primary: brushPrimary,
+                  perceivedSize: perceivedSize ?? "not_sure",
+                  difficulty: brushDifficulty,
+                  access: brushAccess,
+                  haulAway: brushHaulAway,
+                  notes: combinedNotes || undefined,
+                  zip: zip.trim(),
                   photoUrls: photos,
-                  otherDetails: brushPrimary === "other" ? brushOtherDetails.trim() || undefined : undefined
+                  otherDetails:
+                    brushPrimary === "other"
+                      ? brushOtherDetails.trim() || undefined
+                      : undefined,
                 },
-                utm
+                utm,
               }
             : isDemo
               ? {
@@ -687,23 +1076,26 @@ export function LeadForm({
                     notes: combinedNotes || undefined,
                     zip: zip.trim(),
                     photoUrls: photos,
-                    otherDetails: demoType === "other" ? demoOtherDetails.trim() || undefined : undefined
+                    otherDetails:
+                      demoType === "other"
+                        ? demoOtherDetails.trim() || undefined
+                        : undefined,
                   },
-                  utm
+                  utm,
                 }
               : {
-                source: "public_site",
-                contact: { name: safeName, phone: phone.trim(), timeframe },
-                 job: {
-                   types: resolvedTypes,
-                   perceivedSize: perceivedSize ?? "not_sure",
-                   notes: combinedNotes || undefined,
-                   zip: zip.trim(),
-                   photoUrls: photos
-                 },
-                utm
-              }
-        )
+                  source: "public_site",
+                  contact: { name: safeName, phone: phone.trim(), timeframe },
+                  job: {
+                    types: resolvedTypes,
+                    perceivedSize: perceivedSize ?? "not_sure",
+                    notes: combinedNotes || undefined,
+                    zip: zip.trim(),
+                    photoUrls: photos,
+                  },
+                  utm,
+                },
+        ),
       });
       const data = (await res.json().catch(() => null)) as {
         ok?: boolean;
@@ -747,7 +1139,10 @@ export function LeadForm({
         throw new Error(message);
       }
       if (!data.quote) throw new Error("Quote unavailable");
-      const nextQuoteId = typeof data.quoteId === "string" && data.quoteId.length ? data.quoteId : null;
+      const nextQuoteId =
+        typeof data.quoteId === "string" && data.quoteId.length
+          ? data.quoteId
+          : null;
       setQuoteState({
         status: "ready",
         quoteId: nextQuoteId,
@@ -765,7 +1160,7 @@ export function LeadForm({
         estimateDisclaimer: data.quote.estimateDisclaimer,
         weightRisk: data.quote.weightRisk,
         pricingFactors: data.quote.pricingFactors,
-        mediaAnalysis: data.quote.mediaAnalysis
+        mediaAnalysis: data.quote.mediaAnalysis,
       });
       applyEnhancedConversionsUserData({
         name: name.trim(),
@@ -774,23 +1169,33 @@ export function LeadForm({
         address: {
           postalCode: zip.trim(),
           region: "GA",
-          country: "US"
-        }
+          country: "US",
+        },
       });
       trackGoogleLeadConversion(nextQuoteId);
       if (nextQuoteId && trackedMetaLeadQuoteIdRef.current !== nextQuoteId) {
         trackedMetaLeadQuoteIdRef.current = nextQuoteId;
         const leadValue =
-          typeof data.quote.priceLowDiscounted === "number" ? data.quote.priceLowDiscounted : data.quote.priceLow;
+          typeof data.quote.priceLowDiscounted === "number"
+            ? data.quote.priceLowDiscounted
+            : data.quote.priceLow;
         trackMetaEvent(
           "Lead",
           {
-            content_name: isBrush ? "Brush quote" : isDemo ? "Demo quote" : "Junk quote",
-            content_category: isBrush ? "brush" : isDemo ? "demo" : "junk_removal",
+            content_name: isBrush
+              ? "Brush quote"
+              : isDemo
+                ? "Demo quote"
+                : "Junk quote",
+            content_category: isBrush
+              ? "brush"
+              : isDemo
+                ? "demo"
+                : "junk_removal",
             value: Number.isFinite(leadValue) ? leadValue : undefined,
-            currency: "USD"
+            currency: "USD",
           },
-          { eventID: nextQuoteId }
+          { eventID: nextQuoteId },
         );
       }
       if (isBookAnalyticsPath(analyticsPath)) {
@@ -799,23 +1204,36 @@ export function LeadForm({
           path: analyticsPath,
           zip: analyticsZip,
           key: data.quote.displayTierLabel.slice(0, 120),
-          meta: { needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate) }
+          meta: {
+            needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate),
+          },
         });
       } else {
         trackWebEvent({
           event: "lead_form_quote_success",
           path: analyticsPath,
           key: data.quote.displayTierLabel.slice(0, 120),
-          meta: { needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate) }
+          meta: {
+            needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate),
+          },
         });
       }
     } catch (err) {
       setQuoteState({ status: "error", message: (err as Error).message });
       const key = bucketWebAnalyticsError(err);
       if (isBookAnalyticsPath(analyticsPath)) {
-        trackWebEvent({ event: "book_quote_fail", path: analyticsPath, zip: analyticsZip, key });
+        trackWebEvent({
+          event: "book_quote_fail",
+          path: analyticsPath,
+          zip: analyticsZip,
+          key,
+        });
       } else {
-        trackWebEvent({ event: "lead_form_quote_fail", path: analyticsPath, key });
+        trackWebEvent({
+          event: "lead_form_quote_fail",
+          path: analyticsPath,
+          key,
+        });
       }
     }
   };
@@ -835,21 +1253,19 @@ export function LeadForm({
             addressLine1: addressLine1.trim(),
             city: city.trim(),
             state: stateField.trim(),
-            postalCode: postalCode.trim()
+            postalCode: postalCode.trim(),
           }),
-          signal
+          signal,
         });
-        const data = (await res.json().catch(() => null)) as
-          | {
-              ok?: boolean;
-              timezone?: string;
-              durationMinutes?: number;
-              suggestions?: AvailabilitySlot[];
-              days?: AvailabilityDay[];
-              error?: string;
-              message?: string;
-            }
-          | null;
+        const data = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          timezone?: string;
+          durationMinutes?: number;
+          suggestions?: AvailabilitySlot[];
+          days?: AvailabilityDay[];
+          error?: string;
+          message?: string;
+        } | null;
 
         if (!res.ok || !data?.ok) {
           const message =
@@ -867,11 +1283,20 @@ export function LeadForm({
           return;
         }
 
-        const tz = typeof data.timezone === "string" && data.timezone.length ? data.timezone : "America/New_York";
-        const duration = typeof data.durationMinutes === "number" && Number.isFinite(data.durationMinutes) ? data.durationMinutes : null;
+        const tz =
+          typeof data.timezone === "string" && data.timezone.length
+            ? data.timezone
+            : "America/New_York";
+        const duration =
+          typeof data.durationMinutes === "number" &&
+          Number.isFinite(data.durationMinutes)
+            ? data.durationMinutes
+            : null;
         const slots = Array.isArray(data.suggestions) ? data.suggestions : [];
         const days = Array.isArray(data.days) ? data.days : [];
-        const allSlots = slots.concat(days.flatMap((d) => (Array.isArray(d.slots) ? d.slots : [])));
+        const allSlots = slots.concat(
+          days.flatMap((d) => (Array.isArray(d.slots) ? d.slots : [])),
+        );
 
         setAvailabilityTimezone(tz);
         setAvailabilityDurationMinutes(duration);
@@ -879,23 +1304,35 @@ export function LeadForm({
         setAvailabilityDays(days);
         setAvailabilityStatus("ready");
         setSelectedSlotStartAt((prev) => {
-          if (typeof prev === "string" && allSlots.some((s) => s.startAt === prev)) return prev;
+          if (
+            typeof prev === "string" &&
+            allSlots.some((s) => s.startAt === prev)
+          )
+            return prev;
           return slots[0]?.startAt ?? allSlots[0]?.startAt ?? null;
         });
         setAvailabilitySelectedDay((prev) => {
-          const availableDays = days.filter((d) => Array.isArray(d.slots) && d.slots.length > 0);
+          const availableDays = days.filter(
+            (d) => Array.isArray(d.slots) && d.slots.length > 0,
+          );
           if (!availableDays.length) return null;
-          if (typeof prev === "string" && availableDays.some((d) => d.date === prev)) return prev;
+          if (
+            typeof prev === "string" &&
+            availableDays.some((d) => d.date === prev)
+          )
+            return prev;
           const bySelectedSlot =
             typeof selectedSlotAtRequestStart === "string"
-              ? availableDays.find((d) => d.slots.some((s) => s.startAt === selectedSlotAtRequestStart))
+              ? availableDays.find((d) =>
+                  d.slots.some((s) => s.startAt === selectedSlotAtRequestStart),
+                )
               : null;
           return bySelectedSlot?.date ?? availableDays[0]?.date ?? null;
         });
         setAvailabilityMessage(
           allSlots.length
             ? null
-            : "No times available in the next two weeks. Please call to confirm & book."
+            : "No times available in the next two weeks. Please call to confirm & book.",
         );
       } catch (err) {
         if (isAbortError(err)) return;
@@ -907,7 +1344,15 @@ export function LeadForm({
         setSelectedSlotStartAt(null);
       }
     },
-    [addressComplete, addressLine1, apiBase, city, postalCode, quoteId, stateField]
+    [
+      addressComplete,
+      addressLine1,
+      apiBase,
+      city,
+      postalCode,
+      quoteId,
+      stateField,
+    ],
   );
 
   React.useEffect(() => {
@@ -970,13 +1415,17 @@ export function LeadForm({
             addressLine1: addressLine1.trim(),
             city: city.trim(),
             state: stateField.trim(),
-            postalCode: postalCode.trim()
+            postalCode: postalCode.trim(),
           }),
-          signal: controller.signal
+          signal: controller.signal,
         });
-        const data = (await res.json().catch(() => null)) as
-          | { ok?: boolean; holdId?: string; expiresAt?: string; error?: string; message?: string }
-          | null;
+        const data = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          holdId?: string;
+          expiresAt?: string;
+          error?: string;
+          message?: string;
+        } | null;
 
         if (requestId !== holdRequestRef.current) return;
 
@@ -986,7 +1435,8 @@ export function LeadForm({
               ? data.error
               : `Hold failed (HTTP ${res.status})`;
           const message =
-            typeof (data as { message?: string } | null)?.message === "string" &&
+            typeof (data as { message?: string } | null)?.message ===
+              "string" &&
             (data as { message?: string }).message!.trim().length > 0
               ? (data as { message?: string }).message!
               : error === "slot_full"
@@ -1042,7 +1492,7 @@ export function LeadForm({
     quoteId,
     selectedSlotStartAt,
     stateField,
-    step
+    step,
   ]);
 
   const submitBooking = async () => {
@@ -1067,9 +1517,16 @@ export function LeadForm({
     setBookingStatus("loading");
     setBookingMessage(null);
     if (isBookAnalyticsPath(analyticsPath)) {
-      trackWebEvent({ event: "book_booking_attempt", path: analyticsPath, zip: analyticsZip });
+      trackWebEvent({
+        event: "book_booking_attempt",
+        path: analyticsPath,
+        zip: analyticsZip,
+      });
     } else {
-      trackWebEvent({ event: "lead_form_booking_attempt", path: analyticsPath });
+      trackWebEvent({
+        event: "lead_form_booking_attempt",
+        path: analyticsPath,
+      });
     }
     try {
       const payload: Record<string, unknown> = {
@@ -1082,37 +1539,61 @@ export function LeadForm({
         state: stateField.trim(),
         postalCode: postalCode.trim(),
         startAt: selectedSlotStartAt,
-        notes: notes || null
+        notes: notes || null,
       };
       if (holdId) payload["holdId"] = holdId;
 
       const res = await fetch(`${apiBase}/api/junk-quote/book`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-       });
+        body: JSON.stringify(payload),
+      });
       if (!res.ok) {
-        const errorPayload = (await res.json().catch(() => null)) as
-          | { error?: string; errorId?: string; message?: string }
-          | null;
+        const errorPayload = (await res.json().catch(() => null)) as {
+          error?: string;
+          errorId?: string;
+          message?: string;
+        } | null;
         if (errorPayload?.error === "slot_full") {
           setBookingStatus("error");
-          setBookingMessage("That time just filled up. Please pick another time.");
+          setBookingMessage(
+            "That time just filled up. Please pick another time.",
+          );
           if (isBookAnalyticsPath(analyticsPath)) {
-            trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "slot_full" });
+            trackWebEvent({
+              event: "book_booking_fail",
+              path: analyticsPath,
+              zip: analyticsZip,
+              key: "slot_full",
+            });
           } else {
-            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "slot_full" });
+            trackWebEvent({
+              event: "lead_form_booking_fail",
+              path: analyticsPath,
+              key: "slot_full",
+            });
           }
           void fetchAvailability();
           return;
         }
         if (errorPayload?.error === "day_full") {
           setBookingStatus("error");
-          setBookingMessage("We are fully booked that day. Please choose another time.");
+          setBookingMessage(
+            "We are fully booked that day. Please choose another time.",
+          );
           if (isBookAnalyticsPath(analyticsPath)) {
-            trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "day_full" });
+            trackWebEvent({
+              event: "book_booking_fail",
+              path: analyticsPath,
+              zip: analyticsZip,
+              key: "day_full",
+            });
           } else {
-            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "day_full" });
+            trackWebEvent({
+              event: "lead_form_booking_fail",
+              path: analyticsPath,
+              key: "day_full",
+            });
           }
           void fetchAvailability();
           return;
@@ -1129,10 +1610,14 @@ export function LeadForm({
               event: "book_booking_fail",
               path: analyticsPath,
               zip: analyticsZip,
-              key: errorPayload.error
+              key: errorPayload.error,
             });
           } else {
-            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: errorPayload.error });
+            trackWebEvent({
+              event: "lead_form_booking_fail",
+              path: analyticsPath,
+              key: errorPayload.error,
+            });
           }
           setHoldId(null);
           setHoldExpiresAt(null);
@@ -1143,21 +1628,45 @@ export function LeadForm({
         }
         if (errorPayload?.error === "server_error") {
           const suffix =
-            typeof errorPayload.errorId === "string" && errorPayload.errorId.length
+            typeof errorPayload.errorId === "string" &&
+            errorPayload.errorId.length
               ? ` (ref ${errorPayload.errorId})`
               : "";
           if (isBookAnalyticsPath(analyticsPath)) {
-            trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "server_error" });
+            trackWebEvent({
+              event: "book_booking_fail",
+              path: analyticsPath,
+              zip: analyticsZip,
+              key: "server_error",
+            });
           } else {
-            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "server_error" });
+            trackWebEvent({
+              event: "lead_form_booking_fail",
+              path: analyticsPath,
+              key: "server_error",
+            });
           }
-          throw new Error(`Booking failed on our end. Please try again or call us.${suffix}`);
+          throw new Error(
+            `Booking failed on our end. Please try again or call us.${suffix}`,
+          );
         }
-        if (typeof errorPayload?.message === "string" && errorPayload.message.trim().length > 0) {
+        if (
+          typeof errorPayload?.message === "string" &&
+          errorPayload.message.trim().length > 0
+        ) {
           if (isBookAnalyticsPath(analyticsPath)) {
-            trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key: "message" });
+            trackWebEvent({
+              event: "book_booking_fail",
+              path: analyticsPath,
+              zip: analyticsZip,
+              key: "message",
+            });
           } else {
-            trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key: "message" });
+            trackWebEvent({
+              event: "lead_form_booking_fail",
+              path: analyticsPath,
+              key: "message",
+            });
           }
           throw new Error(errorPayload.message);
         }
@@ -1170,23 +1679,38 @@ export function LeadForm({
             event: "book_booking_fail",
             path: analyticsPath,
             zip: analyticsZip,
-            key: typeof errorPayload?.error === "string" ? errorPayload.error.slice(0, 120) : "http_error"
+            key:
+              typeof errorPayload?.error === "string"
+                ? errorPayload.error.slice(0, 120)
+                : "http_error",
           });
         } else {
           trackWebEvent({
             event: "lead_form_booking_fail",
             path: analyticsPath,
-            key: typeof errorPayload?.error === "string" ? errorPayload.error.slice(0, 120) : "http_error"
+            key:
+              typeof errorPayload?.error === "string"
+                ? errorPayload.error.slice(0, 120)
+                : "http_error",
           });
         }
         throw new Error(message);
       }
-      const data = (await res.json().catch(() => null)) as { startAt?: string | null } | null;
-      const bookedAt = typeof data?.startAt === "string" && data.startAt.length ? data.startAt : selectedSlotStartAt;
+      const data = (await res.json().catch(() => null)) as {
+        startAt?: string | null;
+      } | null;
+      const bookedAt =
+        typeof data?.startAt === "string" && data.startAt.length
+          ? data.startAt
+          : selectedSlotStartAt;
       setBookingStatus("success");
       setBookingMessage(() => {
         const delivery = `We\u2019ll text${email.trim().length ? " (and email)" : ""} you a confirmation.`;
-        if (isBrush && quoteState.status === "ready" && quoteState.needsInPersonEstimate) {
+        if (
+          isBrush &&
+          quoteState.status === "ready" &&
+          quoteState.needsInPersonEstimate
+        ) {
           return `Time requested for ${formatSlotLabel(bookedAt)} (pending confirmation). ${delivery}`;
         }
         return `You're booked for ${formatSlotLabel(bookedAt)}. ${delivery}`;
@@ -1197,20 +1721,34 @@ export function LeadForm({
           event: "book_booking_success",
           path: analyticsPath,
           zip: analyticsZip,
-          meta: { hasEmail: email.trim().length > 0, holdUsed: Boolean(holdId) }
+          meta: {
+            hasEmail: email.trim().length > 0,
+            holdUsed: Boolean(holdId),
+          },
         });
       } else {
         trackWebEvent({
           event: "lead_form_booking_success",
           path: analyticsPath,
-          meta: { hasEmail: email.trim().length > 0, holdUsed: Boolean(holdId) }
+          meta: {
+            hasEmail: email.trim().length > 0,
+            holdUsed: Boolean(holdId),
+          },
         });
       }
       if (!trackedScheduleRef.current) {
         trackedScheduleRef.current = true;
         trackMetaEvent("Schedule", {
-          content_name: isBrush ? "Book clearing" : isDemo ? "Book demo estimate" : "Book pickup",
-          content_category: isBrush ? "brush" : isDemo ? "demo" : "junk_removal"
+          content_name: isBrush
+            ? "Book clearing"
+            : isDemo
+              ? "Book demo estimate"
+              : "Book pickup",
+          content_category: isBrush
+            ? "brush"
+            : isDemo
+              ? "demo"
+              : "junk_removal",
         });
         applyEnhancedConversionsUserData({
           name,
@@ -1221,8 +1759,8 @@ export function LeadForm({
             city: city.trim(),
             region: stateField.trim().toUpperCase(),
             postalCode: postalCode.trim(),
-            country: "US"
-          }
+            country: "US",
+          },
         });
         trackGoogleContactConversion();
       }
@@ -1231,9 +1769,18 @@ export function LeadForm({
       setBookingMessage((err as Error).message);
       const key = bucketWebAnalyticsError(err);
       if (isBookAnalyticsPath(analyticsPath)) {
-        trackWebEvent({ event: "book_booking_fail", path: analyticsPath, zip: analyticsZip, key });
+        trackWebEvent({
+          event: "book_booking_fail",
+          path: analyticsPath,
+          zip: analyticsZip,
+          key,
+        });
       } else {
-        trackWebEvent({ event: "lead_form_booking_fail", path: analyticsPath, key });
+        trackWebEvent({
+          event: "lead_form_booking_fail",
+          path: analyticsPath,
+          key,
+        });
       }
     }
   };
@@ -1257,27 +1804,35 @@ export function LeadForm({
 
   const discountLabel =
     quoteState.status === "ready"
-      ? quoteState.discountAmount > 0
-        ? `$${quoteState.discountAmount} off`
-        : quoteState.discountPercent > 0
-          ? `${Math.round(quoteState.discountPercent * 100)}% off`
+      ? quoteState.discountPercent > 0
+        ? `${Math.round(quoteState.discountPercent * 100)}% off`
+        : quoteState.discountAmount > 0
+          ? `$${quoteState.discountAmount} off`
           : null
       : null;
-  const quoteMediaAnalysis = quoteState.status === "ready" ? quoteState.mediaAnalysis : undefined;
-  const quoteMissingViews =
-    quoteState.status === "ready" && Array.isArray(quoteState.mediaAnalysis?.missingViews)
-      ? quoteState.mediaAnalysis.missingViews.filter((item) => typeof item === "string" && item.trim().length > 0)
-      : [];
+  const quoteMediaAnalysis =
+    quoteState.status === "ready" ? quoteState.mediaAnalysis : undefined;
+  const quoteNeedsMorePhotos =
+    quoteState.status === "ready" &&
+    Array.isArray(quoteState.mediaAnalysis?.missingViews) &&
+    quoteState.mediaAnalysis.missingViews.some(
+      (item) => typeof item === "string" && item.trim().length > 0,
+    );
   const quoteVisibleRangeLabel =
-    quoteState.status === "ready" ? formatEnumLabel(quoteState.mediaAnalysis?.visibleVolumeRange) : null;
+    quoteState.status === "ready"
+      ? formatEnumLabel(quoteState.mediaAnalysis?.visibleVolumeRange)
+      : null;
   const quoteMergedRangeLabel =
-    quoteState.status === "ready" ? formatEnumLabel(quoteState.mediaAnalysis?.mergedVolumeRange) : null;
+    quoteState.status === "ready"
+      ? formatEnumLabel(quoteState.mediaAnalysis?.mergedVolumeRange)
+      : null;
   const quoteRangeWasWidened =
     quoteState.status === "ready" &&
     Boolean(
       quoteState.mediaAnalysis?.visibleVolumeRange &&
         quoteState.mediaAnalysis?.mergedVolumeRange &&
-        quoteState.mediaAnalysis.visibleVolumeRange !== quoteState.mediaAnalysis.mergedVolumeRange
+        quoteState.mediaAnalysis.visibleVolumeRange !==
+          quoteState.mediaAnalysis.mergedVolumeRange,
     );
   const quoteAddOnSummary =
     quoteState.status === "ready"
@@ -1294,17 +1849,10 @@ export function LeadForm({
       : "";
   const junkEstimateDisclaimer =
     quoteState.status === "ready"
-      ? quoteState.estimateDisclaimer ??
-        "This is a rough estimate based on your description and any photos provided. Final pricing is confirmed in person before work starts and may change if volume, weight, access, or materials differ from what was described."
+      ? (quoteState.estimateDisclaimer ??
+        "We review the job in person first. The estimate only changes if volume, weight, access, or materials differ from what was entered.")
       : null;
-  const junkWeightLabel =
-    quoteState.status === "ready" && quoteState.weightRisk && quoteState.weightRisk !== "normal"
-      ? quoteState.weightRisk === "high"
-        ? "Heavy material likely"
-        : quoteState.weightRisk === "medium"
-          ? "Weight-sensitive material"
-          : "Some weight risk"
-      : null;
+  const junkWeightLabel = null;
 
   const getAnalyticsPath = React.useCallback(() => {
     if (typeof window === "undefined") return "/";
@@ -1315,14 +1863,20 @@ export function LeadForm({
     return path === "/book" || path === "/bookbrush" || path === "/bookdemo";
   }, []);
 
-  const displayedJunkSizeOptions = contactFirst ? JUNK_SIZE_OPTIONS_NO_PRICE : JUNK_SIZE_OPTIONS;
+  const displayedJunkSizeOptions = contactFirst
+    ? JUNK_SIZE_OPTIONS_NO_PRICE
+    : JUNK_SIZE_OPTIONS;
 
   const validateJobDetails = React.useCallback(() => {
     if (!isBrush && !isDemo && !types.length && !otherSelected) {
       setError("Pick at least one type of junk.");
       return false;
     }
-    if (isBrush && brushPrimary === "other" && brushOtherDetails.trim().length < 3) {
+    if (
+      isBrush &&
+      brushPrimary === "other" &&
+      brushOtherDetails.trim().length < 3
+    ) {
       setError("Please describe what you need cleared.");
       return false;
     }
@@ -1336,7 +1890,11 @@ export function LeadForm({
         return false;
       }
     } else if (!perceivedSize) {
-      setError(isBrush ? "Pick an approximate job size." : "Pick an approximate amount.");
+      setError(
+        isBrush
+          ? "Pick an approximate job size."
+          : "Pick an approximate amount.",
+      );
       return false;
     }
     return true;
@@ -1350,7 +1908,7 @@ export function LeadForm({
     isDemo,
     otherSelected,
     perceivedSize,
-    types
+    types,
   ]);
 
   React.useEffect(() => {
@@ -1365,12 +1923,19 @@ export function LeadForm({
   return (
     <div
       ref={containerRef}
-      className={cn("scroll-mt-24 rounded-xl bg-white p-6 shadow-soft shadow-primary-900/10", className)}
+      className={cn(
+        "scroll-mt-24 rounded-xl bg-white p-6 shadow-soft shadow-primary-900/10",
+        className,
+      )}
       {...props}
     >
       <div className="mb-4 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
-        <span className="rounded-full border border-neutral-200 px-3 py-1">Step {step} of 2</span>
-        <span className="text-[10px] font-medium normal-case tracking-normal">Takes &lt; 1 minute. No spam.</span>
+        <span className="rounded-full border border-neutral-200 px-3 py-1">
+          Step {step} of 2
+        </span>
+        <span className="text-[10px] font-medium normal-case tracking-normal">
+          Takes &lt; 1 minute. No spam.
+        </span>
       </div>
 
       <h2 className="font-display text-2xl text-primary-800">
@@ -1380,30 +1945,30 @@ export function LeadForm({
             : "What needs to go?"
           : step === 1
             ? isBrush
-            ? "Show us what you need cleared"
-            : isDemo
-              ? "Show us what you want demolished"
-              : "Show us what you need gone"
+              ? "Show us what you need cleared"
+              : isDemo
+                ? "Show us what you want demolished"
+                : "Show us what you need gone"
             : isBrush
-            ? "Where should we text your estimate?"
-            : isDemo
-              ? "Where should we text your demo estimate?"
-              : "Where should we text your estimate?"}
+              ? "Where should we text your estimate?"
+              : isDemo
+                ? "Where should we text your demo estimate?"
+                : "Where should we text your estimate?"}
       </h2>
       <p className="mt-1 text-sm text-neutral-600">
         {contactFirst
           ? step === 1
-            ? "Enter your name, mobile number, and ZIP so we can save your quote request before showing an estimate."
+            ? "Enter your name, mobile number, and ZIP so we can save your estimate and follow up if you have questions."
             : "Answer a few quick job questions. You can add photos if you want a tighter estimate."
           : step === 1
             ? isBrush
-            ? "Answer a few quick questions to see a ballpark range before booking."
-            : isDemo
               ? "Answer a few quick questions to see a ballpark range before booking."
-              : "Answer a few quick questions to see a ballpark range before booking."
+              : isDemo
+                ? "Answer a few quick questions to see a ballpark range before booking."
+                : "Answer a few quick questions to see a ballpark range before booking."
             : isDemo
-            ? "Enter a mobile number to see your estimate range. Name is optional."
-            : "Enter a mobile number to see your rough estimate range. Name is optional."}
+              ? "Enter a mobile number to see your estimate range. Name is optional."
+              : "Enter a mobile number to see your estimate range. Name is optional."}
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700">
@@ -1416,7 +1981,12 @@ export function LeadForm({
         >
           <span className="flex items-center gap-0.5" aria-hidden="true">
             {Array.from({ length: 5 }).map((_, idx) => (
-              <Star key={idx} className="h-4 w-4 text-amber-500" fill="currentColor" strokeWidth={1.5} />
+              <Star
+                key={idx}
+                className="h-4 w-4 text-amber-500"
+                fill="currentColor"
+                strokeWidth={1.5}
+              />
             ))}
           </span>
           <span className="font-semibold">{GOOGLE_REVIEW_RATING}</span>
@@ -1424,17 +1994,26 @@ export function LeadForm({
           <span>{GOOGLE_REVIEW_COUNT} reviews</span>
         </a>
         <div className="flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4 text-primary-700" aria-hidden="true" />
+          <ShieldCheck
+            className="h-4 w-4 text-primary-700"
+            aria-hidden="true"
+          />
           <span>Licensed &amp; insured</span>
         </div>
         <div className="flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-primary-700" aria-hidden="true" />
+          <MessageSquare
+            className="h-4 w-4 text-primary-700"
+            aria-hidden="true"
+          />
           <span>Text confirmation</span>
         </div>
       </div>
 
       {error ? (
-        <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="alert">
+        <div
+          className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+          role="alert"
+        >
           {error}
         </div>
       ) : null}
@@ -1463,13 +2042,18 @@ export function LeadForm({
                   event: "book_step1_submit",
                   path,
                   zip: zip.trim(),
-                  meta: { hasName: true, hasPhone: true, contactFirst: true }
+                  meta: { hasName: true, hasPhone: true, contactFirst: true },
                 });
               } else {
                 trackWebEvent({
                   event: "lead_form_step1_submit",
                   path,
-                  meta: { hasName: true, hasPhone: true, hasZip: true, contactFirst: true }
+                  meta: {
+                    hasName: true,
+                    hasPhone: true,
+                    hasZip: true,
+                    contactFirst: true,
+                  },
                 });
               }
               setError(null);
@@ -1490,7 +2074,7 @@ export function LeadForm({
                   haulAway: brushHaulAway,
                   hasPhotos: photos.length > 0,
                   photoCount: photos.length,
-                  photoSkipped
+                  photoSkipped,
                 }
               : isDemo
                 ? {
@@ -1501,7 +2085,7 @@ export function LeadForm({
                     otherHasDetails: demoOtherDetails.trim().length > 0,
                     hasPhotos: photos.length > 0,
                     photoCount: photos.length,
-                    photoSkipped
+                    photoSkipped,
                   }
                 : {
                     typeCount: types.length + (otherSelected ? 1 : 0),
@@ -1510,12 +2094,21 @@ export function LeadForm({
                     perceivedSize,
                     hasPhotos: photos.length > 0,
                     photoCount: photos.length,
-                    photoSkipped
+                    photoSkipped,
                   };
             if (isBookAnalyticsPath(path)) {
-              trackWebEvent({ event: "book_step1_submit", path, zip: zip.trim(), meta: baseMeta });
+              trackWebEvent({
+                event: "book_step1_submit",
+                path,
+                zip: zip.trim(),
+                meta: baseMeta,
+              });
             } else {
-              trackWebEvent({ event: "lead_form_step1_submit", path, meta: baseMeta });
+              trackWebEvent({
+                event: "lead_form_step1_submit",
+                path,
+                meta: baseMeta,
+              });
             }
             setError(null);
             setStep(2);
@@ -1531,7 +2124,9 @@ export function LeadForm({
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label className="text-sm font-semibold text-neutral-800">First name</label>
+                <label className="text-sm font-semibold text-neutral-800">
+                  First name
+                </label>
                 <input
                   name="name"
                   type="text"
@@ -1544,7 +2139,9 @@ export function LeadForm({
                 />
               </div>
               <div>
-                <label className="text-sm font-semibold text-neutral-800">Mobile number</label>
+                <label className="text-sm font-semibold text-neutral-800">
+                  Mobile number
+                </label>
                 <input
                   ref={phoneInputRef}
                   name="phone"
@@ -1557,10 +2154,14 @@ export function LeadForm({
                   className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                   placeholder="(404) 777-2631"
                 />
-                <p className="mt-1 text-[11px] text-neutral-500">We will text your estimate here. No spam.</p>
+                <p className="mt-1 text-[11px] text-neutral-500">
+                  We will text your estimate here. No spam.
+                </p>
               </div>
               <div className="sm:col-span-2">
-                <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
+                <label className="text-sm font-semibold text-neutral-800">
+                  Job ZIP code
+                </label>
                 <input
                   name="zip"
                   type="text"
@@ -1583,9 +2184,15 @@ export function LeadForm({
           <div className="space-y-4">
             {isBrush ? (
               <div>
-                <label className="text-sm font-semibold text-neutral-800">What are we clearing?</label>
+                <label className="text-sm font-semibold text-neutral-800">
+                  What are we clearing?
+                </label>
                 <p className="text-xs text-neutral-500">Pick the best match</p>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="What are we clearing?">
+                <div
+                  className="mt-2 grid gap-2 sm:grid-cols-2"
+                  role="radiogroup"
+                  aria-label="What are we clearing?"
+                >
                   {BRUSH_PRIMARY_OPTIONS.map((opt) => {
                     const selected = brushPrimary === opt.id;
                     return (
@@ -1599,21 +2206,27 @@ export function LeadForm({
                           "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
                           selected
                             ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                            : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                            : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                         )}
                       >
                         <span
                           className={cn(
                             "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                            selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                            selected
+                              ? "border-primary-700 bg-white text-black"
+                              : "border-neutral-300 bg-white text-transparent",
                           )}
                           aria-hidden="true"
                         >
                           <Check className="h-3.5 w-3.5" strokeWidth={3} />
                         </span>
                         <div className="space-y-0.5">
-                          <div className="font-semibold text-neutral-900">{opt.label}</div>
-                          <div className="text-xs text-neutral-500">{opt.hint}</div>
+                          <div className="font-semibold text-neutral-900">
+                            {opt.label}
+                          </div>
+                          <div className="text-xs text-neutral-500">
+                            {opt.hint}
+                          </div>
                         </div>
                       </button>
                     );
@@ -1628,21 +2241,27 @@ export function LeadForm({
                       "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition sm:col-span-2",
                       brushPrimary === "other"
                         ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                        : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                        : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                     )}
                   >
                     <span
                       className={cn(
                         "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                        brushPrimary === "other" ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                        brushPrimary === "other"
+                          ? "border-primary-700 bg-white text-black"
+                          : "border-neutral-300 bg-white text-transparent",
                       )}
                       aria-hidden="true"
                     >
                       <Check className="h-3.5 w-3.5" strokeWidth={3} />
                     </span>
                     <div className="space-y-0.5">
-                      <div className="font-semibold text-neutral-900">Other</div>
-                      <div className="text-xs text-neutral-500">Tell us what you need cleared</div>
+                      <div className="font-semibold text-neutral-900">
+                        Other
+                      </div>
+                      <div className="text-xs text-neutral-500">
+                        Tell us what you need cleared
+                      </div>
                     </div>
                   </button>
                 </div>
@@ -1660,9 +2279,17 @@ export function LeadForm({
             ) : isDemo ? (
               <div className="space-y-4">
                 <div>
-                  <label className="text-sm font-semibold text-neutral-800">What are we demolishing?</label>
-                  <p className="text-xs text-neutral-500">Pick the best match</p>
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="What are we demolishing?">
+                  <label className="text-sm font-semibold text-neutral-800">
+                    What are we demolishing?
+                  </label>
+                  <p className="text-xs text-neutral-500">
+                    Pick the best match
+                  </p>
+                  <div
+                    className="mt-2 grid gap-2 sm:grid-cols-2"
+                    role="radiogroup"
+                    aria-label="What are we demolishing?"
+                  >
                     {DEMO_TYPE_OPTIONS.map((opt) => {
                       const selected = demoType === opt.id;
                       return (
@@ -1676,21 +2303,27 @@ export function LeadForm({
                             "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
                             selected
                               ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                           )}
                         >
                           <span
                             className={cn(
                               "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                              selected
+                                ? "border-primary-700 bg-white text-black"
+                                : "border-neutral-300 bg-white text-transparent",
                             )}
                             aria-hidden="true"
                           >
                             <Check className="h-3.5 w-3.5" strokeWidth={3} />
                           </span>
                           <div className="space-y-0.5">
-                            <div className="font-semibold text-neutral-900">{opt.label}</div>
-                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                            <div className="font-semibold text-neutral-900">
+                              {opt.label}
+                            </div>
+                            <div className="text-xs text-neutral-500">
+                              {opt.hint}
+                            </div>
                           </div>
                         </button>
                       );
@@ -1709,9 +2342,17 @@ export function LeadForm({
                 </div>
 
                 <div>
-                  <label className="text-sm font-semibold text-neutral-800">About how big is it?</label>
-                  <p className="text-xs text-neutral-500">Pick the closest option</p>
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="About how big is it?">
+                  <label className="text-sm font-semibold text-neutral-800">
+                    About how big is it?
+                  </label>
+                  <p className="text-xs text-neutral-500">
+                    Pick the closest option
+                  </p>
+                  <div
+                    className="mt-2 grid gap-2 sm:grid-cols-2"
+                    role="radiogroup"
+                    aria-label="About how big is it?"
+                  >
                     {(DEMO_SIZE_OPTIONS[demoType] ?? []).map((opt) => {
                       const selected = demoSize === opt.id;
                       return (
@@ -1725,21 +2366,27 @@ export function LeadForm({
                             "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
                             selected
                               ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                           )}
                         >
                           <span
                             className={cn(
                               "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                              selected
+                                ? "border-primary-700 bg-white text-black"
+                                : "border-neutral-300 bg-white text-transparent",
                             )}
                             aria-hidden="true"
                           >
                             <Check className="h-3.5 w-3.5" strokeWidth={3} />
                           </span>
                           <div className="space-y-0.5">
-                            <div className="font-semibold text-neutral-900">{opt.label}</div>
-                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                            <div className="font-semibold text-neutral-900">
+                              {opt.label}
+                            </div>
+                            <div className="text-xs text-neutral-500">
+                              {opt.hint}
+                            </div>
                           </div>
                         </button>
                       );
@@ -1748,12 +2395,30 @@ export function LeadForm({
                 </div>
 
                 <div>
-                  <label className="text-sm font-semibold text-neutral-800">Do we haul it away?</label>
-                  <p className="text-xs text-neutral-500">Choose haul-away if you want it removed and disposed.</p>
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Do we haul it away?">
+                  <label className="text-sm font-semibold text-neutral-800">
+                    Do we haul it away?
+                  </label>
+                  <p className="text-xs text-neutral-500">
+                    Choose haul-away if you want it removed and disposed.
+                  </p>
+                  <div
+                    className="mt-2 grid gap-2 sm:grid-cols-2"
+                    role="radiogroup"
+                    aria-label="Do we haul it away?"
+                  >
                     {[
-                      { id: "haul", label: "Haul away", hint: "We remove and dispose of debris", value: true },
-                      { id: "pile", label: "Pile on-site", hint: "We leave a neat pile on the property", value: false }
+                      {
+                        id: "haul",
+                        label: "Haul away",
+                        hint: "We remove and dispose of debris",
+                        value: true,
+                      },
+                      {
+                        id: "pile",
+                        label: "Pile on-site",
+                        hint: "We leave a neat pile on the property",
+                        value: false,
+                      },
                     ].map((opt) => {
                       const selected = demoHaulAway === opt.value;
                       return (
@@ -1767,21 +2432,27 @@ export function LeadForm({
                             "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
                             selected
                               ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                           )}
                         >
                           <span
                             className={cn(
                               "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                              selected
+                                ? "border-primary-700 bg-white text-black"
+                                : "border-neutral-300 bg-white text-transparent",
                             )}
                             aria-hidden="true"
                           >
                             <Check className="h-3.5 w-3.5" strokeWidth={3} />
                           </span>
                           <div className="space-y-0.5">
-                            <div className="font-semibold text-neutral-900">{opt.label}</div>
-                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                            <div className="font-semibold text-neutral-900">
+                              {opt.label}
+                            </div>
+                            <div className="text-xs text-neutral-500">
+                              {opt.hint}
+                            </div>
                           </div>
                         </button>
                       );
@@ -1791,54 +2462,77 @@ export function LeadForm({
               </div>
             ) : (
               <div>
-                <label className="text-sm font-semibold text-neutral-800">What are we picking up?</label>
-                <p className="text-xs text-neutral-500">Choose all that apply (helps us quote accurately).</p>
+                <label className="text-sm font-semibold text-neutral-800">
+                  What are we picking up?
+                </label>
+                <p className="text-xs text-neutral-500">
+                  Choose all that apply (helps us quote accurately).
+                </p>
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   {(() => {
-                    const hasSecondarySelection = types.some((t) => (JUNK_SECONDARY_TYPE_IDS as readonly string[]).includes(t));
-                    const isMoreOpen = showMoreJunkTypes || otherSelected || hasSecondarySelection;
-                    const options = isMoreOpen ? [...JUNK_PRIMARY_OPTIONS, ...JUNK_SECONDARY_OPTIONS] : JUNK_PRIMARY_OPTIONS;
-                    return options.map((opt) => {
-                    const selected = types.includes(opt.id);
-                    const checkboxId = `junk-type-${opt.id}`;
-                    return (
-                      <label
-                        key={opt.id}
-                        htmlFor={checkboxId}
-                        className={cn(
-                          "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
-                          selected
-                            ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
-                            : "border-neutral-200 bg-white text-neutral-700"
-                        )}
-                      >
-                        <input
-                          id={checkboxId}
-                          type="checkbox"
-                          className="sr-only"
-                          checked={selected}
-                          onChange={() => toggleType(opt.id)}
-                          aria-label={opt.label}
-                        />
-                        <span
-                          className={cn(
-                            "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                            selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
-                          )}
-                          aria-hidden="true"
-                        >
-                          <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                        </span>
-                        <span>{opt.label}</span>
-                      </label>
+                    const hasSecondarySelection = types.some((t) =>
+                      (JUNK_SECONDARY_TYPE_IDS as readonly string[]).includes(
+                        t,
+                      ),
                     );
-                  });
+                    const isMoreOpen =
+                      showMoreJunkTypes ||
+                      otherSelected ||
+                      hasSecondarySelection;
+                    const options = isMoreOpen
+                      ? [...JUNK_PRIMARY_OPTIONS, ...JUNK_SECONDARY_OPTIONS]
+                      : JUNK_PRIMARY_OPTIONS;
+                    return options.map((opt) => {
+                      const selected = types.includes(opt.id);
+                      const checkboxId = `junk-type-${opt.id}`;
+                      return (
+                        <label
+                          key={opt.id}
+                          htmlFor={checkboxId}
+                          className={cn(
+                            "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
+                            selected
+                              ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
+                              : "border-neutral-200 bg-white text-neutral-700",
+                          )}
+                        >
+                          <input
+                            id={checkboxId}
+                            type="checkbox"
+                            className="sr-only"
+                            checked={selected}
+                            onChange={() => toggleType(opt.id)}
+                            aria-label={opt.label}
+                          />
+                          <span
+                            className={cn(
+                              "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                              selected
+                                ? "border-primary-700 bg-white text-black"
+                                : "border-neutral-300 bg-white text-transparent",
+                            )}
+                            aria-hidden="true"
+                          >
+                            <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                          </span>
+                          <span>{opt.label}</span>
+                        </label>
+                      );
+                    });
                   })()}
 
                   {(() => {
-                    const hasSecondarySelection = types.some((t) => (JUNK_SECONDARY_TYPE_IDS as readonly string[]).includes(t));
-                    const isMoreOpen = showMoreJunkTypes || otherSelected || hasSecondarySelection;
-                    const canHide = isMoreOpen && !otherSelected && !hasSecondarySelection;
+                    const hasSecondarySelection = types.some((t) =>
+                      (JUNK_SECONDARY_TYPE_IDS as readonly string[]).includes(
+                        t,
+                      ),
+                    );
+                    const isMoreOpen =
+                      showMoreJunkTypes ||
+                      otherSelected ||
+                      hasSecondarySelection;
+                    const canHide =
+                      isMoreOpen && !otherSelected && !hasSecondarySelection;
                     return (
                       <div className="sm:col-span-2">
                         <button
@@ -1852,15 +2546,26 @@ export function LeadForm({
                             setShowMoreJunkTypes(true);
                           }}
                         >
-                          {canHide ? "Hide extra options" : isMoreOpen ? "Extra options" : "More options"}
+                          {canHide
+                            ? "Hide extra options"
+                            : isMoreOpen
+                              ? "Extra options"
+                              : "More options"}
                         </button>
                       </div>
                     );
                   })()}
 
                   {(() => {
-                    const hasSecondarySelection = types.some((t) => (JUNK_SECONDARY_TYPE_IDS as readonly string[]).includes(t));
-                    const isMoreOpen = showMoreJunkTypes || otherSelected || hasSecondarySelection;
+                    const hasSecondarySelection = types.some((t) =>
+                      (JUNK_SECONDARY_TYPE_IDS as readonly string[]).includes(
+                        t,
+                      ),
+                    );
+                    const isMoreOpen =
+                      showMoreJunkTypes ||
+                      otherSelected ||
+                      hasSecondarySelection;
                     if (!isMoreOpen) return null;
                     return (
                       <label
@@ -1869,7 +2574,7 @@ export function LeadForm({
                           "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition sm:col-span-2",
                           otherSelected
                             ? "border-primary-600 bg-primary-50 text-primary-900 shadow-sm"
-                            : "border-neutral-200 bg-white text-neutral-700"
+                            : "border-neutral-200 bg-white text-neutral-700",
                         )}
                       >
                         <input
@@ -1883,7 +2588,9 @@ export function LeadForm({
                         <span
                           className={cn(
                             "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                            otherSelected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                            otherSelected
+                              ? "border-primary-700 bg-white text-black"
+                              : "border-neutral-300 bg-white text-transparent",
                           )}
                           aria-hidden="true"
                         >
@@ -1910,8 +2617,13 @@ export function LeadForm({
             <div className="space-y-2">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-0.5">
-                  <label htmlFor="lead-photos" className="text-sm font-semibold text-neutral-800">
-                    {isBrush ? "Add photos or a short video for the most accurate estimate" : "Add photos or a short video for the most accurate quote"}
+                  <label
+                    htmlFor="lead-photos"
+                    className="text-sm font-semibold text-neutral-800"
+                  >
+                    {isBrush
+                      ? "Add photos or a short video for the most accurate estimate"
+                      : "Add photos or a short video for the most accurate quote"}
                   </label>
                   <p className="text-xs text-neutral-500">
                     {isBrush
@@ -1938,11 +2650,17 @@ export function LeadForm({
                     className="block w-full cursor-pointer rounded-md border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
                   />
                   {photoUploadStatus === "uploading" ? (
-                    <div className="text-xs text-neutral-600">Preparing photos/video frames...</div>
+                    <div className="text-xs text-neutral-600">
+                      Preparing photos/video frames...
+                    </div>
                   ) : photoUploadStatus === "error" ? (
-                    <div className="text-xs text-amber-700">{photoUploadMessage ?? "Unable to upload photos."}</div>
+                    <div className="text-xs text-amber-700">
+                      {photoUploadMessage ?? "Unable to upload photos."}
+                    </div>
                   ) : photoUploadMessage ? (
-                    <div className="text-xs text-neutral-600">{photoUploadMessage}</div>
+                    <div className="text-xs text-neutral-600">
+                      {photoUploadMessage}
+                    </div>
                   ) : null}
                   <button
                     type="button"
@@ -1966,60 +2684,85 @@ export function LeadForm({
               {photos.length ? (
                 <div className="flex flex-wrap gap-2 text-xs text-neutral-600">
                   {photos.map((_, idx) => (
-                    <span key={idx} className="rounded-full bg-neutral-100 px-2 py-1">{`Estimate image ${idx + 1}`}</span>
+                    <span
+                      key={idx}
+                      className="rounded-full bg-neutral-100 px-2 py-1"
+                    >{`Estimate image ${idx + 1}`}</span>
                   ))}
                 </div>
               ) : photoSkipped ? (
-                <div className="text-xs text-neutral-600">No photos added (you can still continue).</div>
+                <div className="text-xs text-neutral-600">
+                  No photos added (you can still continue).
+                </div>
               ) : null}
             </div>
 
             {!isDemo ? (
               <div className="space-y-2">
-              <label className="text-sm font-semibold text-neutral-800">
-                {isBrush ? "How big is the area?" : "How much junk are we hauling away?"}
-              </label>
-              {!isBrush ? (
-                <p className="text-xs text-neutral-500">Final price is confirmed on site before we start loading — no surprises.</p>
-              ) : null}
-              <div
-                className="grid gap-2 sm:grid-cols-2"
-                role="radiogroup"
-                aria-label={isBrush ? "How big is the area?" : "How much junk are we hauling away?"}
-              >
-                {(isBrush ? BRUSH_SIZE_OPTIONS : displayedJunkSizeOptions).map((opt) => {
-                  const selected = perceivedSize === opt.id;
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      onClick={() => setPerceivedSize(opt.id)}
-                      className={cn(
-                        "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
-                        selected
-                          ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                          : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
-                      )}
-                    >
-                      <span
+                <label className="text-sm font-semibold text-neutral-800">
+                  {isBrush
+                    ? "How big is the area?"
+                    : "How much junk are we hauling away?"}
+                </label>
+                {!isBrush ? (
+                  <p className="text-xs text-neutral-500">
+                    Final price is confirmed on site before we start loading —
+                    no surprises.
+                  </p>
+                ) : null}
+                <div
+                  className="grid gap-2 sm:grid-cols-2"
+                  role="radiogroup"
+                  aria-label={
+                    isBrush
+                      ? "How big is the area?"
+                      : "How much junk are we hauling away?"
+                  }
+                >
+                  {(isBrush
+                    ? BRUSH_SIZE_OPTIONS
+                    : displayedJunkSizeOptions
+                  ).map((opt) => {
+                    const selected = perceivedSize === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setPerceivedSize(opt.id)}
                         className={cn(
-                          "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                          selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                          "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
+                          selected
+                            ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
+                            : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                         )}
-                        aria-hidden="true"
                       >
-                        <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                      </span>
-                      <div className="min-w-0 flex-1 space-y-0.5">
-                        <div className="font-semibold leading-snug text-neutral-900">{opt.label}</div>
-                        {opt.hint ? <div className="text-xs leading-snug text-neutral-500">{opt.hint}</div> : null}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                        <span
+                          className={cn(
+                            "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
+                            selected
+                              ? "border-primary-700 bg-white text-black"
+                              : "border-neutral-300 bg-white text-transparent",
+                          )}
+                          aria-hidden="true"
+                        >
+                          <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                        </span>
+                        <div className="min-w-0 flex-1 space-y-0.5">
+                          <div className="font-semibold leading-snug text-neutral-900">
+                            {opt.label}
+                          </div>
+                          {opt.hint ? (
+                            <div className="text-xs leading-snug text-neutral-500">
+                              {opt.hint}
+                            </div>
+                          ) : null}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
 
@@ -2031,7 +2774,8 @@ export function LeadForm({
                       Access and difficulty details
                     </label>
                     <p className="text-xs text-neutral-500">
-                      Optional — add these now for tighter scheduling and pricing.
+                      Optional — add these now for tighter scheduling and
+                      pricing.
                     </p>
                   </div>
                   <button
@@ -2048,8 +2792,14 @@ export function LeadForm({
             {isBrush && showBrushPlanningDetails ? (
               <>
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-neutral-800">Can equipment access the area?</label>
-                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Can equipment access the area?">
+                  <label className="text-sm font-semibold text-neutral-800">
+                    Can equipment access the area?
+                  </label>
+                  <div
+                    className="grid gap-2 sm:grid-cols-2"
+                    role="radiogroup"
+                    aria-label="Can equipment access the area?"
+                  >
                     {BRUSH_ACCESS_OPTIONS.map((opt) => {
                       const selected = brushAccess === opt.id;
                       return (
@@ -2063,21 +2813,27 @@ export function LeadForm({
                             "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
                             selected
                               ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                           )}
                         >
                           <span
                             className={cn(
                               "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                              selected
+                                ? "border-primary-700 bg-white text-black"
+                                : "border-neutral-300 bg-white text-transparent",
                             )}
                             aria-hidden="true"
                           >
                             <Check className="h-3.5 w-3.5" strokeWidth={3} />
                           </span>
                           <div className="space-y-0.5">
-                            <div className="font-semibold text-neutral-900">{opt.label}</div>
-                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                            <div className="font-semibold text-neutral-900">
+                              {opt.label}
+                            </div>
+                            <div className="text-xs text-neutral-500">
+                              {opt.hint}
+                            </div>
                           </div>
                         </button>
                       );
@@ -2086,8 +2842,14 @@ export function LeadForm({
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-neutral-800">How difficult is the clearing?</label>
-                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How difficult is the clearing?">
+                  <label className="text-sm font-semibold text-neutral-800">
+                    How difficult is the clearing?
+                  </label>
+                  <div
+                    className="grid gap-2 sm:grid-cols-2"
+                    role="radiogroup"
+                    aria-label="How difficult is the clearing?"
+                  >
                     {BRUSH_DIFFICULTY_OPTIONS.map((opt) => {
                       const selected = brushDifficulty === opt.id;
                       return (
@@ -2101,21 +2863,27 @@ export function LeadForm({
                             "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
                             selected
                               ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                           )}
                         >
                           <span
                             className={cn(
                               "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                              selected
+                                ? "border-primary-700 bg-white text-black"
+                                : "border-neutral-300 bg-white text-transparent",
                             )}
                             aria-hidden="true"
                           >
                             <Check className="h-3.5 w-3.5" strokeWidth={3} />
                           </span>
                           <div className="space-y-0.5">
-                            <div className="font-semibold text-neutral-900">{opt.label}</div>
-                            <div className="text-xs text-neutral-500">{opt.hint}</div>
+                            <div className="font-semibold text-neutral-900">
+                              {opt.label}
+                            </div>
+                            <div className="text-xs text-neutral-500">
+                              {opt.hint}
+                            </div>
                           </div>
                         </button>
                       );
@@ -2124,11 +2892,17 @@ export function LeadForm({
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-neutral-800">Haul away the debris?</label>
-                  <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Haul away the debris?">
+                  <label className="text-sm font-semibold text-neutral-800">
+                    Haul away the debris?
+                  </label>
+                  <div
+                    className="grid gap-2 sm:grid-cols-2"
+                    role="radiogroup"
+                    aria-label="Haul away the debris?"
+                  >
                     {[
                       { id: "yes", label: "Yes, haul it away", value: true },
-                      { id: "no", label: "No, leave it on site", value: false }
+                      { id: "no", label: "No, leave it on site", value: false },
                     ].map((opt) => {
                       const selected = brushHaulAway === opt.value;
                       return (
@@ -2142,19 +2916,23 @@ export function LeadForm({
                             "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
                             selected
                               ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                           )}
                         >
                           <span
                             className={cn(
                               "flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                              selected
+                                ? "border-primary-700 bg-white text-black"
+                                : "border-neutral-300 bg-white text-transparent",
                             )}
                             aria-hidden="true"
                           >
                             <Check className="h-3 w-3" strokeWidth={3} />
                           </span>
-                          <span className="font-semibold text-neutral-900">{opt.label}</span>
+                          <span className="font-semibold text-neutral-900">
+                            {opt.label}
+                          </span>
                         </button>
                       );
                     })}
@@ -2166,7 +2944,9 @@ export function LeadForm({
             <div className="space-y-2">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-0.5">
-                  <label className="text-sm font-semibold text-neutral-800">Anything else we should know?</label>
+                  <label className="text-sm font-semibold text-neutral-800">
+                    Anything else we should know?
+                  </label>
                   <p className="text-xs text-neutral-500">
                     {isBrush
                       ? "Optional: slope, gates, access notes, what to keep/remove, etc."
@@ -2188,7 +2968,9 @@ export function LeadForm({
                   onChange={(e) => setNotes(e.target.value)}
                   className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                   placeholder={
-                    isBrush ? "Slope, gates, access notes, what to keep/remove, etc." : "Gate codes, stairs, heavy items, etc."
+                    isBrush
+                      ? "Slope, gates, access notes, what to keep/remove, etc."
+                      : "Gate codes, stairs, heavy items, etc."
                   }
                 />
               ) : null}
@@ -2196,7 +2978,9 @@ export function LeadForm({
 
             {!contactFirst ? (
               <div className="space-y-1">
-                <label className="text-sm font-semibold text-neutral-800">Job ZIP code</label>
+                <label className="text-sm font-semibold text-neutral-800">
+                  Job ZIP code
+                </label>
                 <input
                   name="zip"
                   type="text"
@@ -2217,7 +3001,11 @@ export function LeadForm({
             ) : null}
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <Button type="submit" className="w-full justify-center sm:w-auto" disabled={quoteState.status === "loading"}>
+              <Button
+                type="submit"
+                className="w-full justify-center sm:w-auto"
+                disabled={quoteState.status === "loading"}
+              >
                 {quoteState.status === "loading"
                   ? "Calculating your estimate..."
                   : contactFirst
@@ -2228,7 +3016,8 @@ export function LeadForm({
               </Button>
               {!contactFirst ? (
                 <p className="text-xs text-neutral-500">
-                  Next: enter your mobile number to see your {isBrush || isDemo ? "estimate" : "price"}.
+                  Next: enter your mobile number to see your{" "}
+                  {isBrush || isDemo ? "estimate" : "price"}.
                 </p>
               ) : null}
             </div>
@@ -2249,7 +3038,7 @@ export function LeadForm({
                 quoteMergedRangeLabel={quoteMergedRangeLabel}
                 quoteRangeWasWidened={quoteRangeWasWidened}
                 quoteAddOnSummary={quoteAddOnSummary}
-                quoteMissingViews={quoteMissingViews}
+                quoteNeedsMorePhotos={quoteNeedsMorePhotos}
                 showBookingDetails={showBookingDetails}
                 setShowBookingDetails={setShowBookingDetails}
                 textEstimateMessage={textEstimateMessage}
@@ -2292,7 +3081,9 @@ export function LeadForm({
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label className="text-sm font-semibold text-neutral-800">First name (optional)</label>
+                <label className="text-sm font-semibold text-neutral-800">
+                  First name (optional)
+                </label>
                 <input
                   name="name"
                   type="text"
@@ -2304,7 +3095,9 @@ export function LeadForm({
                 />
               </div>
               <div>
-                <label className="text-sm font-semibold text-neutral-800">Mobile number</label>
+                <label className="text-sm font-semibold text-neutral-800">
+                  Mobile number
+                </label>
                 <input
                   ref={phoneInputRef}
                   name="phone"
@@ -2318,11 +3111,14 @@ export function LeadForm({
                   placeholder="(404) 777-2631"
                 />
                 <p className="mt-1 text-[11px] text-neutral-500">
-                  We’ll text your {isBrush || isDemo ? "estimate" : "price"} here. No spam.
+                  We’ll text your {isBrush || isDemo ? "estimate" : "price"}{" "}
+                  here. No spam.
                 </p>
               </div>
               <div className="sm:col-span-2">
-                <label className="text-sm font-semibold text-neutral-800">Email (optional)</label>
+                <label className="text-sm font-semibold text-neutral-800">
+                  Email (optional)
+                </label>
                 <input
                   name="email"
                   type="email"
@@ -2337,8 +3133,14 @@ export function LeadForm({
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-neutral-800">How soon do you need this done?</label>
-              <div className="grid gap-2 sm:grid-cols-4" role="radiogroup" aria-label="How soon do you need this done?">
+              <label className="text-sm font-semibold text-neutral-800">
+                How soon do you need this done?
+              </label>
+              <div
+                className="grid gap-2 sm:grid-cols-4"
+                role="radiogroup"
+                aria-label="How soon do you need this done?"
+              >
                 {TIMEFRAME_OPTIONS.map((opt) => {
                   const selected = timeframe === opt.id;
                   return (
@@ -2352,26 +3154,34 @@ export function LeadForm({
                         "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
                         selected
                           ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                          : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40"
+                          : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
                       )}
                     >
                       <span
                         className={cn(
                           "flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                          selected ? "border-primary-700 bg-white text-black" : "border-neutral-300 bg-white text-transparent"
+                          selected
+                            ? "border-primary-700 bg-white text-black"
+                            : "border-neutral-300 bg-white text-transparent",
                         )}
                         aria-hidden="true"
                       >
                         <Check className="h-3 w-3" strokeWidth={3} />
                       </span>
-                      <span className="font-semibold text-neutral-900">{opt.label}</span>
+                      <span className="font-semibold text-neutral-900">
+                        {opt.label}
+                      </span>
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            <Button type="submit" className="w-full justify-center" disabled={quoteState.status === "loading"}>
+            <Button
+              type="submit"
+              className="w-full justify-center"
+              disabled={quoteState.status === "loading"}
+            >
               {quoteState.status === "loading"
                 ? "Calculating your estimate..."
                 : isBrush || isDemo
@@ -2380,34 +3190,58 @@ export function LeadForm({
             </Button>
 
             {quoteState.status === "ready" ? (
-              <div ref={quoteCardRef} className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/70 p-4">
-                <div className="flex items-center gap-2 text-sm font-semibold text-primary-900">
-                  {discountLabel ? (
-                    <span className="rounded-full bg-primary-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
-                      {discountLabel}
-                    </span>
-                  ) : null}
-                  {isBrush || isDemo ? "Here's your estimate" : "Here's your rough estimate"}
-                  {!isBrush && !isDemo && junkWeightLabel ? (
-                    <span className="rounded-full border border-primary-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-primary-900">
-                      {junkWeightLabel}
-                    </span>
-                  ) : null}
+              <div
+                ref={quoteCardRef}
+                className="scroll-mt-40 space-y-4 rounded-lg border border-neutral-200 bg-white p-4 shadow-soft shadow-primary-900/10"
+              >
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm font-semibold text-primary-900">
+                      Here&apos;s your estimate
+                    </div>
+                    {discountLabel ? (
+                      <span className="rounded-full bg-primary-800 px-2.5 py-1 text-[11px] font-bold uppercase text-white">
+                        {discountLabel}
+                      </span>
+                    ) : null}
+                    {!isBrush && !isDemo && junkWeightLabel ? (
+                      <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-[11px] font-semibold text-neutral-700">
+                        {junkWeightLabel}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
+                    <div className="text-4xl font-semibold leading-none text-primary-900">
+                      {discountedRange}
+                    </div>
+                    {discountLabel && baseRange ? (
+                      <div className="pb-0.5 text-base font-medium text-neutral-400 line-through">
+                        {baseRange}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="text-sm font-semibold text-neutral-900">
+                    {quoteState.tier}
+                  </div>
                 </div>
-                <div className="text-2xl font-semibold text-primary-900">
-                  {discountedRange}
-                  <span className="ml-2 text-sm font-normal text-neutral-500 line-through">
-                    {discountLabel ? baseRange : null}
-                  </span>
+                <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm leading-relaxed text-neutral-700">
+                  {quoteState.reason}
                 </div>
-                <div className="text-sm text-neutral-700">{quoteState.tier}</div>
-                <div className="text-xs text-neutral-600">{quoteState.reason}</div>
                 {!isBrush && !isDemo && junkEstimateDisclaimer ? (
-                  <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  <div className="flex gap-2 rounded-md border border-primary-100 bg-primary-50/70 px-3 py-2 text-xs leading-relaxed text-primary-950">
+                    <ShieldCheck
+                      className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
+                      aria-hidden="true"
+                    />
                     <div>
-                      <div className="font-semibold">Rough estimate only</div>
-                      <div>{junkEstimateDisclaimer}</div>
+                      <div className="font-semibold">
+                        Final price confirmed before loading
+                      </div>
+                      <div>
+                        We review the job in person first. The estimate only
+                        changes if volume, weight, access, or materials differ
+                        from what was entered.
+                      </div>
                     </div>
                   </div>
                 ) : null}
@@ -2415,113 +3249,132 @@ export function LeadForm({
                   <div className="space-y-2 rounded-md border border-primary-100 bg-white/70 px-3 py-2 text-xs text-neutral-700">
                     {quoteVisibleRangeLabel ? (
                       <div>
-                        Photos look like about <span className="font-semibold text-primary-900">{quoteVisibleRangeLabel}</span>.
+                        Photos show{" "}
+                        <span className="font-semibold text-primary-900">
+                          {quoteVisibleRangeLabel}
+                        </span>
+                        .
                         {quoteMergedRangeLabel ? (
                           <>
                             {" "}
-                            We priced this around <span className="font-semibold text-primary-900">{quoteMergedRangeLabel}</span>
-                            {quoteMediaAnalysis.confidence ? (
-                              <> with {quoteMediaAnalysis.confidence} confidence.</>
-                            ) : (
-                              <>.</>
-                            )}
+                            This helped us price the job around{" "}
+                            <span className="font-semibold text-primary-900">
+                              {quoteMergedRangeLabel}
+                            </span>
+                            .
                           </>
                         ) : null}
                       </div>
                     ) : null}
                     {quoteRangeWasWidened ? (
                       <div>
-                        We widened the range a bit because your notes or selections suggest there may be more items than what is visible in the photos.
+                        If there is more outside the photos, we&apos;ll review
+                        it in person before loading starts.
                       </div>
                     ) : null}
                     {quoteState.addOnTotal > 0 && quoteAddOnSummary ? (
                       <div>
-                        This already includes visible disposal add-ons for <span className="font-semibold text-primary-900">{quoteAddOnSummary}</span>.
+                        This estimate includes{" "}
+                        <span className="font-semibold text-primary-900">
+                          {quoteAddOnSummary}
+                        </span>
+                        .
                       </div>
                     ) : (
                       <div>
-                        Disposal add-ons apply only when visible or confirmed, such as mattresses at +$35 each and paint cans at +$10 each.
+                        Special disposal items, like mattresses or paint cans,
+                        are added only if needed.
                       </div>
                     )}
-                    {quoteMissingViews.length > 0 ? (
+                    {quoteNeedsMorePhotos ? (
                       <div>
-                        Want a tighter number? Send {quoteMissingViews[0]}
+                        Want a tighter number? Add one more photo before
+                        booking.
                       </div>
                     ) : null}
                   </div>
                 ) : !isBrush ? (
-                  <div className="text-xs text-neutral-600">
-                    Disposal add-ons apply only when needed, such as mattresses at +$35 each and paint cans at +$10 each.
+                  <div className="rounded-md bg-neutral-50 px-3 py-2 text-xs leading-relaxed text-neutral-600">
+                    Disposal add-ons apply only when needed, such as mattresses
+                    at +$35 each and paint cans at +$10 each.
                   </div>
                 ) : null}
-                <div className="text-xs text-neutral-600">
+                <div className="text-sm font-medium text-neutral-700">
                   {isBrush && quoteState.needsInPersonEstimate
                     ? "This is a ballpark range. We\u2019ll call/text to confirm details and finalize before we arrive."
                     : isDemo
                       ? "This is a range. We’ll confirm details on-site before we start."
                       : "You can still book now. The crew will review the job in person and confirm the set price before loading begins."}
                 </div>
-                  <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
-                    <div className="text-xs font-semibold text-neutral-700">
-                      {isBrush && quoteState.needsInPersonEstimate
-                        ? "Request a time (pending confirmation)"
-                        : isBrush
-                          ? "Book this clearing"
-                          : isDemo
-                            ? "Book a demo estimate"
-                            : "Book this pickup"}
+                <div className="space-y-3 rounded-lg border border-neutral-200 bg-white p-3 text-sm">
+                  <div className="text-sm font-semibold text-primary-900">
+                    {isBrush && quoteState.needsInPersonEstimate
+                      ? "Request a time (pending confirmation)"
+                      : isBrush
+                        ? "Book this clearing"
+                        : isDemo
+                          ? "Book a demo estimate"
+                          : "Book this pickup"}
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <input
+                      name="addressLine1"
+                      type="text"
+                      autoComplete="address-line1"
+                      placeholder="Street address"
+                      value={addressLine1}
+                      onChange={(e) => setAddressLine1(e.target.value)}
+                      className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                    />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input
+                        name="city"
+                        type="text"
+                        autoComplete="address-level2"
+                        placeholder="City"
+                        value={city}
+                        onChange={(e) => setCity(e.target.value)}
+                        className="col-span-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                      />
+                      <input
+                        name="state"
+                        type="text"
+                        autoComplete="address-level1"
+                        placeholder="GA"
+                        maxLength={2}
+                        value={stateField}
+                        onChange={(e) =>
+                          setStateField(e.target.value.toUpperCase())
+                        }
+                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 uppercase"
+                      />
                     </div>
-                    <div className="grid gap-2 md:grid-cols-2">
-                      <input
-                        name="addressLine1"
-                        type="text"
-                        autoComplete="address-line1"
-                        placeholder="Street address"
-                        value={addressLine1}
-                        onChange={(e) => setAddressLine1(e.target.value)}
-                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                      />
-                      <div className="grid grid-cols-3 gap-2">
-                        <input
-                          name="city"
-                          type="text"
-                          autoComplete="address-level2"
-                          placeholder="City"
-                          value={city}
-                          onChange={(e) => setCity(e.target.value)}
-                          className="col-span-2 rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                        />
-                        <input
-                          name="state"
-                          type="text"
-                          autoComplete="address-level1"
-                          placeholder="GA"
-                          maxLength={2}
-                          value={stateField}
-                          onChange={(e) => setStateField(e.target.value.toUpperCase())}
-                          className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 uppercase"
-                        />
-                      </div>
-                      <input
-                        name="postalCode"
-                        type="text"
-                        autoComplete="postal-code"
-                        inputMode="numeric"
-                        placeholder="ZIP"
-                        value={postalCode}
-                        onChange={(e) => setPostalCode(e.target.value)}
-                        className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                      />
+                    <input
+                      name="postalCode"
+                      type="text"
+                      autoComplete="postal-code"
+                      inputMode="numeric"
+                      placeholder="ZIP"
+                      value={postalCode}
+                      onChange={(e) => setPostalCode(e.target.value)}
+                      className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
+                    />
                     <div className="md:col-span-2 space-y-2 rounded-md border border-neutral-200 bg-white p-3">
                       <div className="flex items-center justify-between gap-3">
-                        <div className="text-xs font-semibold text-neutral-700">Choose a time</div>
+                        <div className="text-xs font-semibold text-neutral-700">
+                          Choose a time
+                        </div>
                         <button
                           type="button"
                           onClick={() => void fetchAvailability()}
-                          disabled={!addressComplete || availabilityStatus === "loading"}
+                          disabled={
+                            !addressComplete || availabilityStatus === "loading"
+                          }
                           className="text-[11px] font-semibold text-primary-700 transition hover:text-primary-800 disabled:text-neutral-400"
                         >
-                          {availabilityStatus === "loading" ? "Checking..." : "Refresh"}
+                          {availabilityStatus === "loading"
+                            ? "Checking..."
+                            : "Refresh"}
                         </button>
                       </div>
                       {availabilityDurationMinutes ? (
@@ -2534,12 +3387,16 @@ export function LeadForm({
                           Enter your address to see available times.
                         </div>
                       ) : availabilityStatus === "loading" ? (
-                        <div className="text-xs text-neutral-600">Checking availability...</div>
+                        <div className="text-xs text-neutral-600">
+                          Checking availability...
+                        </div>
                       ) : availabilityStatus === "error" ? (
                         <div className="text-xs text-amber-700">
-                          {availabilityMessage ?? "Availability check failed. Please try again."}
+                          {availabilityMessage ??
+                            "Availability check failed. Please try again."}
                         </div>
-                      ) : availabilitySlots.length || availabilityDays.some((d) => d.slots.length > 0) ? (
+                      ) : availabilitySlots.length ||
+                        availabilityDays.some((d) => d.slots.length > 0) ? (
                         <div className="space-y-3">
                           {availabilitySlots.length ? (
                             <div className="space-y-2">
@@ -2548,24 +3405,29 @@ export function LeadForm({
                               </div>
                               <div className="grid gap-2 sm:grid-cols-2">
                                 {availabilitySlots.map((slot) => {
-                                  const selected = slot.startAt === selectedSlotStartAt;
+                                  const selected =
+                                    slot.startAt === selectedSlotStartAt;
                                   return (
                                     <button
                                       key={slot.startAt}
                                       type="button"
-                                      onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                                      onClick={() =>
+                                        setSelectedSlotStartAt(slot.startAt)
+                                      }
                                       aria-pressed={selected}
                                       className={cn(
                                         "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
                                         selected
                                           ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
-                                          : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50"
+                                          : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50",
                                       )}
                                     >
                                       <div
                                         className={cn(
                                           "text-sm font-semibold",
-                                          selected ? "text-white" : "text-neutral-900"
+                                          selected
+                                            ? "text-white"
+                                            : "text-neutral-900",
                                         )}
                                       >
                                         {formatSlotLabel(slot.startAt)}
@@ -2573,7 +3435,9 @@ export function LeadForm({
                                       <div
                                         className={cn(
                                           "text-[11px]",
-                                          selected ? "text-primary-100" : "text-neutral-600"
+                                          selected
+                                            ? "text-primary-100"
+                                            : "text-neutral-600",
                                         )}
                                       >
                                         {slot.reason}
@@ -2587,29 +3451,42 @@ export function LeadForm({
 
                           {selectedSlotStartAt ? (
                             <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-900">
-                              Selected time: <span className="font-semibold">{formatSlotLabel(selectedSlotStartAt)}</span>
+                              Selected time:{" "}
+                              <span className="font-semibold">
+                                {formatSlotLabel(selectedSlotStartAt)}
+                              </span>
                             </div>
                           ) : null}
                           {holdStatus === "loading" ? (
-                            <div className="text-[11px] text-neutral-500">Holding that time for you...</div>
+                            <div className="text-[11px] text-neutral-500">
+                              Holding that time for you...
+                            </div>
                           ) : holdStatus === "ready" && holdExpiresAt ? (
                             <div className="text-[11px] text-neutral-500">
                               Held until {formatHoldExpiry(holdExpiresAt)}.
                             </div>
                           ) : holdStatus === "error" && holdMessage ? (
-                            <div className="text-[11px] text-amber-700">{holdMessage}</div>
+                            <div className="text-[11px] text-amber-700">
+                              {holdMessage}
+                            </div>
                           ) : null}
 
                           {(() => {
-                            const availableDays = availabilityDays.filter((d) => d.slots.length > 0);
+                            const availableDays = availabilityDays.filter(
+                              (d) => d.slots.length > 0,
+                            );
                             if (!availableDays.length) return null;
 
                             const selectedDay =
-                              typeof availabilitySelectedDay === "string" && availabilitySelectedDay.length
+                              typeof availabilitySelectedDay === "string" &&
+                              availabilitySelectedDay.length
                                 ? availabilitySelectedDay
-                                : availableDays[0]?.date ?? null;
-                            const selectedDaySlots =
-                              selectedDay ? availableDays.find((d) => d.date === selectedDay)?.slots ?? [] : [];
+                                : (availableDays[0]?.date ?? null);
+                            const selectedDaySlots = selectedDay
+                              ? (availableDays.find(
+                                  (d) => d.date === selectedDay,
+                                )?.slots ?? [])
+                              : [];
 
                             return (
                               <div className="space-y-2">
@@ -2618,10 +3495,14 @@ export function LeadForm({
                                   variant="secondary"
                                   size="sm"
                                   aria-expanded={availabilityShowMore}
-                                  onClick={() => setAvailabilityShowMore((prev) => !prev)}
+                                  onClick={() =>
+                                    setAvailabilityShowMore((prev) => !prev)
+                                  }
                                   className="w-full justify-center sm:w-auto"
                                 >
-                                  {availabilityShowMore ? "Hide more times" : "See more times"}
+                                  {availabilityShowMore
+                                    ? "Hide more times"
+                                    : "See more times"}
                                 </Button>
 
                                 {availabilityShowMore ? (
@@ -2634,9 +3515,18 @@ export function LeadForm({
                                       onChange={(e) => {
                                         const next = e.target.value;
                                         setAvailabilitySelectedDay(next);
-                                        const daySlots = availableDays.find((d) => d.date === next)?.slots ?? [];
+                                        const daySlots =
+                                          availableDays.find(
+                                            (d) => d.date === next,
+                                          )?.slots ?? [];
                                         setSelectedSlotStartAt((prev) => {
-                                          if (typeof prev === "string" && daySlots.some((s) => s.startAt === prev)) return prev;
+                                          if (
+                                            typeof prev === "string" &&
+                                            daySlots.some(
+                                              (s) => s.startAt === prev,
+                                            )
+                                          )
+                                            return prev;
                                           return daySlots[0]?.startAt ?? null;
                                         });
                                       }}
@@ -2652,33 +3542,45 @@ export function LeadForm({
                                     {selectedDaySlots.length ? (
                                       <div className="grid gap-2 sm:grid-cols-3">
                                         {selectedDaySlots.map((slot) => {
-                                          const selected = slot.startAt === selectedSlotStartAt;
+                                          const selected =
+                                            slot.startAt ===
+                                            selectedSlotStartAt;
                                           return (
                                             <button
                                               key={slot.startAt}
                                               type="button"
-                                              onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                                              onClick={() =>
+                                                setSelectedSlotStartAt(
+                                                  slot.startAt,
+                                                )
+                                              }
                                               aria-pressed={selected}
                                               className={cn(
                                                 "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
                                                 selected
                                                   ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
-                                                  : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50"
+                                                  : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50",
                                               )}
                                               title={slot.reason}
                                             >
                                               <div
                                                 className={cn(
                                                   "text-sm font-semibold",
-                                                  selected ? "text-white" : "text-neutral-900"
+                                                  selected
+                                                    ? "text-white"
+                                                    : "text-neutral-900",
                                                 )}
                                               >
-                                                {formatSlotTimeLabel(slot.startAt)}
+                                                {formatSlotTimeLabel(
+                                                  slot.startAt,
+                                                )}
                                               </div>
                                               <div
                                                 className={cn(
                                                   "truncate text-[11px]",
-                                                  selected ? "text-primary-100" : "text-neutral-600"
+                                                  selected
+                                                    ? "text-primary-100"
+                                                    : "text-neutral-600",
                                                 )}
                                               >
                                                 {slot.reason}
@@ -2688,7 +3590,9 @@ export function LeadForm({
                                         })}
                                       </div>
                                     ) : (
-                                      <div className="text-xs text-neutral-600">No times available on this day.</div>
+                                      <div className="text-xs text-neutral-600">
+                                        No times available on this day.
+                                      </div>
                                     )}
                                   </div>
                                 ) : null}
@@ -2698,7 +3602,8 @@ export function LeadForm({
                         </div>
                       ) : (
                         <div className="text-xs text-neutral-600">
-                          {availabilityMessage ?? "No times available right now. Please call to confirm & book."}
+                          {availabilityMessage ??
+                            "No times available right now. Please call to confirm & book."}
                         </div>
                       )}
                     </div>
@@ -2708,11 +3613,17 @@ export function LeadForm({
                       type="button"
                       className="justify-center"
                       onClick={() => void submitBooking()}
-                      disabled={bookingStatus === "loading" || !selectedSlotStartAt || availabilityStatus === "loading"}
+                      disabled={
+                        bookingStatus === "loading" ||
+                        !selectedSlotStartAt ||
+                        availabilityStatus === "loading"
+                      }
                     >
                       {bookingStatus === "loading"
                         ? "Booking..."
-                        : isBrush && quoteState.status === "ready" && quoteState.needsInPersonEstimate
+                        : isBrush &&
+                            quoteState.status === "ready" &&
+                            quoteState.needsInPersonEstimate
                           ? "Request this time"
                           : isBrush
                             ? "Book this clearing"
@@ -2720,8 +3631,15 @@ export function LeadForm({
                               ? "Book a demo estimate"
                               : "Book this pickup"}
                     </Button>
-                    <Button asChild variant="secondary" className="justify-center">
-                      <a href="tel:+14047772631" aria-label="Call to confirm and book">
+                    <Button
+                      asChild
+                      variant="secondary"
+                      className="justify-center"
+                    >
+                      <a
+                        href="tel:+14047772631"
+                        aria-label="Call to confirm and book"
+                      >
                         Call to confirm &amp; book
                       </a>
                     </Button>
@@ -2730,14 +3648,17 @@ export function LeadForm({
                     <div
                       className={cn(
                         "text-xs",
-                        bookingStatus === "error" ? "text-amber-700" : "text-emerald-700"
+                        bookingStatus === "error"
+                          ? "text-amber-700"
+                          : "text-emerald-700",
                       )}
                     >
                       {bookingMessage}
                     </div>
                   ) : null}
                   <div className="text-[11px] text-neutral-500">
-                    We&apos;ve saved your estimate with your contact info so we can help if you have questions.
+                    We&apos;ve saved your estimate with your contact info so we
+                    can help if you have questions.
                   </div>
                 </div>
               </div>
@@ -2751,7 +3672,9 @@ export function LeadForm({
               <Button type="button" variant="ghost" onClick={() => setStep(1)}>
                 Back
               </Button>
-              <p className="text-xs text-neutral-500">We&apos;ll save this estimate for follow-up.</p>
+              <p className="text-xs text-neutral-500">
+                We&apos;ll save this estimate for follow-up.
+              </p>
             </div>
           </div>
         )}
@@ -2775,7 +3698,7 @@ function QuoteResult({
   quoteMergedRangeLabel,
   quoteRangeWasWidened,
   quoteAddOnSummary,
-  quoteMissingViews,
+  quoteNeedsMorePhotos,
   showBookingDetails,
   setShowBookingDetails,
   textEstimateMessage,
@@ -2810,7 +3733,7 @@ function QuoteResult({
   formatSlotLabel,
   formatSlotTimeLabel,
   formatHoldExpiry,
-  formatDayLabel
+  formatDayLabel,
 }: {
   quoteState: QuoteState;
   quoteCardRef: React.RefObject<HTMLDivElement | null>;
@@ -2826,7 +3749,7 @@ function QuoteResult({
   quoteMergedRangeLabel: string | null;
   quoteRangeWasWidened: boolean;
   quoteAddOnSummary: string;
-  quoteMissingViews: string[];
+  quoteNeedsMorePhotos: boolean;
   showBookingDetails: boolean;
   setShowBookingDetails: React.Dispatch<React.SetStateAction<boolean>>;
   textEstimateMessage: string | null;
@@ -2846,7 +3769,9 @@ function QuoteResult({
   availabilitySlots: AvailabilitySlot[];
   availabilityDays: AvailabilityDay[];
   availabilitySelectedDay: string | null;
-  setAvailabilitySelectedDay: React.Dispatch<React.SetStateAction<string | null>>;
+  setAvailabilitySelectedDay: React.Dispatch<
+    React.SetStateAction<string | null>
+  >;
   selectedSlotStartAt: string | null;
   setSelectedSlotStartAt: React.Dispatch<React.SetStateAction<string | null>>;
   availabilityShowMore: boolean;
@@ -2874,32 +3799,61 @@ function QuoteResult({
   if (quoteState.status !== "ready") return null;
 
   return (
-    <div ref={quoteCardRef} className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/70 p-4">
-      <div className="flex items-center gap-2 text-sm font-semibold text-primary-900">
-        {discountLabel ? (
-          <span className="rounded-full bg-primary-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.14em] text-white">
-            {discountLabel}
+    <div
+      ref={quoteCardRef}
+      className="scroll-mt-40 space-y-4 rounded-lg border border-neutral-200 bg-white p-4 shadow-soft shadow-primary-900/10"
+    >
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="text-sm font-semibold text-primary-900">
+            Here&apos;s your estimate
+          </div>
+          {discountLabel ? (
+            <span className="rounded-full bg-primary-800 px-2.5 py-1 text-[11px] font-bold uppercase text-white">
+              {discountLabel}
+            </span>
+          ) : null}
+          {!isBrush && !isDemo && junkWeightLabel ? (
+            <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-[11px] font-semibold text-neutral-700">
+              {junkWeightLabel}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-end gap-x-3 gap-y-1">
+          <div className="text-4xl font-semibold leading-none text-primary-900">
+            {discountedRange}
+          </div>
+          {discountLabel && baseRange ? (
+            <div className="pb-0.5 text-base font-medium text-neutral-400 line-through">
+              {baseRange}
+            </div>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-sm text-neutral-700">
+          <span className="font-semibold text-neutral-900">
+            {quoteState.tier}
           </span>
-        ) : null}
-        {isBrush || isDemo ? "Here's your estimate" : "Here's your rough estimate"}
-        {!isBrush && !isDemo && junkWeightLabel ? (
-          <span className="rounded-full border border-primary-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-primary-900">
-            {junkWeightLabel}
-          </span>
-        ) : null}
+          <span className="text-neutral-300">|</span>
+          <span>Saved to your phone number</span>
+        </div>
       </div>
-      <div className="text-2xl font-semibold text-primary-900">
-        {discountedRange}
-        <span className="ml-2 text-sm font-normal text-neutral-500 line-through">{discountLabel ? baseRange : null}</span>
+      <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm leading-relaxed text-neutral-700">
+        {quoteState.reason}
       </div>
-      <div className="text-sm text-neutral-700">{quoteState.tier}</div>
-      <div className="text-xs text-neutral-600">{quoteState.reason}</div>
       {!isBrush && !isDemo && junkEstimateDisclaimer ? (
-        <div className="flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+        <div className="flex gap-2 rounded-md border border-primary-100 bg-primary-50/70 px-3 py-2 text-xs leading-relaxed text-primary-950">
+          <ShieldCheck
+            className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
+            aria-hidden="true"
+          />
           <div>
-            <div className="font-semibold">Rough estimate only</div>
-            <div>{junkEstimateDisclaimer}</div>
+            <div className="font-semibold">
+              Final price confirmed before loading
+            </div>
+            <div>
+              We review the job in person first. The estimate only changes if
+              volume, weight, access, or materials differ from what was entered.
+            </div>
           </div>
         </div>
       ) : null}
@@ -2907,50 +3861,72 @@ function QuoteResult({
         <div className="space-y-2 rounded-md border border-primary-100 bg-white/70 px-3 py-2 text-xs text-neutral-700">
           {quoteVisibleRangeLabel ? (
             <div>
-              Photos look like about <span className="font-semibold text-primary-900">{quoteVisibleRangeLabel}</span>.
+              Photos show{" "}
+              <span className="font-semibold text-primary-900">
+                {quoteVisibleRangeLabel}
+              </span>
+              .
               {quoteMergedRangeLabel ? (
                 <>
                   {" "}
-                  We priced this around <span className="font-semibold text-primary-900">{quoteMergedRangeLabel}</span>
-                  {quoteMediaAnalysis.confidence ? <> with {quoteMediaAnalysis.confidence} confidence.</> : <>.</>}
+                  This helped us price the job around{" "}
+                  <span className="font-semibold text-primary-900">
+                    {quoteMergedRangeLabel}
+                  </span>
+                  .
                 </>
               ) : null}
             </div>
           ) : null}
           {quoteRangeWasWidened ? (
             <div>
-              We widened the range a bit because your notes or selections suggest there may be more items than what is visible in the photos.
+              If there is more outside the photos, we&apos;ll review it in
+              person before loading starts.
             </div>
           ) : null}
           {quoteState.addOnTotal > 0 && quoteAddOnSummary ? (
             <div>
-              This already includes visible disposal add-ons for <span className="font-semibold text-primary-900">{quoteAddOnSummary}</span>.
+              This estimate includes{" "}
+              <span className="font-semibold text-primary-900">
+                {quoteAddOnSummary}
+              </span>
+              .
             </div>
           ) : (
             <div>
-              Disposal add-ons apply only when visible or confirmed, such as mattresses at +$35 each and paint cans at +$10 each.
+              Special disposal items, like mattresses or paint cans, are added
+              only if needed.
             </div>
           )}
-          {quoteMissingViews.length > 0 ? <div>Want a tighter number? Send {quoteMissingViews[0]}</div> : null}
+          {quoteNeedsMorePhotos ? (
+            <div>Want a tighter number? Add one more photo before booking.</div>
+          ) : null}
         </div>
       ) : !isBrush ? (
-        <div className="text-xs text-neutral-600">
-          Disposal add-ons apply only when needed, such as mattresses at +$35 each and paint cans at +$10 each.
+        <div className="rounded-md bg-neutral-50 px-3 py-2 text-xs leading-relaxed text-neutral-600">
+          Disposal add-ons apply only when needed, such as mattresses at +$35
+          each and paint cans at +$10 each.
         </div>
       ) : null}
-      <div className="text-xs text-neutral-600">
+      <div className="text-sm font-medium text-neutral-700">
         {isBrush && quoteState.needsInPersonEstimate
           ? "This is a ballpark range. We'll call/text to confirm details and finalize before we arrive."
           : isDemo
             ? "This is a range. We'll confirm details on-site before we start."
-            : "Your estimate is saved. You can book online now, call us, or have us follow up by text."}
+            : "Your estimate is saved. Choose the next step below."}
       </div>
 
       {!showBookingDetails ? (
-        <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
-          <div className="text-sm font-semibold text-primary-900">Want to move forward?</div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <Button type="button" className="justify-center" onClick={() => setShowBookingDetails(true)}>
+        <div className="space-y-3 rounded-lg border border-neutral-200 bg-white p-3 text-sm">
+          <div className="text-lg font-semibold text-primary-900">
+            Want to move forward?
+          </div>
+          <div className="grid gap-3">
+            <Button
+              type="button"
+              className="justify-center"
+              onClick={() => setShowBookingDetails(true)}
+            >
               Book online
             </Button>
             <Button asChild variant="secondary" className="justify-center">
@@ -2962,14 +3938,23 @@ function QuoteResult({
               type="button"
               variant="secondary"
               className="justify-center"
-              onClick={() => setTextEstimateMessage("Your estimate is saved with your phone number. We'll follow up by text if you do not book online.")}
+              onClick={() =>
+                setTextEstimateMessage(
+                  "Got it. We saved this estimate under your phone number for follow-up.",
+                )
+              }
             >
               Text me this estimate
             </Button>
           </div>
-          {textEstimateMessage ? <div className="text-xs text-emerald-700">{textEstimateMessage}</div> : null}
+          {textEstimateMessage ? (
+            <div className="text-xs text-emerald-700">
+              {textEstimateMessage}
+            </div>
+          ) : null}
           <div className="text-[11px] text-neutral-500">
-            We already saved your quote request, so calling or texting does not make you start over.
+            No need to repeat the form if you call. We can look up this estimate
+            from your phone number.
           </div>
         </div>
       ) : (
@@ -2984,7 +3969,11 @@ function QuoteResult({
                     ? "Book a demo estimate"
                     : "Book this pickup"}
             </div>
-            <button type="button" className="text-[11px] font-semibold text-primary-700 underline" onClick={() => setShowBookingDetails(false)}>
+            <button
+              type="button"
+              className="text-[11px] font-semibold text-primary-700 underline"
+              onClick={() => setShowBookingDetails(false)}
+            >
               Back to options
             </button>
           </div>
@@ -3031,30 +4020,46 @@ function QuoteResult({
             />
             <div className="space-y-2 rounded-md border border-neutral-200 bg-white p-3 md:col-span-2">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-xs font-semibold text-neutral-700">Choose a time</div>
+                <div className="text-xs font-semibold text-neutral-700">
+                  Choose a time
+                </div>
                 <button
                   type="button"
                   onClick={() => void fetchAvailability()}
-                  disabled={!addressComplete || availabilityStatus === "loading"}
+                  disabled={
+                    !addressComplete || availabilityStatus === "loading"
+                  }
                   className="text-[11px] font-semibold text-primary-700 transition hover:text-primary-800 disabled:text-neutral-400"
                 >
                   {availabilityStatus === "loading" ? "Checking..." : "Refresh"}
                 </button>
               </div>
               {availabilityDurationMinutes ? (
-                <div className="text-[11px] text-neutral-500">Estimated job time: {availabilityDurationMinutes} min</div>
+                <div className="text-[11px] text-neutral-500">
+                  Estimated job time: {availabilityDurationMinutes} min
+                </div>
               ) : null}
               {!addressComplete ? (
-                <div className="text-xs text-neutral-600">Enter your address to see available times.</div>
+                <div className="text-xs text-neutral-600">
+                  Enter your address to see available times.
+                </div>
               ) : availabilityStatus === "loading" ? (
-                <div className="text-xs text-neutral-600">Checking availability...</div>
+                <div className="text-xs text-neutral-600">
+                  Checking availability...
+                </div>
               ) : availabilityStatus === "error" ? (
-                <div className="text-xs text-amber-700">{availabilityMessage ?? "Availability check failed. Please try again."}</div>
-              ) : availabilitySlots.length || availabilityDays.some((d) => d.slots.length > 0) ? (
+                <div className="text-xs text-amber-700">
+                  {availabilityMessage ??
+                    "Availability check failed. Please try again."}
+                </div>
+              ) : availabilitySlots.length ||
+                availabilityDays.some((d) => d.slots.length > 0) ? (
                 <div className="space-y-3">
                   {availabilitySlots.length ? (
                     <div className="space-y-2">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">Recommended times</div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+                        Recommended times
+                      </div>
                       <div className="grid gap-2 sm:grid-cols-2">
                         {availabilitySlots.map((slot) => {
                           const selected = slot.startAt === selectedSlotStartAt;
@@ -3062,19 +4067,35 @@ function QuoteResult({
                             <button
                               key={slot.startAt}
                               type="button"
-                              onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                              onClick={() =>
+                                setSelectedSlotStartAt(slot.startAt)
+                              }
                               aria-pressed={selected}
                               className={cn(
                                 "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
                                 selected
                                   ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
-                                  : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50"
+                                  : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50",
                               )}
                             >
-                              <div className={cn("text-sm font-semibold", selected ? "text-white" : "text-neutral-900")}>
+                              <div
+                                className={cn(
+                                  "text-sm font-semibold",
+                                  selected ? "text-white" : "text-neutral-900",
+                                )}
+                              >
                                 {formatSlotLabel(slot.startAt)}
                               </div>
-                              <div className={cn("text-[11px]", selected ? "text-primary-100" : "text-neutral-600")}>{slot.reason}</div>
+                              <div
+                                className={cn(
+                                  "text-[11px]",
+                                  selected
+                                    ? "text-primary-100"
+                                    : "text-neutral-600",
+                                )}
+                              >
+                                {slot.reason}
+                              </div>
                             </button>
                           );
                         })}
@@ -3084,25 +4105,40 @@ function QuoteResult({
 
                   {selectedSlotStartAt ? (
                     <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-900">
-                      Selected time: <span className="font-semibold">{formatSlotLabel(selectedSlotStartAt)}</span>
+                      Selected time:{" "}
+                      <span className="font-semibold">
+                        {formatSlotLabel(selectedSlotStartAt)}
+                      </span>
                     </div>
                   ) : null}
                   {holdStatus === "loading" ? (
-                    <div className="text-[11px] text-neutral-500">Holding that time for you...</div>
+                    <div className="text-[11px] text-neutral-500">
+                      Holding that time for you...
+                    </div>
                   ) : holdStatus === "ready" && holdExpiresAt ? (
-                    <div className="text-[11px] text-neutral-500">Held until {formatHoldExpiry(holdExpiresAt)}.</div>
+                    <div className="text-[11px] text-neutral-500">
+                      Held until {formatHoldExpiry(holdExpiresAt)}.
+                    </div>
                   ) : holdStatus === "error" && holdMessage ? (
-                    <div className="text-[11px] text-amber-700">{holdMessage}</div>
+                    <div className="text-[11px] text-amber-700">
+                      {holdMessage}
+                    </div>
                   ) : null}
 
                   {(() => {
-                    const availableDays = availabilityDays.filter((d) => d.slots.length > 0);
+                    const availableDays = availabilityDays.filter(
+                      (d) => d.slots.length > 0,
+                    );
                     if (!availableDays.length) return null;
                     const selectedDay =
-                      typeof availabilitySelectedDay === "string" && availabilitySelectedDay.length
+                      typeof availabilitySelectedDay === "string" &&
+                      availabilitySelectedDay.length
                         ? availabilitySelectedDay
-                        : availableDays[0]?.date ?? null;
-                    const selectedDaySlots = selectedDay ? availableDays.find((d) => d.date === selectedDay)?.slots ?? [] : [];
+                        : (availableDays[0]?.date ?? null);
+                    const selectedDaySlots = selectedDay
+                      ? (availableDays.find((d) => d.date === selectedDay)
+                          ?.slots ?? [])
+                      : [];
 
                     return (
                       <div className="space-y-2">
@@ -3111,23 +4147,35 @@ function QuoteResult({
                           variant="secondary"
                           size="sm"
                           aria-expanded={availabilityShowMore}
-                          onClick={() => setAvailabilityShowMore((prev) => !prev)}
+                          onClick={() =>
+                            setAvailabilityShowMore((prev) => !prev)
+                          }
                           className="w-full justify-center sm:w-auto"
                         >
-                          {availabilityShowMore ? "Hide more times" : "See more times"}
+                          {availabilityShowMore
+                            ? "Hide more times"
+                            : "See more times"}
                         </Button>
 
                         {availabilityShowMore ? (
                           <div className="space-y-2">
-                            <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">Pick a day</label>
+                            <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+                              Pick a day
+                            </label>
                             <select
                               value={selectedDay ?? ""}
                               onChange={(e) => {
                                 const next = e.target.value;
                                 setAvailabilitySelectedDay(next);
-                                const daySlots = availableDays.find((d) => d.date === next)?.slots ?? [];
+                                const daySlots =
+                                  availableDays.find((d) => d.date === next)
+                                    ?.slots ?? [];
                                 setSelectedSlotStartAt((prev) => {
-                                  if (typeof prev === "string" && daySlots.some((s) => s.startAt === prev)) return prev;
+                                  if (
+                                    typeof prev === "string" &&
+                                    daySlots.some((s) => s.startAt === prev)
+                                  )
+                                    return prev;
                                   return daySlots[0]?.startAt ?? null;
                                 });
                               }}
@@ -3143,25 +4191,42 @@ function QuoteResult({
                             {selectedDaySlots.length ? (
                               <div className="grid gap-2 sm:grid-cols-3">
                                 {selectedDaySlots.map((slot) => {
-                                  const selected = slot.startAt === selectedSlotStartAt;
+                                  const selected =
+                                    slot.startAt === selectedSlotStartAt;
                                   return (
                                     <button
                                       key={slot.startAt}
                                       type="button"
-                                      onClick={() => setSelectedSlotStartAt(slot.startAt)}
+                                      onClick={() =>
+                                        setSelectedSlotStartAt(slot.startAt)
+                                      }
                                       aria-pressed={selected}
                                       className={cn(
                                         "rounded-md border px-3 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2",
                                         selected
                                           ? "border-primary-900 bg-primary-800 shadow-soft ring-2 ring-primary-300"
-                                          : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50"
+                                          : "border-neutral-200 bg-white hover:border-neutral-300 hover:bg-neutral-50",
                                       )}
                                       title={slot.reason}
                                     >
-                                      <div className={cn("text-sm font-semibold", selected ? "text-white" : "text-neutral-900")}>
+                                      <div
+                                        className={cn(
+                                          "text-sm font-semibold",
+                                          selected
+                                            ? "text-white"
+                                            : "text-neutral-900",
+                                        )}
+                                      >
                                         {formatSlotTimeLabel(slot.startAt)}
                                       </div>
-                                      <div className={cn("truncate text-[11px]", selected ? "text-primary-100" : "text-neutral-600")}>
+                                      <div
+                                        className={cn(
+                                          "truncate text-[11px]",
+                                          selected
+                                            ? "text-primary-100"
+                                            : "text-neutral-600",
+                                        )}
+                                      >
                                         {slot.reason}
                                       </div>
                                     </button>
@@ -3169,7 +4234,9 @@ function QuoteResult({
                                 })}
                               </div>
                             ) : (
-                              <div className="text-xs text-neutral-600">No times available on this day.</div>
+                              <div className="text-xs text-neutral-600">
+                                No times available on this day.
+                              </div>
                             )}
                           </div>
                         ) : null}
@@ -3179,7 +4246,8 @@ function QuoteResult({
                 </div>
               ) : (
                 <div className="text-xs text-neutral-600">
-                  {availabilityMessage ?? "No times available right now. Please call to confirm & book."}
+                  {availabilityMessage ??
+                    "No times available right now. Please call to confirm & book."}
                 </div>
               )}
             </div>
@@ -3189,7 +4257,11 @@ function QuoteResult({
               type="button"
               className="justify-center"
               onClick={() => void submitBooking()}
-              disabled={bookingStatus === "loading" || !selectedSlotStartAt || availabilityStatus === "loading"}
+              disabled={
+                bookingStatus === "loading" ||
+                !selectedSlotStartAt ||
+                availabilityStatus === "loading"
+              }
             >
               {bookingStatus === "loading"
                 ? "Booking..."
@@ -3208,10 +4280,20 @@ function QuoteResult({
             </Button>
           </div>
           {bookingMessage ? (
-            <div className={cn("text-xs", bookingStatus === "error" ? "text-amber-700" : "text-emerald-700")}>{bookingMessage}</div>
+            <div
+              className={cn(
+                "text-xs",
+                bookingStatus === "error"
+                  ? "text-amber-700"
+                  : "text-emerald-700",
+              )}
+            >
+              {bookingMessage}
+            </div>
           ) : null}
           <div className="text-[11px] text-neutral-500">
-            We&apos;ve saved your estimate with your contact info so we can help if you have questions.
+            We&apos;ve saved your estimate with your contact info so we can help
+            if you have questions.
           </div>
         </div>
       )}
@@ -3221,23 +4303,36 @@ function QuoteResult({
 
 function bucketWebAnalyticsError(err: unknown): string {
   const message =
-    typeof err === "string"
-      ? err
-      : err instanceof Error
-        ? err.message
-        : "";
+    typeof err === "string" ? err : err instanceof Error ? err.message : "";
   const text = message.trim().toLowerCase();
   if (!text) return "unknown";
-  if (text.includes("413") || text.includes("too large") || text.includes("payload")) return "payload_too_large";
+  if (
+    text.includes("413") ||
+    text.includes("too large") ||
+    text.includes("payload")
+  )
+    return "payload_too_large";
   if (text.includes("missing_api_base_url")) return "missing_api_base_url";
   if (text.includes("timeout")) return "timeout";
-  if (text.includes("failed to fetch") || text.includes("network")) return "network_error";
-  if (text.includes("forbidden") || text.includes("unauthorized") || text.includes("403")) return "forbidden";
-  if (text.includes("400") || text.includes("invalid")) return "invalid_request";
+  if (text.includes("failed to fetch") || text.includes("network"))
+    return "network_error";
+  if (
+    text.includes("forbidden") ||
+    text.includes("unauthorized") ||
+    text.includes("403")
+  )
+    return "forbidden";
+  if (text.includes("400") || text.includes("invalid"))
+    return "invalid_request";
   if (text.includes("upload")) return "upload_failed";
   if (text.includes("quote")) return "quote_failed";
   if (text.includes("booking")) return "booking_failed";
-  return text.slice(0, 60).replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "") || "unknown";
+  return (
+    text
+      .slice(0, 60)
+      .replace(/[^a-z0-9]+/gu, "_")
+      .replace(/^_+|_+$/gu, "") || "unknown"
+  );
 }
 
 function isAbortError(err: unknown): boolean {
@@ -3246,6 +4341,18 @@ function isAbortError(err: unknown): boolean {
 
 function formatEnumLabel(value: string | null | undefined): string | null {
   if (typeof value !== "string" || value.trim().length === 0) return null;
+  switch (value) {
+    case "under_quarter":
+      return "less than a quarter trailer";
+    case "quarter_to_half":
+      return "about a quarter to half trailer";
+    case "half_to_three_quarter":
+      return "about a half to three-quarter trailer";
+    case "three_quarter_to_full":
+      return "about three-quarter to full trailer";
+    case "full_plus":
+      return "a full trailer or more";
+  }
   return value
     .split("_")
     .filter(Boolean)
@@ -3263,7 +4370,10 @@ async function shrinkImageIfNeeded(file: File): Promise<File> {
   if (!bitmap) return file;
 
   const maxDimension = 1600;
-  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+  const scale = Math.min(
+    1,
+    maxDimension / Math.max(bitmap.width, bitmap.height),
+  );
   const width = Math.max(1, Math.round(bitmap.width * scale));
   const height = Math.max(1, Math.round(bitmap.height * scale));
 
@@ -3283,7 +4393,10 @@ async function shrinkImageIfNeeded(file: File): Promise<File> {
   return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
 }
 
-function getVideoFrameTargetCount(videoFileCount: number, imageFileCount: number): number {
+function getVideoFrameTargetCount(
+  videoFileCount: number,
+  imageFileCount: number,
+): number {
   const MAX_UPLOAD_IMAGES = 8;
   const remainingSlots = Math.max(0, MAX_UPLOAD_IMAGES - imageFileCount);
   if (videoFileCount <= 0 || remainingSlots <= 0) return 0;
@@ -3294,17 +4407,29 @@ function getVideoFrameTargetCount(videoFileCount: number, imageFileCount: number
 async function prepareMediaUploads(files: File[]): Promise<File[]> {
   const imageFiles = files.filter((file) => file.type.startsWith("image/"));
   const videoFiles = files.filter((file) => file.type.startsWith("video/"));
-  const preparedImages = await Promise.all(imageFiles.map((file) => shrinkImageIfNeeded(file)));
-  const frameTargetCount = getVideoFrameTargetCount(videoFiles.length, preparedImages.length);
+  const preparedImages = await Promise.all(
+    imageFiles.map((file) => shrinkImageIfNeeded(file)),
+  );
+  const frameTargetCount = getVideoFrameTargetCount(
+    videoFiles.length,
+    preparedImages.length,
+  );
   if (videoFiles.length === 0 || frameTargetCount <= 0) {
     return preparedImages.slice(0, 8);
   }
 
-  const frameFiles = (await Promise.all(videoFiles.map((file) => extractVideoFrames(file, frameTargetCount)))).flat();
+  const frameFiles = (
+    await Promise.all(
+      videoFiles.map((file) => extractVideoFrames(file, frameTargetCount)),
+    )
+  ).flat();
   return [...preparedImages, ...frameFiles].slice(0, 8);
 }
 
-async function extractVideoFrames(file: File, frameCount: number): Promise<File[]> {
+async function extractVideoFrames(
+  file: File,
+  frameCount: number,
+): Promise<File[]> {
   if (typeof window === "undefined" || frameCount <= 0) return [];
 
   const objectUrl = URL.createObjectURL(file);
@@ -3316,7 +4441,10 @@ async function extractVideoFrames(file: File, frameCount: number): Promise<File[
 
   try {
     await waitForVideoEvent(video, "loadedmetadata");
-    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    const duration =
+      Number.isFinite(video.duration) && video.duration > 0
+        ? video.duration
+        : 0;
     if (duration <= 0) return [];
 
     const sourceWidth = Math.max(1, video.videoWidth || 1280);
@@ -3338,7 +4466,11 @@ async function extractVideoFrames(file: File, frameCount: number): Promise<File[
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const blob = await canvasToBlob(canvas, "image/jpeg", 0.76);
       if (!blob) continue;
-      frames.push(new File([blob], `${baseName}-frame-${index + 1}.jpg`, { type: "image/jpeg" }));
+      frames.push(
+        new File([blob], `${baseName}-frame-${index + 1}.jpg`, {
+          type: "image/jpeg",
+        }),
+      );
     }
 
     return frames;
@@ -3350,9 +4482,17 @@ async function extractVideoFrames(file: File, frameCount: number): Promise<File[
   }
 }
 
-function buildVideoFrameTimestamps(durationSeconds: number, frameCount: number): number[] {
+function buildVideoFrameTimestamps(
+  durationSeconds: number,
+  frameCount: number,
+): number[] {
   if (frameCount <= 1) {
-    return [Math.max(0, Math.min(durationSeconds * 0.5, Math.max(0, durationSeconds - 0.05)))];
+    return [
+      Math.max(
+        0,
+        Math.min(durationSeconds * 0.5, Math.max(0, durationSeconds - 0.05)),
+      ),
+    ];
   }
 
   const startRatio = 0.15;
@@ -3361,12 +4501,20 @@ function buildVideoFrameTimestamps(durationSeconds: number, frameCount: number):
   for (let index = 0; index < frameCount; index += 1) {
     const progress = frameCount === 1 ? 0.5 : index / (frameCount - 1);
     const ratio = startRatio + (endRatio - startRatio) * progress;
-    timestamps.push(Math.max(0, Math.min(durationSeconds * ratio, Math.max(0, durationSeconds - 0.05))));
+    timestamps.push(
+      Math.max(
+        0,
+        Math.min(durationSeconds * ratio, Math.max(0, durationSeconds - 0.05)),
+      ),
+    );
   }
   return timestamps;
 }
 
-function waitForVideoEvent(video: HTMLVideoElement, eventName: "loadedmetadata" | "seeked"): Promise<void> {
+function waitForVideoEvent(
+  video: HTMLVideoElement,
+  eventName: "loadedmetadata" | "seeked",
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const handleSuccess = () => {
       cleanup();
@@ -3385,14 +4533,21 @@ function waitForVideoEvent(video: HTMLVideoElement, eventName: "loadedmetadata" 
   });
 }
 
-async function seekVideoTo(video: HTMLVideoElement, timestampSeconds: number): Promise<void> {
+async function seekVideoTo(
+  video: HTMLVideoElement,
+  timestampSeconds: number,
+): Promise<void> {
   if (Math.abs(video.currentTime - timestampSeconds) < 0.05) return;
   const seekPromise = waitForVideoEvent(video, "seeked");
   video.currentTime = timestampSeconds;
   await seekPromise;
 }
 
-function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob | null> {
+function canvasToBlob(
+  canvas: HTMLCanvasElement,
+  type: string,
+  quality: number,
+): Promise<Blob | null> {
   return new Promise((resolve) => {
     canvas.toBlob((blob) => resolve(blob), type, quality);
   });
