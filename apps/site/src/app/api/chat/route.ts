@@ -9,7 +9,7 @@ import {
   runJarvisReadTool,
   type JarvisReadToolCall,
   type JarvisReadToolResult,
-  type JarvisReadToolName
+  type JarvisReadToolName,
 } from "./jarvis-read-tools";
 
 const DEFAULT_BRAIN_MODEL = "gpt-5-mini";
@@ -26,7 +26,7 @@ Principles:
   - Pricing: Stonegate pricing is STRICTLY based on trailer volume only. Never add charges for stairs, weight, difficulty, time, or urgency.
   Base volume prices: minimum pickup $150, 1/4 trailer $175, 1/2 trailer $350, 3/4 trailer $525, full trailer $700.
   Big cleanouts can be multiple loads; speak in trailer-load tiers and ranges, and never promise an exact total.
-  Extra disposal pass-through fees may apply for certain items (for example, mattresses/box springs are +$40 each).
+  Extra disposal pass-through fees may apply for certain items, such as mattresses, box springs, or paint cans.
 - Process notes (use when relevant): licensed and insured two-person crews, careful in-home handling, responsible disposal and recycling when possible.
 - Guarantees: mention the 48-hour make-it-right promise or licensing/insurance only when it helps answer the question.
 - Scheduling: if the user asks to book, collect what you need (name, address, phone) and offer a couple of available 1-hour windows to choose from. Mention the "Schedule Estimate" page (/estimate) or call (404) 777-2631 only when the user asks about booking, timing, or next steps.
@@ -99,21 +99,23 @@ function extractOpenAIResponseText(data: OpenAIResponsesData): string {
 async function fetchOpenAIText(
   apiKey: string,
   payload: Record<string, unknown>,
-  modelLabel: string
-): Promise<{ ok: true; text: string } | { ok: false; status: number; error: string }> {
+  modelLabel: string,
+): Promise<
+  { ok: true; text: string } | { ok: false; status: number; error: string }
+> {
   const response = await fetch(OPENAI_RESPONSES_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
     const bodyText = await response.text().catch(() => "");
     console.error(
-      `[chat] OpenAI error for model '${modelLabel}' status ${response.status}: ${bodyText.slice(0, 300)}`
+      `[chat] OpenAI error for model '${modelLabel}' status ${response.status}: ${bodyText.slice(0, 300)}`,
     );
     return { ok: false, status: response.status, error: bodyText };
   }
@@ -121,14 +123,21 @@ async function fetchOpenAIText(
   const data = (await response.json()) as OpenAIResponsesData;
   const text = extractOpenAIResponseText(data);
   if (!text) {
-    console.error(`[chat] OpenAI returned empty output for model '${modelLabel}'.`);
+    console.error(
+      `[chat] OpenAI returned empty output for model '${modelLabel}'.`,
+    );
     return { ok: false, status: 502, error: "openai_empty" };
   }
 
   return { ok: true, text };
 }
 
-type BookingSuggestion = { startAt: string; endAt: string; reason: string; services?: string[] };
+type BookingSuggestion = {
+  startAt: string;
+  endAt: string;
+  reason: string;
+  services?: string[];
+};
 
 type BookingPayload = {
   contactId: string;
@@ -341,7 +350,8 @@ type IntentClassification = {
 
 const CLASSIFIER_ENABLED = process.env["CHAT_CLASSIFIER_ENABLED"] !== "false";
 const CHAT_ACTIONS_ENABLED = process.env["CHAT_ACTIONS_ENABLED"] !== "false";
-const JARVIS_READ_TOOLS_ENABLED = process.env["JARVIS_READ_TOOLS_ENABLED"] !== "false";
+const JARVIS_READ_TOOLS_ENABLED =
+  process.env["JARVIS_READ_TOOLS_ENABLED"] !== "false";
 
 type ContactTarget = {
   id: string;
@@ -383,7 +393,7 @@ function normalizePhoneDigits(value: string): string {
 }
 
 function extractContactQueryFromMessage(
-  message: string
+  message: string,
 ):
   | { kind: "phone"; value: string }
   | { kind: "email"; value: string }
@@ -397,35 +407,57 @@ function extractContactQueryFromMessage(
   if (email) return { kind: "email", value: email };
 
   const zip =
-    message.match(/\b(?:zip|zipcode|postal)\s*(?:code)?\s*[:#]?\s*(\d{5})\b/i) ??
-    message.match(/\bin\s+(\d{5})\b/i);
-  if (typeof zip?.[1] === "string" && zip[1].trim().length === 5) return { kind: "zip", value: zip[1].trim() };
+    message.match(
+      /\b(?:zip|zipcode|postal)\s*(?:code)?\s*[:#]?\s*(\d{5})\b/i,
+    ) ?? message.match(/\bin\s+(\d{5})\b/i);
+  if (typeof zip?.[1] === "string" && zip[1].trim().length === 5)
+    return { kind: "zip", value: zip[1].trim() };
 
   const addressMatch = message.match(/\b(?:at|address)\s+([^.\n]{6,80})/i);
-  const rawAddress = typeof addressMatch?.[1] === "string" ? addressMatch[1].trim() : "";
+  const rawAddress =
+    typeof addressMatch?.[1] === "string" ? addressMatch[1].trim() : "";
   if (rawAddress) return { kind: "address", value: rawAddress };
 
   const nameMatch =
-    message.match(/\b(?:to|for|contact|about|regarding)\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,4})\b/i) ??
-    message.match(/\b(?:text|sms|call|message|reply|email)\s+(?:to\s+)?([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,4})\b/i);
+    message.match(
+      /\b(?:to|for|contact|about|regarding)\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,4})\b/i,
+    ) ??
+    message.match(
+      /\b(?:text|sms|call|message|reply|email)\s+(?:to\s+)?([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,4})\b/i,
+    );
   let rawName = typeof nameMatch?.[1] === "string" ? nameMatch[1].trim() : "";
   if (!rawName) return null;
   rawName = rawName.replace(/(?:'s|’s)\b/i, "").trim();
 
   const lowered = rawName.toLowerCase();
-  if (/\b(?:this|that|them|lead|contact|customer|person|someone|anyone|me|us|you)\b/i.test(lowered)) return null;
+  if (
+    /\b(?:this|that|them|lead|contact|customer|person|someone|anyone|me|us|you)\b/i.test(
+      lowered,
+    )
+  )
+    return null;
 
   return { kind: "name", value: rawName };
 }
 
 function pickContactResults(payload: unknown): Array<Record<string, unknown>> {
-  if (Array.isArray(payload)) return payload.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+  if (Array.isArray(payload))
+    return payload.filter((item) => item && typeof item === "object") as Array<
+      Record<string, unknown>
+    >;
   if (!payload || typeof payload !== "object") return [];
   const obj = payload as Record<string, unknown>;
-  const candidates = [obj["contacts"], obj["items"], obj["results"], obj["data"]];
+  const candidates = [
+    obj["contacts"],
+    obj["items"],
+    obj["results"],
+    obj["data"],
+  ];
   for (const candidate of candidates) {
     if (Array.isArray(candidate)) {
-      return candidate.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+      return candidate.filter(
+        (item) => item && typeof item === "object",
+      ) as Array<Record<string, unknown>>;
     }
   }
   return [];
@@ -435,12 +467,17 @@ function toCandidateLabel(candidate: ContactCandidate): string {
   const name = candidate.name?.trim() ?? "";
   const phone = (candidate.phoneE164 ?? candidate.phone ?? "").trim();
   const zip = (candidate.postalCode ?? "").trim();
-  return [name, phone || null, zip ? `(${zip})` : null].filter(Boolean).join(" ");
+  return [name, phone || null, zip ? `(${zip})` : null]
+    .filter(Boolean)
+    .join(" ");
 }
 
 async function resolveContactTarget(
-  message: string
-): Promise<{ resolved: ContactCandidate | null; candidates: ContactCandidate[] }> {
+  message: string,
+): Promise<{
+  resolved: ContactCandidate | null;
+  candidates: ContactCandidate[];
+}> {
   const query = extractContactQueryFromMessage(message);
   if (!query) return { resolved: null, candidates: [] };
 
@@ -456,10 +493,13 @@ async function resolveContactTarget(
   search.set("q", qValue);
 
   try {
-    const res = await fetch(`${apiBase}/api/admin/contacts?${search.toString()}`, {
-      headers: { "x-api-key": adminKey },
-      cache: "no-store"
-    });
+    const res = await fetch(
+      `${apiBase}/api/admin/contacts?${search.toString()}`,
+      {
+        headers: { "x-api-key": adminKey },
+        cache: "no-store",
+      },
+    );
     if (!res.ok) return { resolved: null, candidates: [] };
     const payload = (await res.json().catch(() => null)) as unknown;
     const results = pickContactResults(payload);
@@ -470,28 +510,72 @@ async function resolveContactTarget(
         const id = typeof c["id"] === "string" ? (c["id"] as string) : null;
         const name =
           (typeof c["name"] === "string" ? (c["name"] as string) : null) ??
-          (typeof c["contactName"] === "string" ? (c["contactName"] as string) : null);
-        const phone = typeof c["phone"] === "string" ? (c["phone"] as string) : null;
-        const phoneE164 = typeof c["phoneE164"] === "string" ? (c["phoneE164"] as string) : null;
-        const email = typeof c["email"] === "string" ? (c["email"] as string) : null;
-        const lastActivityAt = typeof c["lastActivityAt"] === "string" ? (c["lastActivityAt"] as string) : null;
+          (typeof c["contactName"] === "string"
+            ? (c["contactName"] as string)
+            : null);
+        const phone =
+          typeof c["phone"] === "string" ? (c["phone"] as string) : null;
+        const phoneE164 =
+          typeof c["phoneE164"] === "string"
+            ? (c["phoneE164"] as string)
+            : null;
+        const email =
+          typeof c["email"] === "string" ? (c["email"] as string) : null;
+        const lastActivityAt =
+          typeof c["lastActivityAt"] === "string"
+            ? (c["lastActivityAt"] as string)
+            : null;
 
-        const props = Array.isArray(c["properties"]) ? (c["properties"] as Array<Record<string, unknown>>) : [];
-        const firstProp = props.length > 0 && props[0] && typeof props[0] === "object" ? props[0] : null;
-        const addressLine1 = firstProp && typeof firstProp["addressLine1"] === "string" ? (firstProp["addressLine1"] as string) : null;
-        const city = firstProp && typeof firstProp["city"] === "string" ? (firstProp["city"] as string) : null;
-        const state = firstProp && typeof firstProp["state"] === "string" ? (firstProp["state"] as string) : null;
-        const postalCode = firstProp && typeof firstProp["postalCode"] === "string" ? (firstProp["postalCode"] as string) : null;
+        const props = Array.isArray(c["properties"])
+          ? (c["properties"] as Array<Record<string, unknown>>)
+          : [];
+        const firstProp =
+          props.length > 0 && props[0] && typeof props[0] === "object"
+            ? props[0]
+            : null;
+        const addressLine1 =
+          firstProp && typeof firstProp["addressLine1"] === "string"
+            ? (firstProp["addressLine1"] as string)
+            : null;
+        const city =
+          firstProp && typeof firstProp["city"] === "string"
+            ? (firstProp["city"] as string)
+            : null;
+        const state =
+          firstProp && typeof firstProp["state"] === "string"
+            ? (firstProp["state"] as string)
+            : null;
+        const postalCode =
+          firstProp && typeof firstProp["postalCode"] === "string"
+            ? (firstProp["postalCode"] as string)
+            : null;
         if (!id) return null;
-        return { id, name, phone, phoneE164, email, lastActivityAt, addressLine1, city, state, postalCode } satisfies ContactCandidate;
+        return {
+          id,
+          name,
+          phone,
+          phoneE164,
+          email,
+          lastActivityAt,
+          addressLine1,
+          city,
+          state,
+          postalCode,
+        } satisfies ContactCandidate;
       })
       .filter((c): c is ContactCandidate => Boolean(c));
 
     if (!mapped.length) return { resolved: null, candidates: [] };
 
     mapped.sort((a, b) => {
-      const at = typeof a.lastActivityAt === "string" ? Date.parse(a.lastActivityAt) : NaN;
-      const bt = typeof b.lastActivityAt === "string" ? Date.parse(b.lastActivityAt) : NaN;
+      const at =
+        typeof a.lastActivityAt === "string"
+          ? Date.parse(a.lastActivityAt)
+          : NaN;
+      const bt =
+        typeof b.lastActivityAt === "string"
+          ? Date.parse(b.lastActivityAt)
+          : NaN;
       const aTime = Number.isFinite(at) ? at : 0;
       const bTime = Number.isFinite(bt) ? bt : 0;
       return bTime - aTime;
@@ -505,16 +589,27 @@ async function resolveContactTarget(
         const tail = digits.length > 10 ? digits.slice(-10) : digits;
         return tail.length >= 7 && qTail.length >= 7 && tail === qTail;
       });
-      return { resolved: matches.length === 1 ? matches[0] ?? null : null, candidates: mapped };
+      return {
+        resolved: matches.length === 1 ? (matches[0] ?? null) : null,
+        candidates: mapped,
+      };
     }
 
     if (query.kind === "email") {
       const qLower = query.value.toLowerCase();
-      const matches = mapped.filter((c) => (c.email ?? "").toLowerCase() === qLower);
-      return { resolved: matches.length === 1 ? matches[0] ?? null : null, candidates: mapped };
+      const matches = mapped.filter(
+        (c) => (c.email ?? "").toLowerCase() === qLower,
+      );
+      return {
+        resolved: matches.length === 1 ? (matches[0] ?? null) : null,
+        candidates: mapped,
+      };
     }
 
-    return { resolved: mapped.length === 1 ? mapped[0] ?? null : null, candidates: mapped };
+    return {
+      resolved: mapped.length === 1 ? (mapped[0] ?? null) : null,
+      candidates: mapped,
+    };
   } catch (error) {
     console.warn("[chat] contact_resolve_failed", { error });
     return { resolved: null, candidates: [] };
@@ -546,21 +641,26 @@ function teamHelpText(): string {
     '- "Book Jennifer Wood for Thu at 2pm at 123 Main St."',
     '- "Add a note to Peter: quoted $350 half load."',
     '- "What did we spend on Google Ads yesterday?"',
-    '- "How is /book converting the last 7 days?"'
+    '- "How is /book converting the last 7 days?"',
   ].join("\n");
 }
 
 function publicHelpText(): string {
   return [
     "I can answer pricing and service-area questions, and help you book an appointment.",
-    "If you want a quote, tell me what you need removed and your ZIP code."
+    "If you want a quote, tell me what you need removed and your ZIP code.",
   ].join("\n");
 }
 
 const PUBLIC_BOOKING_COOKIE = "myst-public-booking";
 const PUBLIC_BOOKING_COOKIE_MAX_AGE_S = 60 * 30; // 30 minutes
 
-type PublicBookingPhase = "idle" | "awaiting_name" | "awaiting_address" | "awaiting_phone" | "suggesting";
+type PublicBookingPhase =
+  | "idle"
+  | "awaiting_name"
+  | "awaiting_address"
+  | "awaiting_phone"
+  | "suggesting";
 
 type PublicBookingState = {
   phase: PublicBookingPhase;
@@ -588,62 +688,119 @@ function bookingCookieOptions() {
     sameSite: "lax" as const,
     secure: process.env["NODE_ENV"] === "production",
     path: "/",
-    maxAge: PUBLIC_BOOKING_COOKIE_MAX_AGE_S
+    maxAge: PUBLIC_BOOKING_COOKIE_MAX_AGE_S,
   };
 }
 
-function readPublicBookingState(request: NextRequest): PublicBookingState | null {
+function readPublicBookingState(
+  request: NextRequest,
+): PublicBookingState | null {
   const raw = request.cookies.get(PUBLIC_BOOKING_COOKIE)?.value;
   if (!raw) return null;
   const parsed = safeJsonParse(raw);
   if (!parsed || typeof parsed !== "object") return null;
-  const phase = typeof parsed["phase"] === "string" ? (parsed["phase"] as string) : "idle";
-  const allowed: PublicBookingPhase[] = ["idle", "awaiting_name", "awaiting_address", "awaiting_phone", "suggesting"];
+  const phase =
+    typeof parsed["phase"] === "string" ? (parsed["phase"] as string) : "idle";
+  const allowed: PublicBookingPhase[] = [
+    "idle",
+    "awaiting_name",
+    "awaiting_address",
+    "awaiting_phone",
+    "suggesting",
+  ];
   if (!allowed.includes(phase as PublicBookingPhase)) return null;
 
   const suggestionsRaw = parsed["suggestions"];
-  const suggestions =
-    Array.isArray(suggestionsRaw)
-      ? suggestionsRaw
-          .map((s) => ({
-            startAt: typeof s?.["startAt"] === "string" ? s["startAt"] : "",
-            endAt: typeof s?.["endAt"] === "string" ? s["endAt"] : ""
-          }))
-          .filter((s) => s.startAt.length > 0 && s.endAt.length > 0)
-          .slice(0, 6)
-      : undefined;
+  const suggestions = Array.isArray(suggestionsRaw)
+    ? suggestionsRaw
+        .map((s) => ({
+          startAt: typeof s?.["startAt"] === "string" ? s["startAt"] : "",
+          endAt: typeof s?.["endAt"] === "string" ? s["endAt"] : "",
+        }))
+        .filter((s) => s.startAt.length > 0 && s.endAt.length > 0)
+        .slice(0, 6)
+    : undefined;
 
   return {
     phase: phase as PublicBookingPhase,
-    contactName: typeof parsed["contactName"] === "string" ? parsed["contactName"] : undefined,
+    contactName:
+      typeof parsed["contactName"] === "string"
+        ? parsed["contactName"]
+        : undefined,
     phone: typeof parsed["phone"] === "string" ? parsed["phone"] : undefined,
     email: typeof parsed["email"] === "string" ? parsed["email"] : undefined,
-    addressLine1: typeof parsed["addressLine1"] === "string" ? parsed["addressLine1"] : undefined,
-    addressLine2: typeof parsed["addressLine2"] === "string" ? parsed["addressLine2"] : null,
+    addressLine1:
+      typeof parsed["addressLine1"] === "string"
+        ? parsed["addressLine1"]
+        : undefined,
+    addressLine2:
+      typeof parsed["addressLine2"] === "string"
+        ? parsed["addressLine2"]
+        : null,
     city: typeof parsed["city"] === "string" ? parsed["city"] : undefined,
     state: typeof parsed["state"] === "string" ? parsed["state"] : undefined,
-    postalCode: typeof parsed["postalCode"] === "string" ? parsed["postalCode"] : undefined,
-    contactId: typeof parsed["contactId"] === "string" ? parsed["contactId"] : undefined,
-    propertyId: typeof parsed["propertyId"] === "string" ? parsed["propertyId"] : undefined,
+    postalCode:
+      typeof parsed["postalCode"] === "string"
+        ? parsed["postalCode"]
+        : undefined,
+    contactId:
+      typeof parsed["contactId"] === "string" ? parsed["contactId"] : undefined,
+    propertyId:
+      typeof parsed["propertyId"] === "string"
+        ? parsed["propertyId"]
+        : undefined,
     suggestions,
-    preferredDay: typeof parsed["preferredDay"] === "string" ? parsed["preferredDay"] : undefined,
-    preferredStartHour: typeof parsed["preferredStartHour"] === "number" ? parsed["preferredStartHour"] : undefined,
-    preferredEndHour: typeof parsed["preferredEndHour"] === "number" ? parsed["preferredEndHour"] : undefined,
-    preferenceLabel: typeof parsed["preferenceLabel"] === "string" ? parsed["preferenceLabel"] : undefined,
-    updatedAt: typeof parsed["updatedAt"] === "number" ? parsed["updatedAt"] : undefined
+    preferredDay:
+      typeof parsed["preferredDay"] === "string"
+        ? parsed["preferredDay"]
+        : undefined,
+    preferredStartHour:
+      typeof parsed["preferredStartHour"] === "number"
+        ? parsed["preferredStartHour"]
+        : undefined,
+    preferredEndHour:
+      typeof parsed["preferredEndHour"] === "number"
+        ? parsed["preferredEndHour"]
+        : undefined,
+    preferenceLabel:
+      typeof parsed["preferenceLabel"] === "string"
+        ? parsed["preferenceLabel"]
+        : undefined,
+    updatedAt:
+      typeof parsed["updatedAt"] === "number" ? parsed["updatedAt"] : undefined,
   };
 }
 
-function writePublicBookingState(response: NextResponse, state: PublicBookingState | null) {
+function writePublicBookingState(
+  response: NextResponse,
+  state: PublicBookingState | null,
+) {
   if (!state) {
-    response.cookies.set({ name: PUBLIC_BOOKING_COOKIE, value: "", path: "/", maxAge: 0 });
+    response.cookies.set({
+      name: PUBLIC_BOOKING_COOKIE,
+      value: "",
+      path: "/",
+      maxAge: 0,
+    });
     return;
   }
-  response.cookies.set(PUBLIC_BOOKING_COOKIE, JSON.stringify({ ...state, updatedAt: Date.now() }), bookingCookieOptions());
+  response.cookies.set(
+    PUBLIC_BOOKING_COOKIE,
+    JSON.stringify({ ...state, updatedAt: Date.now() }),
+    bookingCookieOptions(),
+  );
 }
 
 const BOOKING_TIME_ZONE = "America/New_York";
-const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const WEEKDAYS = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
 
 type BookingPreference = {
   preferredDay?: string;
@@ -657,13 +814,18 @@ type BookingPreferenceUpdate = BookingPreference & {
 };
 
 function formatDayInZone(date: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
-    date
-  );
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
 }
 
 function dayIndexInZone(date: Date, timeZone: string): number {
-  const label = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long" }).format(date).toLowerCase();
+  const label = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long" })
+    .format(date)
+    .toLowerCase();
   const idx = WEEKDAYS.indexOf(label);
   return idx >= 0 ? idx : date.getDay();
 }
@@ -675,20 +837,30 @@ function addDays(date: Date, days: number): Date {
 }
 
 function hourInZone(date: Date, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone, hour: "numeric", hour12: false }).formatToParts(date);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(date);
   const hourPart = parts.find((part) => part.type === "hour")?.value;
   const parsed = hourPart ? Number(hourPart) : NaN;
   return Number.isFinite(parsed) ? parsed : date.getHours();
 }
 
-function extractPreferredDay(message: string, timeZone: string): { day: string; label: string } | null {
+function extractPreferredDay(
+  message: string,
+  timeZone: string,
+): { day: string; label: string } | null {
   const lower = message.toLowerCase();
   const now = new Date();
   if (lower.includes("today")) {
     return { day: formatDayInZone(now, timeZone), label: "today" };
   }
   if (lower.includes("tomorrow")) {
-    return { day: formatDayInZone(addDays(now, 1), timeZone), label: "tomorrow" };
+    return {
+      day: formatDayInZone(addDays(now, 1), timeZone),
+      label: "tomorrow",
+    };
   }
 
   for (const [index, name] of WEEKDAYS.entries()) {
@@ -701,7 +873,9 @@ function extractPreferredDay(message: string, timeZone: string): { day: string; 
   return null;
 }
 
-function extractPreferredTimeWindow(message: string): { startHour: number; endHour: number; label: string } | null {
+function extractPreferredTimeWindow(
+  message: string,
+): { startHour: number; endHour: number; label: string } | null {
   const lower = message.toLowerCase();
   if (lower.includes("morning") || lower.includes("early")) {
     return { startHour: 8, endHour: 12, label: "morning" };
@@ -709,7 +883,11 @@ function extractPreferredTimeWindow(message: string): { startHour: number; endHo
   if (lower.includes("afternoon")) {
     return { startHour: 12, endHour: 17, label: "afternoon" };
   }
-  if (lower.includes("evening") || lower.includes("tonight") || lower.includes("after work")) {
+  if (
+    lower.includes("evening") ||
+    lower.includes("tonight") ||
+    lower.includes("after work")
+  ) {
     return { startHour: 17, endHour: 20, label: "evening" };
   }
   return null;
@@ -717,12 +895,20 @@ function extractPreferredTimeWindow(message: string): { startHour: number; endHo
 
 function looksLikeFlexibleTime(message: string): boolean {
   const lower = message.toLowerCase();
-  return ["any time", "anytime", "whenever", "no preference", "no pref", "whatever works"].some((kw) =>
-    lower.includes(kw)
-  );
+  return [
+    "any time",
+    "anytime",
+    "whenever",
+    "no preference",
+    "no pref",
+    "whatever works",
+  ].some((kw) => lower.includes(kw));
 }
 
-function extractBookingPreferenceUpdate(message: string, timeZone: string): BookingPreferenceUpdate | null {
+function extractBookingPreferenceUpdate(
+  message: string,
+  timeZone: string,
+): BookingPreferenceUpdate | null {
   if (looksLikeFlexibleTime(message)) return { clear: true };
 
   const day = extractPreferredDay(message, timeZone);
@@ -737,16 +923,18 @@ function extractBookingPreferenceUpdate(message: string, timeZone: string): Book
     preferredDay: day?.day,
     preferredStartHour: window?.startHour,
     preferredEndHour: window?.endHour,
-    preferenceLabel: labelParts.length ? labelParts.join(" ") : undefined
+    preferenceLabel: labelParts.length ? labelParts.join(" ") : undefined,
   };
 }
 
 function applyBookingPreference(
   suggestions: BookingSuggestion[],
   preference: BookingPreference,
-  timeZone: string
+  timeZone: string,
 ): { suggestions: BookingSuggestion[]; used: boolean } {
-  const hasDay = typeof preference.preferredDay === "string" && preference.preferredDay.length > 0;
+  const hasDay =
+    typeof preference.preferredDay === "string" &&
+    preference.preferredDay.length > 0;
   const hasWindow =
     typeof preference.preferredStartHour === "number" &&
     Number.isFinite(preference.preferredStartHour) &&
@@ -764,7 +952,11 @@ function applyBookingPreference(
     }
     if (hasWindow) {
       const hour = hourInZone(start, timeZone);
-      if (hour < (preference.preferredStartHour ?? 0) || hour >= (preference.preferredEndHour ?? 24)) return false;
+      if (
+        hour < (preference.preferredStartHour ?? 0) ||
+        hour >= (preference.preferredEndHour ?? 24)
+      )
+        return false;
     }
     return true;
   });
@@ -774,16 +966,29 @@ function applyBookingPreference(
 
 function looksLikeBookingIntent(message: string): boolean {
   const lower = message.toLowerCase();
-  return ["book", "schedule", "appointment", "estimate", "slot", "time", "tomorrow", "today"].some((kw) =>
-    lower.includes(kw)
-  );
+  return [
+    "book",
+    "schedule",
+    "appointment",
+    "estimate",
+    "slot",
+    "time",
+    "tomorrow",
+    "today",
+  ].some((kw) => lower.includes(kw));
 }
 
 function looksLikeCancelIntent(message: string): boolean {
   const lower = message.toLowerCase();
-  return ["cancel", "never mind", "nevermind", "stop", "forget it", "start over", "reset"].some((kw) =>
-    lower.includes(kw)
-  );
+  return [
+    "cancel",
+    "never mind",
+    "nevermind",
+    "stop",
+    "forget it",
+    "start over",
+    "reset",
+  ].some((kw) => lower.includes(kw));
 }
 
 function looksLikePricingQuestion(message: string): boolean {
@@ -808,7 +1013,7 @@ function looksLikePricingQuestion(message: string): boolean {
     "tire",
     "trailer",
     "load",
-    "loads"
+    "loads",
   ];
   return keywords.some((kw) => lower.includes(kw));
 }
@@ -823,7 +1028,7 @@ function extractLockedTokens(text: string): string[] {
     /\$\s*\d[\d,]*(?:\.\d+)?/g, // money
     /\b\d+(?:\.\d+)?\s*%/g, // percent
     /\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b/gi, // times
-    /\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g // phone-like
+    /\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g, // phone-like
   ];
   for (const pattern of patterns) {
     for (const match of text.matchAll(pattern)) {
@@ -835,23 +1040,29 @@ function extractLockedTokens(text: string): string[] {
   return Array.from(out);
 }
 
-function rewritePreservesLockedTokens(draft: string, rewritten: string): boolean {
+function rewritePreservesLockedTokens(
+  draft: string,
+  rewritten: string,
+): boolean {
   const required = extractLockedTokens(draft);
   if (!required.length) return true;
   const candidate = new Set(extractLockedTokens(rewritten));
   return required.every((token) => candidate.has(token));
 }
 
-function rewriteDoesNotIntroducePricingTokens(draft: string, rewritten: string): boolean {
+function rewriteDoesNotIntroducePricingTokens(
+  draft: string,
+  rewritten: string,
+): boolean {
   const draftPricing = new Set(
-    Array.from(draft.matchAll(/\$\s*\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s*%/g)).map((m) =>
-      normalizeLockedToken(m[0] ?? "")
-    )
+    Array.from(
+      draft.matchAll(/\$\s*\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s*%/g),
+    ).map((m) => normalizeLockedToken(m[0] ?? "")),
   );
   const rewrittenPricing = new Set(
-    Array.from(rewritten.matchAll(/\$\s*\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s*%/g)).map((m) =>
-      normalizeLockedToken(m[0] ?? "")
-    )
+    Array.from(
+      rewritten.matchAll(/\$\s*\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s*%/g),
+    ).map((m) => normalizeLockedToken(m[0] ?? "")),
   );
   for (const token of rewrittenPricing) {
     if (!draftPricing.has(token)) return false;
@@ -862,7 +1073,7 @@ function rewriteDoesNotIntroducePricingTokens(draft: string, rewritten: string):
 async function generatePublicFactualDraft(
   message: string,
   apiKey: string,
-  model: string
+  model: string,
 ): Promise<string | null> {
   const systemPrompt = `${PUBLIC_SYSTEM_PROMPT}
 
@@ -875,7 +1086,7 @@ Return ONLY JSON with the key "answerDraft".
     model,
     input: [
       { role: "system" as const, content: systemPrompt },
-      { role: "user" as const, content: message }
+      { role: "user" as const, content: message },
     ],
     reasoning: { effort: "low" as const },
     text: {
@@ -888,29 +1099,33 @@ Return ONLY JSON with the key "answerDraft".
           type: "object",
           additionalProperties: false,
           properties: {
-            answerDraft: { type: "string" }
+            answerDraft: { type: "string" },
           },
-          required: ["answerDraft"]
-        }
-      }
+          required: ["answerDraft"],
+        },
+      },
     },
-    max_output_tokens: 300
+    max_output_tokens: 300,
   };
 
   const res = await fetchOpenAIText(apiKey, payload, model);
   if (!res.ok) return null;
 
   const parsed = safeJsonParse(res.text);
-  const draft = typeof parsed?.["answerDraft"] === "string" ? (parsed["answerDraft"] as string).trim() : "";
+  const draft =
+    typeof parsed?.["answerDraft"] === "string"
+      ? (parsed["answerDraft"] as string).trim()
+      : "";
   return draft.length ? draft : null;
 }
 
 async function rewritePublicDraft(
   message: string,
   draft: string,
-  apiKey: string
+  apiKey: string,
 ): Promise<string | null> {
-  const systemPrompt = `You rewrite a draft response into a short, natural customer-service reply.
+  const systemPrompt =
+    `You rewrite a draft response into a short, natural customer-service reply.
 Rules:
 - Do NOT change any numbers, $ amounts, percentages, times, phone numbers, or addresses.
 - Do NOT introduce any new numbers or pricing.
@@ -923,12 +1138,12 @@ Rules:
       { role: "system" as const, content: systemPrompt },
       {
         role: "user" as const,
-        content: `Customer message:\n${message}\n\nFactual draft to rewrite (do not change facts):\n${draft}`
-      }
+        content: `Customer message:\n${message}\n\nFactual draft to rewrite (do not change facts):\n${draft}`,
+      },
     ],
     reasoning: { effort: "low" as const },
     text: { verbosity: "low" as const },
-    max_output_tokens: 220
+    max_output_tokens: 220,
   };
 
   const res = await fetchOpenAIText(apiKey, payload, PUBLIC_VOICE_MODEL);
@@ -951,7 +1166,7 @@ function fmtBookingTime(iso: string): string {
       month: "short",
       day: "numeric",
       hour: "numeric",
-      minute: "2-digit"
+      minute: "2-digit",
     }).format(date);
   } catch {
     return date.toISOString();
@@ -959,7 +1174,7 @@ function fmtBookingTime(iso: string): string {
 }
 
 async function createContactAndPropertyFromState(
-  state: PublicBookingState
+  state: PublicBookingState,
 ): Promise<{ contactId: string; propertyId: string } | null> {
   const { apiBase, adminKey } = getAdminContext();
   if (!adminKey) return null;
@@ -968,7 +1183,7 @@ async function createContactAndPropertyFromState(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": adminKey
+      "x-api-key": adminKey,
     },
     body: JSON.stringify({
       contactName: state.contactName,
@@ -979,27 +1194,40 @@ async function createContactAndPropertyFromState(
       city: state.city,
       state: state.state,
       postalCode: state.postalCode,
-      source: "public_chat"
-    })
+      source: "public_chat",
+    }),
   });
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    console.warn("[chat] public contact create failed", res.status, detail.slice(0, 160));
+    console.warn(
+      "[chat] public contact create failed",
+      res.status,
+      detail.slice(0, 160),
+    );
     return null;
   }
 
-  const data = (await res.json().catch(() => ({}))) as { contactId?: string; propertyId?: string };
+  const data = (await res.json().catch(() => ({}))) as {
+    contactId?: string;
+    propertyId?: string;
+  };
   const contactId = typeof data.contactId === "string" ? data.contactId : null;
-  const propertyId = typeof data.propertyId === "string" ? data.propertyId : null;
+  const propertyId =
+    typeof data.propertyId === "string" ? data.propertyId : null;
   if (!contactId || !propertyId) return null;
   return { contactId, propertyId };
 }
 
 async function bookSlotForState(
   state: PublicBookingState,
-  startAt: string
-): Promise<{ ok: boolean; appointmentId?: string; startAt?: string; error?: string }> {
+  startAt: string,
+): Promise<{
+  ok: boolean;
+  appointmentId?: string;
+  startAt?: string;
+  error?: string;
+}> {
   const { apiBase, adminKey } = getAdminContext();
   if (!adminKey) return { ok: false, error: "admin_key_missing" };
 
@@ -1007,7 +1235,7 @@ async function bookSlotForState(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": adminKey
+      "x-api-key": adminKey,
     },
     body: JSON.stringify({
       contactId: state.contactId,
@@ -1015,17 +1243,24 @@ async function bookSlotForState(
       startAt,
       durationMinutes: 60,
       travelBufferMinutes: 30,
-      services: ["junk_removal_primary"]
-    })
+      services: ["junk_removal_primary"],
+    }),
   });
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    console.warn("[chat] public booking failed", res.status, detail.slice(0, 160));
+    console.warn(
+      "[chat] public booking failed",
+      res.status,
+      detail.slice(0, 160),
+    );
     return { ok: false, error: `booking_failed_${res.status}` };
   }
 
-  const data = (await res.json().catch(() => ({}))) as { appointmentId?: string; startAt?: string };
+  const data = (await res.json().catch(() => ({}))) as {
+    appointmentId?: string;
+    startAt?: string;
+  };
   return { ok: true, appointmentId: data.appointmentId, startAt: data.startAt };
 }
 
@@ -1035,7 +1270,7 @@ function extractContactNameFromMessage(message: string): string | null {
     /\bmy name is\s+([a-z][a-z' .-]{1,60})/i,
     /\bi am\s+([a-z][a-z' .-]{1,60})/i,
     /\bi'm\s+([a-z][a-z' .-]{1,60})/i,
-    /\bthis is\s+([a-z][a-z' .-]{1,60})/i
+    /\bthis is\s+([a-z][a-z' .-]{1,60})/i,
   ];
   for (const pattern of patterns) {
     const match = cleaned.match(pattern);
@@ -1059,36 +1294,51 @@ function normalizeNameInput(message: string): string | null {
 
 async function handlePublicBookingMessage(
   message: string,
-  existingState: PublicBookingState | null
-): Promise<{ reply: string; state: PublicBookingState | null; booking?: BookingPayload }> {
+  existingState: PublicBookingState | null,
+): Promise<{
+  reply: string;
+  state: PublicBookingState | null;
+  booking?: BookingPayload;
+}> {
   if (looksLikeCancelIntent(message)) {
     return {
-      reply: "No problem - I stopped the booking. If you want to schedule later, just say \"book me\".",
-      state: null
+      reply:
+        'No problem - I stopped the booking. If you want to schedule later, just say "book me".',
+      state: null,
     };
   }
 
   const state: PublicBookingState = existingState ?? { phase: "idle" };
-  const preferenceUpdate = extractBookingPreferenceUpdate(message, BOOKING_TIME_ZONE);
+  const preferenceUpdate = extractBookingPreferenceUpdate(
+    message,
+    BOOKING_TIME_ZONE,
+  );
   if (preferenceUpdate?.clear) {
     state.preferredDay = undefined;
     state.preferredStartHour = undefined;
     state.preferredEndHour = undefined;
     state.preferenceLabel = undefined;
   } else if (preferenceUpdate) {
-    if (preferenceUpdate.preferredDay) state.preferredDay = preferenceUpdate.preferredDay;
+    if (preferenceUpdate.preferredDay)
+      state.preferredDay = preferenceUpdate.preferredDay;
     if (typeof preferenceUpdate.preferredStartHour === "number")
       state.preferredStartHour = preferenceUpdate.preferredStartHour;
-    if (typeof preferenceUpdate.preferredEndHour === "number") state.preferredEndHour = preferenceUpdate.preferredEndHour;
-    if (preferenceUpdate.preferenceLabel) state.preferenceLabel = preferenceUpdate.preferenceLabel;
+    if (typeof preferenceUpdate.preferredEndHour === "number")
+      state.preferredEndHour = preferenceUpdate.preferredEndHour;
+    if (preferenceUpdate.preferenceLabel)
+      state.preferenceLabel = preferenceUpdate.preferenceLabel;
   }
 
   const wantsNewSuggestions = Boolean(preferenceUpdate);
 
-  if (state.phase === "suggesting" && state.suggestions?.length && !wantsNewSuggestions) {
+  if (
+    state.phase === "suggesting" &&
+    state.suggestions?.length &&
+    !wantsNewSuggestions
+  ) {
     return {
       reply: "Tap one of the time buttons above and I'll lock it in.",
-      state
+      state,
     };
   }
 
@@ -1112,7 +1362,11 @@ async function handlePublicBookingMessage(
     }
   }
 
-  const parsedAddress = parseAddress(message) ?? (extractAddressFromMessage(message) ? parseAddress(extractAddressFromMessage(message)!) : null);
+  const parsedAddress =
+    parseAddress(message) ??
+    (extractAddressFromMessage(message)
+      ? parseAddress(extractAddressFromMessage(message)!)
+      : null);
   if (parsedAddress) {
     state.addressLine1 = parsedAddress.addressLine1;
     state.addressLine2 = parsedAddress.addressLine2 ?? null;
@@ -1125,7 +1379,7 @@ async function handlePublicBookingMessage(
     state.phase = "awaiting_name";
     return {
       reply: "Absolutely - what's your name?",
-      state
+      state,
     };
   }
 
@@ -1133,7 +1387,7 @@ async function handlePublicBookingMessage(
     state.phase = "awaiting_address";
     return {
       reply: `Thanks, ${state.contactName.split(" ")[0] ?? state.contactName}. What's the pickup address? (Street, City, ST ZIP)`,
-      state
+      state,
     };
   }
 
@@ -1141,7 +1395,7 @@ async function handlePublicBookingMessage(
     state.phase = "awaiting_phone";
     return {
       reply: "Perfect - what's the best phone number to confirm?",
-      state
+      state,
     };
   }
 
@@ -1150,8 +1404,9 @@ async function handlePublicBookingMessage(
     if (!created) {
       state.phase = "awaiting_address";
       return {
-        reply: "Quick check - can you resend the address as Street, City, ST ZIP so I can lock this in?",
-        state
+        reply:
+          "Quick check - can you resend the address as Street, City, ST ZIP so I can lock this in?",
+        state,
       };
     }
     state.contactId = created.contactId;
@@ -1163,17 +1418,18 @@ async function handlePublicBookingMessage(
       addressLine1: state.addressLine1,
       city: state.city,
       state: state.state,
-      postalCode: state.postalCode
+      postalCode: state.postalCode,
     },
     preferredStartHour: state.preferredStartHour,
-    preferredEndHour: state.preferredEndHour
+    preferredEndHour: state.preferredEndHour,
   });
 
   if (!suggestions || !suggestions.length) {
     state.phase = "idle";
     return {
-      reply: "I'm not seeing open times right now - want to try again, or would you rather call (404) 777-2631?",
-      state
+      reply:
+        "I'm not seeing open times right now - want to try again, or would you rather call (404) 777-2631?",
+      state,
     };
   }
 
@@ -1182,11 +1438,20 @@ async function handlePublicBookingMessage(
     preferredDay: state.preferredDay,
     preferredStartHour: state.preferredStartHour,
     preferredEndHour: state.preferredEndHour,
-    preferenceLabel: state.preferenceLabel
+    preferenceLabel: state.preferenceLabel,
   };
-  const filtered = applyBookingPreference(suggestions, preference, BOOKING_TIME_ZONE);
-  const finalSuggestions = filtered.suggestions.length ? filtered.suggestions : suggestions;
-  state.suggestions = finalSuggestions.map((s) => ({ startAt: s.startAt, endAt: s.endAt }));
+  const filtered = applyBookingPreference(
+    suggestions,
+    preference,
+    BOOKING_TIME_ZONE,
+  );
+  const finalSuggestions = filtered.suggestions.length
+    ? filtered.suggestions
+    : suggestions;
+  state.suggestions = finalSuggestions.map((s) => ({
+    startAt: s.startAt,
+    endAt: s.endAt,
+  }));
 
   const label = state.preferenceLabel;
   const prefers = filtered.used;
@@ -1207,8 +1472,8 @@ async function handlePublicBookingMessage(
       contactId: state.contactId,
       propertyId: state.propertyId,
       suggestions: finalSuggestions,
-      propertyLabel: `${state.addressLine1}, ${state.city}`
-    }
+      propertyLabel: `${state.addressLine1}, ${state.city}`,
+    },
   };
 }
 
@@ -1217,7 +1482,8 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => ({}))) as ChatRequest;
     const message = typeof body.message === "string" ? body.message : "";
     const trimmedMessage = message.trim();
-    const systemOverride = typeof body.system === "string" ? body.system.trim() : "";
+    const systemOverride =
+      typeof body.system === "string" ? body.system.trim() : "";
     const contactId = body.contactId;
     const propertyId = body.propertyId;
     const property = body.property;
@@ -1230,7 +1496,7 @@ export async function POST(request: NextRequest) {
         const auth = await requireTeamRole(request, {
           returnJson: true,
           roles: ["owner", "office", "crew"],
-          flashError: "Please sign in again to use the agent."
+          flashError: "Please sign in again to use the agent.",
         });
         if (!auth.ok) return auth.response as NextResponse;
       }
@@ -1242,19 +1508,35 @@ export async function POST(request: NextRequest) {
     if (audience === "public") {
       const actionType = typeof action?.type === "string" ? action.type : null;
       if (actionType === "reset_booking") {
-        const res = NextResponse.json({ ok: true, reply: "Done - starting fresh. What can I help with?" });
+        const res = NextResponse.json({
+          ok: true,
+          reply: "Done - starting fresh. What can I help with?",
+        });
         writePublicBookingState(res, null);
         return res;
       }
 
       if (actionType === "select_booking_slot") {
-        const startAt = typeof action?.startAt === "string" ? action.startAt : "";
+        const startAt =
+          typeof action?.startAt === "string" ? action.startAt : "";
         const state = readPublicBookingState(request);
-        const allowed = state?.suggestions?.some((s) => s.startAt === startAt) ?? false;
-        if (!state || state.phase !== "suggesting" || !state.contactId || !state.propertyId || !allowed) {
+        const allowed =
+          state?.suggestions?.some((s) => s.startAt === startAt) ?? false;
+        if (
+          !state ||
+          state.phase !== "suggesting" ||
+          !state.contactId ||
+          !state.propertyId ||
+          !allowed
+        ) {
           const res = NextResponse.json(
-            { ok: false, error: "booking_state_missing", reply: "I don't have a slot queued up - say \"book me\" and I'll grab times again." },
-            { status: 409 }
+            {
+              ok: false,
+              error: "booking_state_missing",
+              reply:
+                "I don't have a slot queued up - say \"book me\" and I'll grab times again.",
+            },
+            { status: 409 },
           );
           writePublicBookingState(res, null);
           return res;
@@ -1266,29 +1548,49 @@ export async function POST(request: NextRequest) {
             {
               ok: false,
               error: booked.error ?? "booking_failed",
-              reply: "That time just got snagged - want me to pull a few more options?"
+              reply:
+                "That time just got snagged - want me to pull a few more options?",
             },
-            { status: 409 }
+            { status: 409 },
           );
-          writePublicBookingState(res, { ...state, phase: "idle", suggestions: undefined });
+          writePublicBookingState(res, {
+            ...state,
+            phase: "idle",
+            suggestions: undefined,
+          });
           return res;
         }
 
-        const when = booked.startAt ? fmtBookingTime(booked.startAt) : fmtBookingTime(startAt);
+        const when = booked.startAt
+          ? fmtBookingTime(booked.startAt)
+          : fmtBookingTime(startAt);
         const confirmation = `You're booked for ${when}. We'll reach out shortly to confirm details.`;
-        const res = NextResponse.json({ ok: true, reply: confirmation, booked: { appointmentId: booked.appointmentId, startAt: booked.startAt ?? startAt } });
+        const res = NextResponse.json({
+          ok: true,
+          reply: confirmation,
+          booked: {
+            appointmentId: booked.appointmentId,
+            startAt: booked.startAt ?? startAt,
+          },
+        });
         writePublicBookingState(res, null);
         return res;
       }
 
       const existing = readPublicBookingState(request);
       const inFlow = existing?.phase && existing.phase !== "idle";
-      if (trimmedMessage && (inFlow || looksLikeBookingIntent(trimmedMessage))) {
-        const result = await handlePublicBookingMessage(trimmedMessage, existing);
+      if (
+        trimmedMessage &&
+        (inFlow || looksLikeBookingIntent(trimmedMessage))
+      ) {
+        const result = await handlePublicBookingMessage(
+          trimmedMessage,
+          existing,
+        );
         const res = NextResponse.json({
           ok: true,
           reply: result.reply,
-          ...(result.booking ? { booking: result.booking } : {})
+          ...(result.booking ? { booking: result.booking } : {}),
         });
         writePublicBookingState(res, result.state);
         return res;
@@ -1300,11 +1602,16 @@ export async function POST(request: NextRequest) {
     }
 
     if (looksLikeHelpQuestion(trimmedMessage)) {
-      return NextResponse.json({ ok: true, reply: isTeamChat ? teamHelpText() : publicHelpText() });
+      return NextResponse.json({
+        ok: true,
+        reply: isTeamChat ? teamHelpText() : publicHelpText(),
+      });
     }
 
     const apiKey = process.env["OPENAI_API_KEY"];
-    const baseModel = (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() || DEFAULT_BRAIN_MODEL;
+    const baseModel =
+      (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() ||
+      DEFAULT_BRAIN_MODEL;
     const teamModel = (process.env["OPENAI_TEAM_MODEL"] ?? "").trim();
     const brainModel = isTeamChat && teamModel ? teamModel : baseModel;
 
@@ -1312,14 +1619,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error: "openai_not_configured",
-          message: "OpenAI API key not configured on the server"
+          message: "OpenAI API key not configured on the server",
         },
-        { status: 503 }
+        { status: 503 },
       );
     }
 
     const messageMentionsContactContext =
-      /\b(lead|contact|customer|client|inbox|text|sms|thread|conversation|quote|booked|appointment|schedule)\b/i.test(trimmedMessage);
+      /\b(lead|contact|customer|client|inbox|text|sms|thread|conversation|quote|booked|appointment|schedule)\b/i.test(
+        trimmedMessage,
+      );
     const messageContactQuery = extractContactQueryFromMessage(trimmedMessage);
 
     let resolvedContactId: string | null = null;
@@ -1346,18 +1655,19 @@ export async function POST(request: NextRequest) {
           .join("\n");
         return NextResponse.json({
           ok: true,
-          reply: `Which contact did you mean?\n${options}\n\nReply with the phone number or email and I'll pull the right thread.`.trim()
+          reply:
+            `Which contact did you mean?\n${options}\n\nReply with the phone number or email and I'll pull the right thread.`.trim(),
         });
       }
     }
 
-    const effectiveContactId = contactId ?? (resolvedContactId ?? undefined);
+    const effectiveContactId = contactId ?? resolvedContactId ?? undefined;
 
     const teamContext = isTeamChat
       ? await buildTeamChatContext({
           contactId: effectiveContactId,
           propertyId,
-          property
+          property,
         })
       : null;
 
@@ -1368,30 +1678,59 @@ export async function POST(request: NextRequest) {
         apiKey,
         model: brainModel,
         message: trimmedMessage,
-        contextHint: [teamContext, systemOverride].filter((v) => typeof v === "string" && v.trim().length).join("\n\n")
+        contextHint: [teamContext, systemOverride]
+          .filter((v) => typeof v === "string" && v.trim().length)
+          .join("\n\n"),
       });
 
       if (plan?.clarification) {
         const opts = plan.clarification.options.map((o) => `- ${o}`).join("\n");
-        return NextResponse.json({ ok: true, reply: `${plan.clarification.question}\n${opts}`.trim() });
+        return NextResponse.json({
+          ok: true,
+          reply: `${plan.clarification.question}\n${opts}`.trim(),
+        });
       }
 
       const fallbackCalls = deriveFallbackReadToolCalls(trimmedMessage);
       const plannedCalls = plan?.toolCalls?.length ? plan.toolCalls : [];
 
       const shouldLoadDossier =
-        Boolean(effectiveContactId) && (messageMentionsContactContext || (messageContactQuery && messageContactQuery.kind !== "zip"));
-      const dossierCalls: JarvisReadToolCall[] =
-        shouldLoadDossier
-          ? [
-              { tool: "crm.contact.snapshot", args: { contactId: effectiveContactId } },
-              { tool: "crm.contact.omni_facts", args: { contactId: effectiveContactId, includeQuotePrice: true } },
-              { tool: "inbox.contact.transcript", args: { contactId: effectiveContactId, threadLimit: 6, messageLimit: 16 } },
-              { tool: "appointments.list", args: { contactId: effectiveContactId, status: "requested,confirmed,completed", limit: 25 } }
-            ]
-          : [];
+        Boolean(effectiveContactId) &&
+        (messageMentionsContactContext ||
+          (messageContactQuery && messageContactQuery.kind !== "zip"));
+      const dossierCalls: JarvisReadToolCall[] = shouldLoadDossier
+        ? [
+            {
+              tool: "crm.contact.snapshot",
+              args: { contactId: effectiveContactId },
+            },
+            {
+              tool: "crm.contact.omni_facts",
+              args: { contactId: effectiveContactId, includeQuotePrice: true },
+            },
+            {
+              tool: "inbox.contact.transcript",
+              args: {
+                contactId: effectiveContactId,
+                threadLimit: 6,
+                messageLimit: 16,
+              },
+            },
+            {
+              tool: "appointments.list",
+              args: {
+                contactId: effectiveContactId,
+                status: "requested,confirmed,completed",
+                limit: 25,
+              },
+            },
+          ]
+        : [];
 
-      const merged = [...dossierCalls, ...(plannedCalls.length ? plannedCalls : fallbackCalls)];
+      const merged = [
+        ...dossierCalls,
+        ...(plannedCalls.length ? plannedCalls : fallbackCalls),
+      ];
       const seen = new Set<string>();
       const calls = merged
         .filter((call) => {
@@ -1404,83 +1743,130 @@ export async function POST(request: NextRequest) {
 
       if (calls.length) {
         const { apiBase, adminKey } = getAdminContext();
-        liveDataResults = await Promise.all(calls.map((call) => runJarvisReadTool({ apiBase, adminKey }, call)));
+        liveDataResults = await Promise.all(
+          calls.map((call) => runJarvisReadTool({ apiBase, adminKey }, call)),
+        );
         liveDataContext = formatJarvisToolResultsForSystem(liveDataResults);
       }
     }
 
     const combinedSystem =
-      [teamContext, systemOverride, liveDataContext].filter((v) => typeof v === "string" && v.trim().length).join("\n\n") || null;
+      [teamContext, systemOverride, liveDataContext]
+        .filter((v) => typeof v === "string" && v.trim().length)
+        .join("\n\n") || null;
 
-    const systemPrompt = isTeamChat ? TEAM_SYSTEM_PROMPT_V2 : PUBLIC_SYSTEM_PROMPT;
-    const teamEffortRaw = (process.env["OPENAI_TEAM_REASONING_EFFORT"] ?? "").trim().toLowerCase();
+    const systemPrompt = isTeamChat
+      ? TEAM_SYSTEM_PROMPT_V2
+      : PUBLIC_SYSTEM_PROMPT;
+    const teamEffortRaw = (process.env["OPENAI_TEAM_REASONING_EFFORT"] ?? "")
+      .trim()
+      .toLowerCase();
     const teamEffort: ReasoningEffort =
-      teamEffortRaw === "high" ? "high" : teamEffortRaw === "medium" ? "medium" : "low";
+      teamEffortRaw === "high"
+        ? "high"
+        : teamEffortRaw === "medium"
+          ? "medium"
+          : "low";
     const reasoningEffort: ReasoningEffort = isTeamChat ? teamEffort : "low";
-    const buildChatPayload = (modelName: string, extraSystem?: string | null) => ({
+    const buildChatPayload = (
+      modelName: string,
+      extraSystem?: string | null,
+    ) => ({
       model: modelName,
       input: [
         { role: "system" as const, content: systemPrompt },
-        ...(extraSystem ? ([{ role: "system" as const, content: extraSystem }] as const) : []),
-        { role: "user" as const, content: trimmedMessage }
+        ...(extraSystem
+          ? ([{ role: "system" as const, content: extraSystem }] as const)
+          : []),
+        { role: "user" as const, content: trimmedMessage },
       ],
       reasoning: { effort: reasoningEffort },
       text: { verbosity: "low" as const },
-      max_output_tokens: 400
+      max_output_tokens: 400,
     });
 
     if (!isTeamChat) {
       if (looksLikePricingQuestion(trimmedMessage)) {
-        const draft = await generatePublicFactualDraft(trimmedMessage, apiKey, brainModel);
+        const draft = await generatePublicFactualDraft(
+          trimmedMessage,
+          apiKey,
+          brainModel,
+        );
         if (draft) {
-          const rewritten = await rewritePublicDraft(trimmedMessage, draft, apiKey);
+          const rewritten = await rewritePublicDraft(
+            trimmedMessage,
+            draft,
+            apiKey,
+          );
           if (!rewritten) {
-            console.warn("[chat] public pricing rewrite failed validation; using factual draft");
+            console.warn(
+              "[chat] public pricing rewrite failed validation; using factual draft",
+            );
           }
           return NextResponse.json({ ok: true, reply: rewritten ?? draft });
         }
 
-        console.warn("[chat] public pricing draft failed; falling back to brain model response");
-        const res = await fetchOpenAIText(apiKey, buildChatPayload(brainModel, null), brainModel);
+        console.warn(
+          "[chat] public pricing draft failed; falling back to brain model response",
+        );
+        const res = await fetchOpenAIText(
+          apiKey,
+          buildChatPayload(brainModel, null),
+          brainModel,
+        );
         if (!res.ok) {
           return NextResponse.json(
             {
               error: "openai_error",
-              message: "Assistant is unavailable right now."
+              message: "Assistant is unavailable right now.",
             },
-            { status: 502 }
+            { status: 502 },
           );
         }
         return NextResponse.json({ ok: true, reply: res.text.trim() });
       }
 
-      const voiceRes = await fetchOpenAIText(apiKey, buildChatPayload(PUBLIC_VOICE_MODEL, null), PUBLIC_VOICE_MODEL);
+      const voiceRes = await fetchOpenAIText(
+        apiKey,
+        buildChatPayload(PUBLIC_VOICE_MODEL, null),
+        PUBLIC_VOICE_MODEL,
+      );
       if (voiceRes.ok) {
         return NextResponse.json({ ok: true, reply: voiceRes.text.trim() });
       }
 
-      console.warn("[chat] public voice model failed; falling back to brain model");
-      const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel, null), brainModel);
+      console.warn(
+        "[chat] public voice model failed; falling back to brain model",
+      );
+      const brainRes = await fetchOpenAIText(
+        apiKey,
+        buildChatPayload(brainModel, null),
+        brainModel,
+      );
       if (!brainRes.ok) {
         return NextResponse.json(
           {
             error: "openai_error",
-            message: "Assistant is unavailable right now."
+            message: "Assistant is unavailable right now.",
           },
-          { status: 502 }
+          { status: 502 },
         );
       }
       return NextResponse.json({ ok: true, reply: brainRes.text.trim() });
     }
 
-    const brainRes = await fetchOpenAIText(apiKey, buildChatPayload(brainModel, combinedSystem), brainModel);
+    const brainRes = await fetchOpenAIText(
+      apiKey,
+      buildChatPayload(brainModel, combinedSystem),
+      brainModel,
+    );
     if (!brainRes.ok) {
       return NextResponse.json(
         {
           error: "openai_error",
-          message: "Assistant is unavailable right now."
+          message: "Assistant is unavailable right now.",
         },
-        { status: 502 }
+        { status: 502 },
       );
     }
 
@@ -1489,9 +1875,11 @@ export async function POST(request: NextRequest) {
     const booking = await maybeGetSuggestions(trimmedMessage, {
       contactId: effectiveContactId,
       propertyId,
-      property
+      property,
     });
-    const classification = CLASSIFIER_ENABLED ? await classifyIntent(trimmedMessage) : null;
+    const classification = CLASSIFIER_ENABLED
+      ? await classifyIntent(trimmedMessage)
+      : null;
 
     const actions = CHAT_ACTIONS_ENABLED
       ? await buildActionSuggestions(
@@ -1499,20 +1887,22 @@ export async function POST(request: NextRequest) {
           {
             contactId: effectiveContactId,
             propertyId,
-            property
+            property,
           },
           booking,
           classification,
           reply,
-          liveDataResults
+          liveDataResults,
         )
       : [];
-    const actionNote = actions.length ? actions.map((action) => `Action: ${action.summary}`).join("\n") : null;
+    const actionNote = actions.length
+      ? actions.map((action) => `Action: ${action.summary}`).join("\n")
+      : null;
     const liveDataMeta = liveDataResults.map((r) => ({
       tool: r.tool,
       status: r.status,
       ...(typeof r.httpStatus === "number" ? { httpStatus: r.httpStatus } : {}),
-      ...(typeof r.error === "string" ? { error: r.error } : {})
+      ...(typeof r.error === "string" ? { error: r.error } : {}),
     }));
 
     return NextResponse.json({
@@ -1521,7 +1911,7 @@ export async function POST(request: NextRequest) {
       ...(booking ? { booking } : {}),
       ...(actions.length ? { actions } : {}),
       ...(actionNote ? { actionNote } : {}),
-      ...(liveDataMeta.length ? { liveData: liveDataMeta } : {})
+      ...(liveDataMeta.length ? { liveData: liveDataMeta } : {}),
     });
   } catch (error) {
     console.error("[chat] Server error:", error);
@@ -1534,21 +1924,29 @@ async function maybeGetSuggestions(
   ctx: {
     contactId?: string;
     propertyId?: string;
-    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+    property?: {
+      addressLine1?: string;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+    };
     propertyLabel?: string;
-  }
+  },
 ): Promise<BookingPayload | null> {
   const keywords = ["book", "schedule", "slot", "time", "appointment"];
   const lower = message.toLowerCase();
   if (!keywords.some((kw) => lower.includes(kw))) return null;
   if (!ctx.contactId || !ctx.propertyId) return null;
 
-  const preferenceUpdate = extractBookingPreferenceUpdate(message, BOOKING_TIME_ZONE);
+  const preferenceUpdate = extractBookingPreferenceUpdate(
+    message,
+    BOOKING_TIME_ZONE,
+  );
   const preference = preferenceUpdate?.clear ? null : preferenceUpdate;
   const suggestions = await fetchBookingSuggestions({
     ...ctx,
     preferredStartHour: preference?.preferredStartHour,
-    preferredEndHour: preference?.preferredEndHour
+    preferredEndHour: preference?.preferredEndHour,
   });
   if (!suggestions || !suggestions.length) return null;
   const filtered = preference
@@ -1558,29 +1956,34 @@ async function maybeGetSuggestions(
           preferredDay: preference.preferredDay,
           preferredStartHour: preference.preferredStartHour,
           preferredEndHour: preference.preferredEndHour,
-          preferenceLabel: preference.preferenceLabel
+          preferenceLabel: preference.preferenceLabel,
         },
-        BOOKING_TIME_ZONE
+        BOOKING_TIME_ZONE,
       )
     : { suggestions, used: false };
-  const finalSuggestions = filtered.suggestions.length ? filtered.suggestions : suggestions;
+  const finalSuggestions = filtered.suggestions.length
+    ? filtered.suggestions
+    : suggestions;
   return {
     contactId: ctx.contactId,
     propertyId: ctx.propertyId,
     suggestions: finalSuggestions,
-    propertyLabel: ctx.propertyLabel
+    propertyLabel: ctx.propertyLabel,
   };
 }
 
-async function fetchBookingSuggestions(
-  ctx: {
-    contactId?: string;
-    propertyId?: string;
-    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
-    preferredStartHour?: number;
-    preferredEndHour?: number;
-  }
-): Promise<BookingSuggestion[] | null> {
+async function fetchBookingSuggestions(ctx: {
+  contactId?: string;
+  propertyId?: string;
+  property?: {
+    addressLine1?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+  };
+  preferredStartHour?: number;
+  preferredEndHour?: number;
+}): Promise<BookingSuggestion[] | null> {
   const { apiBase, adminKey } = getAdminContext();
   const hdrs = await headers();
   const apiKey = adminKey ?? hdrs.get("x-api-key");
@@ -1603,10 +2006,16 @@ async function fetchBookingSuggestions(
       if (ctx.property.state) body.state = ctx.property.state;
       if (ctx.property.postalCode) body.postalCode = ctx.property.postalCode;
     }
-    if (typeof ctx.preferredStartHour === "number" && Number.isFinite(ctx.preferredStartHour)) {
+    if (
+      typeof ctx.preferredStartHour === "number" &&
+      Number.isFinite(ctx.preferredStartHour)
+    ) {
       body.startHour = ctx.preferredStartHour;
     }
-    if (typeof ctx.preferredEndHour === "number" && Number.isFinite(ctx.preferredEndHour)) {
+    if (
+      typeof ctx.preferredEndHour === "number" &&
+      Number.isFinite(ctx.preferredEndHour)
+    ) {
       body.endHour = ctx.preferredEndHour;
     }
 
@@ -1614,19 +2023,25 @@ async function fetchBookingSuggestions(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": apiKey
+        "x-api-key": apiKey,
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
     if (!res.ok) return null;
-    const data = (await res.json()) as { suggestions?: Array<{ startAt?: string; endAt?: string; reason?: string }> };
+    const data = (await res.json()) as {
+      suggestions?: Array<{
+        startAt?: string;
+        endAt?: string;
+        reason?: string;
+      }>;
+    };
     const suggestions =
       data.suggestions
         ?.slice(0, 3)
         .map((s) => ({
           startAt: typeof s.startAt === "string" ? s.startAt : "",
           endAt: typeof s.endAt === "string" ? s.endAt : "",
-          reason: s.reason ?? "No conflicts"
+          reason: s.reason ?? "No conflicts",
         }))
         .filter((s) => s.startAt && s.endAt) ?? [];
     return suggestions;
@@ -1638,13 +2053,32 @@ async function fetchBookingSuggestions(
 
 function looksLikeScheduleQuestion(message: string): boolean {
   const lower = message.toLowerCase();
-  const keywords = ["schedule", "appointments", "jobs", "calendar", "booked", "slots", "week", "today", "tomorrow"];
+  const keywords = [
+    "schedule",
+    "appointments",
+    "jobs",
+    "calendar",
+    "booked",
+    "slots",
+    "week",
+    "today",
+    "tomorrow",
+  ];
   return keywords.some((kw) => lower.includes(kw));
 }
 
 function looksLikeRevenueQuestion(message: string): boolean {
   const lower = message.toLowerCase();
-  const keywords = ["revenue", "forecast", "sales", "booked out", "projected", "income", "today", "tomorrow"];
+  const keywords = [
+    "revenue",
+    "forecast",
+    "sales",
+    "booked out",
+    "projected",
+    "income",
+    "today",
+    "tomorrow",
+  ];
   return keywords.some((kw) => lower.includes(kw));
 }
 
@@ -1710,15 +2144,23 @@ function shouldPlanReadTools(message: string): boolean {
     "seo",
     "policy",
     "hours",
-    "service area"
+    "service area",
   ];
   return keywords.some((kw) => lower.includes(kw));
 }
 
-function looksLikeOpsReportQuestion(message: string): "daily" | "weekly" | null {
+function looksLikeOpsReportQuestion(
+  message: string,
+): "daily" | "weekly" | null {
   const lower = message.toLowerCase();
-  if (lower.includes("weekly report") || lower.includes("week report")) return "weekly";
-  if (lower.includes("daily report") || lower.includes("morning report") || lower.includes("today report") || lower.includes("yesterday report")) {
+  if (lower.includes("weekly report") || lower.includes("week report"))
+    return "weekly";
+  if (
+    lower.includes("daily report") ||
+    lower.includes("morning report") ||
+    lower.includes("today report") ||
+    lower.includes("yesterday report")
+  ) {
     return "daily";
   }
   return null;
@@ -1730,7 +2172,8 @@ async function planJarvisReadTools(input: {
   message: string;
   contextHint?: string | null;
 }): Promise<JarvisReadToolPlan | null> {
-  if (!shouldPlanReadTools(input.message)) return { toolCalls: [], clarification: null };
+  if (!shouldPlanReadTools(input.message))
+    return { toolCalls: [], clarification: null };
 
   const toolNames: JarvisReadToolName[] = [
     "policy.get_all",
@@ -1763,7 +2206,7 @@ async function planJarvisReadTools(input: {
     "google.ads.summary",
     "google.ads.status",
     "google.ads.analyst.status",
-    "google.ads.analyst.recommendations"
+    "google.ads.analyst.recommendations",
   ];
 
   const systemPrompt = `You are a tool router for Jarvis (StonegateOS).
@@ -1788,14 +2231,24 @@ Tool hints:
 - Outbound queue => outbound.queue; Partners => partners.list; SEO => seo.status; Meta ads => meta.ads.summary
 `.trim();
 
-  const contextHint = typeof input.contextHint === "string" && input.contextHint.trim().length ? truncateText(input.contextHint, 1600) : null;
+  const contextHint =
+    typeof input.contextHint === "string" && input.contextHint.trim().length
+      ? truncateText(input.contextHint, 1600)
+      : null;
 
   const payload = {
     model: input.model,
     input: [
       { role: "system" as const, content: systemPrompt },
-      ...(contextHint ? ([{ role: "system" as const, content: `Context (may help disambiguate):\n${contextHint}` }] as const) : []),
-      { role: "user" as const, content: input.message }
+      ...(contextHint
+        ? ([
+            {
+              role: "system" as const,
+              content: `Context (may help disambiguate):\n${contextHint}`,
+            },
+          ] as const)
+        : []),
+      { role: "user" as const, content: input.message },
     ],
     reasoning: { effort: "low" as const },
     text: {
@@ -1816,10 +2269,10 @@ Tool hints:
                 additionalProperties: false,
                 properties: {
                   tool: { type: "string", enum: toolNames },
-                  args: { type: "object" }
+                  args: { type: "object" },
                 },
-                required: ["tool", "args"]
-              }
+                required: ["tool", "args"],
+              },
             },
             clarification: {
               anyOf: [
@@ -1829,34 +2282,50 @@ Tool hints:
                   additionalProperties: false,
                   properties: {
                     question: { type: "string" },
-                    options: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 5 }
+                    options: {
+                      type: "array",
+                      items: { type: "string" },
+                      minItems: 2,
+                      maxItems: 5,
+                    },
                   },
-                  required: ["question", "options"]
-                }
-              ]
-            }
+                  required: ["question", "options"],
+                },
+              ],
+            },
           },
-          required: ["toolCalls", "clarification"]
-        }
-      }
+          required: ["toolCalls", "clarification"],
+        },
+      },
     },
-    max_output_tokens: 260
+    max_output_tokens: 260,
   };
 
   const res = await fetchOpenAIText(input.apiKey, payload, input.model);
   if (!res.ok) {
-    console.warn("[chat] jarvis tool plan failed", res.status, res.error.slice(0, 120));
+    console.warn(
+      "[chat] jarvis tool plan failed",
+      res.status,
+      res.error.slice(0, 120),
+    );
     return null;
   }
 
   const parsed = safeJsonParse(res.text);
   if (!parsed) return null;
-  const rawCalls = Array.isArray(parsed["toolCalls"]) ? (parsed["toolCalls"] as any[]) : [];
+  const rawCalls = Array.isArray(parsed["toolCalls"])
+    ? (parsed["toolCalls"] as any[])
+    : [];
   const toolCalls: JarvisReadToolCall[] = rawCalls
     .map((c) => {
-      const tool = typeof c?.tool === "string" ? (c.tool as JarvisReadToolName) : null;
-      const args = c?.args && typeof c.args === "object" ? (c.args as Record<string, unknown>) : {};
-      if (!tool || !(toolNames as readonly string[]).includes(tool)) return null;
+      const tool =
+        typeof c?.tool === "string" ? (c.tool as JarvisReadToolName) : null;
+      const args =
+        c?.args && typeof c.args === "object"
+          ? (c.args as Record<string, unknown>)
+          : {};
+      if (!tool || !(toolNames as readonly string[]).includes(tool))
+        return null;
       return { tool, args };
     })
     .filter((c): c is JarvisReadToolCall => Boolean(c));
@@ -1864,17 +2333,29 @@ Tool hints:
   const clarification =
     parsed["clarification"] && typeof parsed["clarification"] === "object"
       ? {
-          question: typeof (parsed["clarification"] as any).question === "string" ? ((parsed["clarification"] as any).question as string) : "",
+          question:
+            typeof (parsed["clarification"] as any).question === "string"
+              ? ((parsed["clarification"] as any).question as string)
+              : "",
           options: Array.isArray((parsed["clarification"] as any).options)
-            ? ((parsed["clarification"] as any).options as unknown[]).filter((o) => typeof o === "string") as string[]
-            : []
+            ? (((parsed["clarification"] as any).options as unknown[]).filter(
+                (o) => typeof o === "string",
+              ) as string[])
+            : [],
         }
       : null;
 
   const finalClarification =
-    clarification && clarification.question.trim().length && clarification.options.length >= 2 ? clarification : null;
+    clarification &&
+    clarification.question.trim().length &&
+    clarification.options.length >= 2
+      ? clarification
+      : null;
 
-  return { toolCalls: toolCalls.slice(0, 6), clarification: finalClarification };
+  return {
+    toolCalls: toolCalls.slice(0, 6),
+    clarification: finalClarification,
+  };
 }
 
 function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
@@ -1883,7 +2364,9 @@ function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
 
   const contactQuery = extractContactQueryFromMessage(message);
   const contactish =
-    /\b(lead|contact|customer|client|inbox|text|sms|thread|conversation|quote|booked|appointment|schedule)\b/i.test(lower);
+    /\b(lead|contact|customer|client|inbox|text|sms|thread|conversation|quote|booked|appointment|schedule)\b/i.test(
+      lower,
+    );
 
   const reportKind = looksLikeOpsReportQuestion(message);
   if (reportKind === "daily") {
@@ -1909,37 +2392,65 @@ function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
   if (looksLikeGoogleAdsSpendQuestion(message)) {
     calls.push({
       tool: "google.ads.spend",
-      args: { relative: pickGoogleAdsSpendRelative(message) ?? "yesterday" }
+      args: { relative: pickGoogleAdsSpendRelative(message) ?? "yesterday" },
     });
     return calls;
   }
 
-  if (lower.includes("google") && lower.includes("ads") && (lower.includes("status") || lower.includes("connected") || lower.includes("configured"))) {
+  if (
+    lower.includes("google") &&
+    lower.includes("ads") &&
+    (lower.includes("status") ||
+      lower.includes("connected") ||
+      lower.includes("configured"))
+  ) {
     calls.push({ tool: "google.ads.status", args: {} });
     return calls;
   }
 
   if (
-    (lower.includes("google") && lower.includes("ads")) &&
-    (lower.includes("recommendation") || lower.includes("recommendations") || lower.includes("negative keyword") || lower.includes("negative keywords"))
+    lower.includes("google") &&
+    lower.includes("ads") &&
+    (lower.includes("recommendation") ||
+      lower.includes("recommendations") ||
+      lower.includes("negative keyword") ||
+      lower.includes("negative keywords"))
   ) {
-    calls.push({ tool: "google.ads.analyst.recommendations", args: { status: "proposed" } });
+    calls.push({
+      tool: "google.ads.analyst.recommendations",
+      args: { status: "proposed" },
+    });
     return calls;
   }
 
   if (lower.includes("web") && lower.includes("vitals")) {
-    calls.push({ tool: "web.analytics.vitals", args: { rangeDays: parseRangeDaysFromMessage(message) ?? 7 } });
+    calls.push({
+      tool: "web.analytics.vitals",
+      args: { rangeDays: parseRangeDaysFromMessage(message) ?? 7 },
+    });
     return calls;
   }
 
-  if (lower.includes("analytics") || lower.includes("funnel") || lower.includes("/book")) {
+  if (
+    lower.includes("analytics") ||
+    lower.includes("funnel") ||
+    lower.includes("/book")
+  ) {
     const rangeDays = parseRangeDaysFromMessage(message) ?? 7;
-    calls.push({ tool: lower.includes("funnel") ? "web.analytics.funnel" : "web.analytics.summary", args: { rangeDays } });
+    calls.push({
+      tool: lower.includes("funnel")
+        ? "web.analytics.funnel"
+        : "web.analytics.summary",
+      args: { rangeDays },
+    });
     return calls;
   }
 
   if (looksLikeScheduleQuestion(message)) {
-    calls.push({ tool: "schedule.summary", args: { range: pickRange(message) } });
+    calls.push({
+      tool: "schedule.summary",
+      args: { range: pickRange(message) },
+    });
     return calls;
   }
 
@@ -1953,18 +2464,32 @@ function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
     return calls;
   }
 
-  if (lower.includes("expense") || (lower.includes("spend") && !lower.includes("ads"))) {
+  if (
+    lower.includes("expense") ||
+    (lower.includes("spend") && !lower.includes("ads"))
+  ) {
     calls.push({ tool: "finance.expenses.summary", args: {} });
     return calls;
   }
 
-  if (lower.includes("pipeline") || lower.includes("quoted") || lower.includes("new leads")) {
+  if (
+    lower.includes("pipeline") ||
+    lower.includes("quoted") ||
+    lower.includes("new leads")
+  ) {
     calls.push({ tool: "crm.pipeline", args: {} });
     return calls;
   }
 
-  if (lower.includes("inbox") || lower.includes("texts") || lower.includes("threads")) {
-    calls.push({ tool: "inbox.threads.list", args: { status: "open", limit: 12 } });
+  if (
+    lower.includes("inbox") ||
+    lower.includes("texts") ||
+    lower.includes("threads")
+  ) {
+    calls.push({
+      tool: "inbox.threads.list",
+      args: { status: "open", limit: 12 },
+    });
     return calls;
   }
 
@@ -1983,13 +2508,23 @@ function deriveFallbackReadToolCalls(message: string): JarvisReadToolCall[] {
     return calls;
   }
 
-  if (lower.includes("meta") || lower.includes("facebook") || lower.includes("instagram")) {
+  if (
+    lower.includes("meta") ||
+    lower.includes("facebook") ||
+    lower.includes("instagram")
+  ) {
     calls.push({ tool: "meta.ads.summary", args: { level: "campaign" } });
     return calls;
   }
 
-  if (contactQuery?.value?.trim().length && (contactQuery.kind !== "zip" || contactish)) {
-    calls.push({ tool: "crm.contacts.search", args: { q: contactQuery.value.trim(), limit: 12 } });
+  if (
+    contactQuery?.value?.trim().length &&
+    (contactQuery.kind !== "zip" || contactish)
+  ) {
+    calls.push({
+      tool: "crm.contacts.search",
+      args: { q: contactQuery.value.trim(), limit: 12 },
+    });
     return calls;
   }
 
@@ -2005,10 +2540,14 @@ function looksLikeGoogleAdsSpendQuestion(message: string): boolean {
     lower.includes("ads spend") ||
     lower.includes("adspend");
   if (!mentionsAds) return false;
-  return lower.includes("spent") || lower.includes("spend") || lower.includes("cost");
+  return (
+    lower.includes("spent") || lower.includes("spend") || lower.includes("cost")
+  );
 }
 
-function pickGoogleAdsSpendRelative(message: string): "yesterday" | "today" | null {
+function pickGoogleAdsSpendRelative(
+  message: string,
+): "yesterday" | "today" | null {
   const lower = message.toLowerCase();
   if (lower.includes("yesterday")) return "yesterday";
   if (lower.includes("today")) return "today";
@@ -2029,7 +2568,10 @@ async function fetchGoogleAdsSpendReply(message: string): Promise<string> {
   }
 
   const url = `${apiBase}/api/admin/google/ads/spend?relative=${encodeURIComponent(relative)}`;
-  const res = await fetch(url, { headers: { "x-api-key": adminKey }, cache: "no-store" }).catch(() => null);
+  const res = await fetch(url, {
+    headers: { "x-api-key": adminKey },
+    cache: "no-store",
+  }).catch(() => null);
   if (!res) return "I couldn’t reach the Google Ads endpoint right now.";
 
   const data = (await res.json().catch(() => null)) as any;
@@ -2054,13 +2596,18 @@ async function fetchGoogleAdsSpendReply(message: string): Promise<string> {
 function fmtMoney(cents: number, currency: string | null): string {
   if (!Number.isFinite(cents)) return "$0";
   try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: currency ?? "USD" }).format(cents / 100);
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency ?? "USD",
+    }).format(cents / 100);
   } catch {
     return `$${(cents / 100).toFixed(2)}`;
   }
 }
 
-function pickRange(message: string): "today" | "tomorrow" | "this_week" | "next_week" {
+function pickRange(
+  message: string,
+): "today" | "tomorrow" | "this_week" | "next_week" {
   const lower = message.toLowerCase();
   if (lower.includes("tomorrow")) return "tomorrow";
   if (lower.includes("today")) return "today";
@@ -2077,10 +2624,17 @@ function truncateText(value: string, maxLen: number): string {
 type TeamChatContext = {
   contactId?: string;
   propertyId?: string;
-  property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+  property?: {
+    addressLine1?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+  };
 };
 
-async function buildTeamChatContext(ctx: TeamChatContext): Promise<string | null> {
+async function buildTeamChatContext(
+  ctx: TeamChatContext,
+): Promise<string | null> {
   const { apiBase, adminKey } = getAdminContext();
   const hdrs = await headers();
   const apiKey = adminKey ?? hdrs.get("x-api-key");
@@ -2090,30 +2644,45 @@ async function buildTeamChatContext(ctx: TeamChatContext): Promise<string | null
     return [
       "You are assisting internal ops and office staff.",
       "Use the company policies and existing system behavior. If you are unsure, ask a clarifying question.",
-      "Only discuss confirmed appointments when asked about scheduling."
+      "Only discuss confirmed appointments when asked about scheduling.",
     ].join("\n");
   }
 
   const contactId = ctx.contactId;
   const propertyLabel =
-    ctx.property?.addressLine1 && ctx.property?.city && ctx.property?.state && ctx.property?.postalCode
+    ctx.property?.addressLine1 &&
+    ctx.property?.city &&
+    ctx.property?.state &&
+    ctx.property?.postalCode
       ? `${ctx.property.addressLine1}, ${ctx.property.city}, ${ctx.property.state} ${ctx.property.postalCode}`
       : null;
 
   const [taskRes, inboxRes, appt] = await Promise.all([
-    fetch(`${apiBase}/api/admin/crm/tasks?contactId=${encodeURIComponent(contactId)}&status=all`, {
-      headers: { "x-api-key": apiKey }
-    }).catch(() => null),
-    fetch(`${apiBase}/api/admin/inbox/threads?contactId=${encodeURIComponent(contactId)}&limit=3`, {
-      headers: { "x-api-key": apiKey }
-    }).catch(() => null),
-    findAppointmentForContext(contactId, ctx.propertyId)
+    fetch(
+      `${apiBase}/api/admin/crm/tasks?contactId=${encodeURIComponent(contactId)}&status=all`,
+      {
+        headers: { "x-api-key": apiKey },
+      },
+    ).catch(() => null),
+    fetch(
+      `${apiBase}/api/admin/inbox/threads?contactId=${encodeURIComponent(contactId)}&limit=3`,
+      {
+        headers: { "x-api-key": apiKey },
+      },
+    ).catch(() => null),
+    findAppointmentForContext(contactId, ctx.propertyId),
   ]);
 
   const notes: Array<{ body: string; createdAt?: string | null }> = [];
-  const reminders: Array<{ title: string; dueAt: string | null; notes?: string | null }> = [];
+  const reminders: Array<{
+    title: string;
+    dueAt: string | null;
+    notes?: string | null;
+  }> = [];
   if (taskRes && taskRes.ok) {
-    const data = (await taskRes.json().catch(() => null)) as { tasks?: Array<Record<string, unknown>> } | null;
+    const data = (await taskRes.json().catch(() => null)) as {
+      tasks?: Array<Record<string, unknown>>;
+    } | null;
     const tasks = Array.isArray(data?.tasks) ? data!.tasks : [];
     for (const task of tasks) {
       const status = typeof task["status"] === "string" ? task["status"] : null;
@@ -2123,7 +2692,8 @@ async function buildTeamChatContext(ctx: TeamChatContext): Promise<string | null
 
       if (status === "completed" && !dueAt && body && body.trim().length) {
         if (body.includes("[auto]")) continue;
-        const createdAt = typeof task["createdAt"] === "string" ? task["createdAt"] : null;
+        const createdAt =
+          typeof task["createdAt"] === "string" ? task["createdAt"] : null;
         notes.push({ body: body.trim(), createdAt });
       }
 
@@ -2131,7 +2701,7 @@ async function buildTeamChatContext(ctx: TeamChatContext): Promise<string | null
         reminders.push({
           title: title.trim().length ? title.trim() : "Reminder",
           dueAt,
-          notes: typeof task["notes"] === "string" ? task["notes"] : null
+          notes: typeof task["notes"] === "string" ? task["notes"] : null,
         });
       }
     }
@@ -2142,34 +2712,50 @@ async function buildTeamChatContext(ctx: TeamChatContext): Promise<string | null
 
   const inboxSnippets: string[] = [];
   if (inboxRes && inboxRes.ok) {
-    const data = (await inboxRes.json().catch(() => null)) as { threads?: Array<Record<string, unknown>> } | null;
+    const data = (await inboxRes.json().catch(() => null)) as {
+      threads?: Array<Record<string, unknown>>;
+    } | null;
     const threads = Array.isArray(data?.threads) ? data!.threads : [];
     for (const thread of threads.slice(0, 3)) {
-      const channel = typeof thread["channel"] === "string" ? thread["channel"] : "unknown";
-      const status = typeof thread["status"] === "string" ? thread["status"] : "unknown";
-      const subject = typeof thread["subject"] === "string" ? thread["subject"] : null;
+      const channel =
+        typeof thread["channel"] === "string" ? thread["channel"] : "unknown";
+      const status =
+        typeof thread["status"] === "string" ? thread["status"] : "unknown";
+      const subject =
+        typeof thread["subject"] === "string" ? thread["subject"] : null;
       const preview =
         typeof thread["lastMessagePreview"] === "string"
           ? thread["lastMessagePreview"]
           : typeof thread["resolvedLastMessagePreview"] === "string"
             ? thread["resolvedLastMessagePreview"]
             : null;
-      const lastActivityAt = typeof thread["lastActivityAt"] === "string" ? thread["lastActivityAt"] : null;
+      const lastActivityAt =
+        typeof thread["lastActivityAt"] === "string"
+          ? thread["lastActivityAt"]
+          : null;
       const prefix = `[${channel}/${status}]`;
-      const subjectPart = subject && subject.trim().length ? ` ${truncateText(subject, 60)}` : "";
-      const previewPart = preview && preview.trim().length ? ` — ${truncateText(preview, 120)}` : "";
+      const subjectPart =
+        subject && subject.trim().length ? ` ${truncateText(subject, 60)}` : "";
+      const previewPart =
+        preview && preview.trim().length
+          ? ` — ${truncateText(preview, 120)}`
+          : "";
       const atPart = lastActivityAt ? ` (${lastActivityAt})` : "";
-      inboxSnippets.push(`${prefix}${subjectPart}${previewPart}${atPart}`.trim());
+      inboxSnippets.push(
+        `${prefix}${subjectPart}${previewPart}${atPart}`.trim(),
+      );
     }
   }
 
   const contextLines: string[] = [
     "You are assisting internal ops and office staff.",
     "Use the CRM context below. Be concise, actionable, and specific.",
-    "Only use confirmed appointments for scheduling."
+    "Only use confirmed appointments for scheduling.",
   ];
 
-  contextLines.push(`Context contactId=${contactId}${propertyLabel ? ` property=${propertyLabel}` : ""}`);
+  contextLines.push(
+    `Context contactId=${contactId}${propertyLabel ? ` property=${propertyLabel}` : ""}`,
+  );
 
   if (appt?.startAt) {
     contextLines.push(`Next confirmed appointment: ${appt.startAt}`);
@@ -2202,7 +2788,7 @@ async function buildTeamChatContext(ctx: TeamChatContext): Promise<string | null
 
 async function fetchScheduleSummary(
   range: string,
-  opts?: { statuses?: string[] }
+  opts?: { statuses?: string[] },
 ): Promise<string | null> {
   const { apiBase, adminKey } = getAdminContext();
   const hdrs = await headers();
@@ -2214,16 +2800,25 @@ async function fetchScheduleSummary(
     if (opts?.statuses?.length) {
       search.set("statuses", opts.statuses.join(","));
     }
-    const res = await fetch(`${apiBase}/api/admin/schedule/summary?${search.toString()}`, {
-      headers: {
-        "x-api-key": apiKey
-      }
-    });
+    const res = await fetch(
+      `${apiBase}/api/admin/schedule/summary?${search.toString()}`,
+      {
+        headers: {
+          "x-api-key": apiKey,
+        },
+      },
+    );
     if (!res.ok) return null;
     const data = (await res.json()) as ScheduleSummary;
     if (!data.ok) return null;
     const label =
-      range === "today" ? "today" : range === "tomorrow" ? "tomorrow" : range === "next_week" ? "next week" : "this week";
+      range === "today"
+        ? "today"
+        : range === "tomorrow"
+          ? "tomorrow"
+          : range === "next_week"
+            ? "next week"
+            : "this week";
     if (!data.total) return `Schedule ${label}: no appointments on the books.`;
     const statusParts = Object.entries(data.byStatus)
       .map(([k, v]) => `${k}: ${v}`)
@@ -2246,16 +2841,25 @@ async function fetchRevenueForecast(range: string): Promise<string | null> {
   if (!apiKey) return null;
 
   try {
-    const res = await fetch(`${apiBase}/api/admin/revenue/forecast?range=${encodeURIComponent(range)}`, {
-      headers: {
-        "x-api-key": apiKey
-      }
-    });
+    const res = await fetch(
+      `${apiBase}/api/admin/revenue/forecast?range=${encodeURIComponent(range)}`,
+      {
+        headers: {
+          "x-api-key": apiKey,
+        },
+      },
+    );
     if (!res.ok) return null;
     const data = (await res.json()) as RevenueForecast;
     if (!data.ok) return null;
     const label =
-      range === "today" ? "today" : range === "tomorrow" ? "tomorrow" : range === "next_week" ? "next week" : "this week";
+      range === "today"
+        ? "today"
+        : range === "tomorrow"
+          ? "tomorrow"
+          : range === "next_week"
+            ? "next week"
+            : "this week";
     return `Revenue ${label}: ${fmtMoney(data.totalCents, data.currency)} across ${data.count} payment(s).`;
   } catch (error) {
     console.warn("[chat] revenue_forecast_failed", error);
@@ -2268,12 +2872,17 @@ async function buildActionSuggestions(
   ctx: {
     contactId?: string;
     propertyId?: string;
-    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+    property?: {
+      addressLine1?: string;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+    };
   },
   booking?: BookingPayload | null,
   classification?: IntentClassification | null,
   replyText?: string | null,
-  liveDataResults?: JarvisReadToolResult[] | null
+  liveDataResults?: JarvisReadToolResult[] | null,
 ): Promise<ActionSuggestion[]> {
   const actions: ActionSuggestion[] = [];
   const note = extractActionNote(message) ?? classification?.note ?? null;
@@ -2291,22 +2900,35 @@ async function buildActionSuggestions(
     lower.includes("appointment") ||
     lower.includes("reschedule") ||
     lower.includes("note");
-  const contactQuery = !ctx.contactId && maybeTargetedAction ? extractContactQueryFromMessage(message) : null;
-  const contactResolve = contactQuery ? await resolveContactTarget(message) : { resolved: null, candidates: [] };
+  const contactQuery =
+    !ctx.contactId && maybeTargetedAction
+      ? extractContactQueryFromMessage(message)
+      : null;
+  const contactResolve = contactQuery
+    ? await resolveContactTarget(message)
+    : { resolved: null, candidates: [] };
   const contactTarget = contactResolve.resolved;
-  const baseCtx = contactQuery && !contactTarget ? { ...ctx, contactId: undefined } : ctx;
+  const baseCtx =
+    contactQuery && !contactTarget ? { ...ctx, contactId: undefined } : ctx;
   const contactCandidates = contactTarget ? [] : contactResolve.candidates;
-  const resolvedCtx = contactTarget?.id ? { ...baseCtx, contactId: contactTarget.id } : baseCtx;
+  const resolvedCtx = contactTarget?.id
+    ? { ...baseCtx, contactId: contactTarget.id }
+    : baseCtx;
 
   const contactAction = extractContactSuggestion(message, note, {
     contactName: classification?.contactName,
-    address: classification?.address
+    address: classification?.address,
   });
   if (contactAction) {
     actions.push(contactAction);
   }
 
-  const quoteAction = extractQuoteSuggestion(message, resolvedCtx, note, classification?.services);
+  const quoteAction = extractQuoteSuggestion(
+    message,
+    resolvedCtx,
+    note,
+    classification?.services,
+  );
   if (quoteAction) {
     actions.push(quoteAction);
   }
@@ -2321,7 +2943,11 @@ async function buildActionSuggestions(
     actions.push(reminderAction);
   }
 
-  const contactNoteAction = extractContactNoteSuggestion(message, resolvedCtx, note);
+  const contactNoteAction = extractContactNoteSuggestion(
+    message,
+    resolvedCtx,
+    note,
+  );
   if (contactNoteAction) {
     actions.push(contactNoteAction);
   }
@@ -2331,7 +2957,7 @@ async function buildActionSuggestions(
     resolvedCtx,
     classification,
     quotedTotalCents,
-    contactCandidates
+    contactCandidates,
   );
   if (directBooking) {
     actions.push(directBooking);
@@ -2342,41 +2968,60 @@ async function buildActionSuggestions(
     resolvedCtx,
     replyText ?? null,
     contactTarget,
-    contactCandidates
+    contactCandidates,
   );
   if (sendTextAction) {
     actions.push(sendTextAction);
   }
 
-  const cancelAction = await extractCancelAppointmentSuggestion(message, resolvedCtx, when ?? null);
+  const cancelAction = await extractCancelAppointmentSuggestion(
+    message,
+    resolvedCtx,
+    when ?? null,
+  );
   if (cancelAction) {
     actions.push(cancelAction);
   }
 
-  const rescheduleAction = await extractRescheduleAppointmentSuggestion(message, resolvedCtx, when ?? null);
+  const rescheduleAction = await extractRescheduleAppointmentSuggestion(
+    message,
+    resolvedCtx,
+    when ?? null,
+  );
   if (rescheduleAction) {
     actions.push(rescheduleAction);
   }
 
-  const googleAdsActions = extractGoogleAdsRecommendationActions(message, liveDataResults ?? null);
+  const googleAdsActions = extractGoogleAdsRecommendationActions(
+    message,
+    liveDataResults ?? null,
+  );
   if (googleAdsActions.length) {
     actions.push(...googleAdsActions);
   }
 
   if (booking && !directBooking) {
-    const bookingActions = buildBookingActions(booking, resolvedCtx, when, quotedTotalCents);
+    const bookingActions = buildBookingActions(
+      booking,
+      resolvedCtx,
+      when,
+      quotedTotalCents,
+    );
     actions.push(
       ...bookingActions.map((action) => ({
         ...action,
-        ...(note ? { note } : {})
-      }))
+        ...(note ? { note } : {}),
+      })),
     );
   }
 
   return actions.slice(0, 3);
 }
 
-function extractGoogleAdsRecommendationActions(message: string, liveData: JarvisReadToolResult[] | null): ActionSuggestion[] {
+function extractGoogleAdsRecommendationActions(
+  message: string,
+  liveData: JarvisReadToolResult[] | null,
+): ActionSuggestion[] {
   const lower = message.toLowerCase();
   const mentionsGoogleAds = lower.includes("google") && lower.includes("ads");
   const mentionsRecs =
@@ -2393,18 +3038,39 @@ function extractGoogleAdsRecommendationActions(message: string, liveData: Jarvis
     lower.includes("dont") ||
     lower.includes("no") ||
     lower.includes("not now");
-  const wantsApply = lower.includes("apply") || lower.includes("implement") || lower.includes("push") || lower.includes("run it");
-  const wantsApprove = lower.includes("approve") || lower.includes("accept") || lower.includes("ok") || lower.includes("yes");
+  const wantsApply =
+    lower.includes("apply") ||
+    lower.includes("implement") ||
+    lower.includes("push") ||
+    lower.includes("run it");
+  const wantsApprove =
+    lower.includes("approve") ||
+    lower.includes("accept") ||
+    lower.includes("ok") ||
+    lower.includes("yes");
 
   const uuid = extractUuidFromText(message);
-  const wantsAll = /\b(all|everything|all of them|all of those)\b/i.test(message);
+  const wantsAll = /\b(all|everything|all of them|all of those)\b/i.test(
+    message,
+  );
   const wantsNegativeOnly = lower.includes("negative keyword");
 
-  const items: Array<{ id: string; status?: string | null; kind?: string | null }> = [];
+  const items: Array<{
+    id: string;
+    status?: string | null;
+    kind?: string | null;
+  }> = [];
   if (!uuid && Array.isArray(liveData)) {
-    const recTool = liveData.find((r) => r.tool === "google.ads.analyst.recommendations" && r.status === "ok");
+    const recTool = liveData.find(
+      (r) =>
+        r.tool === "google.ads.analyst.recommendations" && r.status === "ok",
+    );
     const data = recTool?.data;
-    if (data && typeof data === "object" && Array.isArray((data as any).items)) {
+    if (
+      data &&
+      typeof data === "object" &&
+      Array.isArray((data as any).items)
+    ) {
       for (const it of (data as any).items as any[]) {
         if (!it || typeof it !== "object") continue;
         const id = typeof it.id === "string" ? it.id : null;
@@ -2412,15 +3078,21 @@ function extractGoogleAdsRecommendationActions(message: string, liveData: Jarvis
         items.push({
           id,
           status: typeof it.status === "string" ? it.status : null,
-          kind: typeof it.kind === "string" ? it.kind : null
+          kind: typeof it.kind === "string" ? it.kind : null,
         });
       }
     }
   }
 
-  const pickIds = (): Array<{ id: string; status?: string | null; kind?: string | null }> => {
+  const pickIds = (): Array<{
+    id: string;
+    status?: string | null;
+    kind?: string | null;
+  }> => {
     if (uuid) return [{ id: uuid }];
-    const pool = wantsNegativeOnly ? items.filter((i) => i.kind === "negative_keyword") : items;
+    const pool = wantsNegativeOnly
+      ? items.filter((i) => i.kind === "negative_keyword")
+      : items;
     if (!pool.length) return [];
     if (wantsAll) return pool.slice(0, 20);
     return [pool[0]!];
@@ -2430,7 +3102,11 @@ function extractGoogleAdsRecommendationActions(message: string, liveData: Jarvis
   if (!selected.length) return [];
 
   const ids = selected.map((s) => s.id);
-  const needsApprove = selected.filter((s) => (s.status ?? "proposed") !== "approved" && (s.status ?? "proposed") !== "applied");
+  const needsApprove = selected.filter(
+    (s) =>
+      (s.status ?? "proposed") !== "approved" &&
+      (s.status ?? "proposed") !== "applied",
+  );
   const approvedOrWillBe = ids;
 
   const actions: ActionSuggestion[] = [];
@@ -2440,7 +3116,7 @@ function extractGoogleAdsRecommendationActions(message: string, liveData: Jarvis
       id: newActionId(),
       type: "google_ads_recommendations_bulk_update",
       summary: `Ignore Google Ads recommendation${ids.length === 1 ? "" : "s"} (${ids.length})`,
-      payload: { ids, status: "ignored" }
+      payload: { ids, status: "ignored" },
     });
     return actions;
   }
@@ -2451,14 +3127,14 @@ function extractGoogleAdsRecommendationActions(message: string, liveData: Jarvis
         id: newActionId(),
         type: "google_ads_recommendations_bulk_update",
         summary: `Approve Google Ads recommendation${ids.length === 1 ? "" : "s"} (${ids.length})`,
-        payload: { ids: needsApprove.map((s) => s.id), status: "approved" }
+        payload: { ids: needsApprove.map((s) => s.id), status: "approved" },
       });
     }
     actions.push({
       id: newActionId(),
       type: "google_ads_recommendations_bulk_apply",
       summary: `Apply Google Ads recommendation${approvedOrWillBe.length === 1 ? "" : "s"} (${approvedOrWillBe.length})`,
-      payload: { ids: approvedOrWillBe }
+      payload: { ids: approvedOrWillBe },
     });
     return actions;
   }
@@ -2468,7 +3144,7 @@ function extractGoogleAdsRecommendationActions(message: string, liveData: Jarvis
       id: newActionId(),
       type: "google_ads_recommendations_bulk_update",
       summary: `Approve Google Ads recommendation${ids.length === 1 ? "" : "s"} (${ids.length})`,
-      payload: { ids, status: "approved" }
+      payload: { ids, status: "approved" },
     });
     return actions;
   }
@@ -2481,7 +3157,7 @@ function extractDirectBookingSuggestion(
   ctx: { contactId?: string; propertyId?: string },
   classification: IntentClassification | null | undefined,
   quotedTotalCents: number | null,
-  contactCandidates: ContactCandidate[]
+  contactCandidates: ContactCandidate[],
 ): CreateBookingAction | null {
   const lower = message.toLowerCase();
   const hasIntent =
@@ -2492,7 +3168,9 @@ function extractDirectBookingSuggestion(
     lower.includes("appointment");
   if (!hasIntent) return null;
 
-  const whenTextRaw = classification?.when?.trim().length ? (classification!.when as string) : null;
+  const whenTextRaw = classification?.when?.trim().length
+    ? (classification!.when as string)
+    : null;
   const whenText = whenTextRaw ?? (looksLikeTimeHint(message) ? message : null);
   if (!whenText) return null;
 
@@ -2517,16 +3195,23 @@ function extractDirectBookingSuggestion(
       travelBufferMinutes: 30,
       services,
       ...(candidates.length > 0 ? { contactCandidates: candidates } : {}),
-      ...(typeof quotedTotalCents === "number" && Number.isFinite(quotedTotalCents) && quotedTotalCents >= 0
+      ...(typeof quotedTotalCents === "number" &&
+      Number.isFinite(quotedTotalCents) &&
+      quotedTotalCents >= 0
         ? { quotedTotalCents }
-        : {})
-    }
+        : {}),
+    },
   };
 }
 
 function looksLikeTimeHint(text: string): boolean {
   const lower = text.toLowerCase();
-  if (lower.includes("tomorrow") || lower.includes("morning") || lower.includes("afternoon") || lower.includes("evening")) {
+  if (
+    lower.includes("tomorrow") ||
+    lower.includes("morning") ||
+    lower.includes("afternoon") ||
+    lower.includes("evening")
+  ) {
     return true;
   }
   if (/\b(?:mon|tue|wed|thu|fri|sat|sun)\b/i.test(text)) return true;
@@ -2541,18 +3226,27 @@ function extractSendTextSuggestion(
   ctx: { contactId?: string },
   replyText: string | null,
   contactTarget: ContactTarget | null,
-  contactCandidates: ContactCandidate[]
+  contactCandidates: ContactCandidate[],
 ): SendTextAction | null {
   const lower = message.toLowerCase();
   const wantsText =
     (lower.includes("text") || lower.includes("sms")) &&
-    (lower.includes("send") || lower.includes("reply") || lower.includes("message"));
+    (lower.includes("send") ||
+      lower.includes("reply") ||
+      lower.includes("message"));
   if (!wantsText) return null;
 
   const explicit =
     extractQuotedContent(message) ??
-    extractAfterKeyword(message, ["that says", "says", "text:", "sms:", "message:"]);
-  const wantsGenerated = lower.includes("good reply") || lower.includes("good response");
+    extractAfterKeyword(message, [
+      "that says",
+      "says",
+      "text:",
+      "sms:",
+      "message:",
+    ]);
+  const wantsGenerated =
+    lower.includes("good reply") || lower.includes("good response");
   const generated = wantsGenerated ? pickSmsDraft(replyText) : null;
   const body = (explicit ?? generated ?? "").trim();
   if (!body) return null;
@@ -2571,14 +3265,19 @@ function extractSendTextSuggestion(
       channel: "sms",
       ...(contactTarget
         ? {
-            contactLabel: [contactTarget.name, contactTarget.phoneE164 ?? contactTarget.phone]
-              .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
-              .join(" ")
+            contactLabel: [
+              contactTarget.name,
+              contactTarget.phoneE164 ?? contactTarget.phone,
+            ]
+              .filter(
+                (part): part is string =>
+                  typeof part === "string" && part.trim().length > 0,
+              )
+              .join(" "),
           }
-        : {})
-      ,
-      ...(candidates.length > 0 ? { contactCandidates: candidates } : {})
-    }
+        : {}),
+      ...(candidates.length > 0 ? { contactCandidates: candidates } : {}),
+    },
   };
 }
 
@@ -2599,7 +3298,10 @@ function pickSmsDraft(replyText: string | null): string | null {
   const candidate = firstParagraph.length ? firstParagraph : unfenced;
 
   const cleaned = candidate
-    .replace(/^(here(?:'s| is)\s+)?(a\s+)?(text|sms|message)\s*(you\s+can\s+send|to\s+send)\s*[:\-]\s*/i, "")
+    .replace(
+      /^(here(?:'s| is)\s+)?(a\s+)?(text|sms|message)\s*(you\s+can\s+send|to\s+send)\s*[:\-]\s*/i,
+      "",
+    )
     .replace(/^(sure|ok|okay|got it)[\s,:\-]+/i, "")
     .trim();
 
@@ -2610,20 +3312,27 @@ function pickSmsDraft(replyText: string | null): string | null {
 async function extractCancelAppointmentSuggestion(
   message: string,
   ctx: { contactId?: string },
-  whenHint: string | null
+  whenHint: string | null,
 ): Promise<CancelAppointmentAction | null> {
   const lower = message.toLowerCase();
   const hasIntent =
     lower.includes("cancel") &&
-    (lower.includes("appointment") || lower.includes("booking") || lower.includes("schedule"));
+    (lower.includes("appointment") ||
+      lower.includes("booking") ||
+      lower.includes("schedule"));
   if (!hasIntent) return null;
   if (!ctx.contactId) return null;
 
   const appts = await fetchUpcomingAppointmentsForContact(ctx.contactId);
   if (!appts.length) return null;
 
-  const shouldUseWhen = Boolean(whenHint && whenHint.trim().length) || looksLikeTimeHint(message);
-  const parsed = shouldUseWhen ? parseWhen((whenHint && whenHint.trim().length ? whenHint : message).trim()) : null;
+  const shouldUseWhen =
+    Boolean(whenHint && whenHint.trim().length) || looksLikeTimeHint(message);
+  const parsed = shouldUseWhen
+    ? parseWhen(
+        (whenHint && whenHint.trim().length ? whenHint : message).trim(),
+      )
+    : null;
   const targetIso = parsed?.iso ?? null;
 
   const candidates = targetIso
@@ -2640,12 +3349,14 @@ async function extractCancelAppointmentSuggestion(
 
   if (candidates.length === 1) {
     const only = candidates[0]!;
-    const whenLabel = only.startAt ? new Date(only.startAt).toLocaleString() : "the next appointment";
+    const whenLabel = only.startAt
+      ? new Date(only.startAt).toLocaleString()
+      : "the next appointment";
     return {
       id: newActionId(),
       type: "cancel_appointment",
       summary: `Cancel appointment (${whenLabel})`,
-      payload: { appointmentId: only.id }
+      payload: { appointmentId: only.id },
     };
   }
 
@@ -2653,17 +3364,20 @@ async function extractCancelAppointmentSuggestion(
     id: newActionId(),
     type: "cancel_appointment",
     summary: "Cancel appointment (pick one)",
-    payload: { appointmentCandidates: candidates }
+    payload: { appointmentCandidates: candidates },
   };
 }
 
 async function extractRescheduleAppointmentSuggestion(
   message: string,
   ctx: { contactId?: string },
-  whenHint: string | null
+  whenHint: string | null,
 ): Promise<RescheduleAppointmentAction | null> {
   const lower = message.toLowerCase();
-  const hasIntent = lower.includes("reschedule") || lower.includes("move appointment") || lower.includes("change appointment");
+  const hasIntent =
+    lower.includes("reschedule") ||
+    lower.includes("move appointment") ||
+    lower.includes("change appointment");
   if (!hasIntent) return null;
 
   const when = (whenHint && whenHint.trim().length ? whenHint : message).trim();
@@ -2678,8 +3392,8 @@ async function extractRescheduleAppointmentSuggestion(
       summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()}`,
       payload: {
         appointmentId,
-        startAt: parsed.iso
-      }
+        startAt: parsed.iso,
+      },
     };
   }
 
@@ -2695,8 +3409,8 @@ async function extractRescheduleAppointmentSuggestion(
       summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()}`,
       payload: {
         appointmentId: appts[0]!.id,
-        startAt: parsed.iso
-      }
+        startAt: parsed.iso,
+      },
     };
   }
 
@@ -2706,8 +3420,8 @@ async function extractRescheduleAppointmentSuggestion(
     summary: `Reschedule appointment to ${new Date(parsed.iso).toLocaleString()} (pick which appointment)`,
     payload: {
       startAt: parsed.iso,
-      appointmentCandidates: appts
-    }
+      appointmentCandidates: appts,
+    },
   };
 }
 
@@ -2718,7 +3432,10 @@ function extractQuotedContent(message: string): string | null {
   return text.length ? text : null;
 }
 
-function extractAfterKeyword(message: string, keywords: string[]): string | null {
+function extractAfterKeyword(
+  message: string,
+  keywords: string[],
+): string | null {
   const lower = message.toLowerCase();
   for (const keyword of keywords) {
     const idx = lower.indexOf(keyword);
@@ -2730,7 +3447,9 @@ function extractAfterKeyword(message: string, keywords: string[]): string | null
 }
 
 function extractUuidFromText(text: string): string | null {
-  const match = text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+  const match = text.match(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
+  );
   return match ? match[0] : null;
 }
 
@@ -2748,7 +3467,7 @@ function extractUsdToCents(message: string): number | null {
 function extractContactSuggestion(
   message: string,
   note?: string | null,
-  hints?: { contactName?: string | null; address?: string | null }
+  hints?: { contactName?: string | null; address?: string | null },
 ): CreateContactAction | null {
   const lower = message.toLowerCase();
   const intentMatch =
@@ -2758,8 +3477,13 @@ function extractContactSuggestion(
 
   const pattern = /contact\s+(.+?)\s+at\s+(.+)/i;
   const match = message.match(pattern);
-  const contactName = (match?.[1]?.trim() ?? hints?.contactName ?? extractNameFallback(message)).trim();
-  const addressRaw = match?.[2]?.trim() ?? hints?.address ?? extractAddressFromMessage(message);
+  const contactName = (
+    match?.[1]?.trim() ??
+    hints?.contactName ??
+    extractNameFallback(message)
+  ).trim();
+  const addressRaw =
+    match?.[2]?.trim() ?? hints?.address ?? extractAddressFromMessage(message);
   const address = addressRaw ? parseAddress(addressRaw) : null;
 
   if (!contactName.length || !address) {
@@ -2781,23 +3505,34 @@ function extractContactSuggestion(
       state: address.state,
       postalCode: address.postalCode,
       ...(phone ? { phone } : {}),
-      ...(email ? { email } : {})
+      ...(email ? { email } : {}),
     },
-    ...(note ? { note } : {})
+    ...(note ? { note } : {}),
   };
 }
 
 function parseAddress(
-  raw: string
-): { addressLine1: string; addressLine2?: string | null; city: string; state: string; postalCode: string } | null {
-  const parts = raw.split(",").map((p) => p.trim()).filter(Boolean);
+  raw: string,
+): {
+  addressLine1: string;
+  addressLine2?: string | null;
+  city: string;
+  state: string;
+  postalCode: string;
+} | null {
+  const parts = raw
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
   if (parts.length < 3) return null;
 
   const hasLine2 = parts.length >= 4;
   const addressLine1 = parts[0];
   const addressLine2 = hasLine2 ? parts[1] : null;
   const city = hasLine2 ? parts[2] : parts[1];
-  const stateZip = hasLine2 ? parts.slice(3).join(" ") : parts.slice(2).join(" ");
+  const stateZip = hasLine2
+    ? parts.slice(3).join(" ")
+    : parts.slice(2).join(" ");
   const stateZipParts = stateZip.split(/\s+/).filter(Boolean);
   const state = stateZipParts[0] ?? "";
   const postalCode = stateZipParts.slice(1).join("") || stateZipParts[1] || "";
@@ -2809,7 +3544,7 @@ function parseAddress(
     addressLine2,
     city,
     state: state.slice(0, 2).toUpperCase(),
-    postalCode
+    postalCode,
   };
 }
 
@@ -2846,10 +3581,15 @@ function extractQuoteSuggestion(
   ctx: {
     contactId?: string;
     propertyId?: string;
-    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+    property?: {
+      addressLine1?: string;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+    };
   },
   note?: string | null,
-  servicesHint?: string[] | null
+  servicesHint?: string[] | null,
 ): CreateQuoteAction | null {
   const lower = message.toLowerCase();
   if (
@@ -2865,7 +3605,9 @@ function extractQuoteSuggestion(
 
   const services = deriveServicesFromMessage(message, servicesHint);
   const propertyLabel = ctx.property
-    ? [ctx.property.addressLine1, ctx.property.city].filter((part) => part && part.length).join(", ")
+    ? [ctx.property.addressLine1, ctx.property.city]
+        .filter((part) => part && part.length)
+        .join(", ")
     : null;
 
   return {
@@ -2878,32 +3620,67 @@ function extractQuoteSuggestion(
       services,
       appointmentId: null,
       notes: note ?? null,
-      zoneId: null
+      zoneId: null,
     },
-    ...(note ? { note } : {})
+    ...(note ? { note } : {}),
   };
 }
 
 const SERVICE_KEYWORDS: Array<{ id: string; patterns: RegExp[] }> = [
-  { id: "single-item", patterns: [/rubbish/i, /trash/i, /garbage/i, /household/i, /single/i, /item/i, /tv/i, /mattress/i] },
-  { id: "furniture", patterns: [/furniture/i, /sofa/i, /couch/i, /dresser/i, /bed/i] },
-  { id: "appliances", patterns: [/appliance/i, /fridge/i, /washer/i, /dryer/i, /stove/i, /oven/i] },
+  {
+    id: "single-item",
+    patterns: [
+      /rubbish/i,
+      /trash/i,
+      /garbage/i,
+      /household/i,
+      /single/i,
+      /item/i,
+      /tv/i,
+      /mattress/i,
+    ],
+  },
+  {
+    id: "furniture",
+    patterns: [/furniture/i, /sofa/i, /couch/i, /dresser/i, /bed/i],
+  },
+  {
+    id: "appliances",
+    patterns: [/appliance/i, /fridge/i, /washer/i, /dryer/i, /stove/i, /oven/i],
+  },
   { id: "yard-waste", patterns: [/yard/i, /brush/i, /leaves/i, /branches/i] },
-  { id: "construction-debris", patterns: [/construction/i, /debris/i, /demo/i, /renovation/i, /junk/i, /load/i] },
+  {
+    id: "construction-debris",
+    patterns: [
+      /construction/i,
+      /debris/i,
+      /demo/i,
+      /renovation/i,
+      /junk/i,
+      /load/i,
+    ],
+  },
   { id: "hot-tub", patterns: [/hot[ -]?tub/i, /spa/i, /jacuzzi/i] },
   { id: "driveway", patterns: [/driveway/i, /concrete/i] },
   { id: "roof", patterns: [/roof/i] },
   { id: "deck", patterns: [/deck/i, /patio/i, /porch/i] },
   { id: "gutter", patterns: [/gutter/i] },
   { id: "commercial", patterns: [/commercial/i, /store/i, /office/i] },
-  { id: "other", patterns: [/quote/i, /estimate/i] }
+  { id: "other", patterns: [/quote/i, /estimate/i] },
 ];
 
-function deriveServicesFromMessage(message: string, hints?: string[] | null): string[] {
+function deriveServicesFromMessage(
+  message: string,
+  hints?: string[] | null,
+): string[] {
   const services: string[] = [];
   if (Array.isArray(hints)) {
     for (const hint of hints) {
-      if (typeof hint === "string" && hint.trim().length && !services.includes(hint.trim())) {
+      if (
+        typeof hint === "string" &&
+        hint.trim().length &&
+        !services.includes(hint.trim())
+      ) {
         services.push(hint.trim());
       }
     }
@@ -2926,18 +3703,33 @@ function buildBookingActions(
   ctx: {
     contactId?: string;
     propertyId?: string;
-    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+    property?: {
+      addressLine1?: string;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+    };
   },
   whenHint?: string | null,
-  quotedTotalCents?: number | null
+  quotedTotalCents?: number | null,
 ): ActionSuggestion[] {
-  if (!booking?.suggestions?.length || !booking.contactId || !booking.propertyId) return [];
+  if (
+    !booking?.suggestions?.length ||
+    !booking.contactId ||
+    !booking.propertyId
+  )
+    return [];
 
   const parsed = whenHint ? parseWhen(whenHint) : null;
   const propertyLabel =
     booking.propertyLabel ??
     (ctx.property
-      ? [ctx.property.addressLine1, ctx.property.city, ctx.property.state, ctx.property.postalCode]
+      ? [
+          ctx.property.addressLine1,
+          ctx.property.city,
+          ctx.property.state,
+          ctx.property.postalCode,
+        ]
           .filter((part) => part && part.length)
           .join(", ")
       : null);
@@ -2953,20 +3745,30 @@ function buildBookingActions(
       durationMinutes: 60,
       travelBufferMinutes: 30,
       services: normalizeServiceArray(suggestion.services),
-      ...(typeof quotedTotalCents === "number" && Number.isFinite(quotedTotalCents) && quotedTotalCents >= 0
+      ...(typeof quotedTotalCents === "number" &&
+      Number.isFinite(quotedTotalCents) &&
+      quotedTotalCents >= 0
         ? { quotedTotalCents }
-        : {})
+        : {}),
     },
-    context: propertyLabel ? { propertyLabel } : undefined
+    context: propertyLabel ? { propertyLabel } : undefined,
   }));
 }
 
 function formatSlotSummary(startIso: string, endIso: string): string {
   const start = new Date(startIso);
   const end = new Date(endIso);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "slot";
-  const startLabel = start.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
-  const endLabel = end.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()))
+    return "slot";
+  const startLabel = start.toLocaleString(undefined, {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const endLabel = end.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
   return `${startLabel} - ${endLabel}`;
 }
 
@@ -3031,9 +3833,14 @@ async function extractTaskSuggestion(
   ctx: {
     contactId?: string;
     propertyId?: string;
-    property?: { addressLine1?: string; city?: string; state?: string; postalCode?: string };
+    property?: {
+      addressLine1?: string;
+      city?: string;
+      state?: string;
+      postalCode?: string;
+    };
   },
-  note?: string | null
+  note?: string | null,
 ): Promise<CreateTaskAction | null> {
   const lower = message.toLowerCase();
   const hasIntent =
@@ -3057,17 +3864,17 @@ async function extractTaskSuggestion(
     payload: {
       appointmentId: appt.id,
       title,
-      ...(note ? { note } : {})
+      ...(note ? { note } : {}),
     },
     context: {
-      appointmentStartAt: appt.startAt ?? null
-    }
+      appointmentStartAt: appt.startAt ?? null,
+    },
   };
 }
 
 async function findAppointmentForContext(
   contactId?: string,
-  propertyId?: string
+  propertyId?: string,
 ): Promise<{ id: string; startAt: string | null } | null> {
   const { apiBase, adminKey } = getAdminContext();
   const hdrs = await headers();
@@ -3079,22 +3886,37 @@ async function findAppointmentForContext(
       status: "confirmed",
       contactId,
       propertyId,
-      limit: "25"
+      limit: "25",
     });
-    const res = await fetch(`${apiBase}/api/appointments?${search.toString()}`, {
-      headers: { "x-api-key": apiKey }
-    });
+    const res = await fetch(
+      `${apiBase}/api/appointments?${search.toString()}`,
+      {
+        headers: { "x-api-key": apiKey },
+      },
+    );
     if (!res.ok) return null;
     const data = (await res.json()) as {
-      data?: Array<{ id: string; startAt: string | null; contact?: { id: string }; property?: { id: string } }>;
+      data?: Array<{
+        id: string;
+        startAt: string | null;
+        contact?: { id: string };
+        property?: { id: string };
+      }>;
     };
     const matches = data.data ?? [];
     if (!matches.length) return null;
 
     const now = Date.now();
     const upcoming = matches
-      .filter((appt) => appt.startAt && !Number.isNaN(Date.parse(appt.startAt)) && Date.parse(appt.startAt) >= now)
-      .sort((a, b) => Date.parse(a.startAt ?? "") - Date.parse(b.startAt ?? ""));
+      .filter(
+        (appt) =>
+          appt.startAt &&
+          !Number.isNaN(Date.parse(appt.startAt)) &&
+          Date.parse(appt.startAt) >= now,
+      )
+      .sort(
+        (a, b) => Date.parse(a.startAt ?? "") - Date.parse(b.startAt ?? ""),
+      );
 
     const candidate = upcoming[0] ?? matches[0];
     return candidate ?? null;
@@ -3105,7 +3927,7 @@ async function findAppointmentForContext(
 }
 
 async function fetchUpcomingAppointmentsForContact(
-  contactId: string
+  contactId: string,
 ): Promise<AppointmentCandidate[]> {
   const { apiBase, adminKey } = getAdminContext();
   const hdrs = await headers();
@@ -3116,15 +3938,22 @@ async function fetchUpcomingAppointmentsForContact(
     const search = new URLSearchParams({
       status: "confirmed,requested",
       contactId,
-      limit: "25"
+      limit: "25",
     });
-    const res = await fetch(`${apiBase}/api/appointments?${search.toString()}`, {
-      headers: { "x-api-key": apiKey },
-      cache: "no-store"
-    });
+    const res = await fetch(
+      `${apiBase}/api/appointments?${search.toString()}`,
+      {
+        headers: { "x-api-key": apiKey },
+        cache: "no-store",
+      },
+    );
     if (!res.ok) return [];
     const data = (await res.json().catch(() => null)) as any;
-    const items: any[] = Array.isArray(data?.data) ? data.data : Array.isArray(data?.appointments) ? data.appointments : [];
+    const items: any[] = Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data?.appointments)
+        ? data.appointments
+        : [];
 
     const mapped = items
       .map((appt) => {
@@ -3132,19 +3961,39 @@ async function fetchUpcomingAppointmentsForContact(
         if (!id) return null;
         const status = typeof appt?.status === "string" ? appt.status : null;
         const startAt = typeof appt?.startAt === "string" ? appt.startAt : null;
-        const prop = appt?.property && typeof appt.property === "object" ? appt.property : null;
-        const addressLine1 = typeof prop?.addressLine1 === "string" ? prop.addressLine1 : null;
+        const prop =
+          appt?.property && typeof appt.property === "object"
+            ? appt.property
+            : null;
+        const addressLine1 =
+          typeof prop?.addressLine1 === "string" ? prop.addressLine1 : null;
         const city = typeof prop?.city === "string" ? prop.city : null;
         const state = typeof prop?.state === "string" ? prop.state : null;
-        const postalCode = typeof prop?.postalCode === "string" ? prop.postalCode : null;
-        return { id, status, startAt, addressLine1, city, state, postalCode } satisfies AppointmentCandidate;
+        const postalCode =
+          typeof prop?.postalCode === "string" ? prop.postalCode : null;
+        return {
+          id,
+          status,
+          startAt,
+          addressLine1,
+          city,
+          state,
+          postalCode,
+        } satisfies AppointmentCandidate;
       })
       .filter((v): v is AppointmentCandidate => Boolean(v));
 
     const now = Date.now();
     const upcoming = mapped
-      .filter((a) => a.startAt && !Number.isNaN(Date.parse(a.startAt)) && Date.parse(a.startAt) >= now)
-      .sort((a, b) => Date.parse(a.startAt ?? "") - Date.parse(b.startAt ?? ""));
+      .filter(
+        (a) =>
+          a.startAt &&
+          !Number.isNaN(Date.parse(a.startAt)) &&
+          Date.parse(a.startAt) >= now,
+      )
+      .sort(
+        (a, b) => Date.parse(a.startAt ?? "") - Date.parse(b.startAt ?? ""),
+      );
 
     return upcoming.slice(0, 8);
   } catch (error) {
@@ -3156,9 +4005,15 @@ async function fetchUpcomingAppointmentsForContact(
 function buildTaskTitle(message: string, note?: string | null): string {
   const cleaned = message
     .replace(/\b(add|create|new|make)\b/gi, "")
-    .replace(/\b(task|todo|reminder|remind|follow\s*up|follow-up|call\s*back|callback)\b/gi, "")
+    .replace(
+      /\b(task|todo|reminder|remind|follow\s*up|follow-up|call\s*back|callback)\b/gi,
+      "",
+    )
     .trim();
-  const base = cleaned.length >= 4 ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1) : "Follow up on this job";
+  const base =
+    cleaned.length >= 4
+      ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
+      : "Follow up on this job";
   if (note && note.trim().length > 0) {
     return `${base} - ${note.trim()}`;
   }
@@ -3167,7 +4022,13 @@ function buildTaskTitle(message: string, note?: string | null): string {
 
 function looksLikeExplicitReminderTime(message: string): boolean {
   const lower = message.toLowerCase();
-  if (lower.includes("tomorrow") || lower.includes("today") || lower.includes("morning") || lower.includes("afternoon") || lower.includes("evening")) {
+  if (
+    lower.includes("tomorrow") ||
+    lower.includes("today") ||
+    lower.includes("morning") ||
+    lower.includes("afternoon") ||
+    lower.includes("evening")
+  ) {
     return true;
   }
   if (/\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(message)) return true;
@@ -3177,7 +4038,7 @@ function looksLikeExplicitReminderTime(message: string): boolean {
 function extractReminderSuggestion(
   message: string,
   ctx: { contactId?: string },
-  note?: string | null
+  note?: string | null,
 ): CreateReminderAction | null {
   if (!ctx.contactId) return null;
   const lower = message.toLowerCase();
@@ -3195,8 +4056,11 @@ function extractReminderSuggestion(
   const when = parseWhen(message);
   if (!when) return null;
 
-  const title =
-    lower.includes("call") ? "Call back" : lower.includes("text") || lower.includes("sms") ? "Text follow-up" : "Follow up";
+  const title = lower.includes("call")
+    ? "Call back"
+    : lower.includes("text") || lower.includes("sms")
+      ? "Text follow-up"
+      : "Follow up";
 
   return {
     id: newActionId(),
@@ -3206,15 +4070,15 @@ function extractReminderSuggestion(
       contactId: ctx.contactId,
       title,
       dueAt: when.iso,
-      ...(note && note.trim().length ? { notes: note.trim() } : {})
-    }
+      ...(note && note.trim().length ? { notes: note.trim() } : {}),
+    },
   };
 }
 
 function extractContactNoteSuggestion(
   message: string,
   ctx: { contactId?: string },
-  note?: string | null
+  note?: string | null,
 ): AddContactNoteAction | null {
   if (!ctx.contactId) return null;
   const lower = message.toLowerCase();
@@ -3236,14 +4100,18 @@ function extractContactNoteSuggestion(
     summary: "Add note to contact",
     payload: {
       contactId: ctx.contactId,
-      body
-    }
+      body,
+    },
   };
 }
 
-async function classifyIntent(message: string): Promise<IntentClassification | null> {
+async function classifyIntent(
+  message: string,
+): Promise<IntentClassification | null> {
   const apiKey = process.env["OPENAI_API_KEY"];
-  const model = (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() || DEFAULT_BRAIN_MODEL;
+  const model =
+    (process.env["OPENAI_MODEL"] ?? DEFAULT_BRAIN_MODEL).trim() ||
+    DEFAULT_BRAIN_MODEL;
   if (!apiKey) return null;
 
   const systemPrompt = `
@@ -3256,7 +4124,7 @@ Keep note short (<120 chars). If unsure, use intent "none".
     model,
     input: [
       { role: "system" as const, content: systemPrompt },
-      { role: "user" as const, content: message }
+      { role: "user" as const, content: message },
     ],
     reasoning: { effort: "low" as const },
     text: {
@@ -3271,17 +4139,17 @@ Keep note short (<120 chars). If unsure, use intent "none".
           properties: {
             intent: {
               type: "string",
-              enum: ["booking", "contact", "quote", "task", "none"]
+              enum: ["booking", "contact", "quote", "task", "none"],
             },
             contactName: { type: "string" },
             address: { type: "string" },
             services: { type: "array", items: { type: "string" } },
             note: { type: "string" },
-            when: { type: "string" }
+            when: { type: "string" },
           },
-          required: ["intent"]
-        }
-      }
+          required: ["intent"],
+        },
+      },
     },
     max_output_tokens: 180,
   };
@@ -3289,23 +4157,35 @@ Keep note short (<120 chars). If unsure, use intent "none".
   try {
     const res = await fetchOpenAIText(apiKey, payload, model);
     if (!res.ok) {
-      console.warn("[chat] intent classify failed", res.status, res.error.slice(0, 120));
+      console.warn(
+        "[chat] intent classify failed",
+        res.status,
+        res.error.slice(0, 120),
+      );
       return null;
     }
     const parsed = safeJsonParse(res.text);
     if (parsed && typeof parsed["intent"] === "string") {
-      const intent = ["booking", "contact", "quote", "task"].includes(parsed["intent"])
+      const intent = ["booking", "contact", "quote", "task"].includes(
+        parsed["intent"],
+      )
         ? (parsed["intent"] as IntentClassification["intent"])
         : "none";
       return {
         intent,
-        contactName: typeof parsed["contactName"] === "string" ? parsed["contactName"] : undefined,
-        address: typeof parsed["address"] === "string" ? parsed["address"] : undefined,
+        contactName:
+          typeof parsed["contactName"] === "string"
+            ? parsed["contactName"]
+            : undefined,
+        address:
+          typeof parsed["address"] === "string" ? parsed["address"] : undefined,
         services: Array.isArray(parsed["services"])
-          ? parsed["services"].filter((s: unknown) => typeof s === "string" && s.trim().length)
+          ? parsed["services"].filter(
+              (s: unknown) => typeof s === "string" && s.trim().length,
+            )
           : undefined,
         note: typeof parsed["note"] === "string" ? parsed["note"] : undefined,
-        when: typeof parsed["when"] === "string" ? parsed["when"] : undefined
+        when: typeof parsed["when"] === "string" ? parsed["when"] : undefined,
       };
     }
   } catch (error) {
@@ -3324,7 +4204,8 @@ function safeJsonParse(text: string): Record<string, any> | null {
 
 function newActionId(): string {
   // Guard against environments without crypto.randomUUID (mainly for tests)
-  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+  return typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 }
