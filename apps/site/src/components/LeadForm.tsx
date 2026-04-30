@@ -500,6 +500,25 @@ const GOOGLE_REVIEW_RATING =
 const GOOGLE_REVIEW_COUNT =
   process.env["NEXT_PUBLIC_GOOGLE_REVIEW_COUNT"] ?? "15";
 
+const JUNK_DISPLAY_DISCOUNT_PERCENT = 0.25;
+
+function roundUpToNearest(value: number, increment: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (!Number.isFinite(increment) || increment <= 0) return Math.ceil(value);
+  return Math.ceil(value / increment) * increment;
+}
+
+function getPreDiscountDisplayPrice(
+  discountedPrice: number,
+  discountPercent: number,
+): number {
+  if (!Number.isFinite(discountedPrice)) return 0;
+  if (discountPercent <= 0 || discountPercent >= 1) {
+    return Math.round(discountedPrice);
+  }
+  return roundUpToNearest(discountedPrice / (1 - discountPercent), 25);
+}
+
 export function LeadForm({
   variant = "junk",
   contactFirst = false,
@@ -1143,15 +1162,37 @@ export function LeadForm({
         typeof data.quoteId === "string" && data.quoteId.length
           ? data.quoteId
           : null;
+      const apiDiscountPercent = data.quote.discountPercent ?? 0;
+      const apiDiscountAmount = data.quote.discountAmount ?? 0;
+      const isLegacyFixedJunkDiscount =
+        !isBrush && !isDemo && apiDiscountPercent <= 0 && apiDiscountAmount > 0;
+      const displayDiscountPercent = isLegacyFixedJunkDiscount
+        ? JUNK_DISPLAY_DISCOUNT_PERCENT
+        : apiDiscountPercent;
+      const displayLow = isLegacyFixedJunkDiscount
+        ? data.quote.priceLow
+        : (data.quote.priceLowDiscounted ?? data.quote.priceLow);
+      const displayHigh = isLegacyFixedJunkDiscount
+        ? data.quote.priceHigh
+        : (data.quote.priceHighDiscounted ?? data.quote.priceHigh);
+      const baseLow = isLegacyFixedJunkDiscount
+        ? getPreDiscountDisplayPrice(displayLow, displayDiscountPercent)
+        : data.quote.priceLow;
+      const baseHigh = isLegacyFixedJunkDiscount
+        ? Math.max(
+            baseLow,
+            getPreDiscountDisplayPrice(displayHigh, displayDiscountPercent),
+          )
+        : data.quote.priceHigh;
       setQuoteState({
         status: "ready",
         quoteId: nextQuoteId,
-        baseLow: data.quote.priceLow,
-        baseHigh: data.quote.priceHigh,
-        low: data.quote.priceLowDiscounted ?? data.quote.priceLow,
-        high: data.quote.priceHighDiscounted ?? data.quote.priceHigh,
-        discountPercent: data.quote.discountPercent ?? 0,
-        discountAmount: data.quote.discountAmount ?? 0,
+        baseLow,
+        baseHigh,
+        low: displayLow,
+        high: displayHigh,
+        discountPercent: displayDiscountPercent,
+        discountAmount: isLegacyFixedJunkDiscount ? 0 : apiDiscountAmount,
         tier: data.quote.displayTierLabel,
         reason: data.quote.reasonSummary,
         needsInPersonEstimate: Boolean(data.quote.needsInPersonEstimate),

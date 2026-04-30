@@ -1473,9 +1473,7 @@ function hashSha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-async function buildLeadAlertMessage(
-  leadId: string,
-): Promise<{
+async function buildLeadAlertMessage(leadId: string): Promise<{
   text: string;
   phone: string | null;
   mediaUrls: string[] | null;
@@ -1572,10 +1570,10 @@ async function buildLeadAlertMessage(
     ) {
       const normalizedDiscountedHigh = Math.max(discountedLow, discountedHigh);
       const discountLabel =
-        discountAmount > 0
-          ? `${formatCurrency(discountAmount)} off`
-          : discountPercent > 0 && discountPercent < 1
-            ? `${Math.round(discountPercent * 100)}% off`
+        discountPercent > 0 && discountPercent < 1
+          ? `${Math.round(discountPercent * 100)}% off`
+          : discountAmount > 0
+            ? `${formatCurrency(discountAmount)} off`
             : "discount applied";
       const baseLabel = formatRange(low, high);
       const discountedLabel = formatRange(
