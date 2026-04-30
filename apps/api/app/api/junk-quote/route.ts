@@ -200,7 +200,7 @@ const QuoteResultSchema = z
   });
 
 const UNIT_PRICE = JUNK_VOLUME_UNIT_PRICE;
-const PUBLIC_MATTRESS_FEE = 35;
+const PUBLIC_MATTRESS_FEE = 40;
 const PUBLIC_PAINT_CAN_FEE = 10;
 type JobInput = z.infer<typeof RequestSchema>["job"];
 type QuoteResult = z.infer<typeof QuoteResultSchema>;

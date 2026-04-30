@@ -3337,7 +3337,7 @@ export function LeadForm({
                 ) : !isBrush ? (
                   <div className="rounded-md bg-neutral-50 px-3 py-2 text-xs leading-relaxed text-neutral-600">
                     Disposal add-ons apply only when needed, such as mattresses
-                    at +$35 each and paint cans at +$10 each.
+                    at +$40 each and paint cans at +$10 each.
                   </div>
                 ) : null}
                 <div className="text-sm font-medium text-neutral-700">
@@ -3945,7 +3945,7 @@ function QuoteResult({
         </div>
       ) : !isBrush ? (
         <div className="rounded-md bg-neutral-50 px-3 py-2 text-xs leading-relaxed text-neutral-600">
-          Disposal add-ons apply only when needed, such as mattresses at +$35
+          Disposal add-ons apply only when needed, such as mattresses at +$40
           each and paint cans at +$10 each.
         </div>
       ) : null}
