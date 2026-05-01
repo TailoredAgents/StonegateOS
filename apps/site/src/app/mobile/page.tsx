@@ -1516,6 +1516,13 @@ export default async function MobileHomePage({
             </div>
           ) : activeScreen === "myday" ? (
             <div className="space-y-4">
+              <MobileWeekStrip
+                activeDay={calendarDay}
+                days={calendarWeekDays}
+                events={calendarWeekEvents}
+                screen="myday"
+              />
+
               <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">My Day</p>
                 <h2 className="mt-1 text-lg font-semibold">{formatDateLabel(calendarDay)}</h2>
@@ -1542,13 +1549,6 @@ export default async function MobileHomePage({
                   </Link>
                 </div>
               </div>
-
-              <MobileWeekStrip
-                activeDay={calendarDay}
-                days={calendarWeekDays}
-                events={calendarWeekEvents}
-                screen="myday"
-              />
 
               <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
                 <div className="flex items-center justify-between gap-3">
