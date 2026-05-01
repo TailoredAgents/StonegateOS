@@ -6,7 +6,6 @@ import { resolveMobileSessionFromCookies } from "./lib/session";
 import { callAdminApi } from "../team/lib/api";
 import {
   addMobileContactNoteAction,
-  addMobileAppointmentAttachmentAction,
   addMobileAppointmentNoteAction,
   bookMobileAppointmentAction,
   createMobileTeamMemberAction,
@@ -335,6 +334,31 @@ function addDaysToKey(dayKey: string, days: number): string {
   return formatDayKey(date);
 }
 
+function startOfWeekKey(dayKey: string): string {
+  const date = parseDayKey(dayKey);
+  date.setUTCDate(date.getUTCDate() - date.getUTCDay());
+  return formatDayKey(date);
+}
+
+function weekDayKeys(dayKey: string): string[] {
+  const start = startOfWeekKey(dayKey);
+  return Array.from({ length: 7 }, (_, index) => addDaysToKey(start, index));
+}
+
+function dayShortLabel(dayKey: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
+    weekday: "short"
+  }).format(parseDayKey(dayKey));
+}
+
+function dayNumberLabel(dayKey: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: TEAM_TIME_ZONE,
+    day: "numeric"
+  }).format(parseDayKey(dayKey));
+}
+
 function getProjectedEventCents(event: CalendarEvent): number {
   if (event.source !== "db") return 0;
   const status = (event.status ?? "").trim().toLowerCase();
@@ -347,6 +371,78 @@ function getProjectedEventCents(event: CalendarEvent): number {
 function normalizeCents(value: number | null | undefined): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
   return value;
+}
+
+function formatCompactUsdCents(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "$0";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    maximumFractionDigits: 1
+  }).format(value / 100);
+}
+
+function isCanceledEvent(event: CalendarEvent): boolean {
+  const status = (event.status ?? "").trim().toLowerCase();
+  return status === "canceled" || status === "cancelled";
+}
+
+function eventDayKey(event: CalendarEvent): string {
+  return formatDayKey(new Date(event.start));
+}
+
+function eventsForDay(events: CalendarEvent[], dayKey: string): CalendarEvent[] {
+  return events.filter((event) => eventDayKey(event) === dayKey);
+}
+
+function projectedCentsForEvents(events: CalendarEvent[]): number {
+  return events.reduce((sum, event) => sum + getProjectedEventCents(event), 0);
+}
+
+function eventTone(event: CalendarEvent): {
+  card: string;
+  badge: string;
+  time: string;
+  amount: string;
+} {
+  if (isCanceledEvent(event)) {
+    return {
+      card: "border-rose-300/30 bg-rose-300/10",
+      badge: "bg-rose-300/15 text-rose-100 ring-1 ring-rose-300/30",
+      time: "text-rose-100",
+      amount: "text-rose-100"
+    };
+  }
+  if (isQuoteOnlyAppointmentType(event.appointmentType)) {
+    return {
+      card: "border-sky-300/30 bg-sky-300/10",
+      badge: "bg-sky-300/15 text-sky-100 ring-1 ring-sky-300/30",
+      time: "text-sky-100",
+      amount: "text-sky-100"
+    };
+  }
+  if (event.source !== "db") {
+    return {
+      card: "border-white/10 bg-white/[0.08]",
+      badge: "bg-slate-800 text-slate-300 ring-1 ring-white/10",
+      time: "text-cyan-200",
+      amount: "text-cyan-200"
+    };
+  }
+  return {
+    card: "border-emerald-300/30 bg-emerald-300/10",
+    badge: "bg-emerald-300/15 text-emerald-100 ring-1 ring-emerald-300/30",
+    time: "text-emerald-100",
+    amount: "text-emerald-100"
+  };
+}
+
+function eventKindLabel(event: CalendarEvent): string {
+  if (isCanceledEvent(event)) return "Canceled";
+  if (isQuoteOnlyAppointmentType(event.appointmentType)) return "In-person quote";
+  if (event.source !== "db") return "Calendar event";
+  return event.status ? formatStage(event.status) : "Confirmed";
 }
 
 function formatStage(value: string | null | undefined): string {
@@ -512,6 +608,65 @@ function MobileCompleteAppointmentForm({
   );
 }
 
+function MobileWeekStrip({
+  activeDay,
+  days,
+  events,
+  screen
+}: {
+  activeDay: string;
+  days: string[];
+  events: CalendarEvent[];
+  screen: "myday" | "calendar";
+}) {
+  const weekProjectedCents = projectedCentsForEvents(events);
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Week</p>
+          <h2 className="mt-1 text-lg font-semibold">{formatDateLabel(days[0] ?? activeDay)} - {formatDateLabel(days[6] ?? activeDay)}</h2>
+        </div>
+        <div className="text-right">
+          <p className="text-xs text-slate-400">Week projected</p>
+          <p className="text-xl font-semibold text-cyan-200">{formatUsdCents(weekProjectedCents)}</p>
+        </div>
+      </div>
+      <div className="mt-4 grid grid-cols-7 gap-1.5">
+        {days.map((dayKey) => {
+          const dayEvents = eventsForDay(events, dayKey);
+          const dayProjectedCents = projectedCentsForEvents(dayEvents);
+          const active = dayKey === activeDay;
+          const canceledCount = dayEvents.filter(isCanceledEvent).length;
+          return (
+            <Link
+              key={dayKey}
+              href={`/mobile?screen=${screen}&date=${encodeURIComponent(dayKey)}` as Route}
+              className={[
+                "min-w-0 rounded-md border px-1.5 py-2 text-center",
+                active
+                  ? "border-cyan-300 bg-cyan-300 text-slate-950"
+                  : "border-white/10 bg-slate-900 text-slate-200"
+              ].join(" ")}
+            >
+              <span className={active ? "block text-[10px] font-semibold uppercase text-slate-800" : "block text-[10px] font-semibold uppercase text-slate-400"}>
+                {dayShortLabel(dayKey)}
+              </span>
+              <span className="mt-1 block text-base font-semibold leading-none">{dayNumberLabel(dayKey)}</span>
+              <span className={active ? "mt-1 block truncate text-[10px] font-semibold text-slate-800" : "mt-1 block truncate text-[10px] font-semibold text-cyan-200"}>
+                {formatCompactUsdCents(dayProjectedCents)}
+              </span>
+              <span className={active ? "mt-0.5 block text-[10px] text-slate-800" : "mt-0.5 block text-[10px] text-slate-500"}>
+                {dayEvents.length}{canceledCount ? `/${canceledCount}x` : ""}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 async function loadMobileThreads(input: { status: string; q: string }): Promise<ThreadSummary[]> {
   const params = new URLSearchParams();
   params.set("limit", "25");
@@ -551,11 +706,11 @@ async function loadMobileContacts(input: { q: string }): Promise<ContactSummary[
   return Array.isArray(payload?.contacts) ? payload.contacts : [];
 }
 
-async function loadMobileCalendar(dayKey: string): Promise<CalendarEvent[]> {
-  const start = parseDayKey(dayKey);
+async function loadMobileCalendarRange(startDayKey: string, days: number): Promise<CalendarEvent[]> {
+  const start = parseDayKey(startDayKey);
   start.setUTCHours(0, 0, 0, 0);
   const end = new Date(start.getTime());
-  end.setUTCDate(end.getUTCDate() + 2);
+  end.setUTCDate(end.getUTCDate() + Math.max(1, days));
 
   const response = await callAdminApi(
     `/api/admin/calendar/feed?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`,
@@ -564,9 +719,7 @@ async function loadMobileCalendar(dayKey: string): Promise<CalendarEvent[]> {
   if (!response.ok) return [];
   const payload = (await response.json().catch(() => null)) as CalendarFeedResponse | null;
   const events = [...(payload?.appointments ?? []), ...(payload?.externalEvents ?? [])];
-  return events
-    .filter((event) => formatDayKey(new Date(event.start)) === dayKey)
-    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  return events.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
 }
 
 async function loadMobileQuotes(status: string): Promise<QuoteSummary[]> {
@@ -684,13 +837,21 @@ export default async function MobileHomePage({
   const threads = activeScreen === "inbox" ? await loadMobileThreads({ status: inboxStatus, q: inboxQuery }) : [];
   const contacts = activeScreen === "contacts" ? await loadMobileContacts({ q: inboxQuery }) : [];
   const contactDetail = activeScreen === "contacts" && contactId ? await loadMobileContact(contactId) : null;
-  const calendarEvents = activeScreen === "calendar" || activeScreen === "myday" ? await loadMobileCalendar(calendarDay) : [];
-  const teamMembers = activeScreen === "calendar" || activeScreen === "myday" ? await loadMobileTeamMembers() : [];
+  const calendarWeekDays = weekDayKeys(calendarDay);
+  const calendarWeekEvents =
+    activeScreen === "calendar" || activeScreen === "myday"
+      ? (await loadMobileCalendarRange(calendarWeekDays[0] ?? calendarDay, 8)).filter((event) =>
+          calendarWeekDays.includes(eventDayKey(event))
+        )
+      : [];
+  const calendarEvents = eventsForDay(calendarWeekEvents, calendarDay);
+  const visibleTodayEvents = activeScreen === "myday" ? calendarEvents.filter((event) => !isCanceledEvent(event)) : calendarEvents;
+  const teamMembers = activeScreen === "myday" ? await loadMobileTeamMembers() : [];
   const allQuotes = activeScreen === "quotes" ? await loadMobileQuotes("all") : [];
   const quotes = quoteStatus === "all" ? allQuotes : allQuotes.filter((quote) => quote.status === quoteStatus);
   const ownerSummary = activeScreen === "owner" && session.isOwner ? await loadMobileOwnerSummary() : null;
   const accessData = activeScreen === "access" && session.isOwner ? await loadMobileAccess() : null;
-  const projectedCents = calendarEvents.reduce((sum, event) => sum + getProjectedEventCents(event), 0);
+  const projectedCents = projectedCentsForEvents(visibleTodayEvents);
   const selectedThread = activeScreen === "inbox" && threadId ? await loadMobileThread(threadId) : null;
   const selectedContact = selectedThread?.thread?.contact?.id
     ? await loadMobileContact(selectedThread.thread.contact.id)
@@ -717,7 +878,7 @@ export default async function MobileHomePage({
         { name: "Devon", expectedRole: "sales", role: salesRole, member: findLaunchMember(accessData.members, "Devon") }
       ]
     : [];
-  const mobileJobEvents = calendarEvents.filter((event) => event.source === "db" && !isQuoteOnlyAppointmentType(event.appointmentType));
+  const mobileJobEvents = visibleTodayEvents.filter((event) => event.source === "db" && !isQuoteOnlyAppointmentType(event.appointmentType));
 
   return (
     <main className="min-h-dvh bg-slate-950 text-white">
@@ -1361,7 +1522,7 @@ export default async function MobileHomePage({
                 <div className="mt-4 grid grid-cols-3 gap-2">
                   <div className="rounded-md border border-white/10 bg-slate-900 p-3">
                     <p className="text-xs text-slate-400">Stops</p>
-                    <p className="mt-1 text-xl font-semibold">{calendarEvents.length}</p>
+                    <p className="mt-1 text-xl font-semibold">{visibleTodayEvents.length}</p>
                   </div>
                   <div className="rounded-md border border-white/10 bg-slate-900 p-3">
                     <p className="text-xs text-slate-400">Jobs</p>
@@ -1382,30 +1543,38 @@ export default async function MobileHomePage({
                 </div>
               </div>
 
+              <MobileWeekStrip
+                activeDay={calendarDay}
+                days={calendarWeekDays}
+                events={calendarWeekEvents}
+                screen="myday"
+              />
+
               <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="text-base font-semibold">Today&apos;s Appointments</h2>
-                  <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">{calendarEvents.length}</span>
+                  <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">{visibleTodayEvents.length}</span>
                 </div>
                 <div className="mt-3 space-y-2">
-                  {calendarEvents.length > 0 ? (
-                    calendarEvents.map((event) => {
+                  {visibleTodayEvents.length > 0 ? (
+                    visibleTodayEvents.map((event) => {
                       const appointmentId = event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : "");
                       const canUpdate = Boolean(appointmentId && event.source === "db");
                       const eventAmount = getProjectedEventCents(event);
                       const mapsHref = event.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.address)}` : null;
+                      const tone = eventTone(event);
                       return (
-                        <div key={event.id} className="rounded-md border border-white/10 bg-slate-900 p-3">
+                        <div key={event.id} className={`rounded-md border p-3 ${tone.card}`}>
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="text-sm font-semibold text-cyan-200">
+                              <p className={`text-sm font-semibold ${tone.time}`}>
                                 {formatTime(event.start)} - {formatTime(event.end)}
                               </p>
                               <p className="mt-1 truncate text-sm font-semibold text-white">{event.contactName ?? event.title}</p>
                               {event.address ? <p className="mt-1 text-sm leading-5 text-slate-300">{event.address}</p> : null}
                             </div>
-                            <span className="shrink-0 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold capitalize text-slate-300">
-                              {event.status ?? event.source}
+                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone.badge}`}>
+                              {eventKindLabel(event)}
                             </span>
                           </div>
                           {event.notes?.length ? (
@@ -1467,7 +1636,7 @@ export default async function MobileHomePage({
                                 Map
                               </a>
                             ) : null}
-                            {eventAmount > 0 ? <span className="ml-auto py-2 text-xs font-semibold text-cyan-200">{formatUsdCents(eventAmount)}</span> : null}
+                            {eventAmount > 0 ? <span className={`ml-auto py-2 text-xs font-semibold ${tone.amount}`}>{formatUsdCents(eventAmount)}</span> : null}
                           </div>
                           {canUpdate ? (
                             <div className="mt-3">
@@ -1857,16 +2026,16 @@ export default async function MobileHomePage({
                     <h2 className="mt-1 text-lg font-semibold">{formatDateLabel(calendarDay)}</h2>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs text-slate-400">Projected</p>
+                    <p className="text-xs text-slate-400">Day projected</p>
                     <p className="text-xl font-semibold text-cyan-200">{formatUsdCents(projectedCents)}</p>
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-2">
                   <Link
-                    href={`/mobile?screen=calendar&date=${encodeURIComponent(addDaysToKey(calendarDay, -1))}` as Route}
+                    href={`/mobile?screen=calendar&date=${encodeURIComponent(addDaysToKey(calendarDay, -7))}` as Route}
                     className="rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-center text-sm font-semibold text-slate-200"
                   >
-                    Prev
+                    Prev wk
                   </Link>
                   <Link
                     href="/mobile?screen=calendar"
@@ -1875,38 +2044,57 @@ export default async function MobileHomePage({
                     Today
                   </Link>
                   <Link
-                    href={`/mobile?screen=calendar&date=${encodeURIComponent(addDaysToKey(calendarDay, 1))}` as Route}
+                    href={`/mobile?screen=calendar&date=${encodeURIComponent(addDaysToKey(calendarDay, 7))}` as Route}
                     className="rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-center text-sm font-semibold text-slate-200"
                   >
-                    Next
+                    Next wk
                   </Link>
                 </div>
+                <form action="/mobile" className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+                  <input type="hidden" name="screen" value="calendar" />
+                  <input
+                    type="date"
+                    name="date"
+                    defaultValue={calendarDay}
+                    className="min-w-0 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-white outline-none focus:border-cyan-300"
+                  />
+                  <button type="submit" className="rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200">
+                    Go
+                  </button>
+                </form>
               </div>
+
+              <MobileWeekStrip
+                activeDay={calendarDay}
+                days={calendarWeekDays}
+                events={calendarWeekEvents}
+                screen="calendar"
+              />
 
               <div className="space-y-3">
                 {calendarEvents.length > 0 ? (
                   calendarEvents.map((event) => {
                     const appointmentId = event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : "");
-                    const status = (event.status ?? "").trim().toLowerCase();
                     const canUpdate = Boolean(appointmentId && event.source === "db");
                     const eventAmount = getProjectedEventCents(event);
+                    const tone = eventTone(event);
                     return (
-                      <div key={event.id} className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                      <div key={event.id} className={`rounded-lg border p-4 ${tone.card}`}>
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="text-sm font-semibold text-cyan-200">
+                            <p className={`text-sm font-semibold ${tone.time}`}>
                               {formatTime(event.start)} - {formatTime(event.end)}
                             </p>
                             <h3 className="mt-1 truncate text-base font-semibold">{event.contactName ?? event.title}</h3>
                             {event.address ? <p className="mt-1 text-sm leading-5 text-slate-300">{event.address}</p> : null}
                           </div>
-                          <span className="shrink-0 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold capitalize text-slate-300">
-                            {event.status ?? event.source}
+                          <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone.badge}`}>
+                            {eventKindLabel(event)}
                           </span>
                         </div>
                         <div className="mt-3 flex items-center justify-between gap-3 text-sm">
                           <span className="text-slate-400">{event.appointmentType ? formatStage(event.appointmentType) : "Calendar event"}</span>
-                          {eventAmount > 0 ? <span className="font-semibold text-cyan-200">{formatUsdCents(eventAmount)}</span> : null}
+                          {eventAmount > 0 ? <span className={`font-semibold ${tone.amount}`}>{formatUsdCents(eventAmount)}</span> : null}
                         </div>
                         {event.notes?.length ? (
                           <div className="mt-3 rounded-md border border-white/10 bg-slate-900 p-3 text-sm leading-6 text-slate-300">
@@ -1915,10 +2103,11 @@ export default async function MobileHomePage({
                         ) : null}
                         {canUpdate ? (
                           <div className="mt-3 grid grid-cols-2 gap-2">
-                            {status !== "canceled" ? (
+                            {!isCanceledEvent(event) ? (
                               <form action={updateMobileAppointmentStatusAction}>
                                 <input type="hidden" name="appointmentId" value={appointmentId} />
                                 <input type="hidden" name="date" value={calendarDay} />
+                                <input type="hidden" name="screen" value="calendar" />
                                 <button
                                   type="submit"
                                   name="status"
@@ -1928,17 +2117,12 @@ export default async function MobileHomePage({
                                   Cancel
                                 </button>
                               </form>
-                            ) : null}
-                            <div className="col-span-2">
-                              <MobileCompleteAppointmentForm
-                                event={event}
-                                appointmentId={appointmentId}
-                                calendarDay={calendarDay}
-                                screen="calendar"
-                                teamMembers={teamMembers}
-                              />
-                            </div>
-                            <details className="col-span-2 rounded-md border border-white/10 bg-slate-900 p-3">
+                            ) : (
+                              <div className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-center text-sm font-semibold text-rose-100">
+                                Canceled
+                              </div>
+                            )}
+                            <details className="rounded-md border border-white/10 bg-slate-900 p-3">
                               <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
                                 Reschedule
                               </summary>
@@ -1972,40 +2156,6 @@ export default async function MobileHomePage({
                                   className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
                                 >
                                   Save new time
-                                </button>
-                              </form>
-                            </details>
-                            <details className="col-span-2 rounded-md border border-white/10 bg-slate-900 p-3">
-                              <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
-                                Upload photo or receipt
-                              </summary>
-                              <form action={addMobileAppointmentAttachmentAction} className="mt-3 space-y-3">
-                                <input type="hidden" name="appointmentId" value={appointmentId} />
-                                <input type="hidden" name="date" value={calendarDay} />
-                                <label className="block">
-                                  <span className="text-xs font-semibold text-slate-300">File</span>
-                                  <input
-                                    name="file"
-                                    type="file"
-                                    accept="image/*,application/pdf"
-                                    required
-                                    className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white file:mr-3 file:rounded-md file:border-0 file:bg-cyan-300 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-slate-950"
-                                  />
-                                  <span className="mt-1 block text-xs text-slate-500">Max 20MB.</span>
-                                </label>
-                                <label className="block">
-                                  <span className="text-xs font-semibold text-slate-300">Label</span>
-                                  <input
-                                    name="filename"
-                                    className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-cyan-300"
-                                    placeholder="Job photo, quote photo, dump receipt..."
-                                  />
-                                </label>
-                                <button
-                                  type="submit"
-                                  className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
-                                >
-                                  Save upload
                                 </button>
                               </form>
                             </details>
