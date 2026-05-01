@@ -11,6 +11,7 @@ import { completeNextFollowupTaskOnTouch } from "@/lib/sales-followups";
 type StartCallPayload = {
   contactId?: string;
   taskId?: string;
+  agentMemberId?: string;
   agentPhone?: string;
   toPhone?: string;
 };
@@ -175,9 +176,14 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const contactId = readString(json.contactId);
   const taskIdRaw = readString(json.taskId);
+  const agentMemberIdRaw = readString(json.agentMemberId);
   const agentPhoneRaw = readString(json.agentPhone);
   const toPhoneRaw = readString(json.toPhone);
   const taskId = taskIdRaw && isUuid(taskIdRaw) ? taskIdRaw : null;
+  if (agentMemberIdRaw && !isUuid(agentMemberIdRaw)) {
+    return NextResponse.json({ error: "invalid_agent_member" }, { status: 400 });
+  }
+  const agentMemberId = agentMemberIdRaw ?? null;
 
   const db = getDb();
 
@@ -235,6 +241,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
   } else {
     const assigneeMemberId =
+      agentMemberId ??
       resolvedAssigneeMemberId ??
       (await resolveFallbackDefaultAssigneeMemberId());
 
@@ -250,10 +257,11 @@ export async function POST(request: NextRequest): Promise<Response> {
     const phoneMap = readPhoneMap(phoneSetting?.value);
     const phoneCandidate = phoneMap[assigneeMemberId] ?? null;
     if (!phoneCandidate) {
+      const phoneOwnerLabel = agentMemberId ? "selected team member" : "assigned salesperson";
       return NextResponse.json(
         {
           error: "missing_agent_phone",
-          message: "No phone is configured for the assigned salesperson. Set it in Team Console: Access."
+          message: `No phone is configured for the ${phoneOwnerLabel}. Set it in Team Console: Access.`
         },
         { status: 400 }
       );
@@ -262,14 +270,17 @@ export async function POST(request: NextRequest): Promise<Response> {
     try {
       agentPhone = normalizePhone(phoneCandidate).e164;
     } catch {
-      return NextResponse.json({ error: "invalid_agent_phone", message: "Assigned salesperson phone is invalid." }, { status: 400 });
+      const phoneOwnerLabel = agentMemberId ? "Selected team member" : "Assigned salesperson";
+      return NextResponse.json({ error: "invalid_agent_phone", message: `${phoneOwnerLabel} phone is invalid.` }, { status: 400 });
     }
 
-    auditActorOverride = {
-      type: "system",
-      id: assigneeMemberId,
-      label: "assigned_salesperson"
-    };
+    if (!agentMemberId) {
+      auditActorOverride = {
+        type: "system",
+        id: assigneeMemberId,
+        label: "assigned_salesperson"
+      };
+    }
   }
 
   const result = await createTwilioCall({ agentPhone, toPhone, request, taskId });

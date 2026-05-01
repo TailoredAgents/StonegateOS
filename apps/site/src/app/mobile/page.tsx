@@ -15,6 +15,7 @@ import {
   runMobilePayoutAction,
   rescheduleMobileAppointmentAction,
   sendMobileTeamInviteAction,
+  startMobileContactCallAction,
   sendMobileThreadMessageAction,
   sendMobileQuoteAction,
   updateMobileAppointmentStatusAction,
@@ -384,12 +385,6 @@ function ownerHealthClass(status: OwnerHealthStatus): string {
   return "border-amber-300/30 bg-amber-300/10 text-amber-100";
 }
 
-function phoneHref(phone: string | null | undefined): string | null {
-  if (!phone) return null;
-  const normalized = phone.replace(/[^\d+]/g, "");
-  return normalized ? `tel:${normalized}` : null;
-}
-
 function isQuoteOnlyAppointmentType(value: string | null | undefined): boolean {
   const normalized = (value ?? "").trim().toLowerCase();
   return normalized === "in_person_quote" || normalized === "in_person_estimate";
@@ -645,6 +640,7 @@ export default async function MobileHomePage({
     account?: string;
     invite?: string;
     password?: string;
+    call?: string;
     error?: string;
   }>;
 }) {
@@ -683,6 +679,7 @@ export default async function MobileHomePage({
   const accountUpdated = params.account === "updated";
   const inviteSent = params.invite === "sent";
   const passwordSaved = params.password === "saved";
+  const callStarted = params.call === "started";
   const error = typeof params.error === "string" && params.error.trim().length ? params.error.trim() : null;
   const threads = activeScreen === "inbox" ? await loadMobileThreads({ status: inboxStatus, q: inboxQuery }) : [];
   const contacts = activeScreen === "contacts" ? await loadMobileContacts({ q: inboxQuery }) : [];
@@ -701,7 +698,6 @@ export default async function MobileHomePage({
   const detectedThreadAddress = selectedThread ? detectAddressFromMessages(selectedThread.messages) : null;
   const selectedThreadMediaMessages =
     selectedThread?.messages?.filter((message) => Array.isArray(message.mediaUrls) && message.mediaUrls.length > 0) ?? [];
-  const selectedPhone = phoneHref(selectedThread?.thread?.contact?.phone);
   const quoteStatusCounts = quoteStatusFilters.reduce(
     (counts, status) => ({
       ...counts,
@@ -848,6 +844,11 @@ export default async function MobileHomePage({
               Password saved.
             </div>
           ) : null}
+          {callStarted ? (
+            <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
+              Ringing your phone now. Answer to connect with the customer.
+            </div>
+          ) : null}
           {error ? (
             <div className="rounded-lg border border-rose-300/30 bg-rose-300/10 p-4 text-sm text-rose-100">
               {error}
@@ -877,10 +878,14 @@ export default async function MobileHomePage({
                           {selectedThread.thread.property?.addressLine1 ? ` • ${selectedThread.thread.property.addressLine1}` : ""}
                         </p>
                       </div>
-                      {selectedPhone ? (
-                        <a href={selectedPhone} className="rounded-md bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950">
-                          Call
-                        </a>
+                      {selectedThread.thread.contact?.id && (selectedThread.thread.contact.phone || selectedContact?.phoneE164 || selectedContact?.phone) ? (
+                        <form action={startMobileContactCallAction}>
+                          <input type="hidden" name="contactId" value={selectedThread.thread.contact.id} />
+                          <input type="hidden" name="returnTo" value={`/mobile?threadId=${encodeURIComponent(threadId)}`} />
+                          <button type="submit" className="rounded-md bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950">
+                            Call
+                          </button>
+                        </form>
                       ) : null}
                     </div>
                   </div>
@@ -1031,9 +1036,20 @@ export default async function MobileHomePage({
                         {selectedContact.email ? ` • ${selectedContact.email}` : ""}
                       </p>
                     </div>
-                    <span className="shrink-0 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">
-                      {formatStage(selectedContact.pipeline?.stage)}
-                    </span>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      {(selectedContact.phoneE164 ?? selectedContact.phone) ? (
+                        <form action={startMobileContactCallAction}>
+                          <input type="hidden" name="contactId" value={selectedContact.id} />
+                          <input type="hidden" name="returnTo" value={`/mobile?threadId=${encodeURIComponent(threadId)}`} />
+                          <button type="submit" className="rounded-md bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950">
+                            Call
+                          </button>
+                        </form>
+                      ) : null}
+                      <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">
+                        {formatStage(selectedContact.pipeline?.stage)}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="mt-4 grid grid-cols-2 gap-2">
@@ -1491,9 +1507,20 @@ export default async function MobileHomePage({
                         {contactDetail.email ? ` • ${contactDetail.email}` : ""}
                       </p>
                     </div>
-                    <span className="shrink-0 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">
-                      {formatStage(contactDetail.pipeline?.stage)}
-                    </span>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      {(contactDetail.phoneE164 ?? contactDetail.phone) ? (
+                        <form action={startMobileContactCallAction}>
+                          <input type="hidden" name="contactId" value={contactDetail.id} />
+                          <input type="hidden" name="returnTo" value={`/mobile?screen=contacts&contactId=${encodeURIComponent(contactDetail.id)}`} />
+                          <button type="submit" className="rounded-md bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950">
+                            Call
+                          </button>
+                        </form>
+                      ) : null}
+                      <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">
+                        {formatStage(contactDetail.pipeline?.stage)}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="mt-4 grid grid-cols-2 gap-2">

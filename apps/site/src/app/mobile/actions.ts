@@ -7,9 +7,10 @@ import type { Route } from "next";
 import { TEAM_SESSION_COOKIE } from "@/lib/team-session";
 import { callAdminApi } from "../team/lib/api";
 import { callTeamApi, callTeamPublicApi } from "../team/login/lib/api";
+import type { MobileSession } from "./lib/session";
 import { hasMobilePermission, resolveMobileSessionFromCookies } from "./lib/session";
 
-async function requireMobilePermission(required: string): Promise<void> {
+async function requireMobilePermission(required: string): Promise<MobileSession> {
   const session = await resolveMobileSessionFromCookies();
   if (!session) {
     redirect("/mobile/login");
@@ -17,6 +18,30 @@ async function requireMobilePermission(required: string): Promise<void> {
   if (!hasMobilePermission(session.teamMember.permissions, required)) {
     redirect(`/mobile?error=${encodeURIComponent("forbidden")}` as Route);
   }
+  return session;
+}
+
+async function requireAnyMobilePermission(required: string[]): Promise<MobileSession> {
+  const session = await resolveMobileSessionFromCookies();
+  if (!session) {
+    redirect("/mobile/login");
+  }
+  if (!required.some((permission) => hasMobilePermission(session.teamMember.permissions, permission))) {
+    redirect(`/mobile?error=${encodeURIComponent("forbidden")}` as Route);
+  }
+  return session;
+}
+
+function mobileReturnTo(value: unknown): Route {
+  if (typeof value !== "string") return "/mobile";
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/mobile") || trimmed.startsWith("//")) return "/mobile";
+  return trimmed as Route;
+}
+
+function mobileReturnWithParam(returnTo: Route, key: string, value: string): Route {
+  const separator = returnTo.includes("?") ? "&" : "?";
+  return `${returnTo}${separator}${encodeURIComponent(key)}=${encodeURIComponent(value)}` as Route;
 }
 
 async function requireMobileOwner(): Promise<void> {
@@ -76,6 +101,33 @@ export async function sendMobileThreadMessageAction(formData: FormData) {
 
   revalidatePath("/mobile");
   redirect(`/mobile?threadId=${encodeURIComponent(threadId)}&sent=1`);
+}
+
+export async function startMobileContactCallAction(formData: FormData) {
+  const session = await requireAnyMobilePermission(["messages.read", "messages.send", "bookings.manage", "appointments.read"]);
+  const contactIdRaw = formData.get("contactId");
+  const returnTo = mobileReturnTo(formData.get("returnTo"));
+  const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
+
+  if (!contactId) {
+    redirect(mobileReturnWithParam(returnTo, "error", "contact_required"));
+  }
+
+  const response = await callAdminApi("/api/admin/calls/start", {
+    method: "POST",
+    body: JSON.stringify({
+      contactId,
+      agentMemberId: session.teamMember.id
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "call_failed");
+    redirect(mobileReturnWithParam(returnTo, "error", message));
+  }
+
+  revalidatePath("/mobile");
+  redirect(mobileReturnWithParam(returnTo, "call", "started"));
 }
 
 function makeNoteTitle(body: string): string {
@@ -572,7 +624,7 @@ export async function rescheduleMobileAppointmentAction(formData: FormData) {
 }
 
 export async function bookMobileAppointmentAction(formData: FormData) {
-  await requireMobilePermission("bookings.manage");
+  const session = await requireMobilePermission("bookings.manage");
 
   const contactIdRaw = formData.get("contactId");
   const propertyIdRaw = formData.get("propertyId");
@@ -651,6 +703,8 @@ export async function bookMobileAppointmentAction(formData: FormData) {
     startAt,
     durationMinutes: Number.isFinite(durationMinutes) && durationMinutes > 0 ? durationMinutes : 60,
     travelBufferMinutes: 30,
+    soldByMemberId: session.teamMember.id,
+    assignedAssociateMemberId: session.teamMember.id,
     source: "mobile"
   };
 
