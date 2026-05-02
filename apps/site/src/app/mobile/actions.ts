@@ -68,6 +68,49 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
   }
 }
 
+function parseDayWindow(dayKey: string): { startAtFrom: string; startAtTo: string } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
+  if (!match) return null;
+  const start = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 0, 0, 0, 0));
+  if (Number.isNaN(start.getTime())) return null;
+  start.setUTCDate(start.getUTCDate() - 1);
+  const end = new Date(start.getTime());
+  end.setUTCDate(end.getUTCDate() + 4);
+  return {
+    startAtFrom: start.toISOString(),
+    startAtTo: end.toISOString()
+  };
+}
+
+function mobileScheduleRedirect(screen: string, dayKey: string, error?: string): Route {
+  const normalizedScreen = screen === "calendar" ? "calendar" : "myday";
+  const params = new URLSearchParams();
+  params.set("screen", normalizedScreen);
+  if (dayKey) params.set("date", dayKey);
+  if (error) params.set("error", error);
+  return `/mobile?${params.toString()}` as Route;
+}
+
+type MobileAppointmentLookupResponse = {
+  appointments?: Array<{
+    id?: string;
+    contact?: {
+      id?: string | null;
+    } | null;
+  }>;
+};
+
+type MobileThreadListResponse = {
+  threads?: Array<{
+    id?: string;
+  }>;
+};
+
+type MobileEnsureThreadResponse = {
+  ok?: boolean;
+  threadId?: string;
+};
+
 export async function sendMobileThreadMessageAction(formData: FormData) {
   await requireMobilePermission("messages.send");
 
@@ -101,6 +144,79 @@ export async function sendMobileThreadMessageAction(formData: FormData) {
 
   revalidatePath("/mobile");
   redirect(`/mobile?threadId=${encodeURIComponent(threadId)}&sent=1`);
+}
+
+export async function openMobileAppointmentThreadAction(formData: FormData) {
+  const session = await requireMobilePermission("messages.read");
+
+  const appointmentIdRaw = formData.get("appointmentId");
+  const dateRaw = formData.get("date");
+  const screenRaw = formData.get("screen");
+  const appointmentId = typeof appointmentIdRaw === "string" ? appointmentIdRaw.trim() : "";
+  const dayKey = typeof dateRaw === "string" ? dateRaw.trim() : "";
+  const screen = typeof screenRaw === "string" ? screenRaw.trim() : "myday";
+  const returnTo = mobileScheduleRedirect(screen, dayKey);
+
+  if (!appointmentId) {
+    redirect(mobileScheduleRedirect(screen, dayKey, "appointment_required"));
+  }
+
+  const window = parseDayWindow(dayKey);
+  const appointmentParams = new URLSearchParams();
+  appointmentParams.set("status", "all");
+  appointmentParams.set("limit", "200");
+  if (window) {
+    appointmentParams.set("startAtFrom", window.startAtFrom);
+    appointmentParams.set("startAtTo", window.startAtTo);
+  }
+
+  const appointmentResponse = await callAdminApi(`/api/appointments?${appointmentParams.toString()}`, {
+    method: "GET"
+  });
+  if (!appointmentResponse.ok) {
+    const message = await readErrorMessage(appointmentResponse, "appointment_lookup_failed");
+    redirect(mobileScheduleRedirect(screen, dayKey, message));
+  }
+
+  const appointmentPayload = (await appointmentResponse.json().catch(() => null)) as MobileAppointmentLookupResponse | null;
+  const appointment = (appointmentPayload?.appointments ?? []).find((item) => item.id === appointmentId);
+  const contactId = typeof appointment?.contact?.id === "string" ? appointment.contact.id.trim() : "";
+
+  if (!contactId || contactId === "unknown") {
+    redirect(mobileScheduleRedirect(screen, dayKey, "contact_not_found"));
+  }
+
+  const threadsResponse = await callAdminApi(`/api/admin/inbox/threads?contactId=${encodeURIComponent(contactId)}&limit=1`, {
+    method: "GET"
+  });
+  if (!threadsResponse.ok) {
+    const message = await readErrorMessage(threadsResponse, "thread_lookup_failed");
+    redirect(mobileScheduleRedirect(screen, dayKey, message));
+  }
+
+  const threadsPayload = (await threadsResponse.json().catch(() => null)) as MobileThreadListResponse | null;
+  const existingThreadId = threadsPayload?.threads?.find((thread) => typeof thread.id === "string" && thread.id.trim())?.id?.trim() ?? "";
+
+  if (existingThreadId) {
+    redirect(`/mobile?threadId=${encodeURIComponent(existingThreadId)}` as Route);
+  }
+
+  if (hasMobilePermission(session.teamMember.permissions, "messages.send")) {
+    const ensureResponse = await callAdminApi("/api/admin/inbox/threads/ensure", {
+      method: "POST",
+      body: JSON.stringify({ contactId, channel: "sms" })
+    });
+
+    if (ensureResponse.ok) {
+      const ensurePayload = (await ensureResponse.json().catch(() => null)) as MobileEnsureThreadResponse | null;
+      const ensuredThreadId = typeof ensurePayload?.threadId === "string" ? ensurePayload.threadId.trim() : "";
+      if (ensuredThreadId) {
+        redirect(`/mobile?threadId=${encodeURIComponent(ensuredThreadId)}` as Route);
+      }
+    }
+  }
+
+  redirect(mobileReturnWithParam(returnTo, "error", "thread_not_found"));
 }
 
 export async function startMobileContactCallAction(formData: FormData) {

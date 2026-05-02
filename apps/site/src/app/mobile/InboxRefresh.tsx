@@ -19,7 +19,7 @@ export function InboxRefresh({ threadId }: InboxRefreshProps): null {
       router.refresh();
     };
 
-    const interval = window.setInterval(refresh, threadId ? 10000 : 15000);
+    const interval = window.setInterval(refresh, threadId ? 60000 : 15000);
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") refresh();
     };

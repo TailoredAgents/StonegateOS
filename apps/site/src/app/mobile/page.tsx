@@ -1,8 +1,8 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { redirect } from "next/navigation";
-import { Inbox, CalendarDays, ContactRound, FileText, Home, Settings, ShieldCheck, UserCog } from "lucide-react";
-import { resolveMobileSessionFromCookies } from "./lib/session";
+import { Inbox, CalendarDays, ContactRound, FileText, Home, MessageSquare, Settings, ShieldCheck, UserCog } from "lucide-react";
+import { hasMobilePermission, resolveMobileSessionFromCookies } from "./lib/session";
 import { callAdminApi } from "../team/lib/api";
 import {
   addMobileContactNoteAction,
@@ -11,11 +11,11 @@ import {
   createMobileTeamMemberAction,
   createMobileQuoteAction,
   mobileLogoutAction,
+  openMobileAppointmentThreadAction,
   runMobilePayoutAction,
   rescheduleMobileAppointmentAction,
   sendMobileTeamInviteAction,
   startMobileContactCallAction,
-  sendMobileThreadMessageAction,
   sendMobileQuoteAction,
   updateMobileAppointmentStatusAction,
   updateMobileContactAction,
@@ -27,6 +27,7 @@ import { formatDayKey, TEAM_TIME_ZONE } from "../team/lib/timezone";
 import { OfflineBanner } from "./OfflineBanner";
 import { InboxRefresh } from "./InboxRefresh";
 import { MobileInboxMediaGallery } from "./MobileInboxMediaGallery";
+import { MobileThreadConversation } from "./MobileThreadConversation";
 import { loadMobileOwnerSummary, type MobileOwnerSummary } from "./lib/owner-summary";
 
 const navItems: Array<{ id: string; label: string; href: Route; icon: typeof Inbox }> = [
@@ -470,11 +471,6 @@ function formatProviderLabel(value: string): string {
     .join(" ");
 }
 
-function isMediaPlaceholderBody(value: string | null | undefined): boolean {
-  const normalized = (value ?? "").trim().toLowerCase();
-  return normalized === "" || normalized === "media message" || normalized === "message received";
-}
-
 function ownerHealthClass(status: OwnerHealthStatus): string {
   if (status === "healthy") return "border-emerald-300/30 bg-emerald-300/10 text-emerald-100";
   if (status === "degraded") return "border-rose-300/30 bg-rose-300/10 text-rose-100";
@@ -851,6 +847,7 @@ export default async function MobileHomePage({
   const quotes = quoteStatus === "all" ? allQuotes : allQuotes.filter((quote) => quote.status === quoteStatus);
   const ownerSummary = activeScreen === "owner" && session.isOwner ? await loadMobileOwnerSummary() : null;
   const accessData = activeScreen === "access" && session.isOwner ? await loadMobileAccess() : null;
+  const canOpenMessageThreads = hasMobilePermission(session.teamMember.permissions, "messages.read");
   const projectedCents = projectedCentsForEvents(visibleTodayEvents);
   const selectedThread = activeScreen === "inbox" && threadId ? await loadMobileThread(threadId) : null;
   const selectedContact = selectedThread?.thread?.contact?.id
@@ -1067,53 +1064,11 @@ export default async function MobileHomePage({
                     </div>
                   ) : null}
 
-                  <div className="space-y-3 p-4">
-                    {(selectedThread.messages ?? []).length > 0 ? (
-                      selectedThread.messages?.map((message) => {
-                        const outbound = message.direction === "outbound";
-                        const mediaCount = message.mediaUrls?.length ?? 0;
-                        const hasMedia = mediaCount > 0;
-                        const showBody = !isMediaPlaceholderBody(message.body) || !hasMedia;
-                        return (
-                          <div key={message.id} className={`flex ${outbound ? "justify-end" : "justify-start"}`}>
-                            <div
-                              className={`max-w-[82%] rounded-lg px-3 py-2 text-sm leading-6 ${
-                                outbound ? "bg-cyan-300 text-slate-950" : "bg-slate-800 text-slate-100"
-                              }`}
-                            >
-                              {showBody ? <p className="whitespace-pre-wrap break-words">{message.body || "Message received"}</p> : null}
-                              {hasMedia ? <MobileInboxMediaGallery messageId={message.id} count={mediaCount} /> : null}
-                              <p className={`mt-1 text-[11px] ${outbound ? "text-slate-700" : "text-slate-400"}`}>
-                                {formatRelativeTime(message.createdAt)} • {message.deliveryStatus}
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="rounded-md border border-dashed border-white/15 bg-slate-900 p-4 text-sm text-slate-300">
-                        No messages yet.
-                      </div>
-                    )}
-                  </div>
-
-                  <form action={sendMobileThreadMessageAction} className="border-t border-white/10 p-4">
-                    <input type="hidden" name="threadId" value={selectedThread.thread.id} />
-                    <input type="hidden" name="channel" value={selectedThread.thread.channel} />
-                    <label className="block">
-                      <span className="text-xs font-semibold text-slate-300">Reply</span>
-                      <textarea
-                        name="body"
-                        required
-                        rows={3}
-                        className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
-                        placeholder="Type a reply..."
-                      />
-                    </label>
-                    <button type="submit" className="mt-3 w-full rounded-md bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950">
-                      Send reply
-                    </button>
-                  </form>
+                  <MobileThreadConversation
+                    threadId={selectedThread.thread.id}
+                    channel={selectedThread.thread.channel}
+                    initialMessages={selectedThread.messages ?? []}
+                  />
                 </div>
               ) : (
                 <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
@@ -1636,6 +1591,20 @@ export default async function MobileHomePage({
                                 Map
                               </a>
                             ) : null}
+                            {canUpdate && canOpenMessageThreads ? (
+                              <form action={openMobileAppointmentThreadAction}>
+                                <input type="hidden" name="appointmentId" value={appointmentId} />
+                                <input type="hidden" name="date" value={calendarDay} />
+                                <input type="hidden" name="screen" value="myday" />
+                                <button
+                                  type="submit"
+                                  className="inline-flex items-center gap-1.5 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200"
+                                >
+                                  <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                                  Message
+                                </button>
+                              </form>
+                            ) : null}
                             {eventAmount > 0 ? <span className={`ml-auto py-2 text-xs font-semibold ${tone.amount}`}>{formatUsdCents(eventAmount)}</span> : null}
                           </div>
                           {canUpdate ? (
@@ -2103,6 +2072,20 @@ export default async function MobileHomePage({
                         ) : null}
                         {canUpdate ? (
                           <div className="mt-3 grid grid-cols-2 gap-2">
+                            {canOpenMessageThreads ? (
+                              <form action={openMobileAppointmentThreadAction}>
+                                <input type="hidden" name="appointmentId" value={appointmentId} />
+                                <input type="hidden" name="date" value={calendarDay} />
+                                <input type="hidden" name="screen" value="calendar" />
+                                <button
+                                  type="submit"
+                                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200"
+                                >
+                                  <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                                  Message
+                                </button>
+                              </form>
+                            ) : null}
                             {!isCanceledEvent(event) ? (
                               <form action={updateMobileAppointmentStatusAction}>
                                 <input type="hidden" name="appointmentId" value={appointmentId} />
