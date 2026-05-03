@@ -9,7 +9,6 @@ import {
   addMobileAppointmentNoteAction,
   bookMobileAppointmentAction,
   createMobileTeamMemberAction,
-  createMobileQuoteAction,
   mobileLogoutAction,
   openMobileAppointmentThreadAction,
   runMobilePayoutAction,
@@ -28,7 +27,9 @@ import { OfflineBanner } from "./OfflineBanner";
 import { InboxRefresh } from "./InboxRefresh";
 import { MobileInboxMediaGallery } from "./MobileInboxMediaGallery";
 import { MobileThreadConversation } from "./MobileThreadConversation";
+import { MobileAppointmentPricingFields } from "./MobileAppointmentPricingFields";
 import { loadMobileOwnerSummary, type MobileOwnerSummary } from "./lib/owner-summary";
+import type { AppointmentBookingDetails } from "../team/lib/booking-details";
 
 const navItems: Array<{ id: string; label: string; href: Route; icon: typeof Inbox }> = [
   { id: "inbox", label: "Inbox", href: "/mobile", icon: Inbox },
@@ -162,6 +163,7 @@ type CalendarEvent = {
   status?: string | null;
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
+  bookingDetails?: AppointmentBookingDetails | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
 };
 
@@ -360,13 +362,32 @@ function dayNumberLabel(dayKey: string): string {
   }).format(parseDayKey(dayKey));
 }
 
-function getProjectedEventCents(event: CalendarEvent): number {
-  if (event.source !== "db") return 0;
+function getProjectedEventRange(event: CalendarEvent): { minCents: number; maxCents: number } | null {
+  if (event.source !== "db") return null;
   const status = (event.status ?? "").trim().toLowerCase();
-  if (status === "canceled" || status === "cancelled") return 0;
+  if (status === "canceled" || status === "cancelled") return null;
   const type = (event.appointmentType ?? "").trim().toLowerCase();
-  if (type === "in_person_quote" || type === "in_person_estimate") return 0;
-  return normalizeCents(event.finalTotalCents) ?? normalizeCents(event.quotedTotalCents) ?? 0;
+  if (type === "in_person_quote" || type === "in_person_estimate") return null;
+
+  const finalTotal = normalizeCents(event.finalTotalCents);
+  if (finalTotal !== null) return { minCents: finalTotal, maxCents: finalTotal };
+
+  const pricing = event.bookingDetails?.pricing;
+  const rangeMin = normalizeCents(pricing?.rangeMinCents);
+  const rangeMax = normalizeCents(pricing?.rangeMaxCents);
+  if (
+    pricing &&
+    (pricing.mode === "range" || pricing.mode === "both") &&
+    rangeMin !== null &&
+    rangeMax !== null
+  ) {
+    return { minCents: rangeMin, maxCents: rangeMax };
+  }
+
+  const quotedTotal = normalizeCents(event.quotedTotalCents);
+  return quotedTotal !== null
+    ? { minCents: quotedTotal, maxCents: quotedTotal }
+    : null;
 }
 
 function normalizeCents(value: number | null | undefined): number | null {
@@ -394,11 +415,71 @@ function eventDayKey(event: CalendarEvent): string {
 }
 
 function eventsForDay(events: CalendarEvent[], dayKey: string): CalendarEvent[] {
-  return events.filter((event) => eventDayKey(event) === dayKey);
+  return events
+    .filter((event) => eventDayKey(event) === dayKey)
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
 }
 
-function projectedCentsForEvents(events: CalendarEvent[]): number {
-  return events.reduce((sum, event) => sum + getProjectedEventCents(event), 0);
+function projectedRangeForEvents(events: CalendarEvent[]): { minCents: number; maxCents: number } {
+  return events.reduce(
+    (sum, event) => {
+      const range = getProjectedEventRange(event);
+      if (!range) return sum;
+      return {
+        minCents: sum.minCents + range.minCents,
+        maxCents: sum.maxCents + range.maxCents
+      };
+    },
+    { minCents: 0, maxCents: 0 }
+  );
+}
+
+function formatProjectedRange(events: CalendarEvent[]): string {
+  const range = projectedRangeForEvents(events);
+  if (range.minCents <= 0 && range.maxCents <= 0) return "$0";
+  if (range.minCents === range.maxCents) return formatUsdCents(range.maxCents);
+  return `${formatUsdCents(range.minCents)} - ${formatUsdCents(range.maxCents)}`;
+}
+
+function formatCompactProjectedRange(events: CalendarEvent[]): string {
+  const range = projectedRangeForEvents(events);
+  if (range.minCents <= 0 && range.maxCents <= 0) return "$0";
+  if (range.minCents === range.maxCents) return formatCompactUsdCents(range.maxCents);
+  return `${formatCompactUsdCents(range.minCents)}-${formatCompactUsdCents(range.maxCents)}`;
+}
+
+function formatEventPricing(event: CalendarEvent): string | null {
+  if (event.source !== "db") return null;
+  const finalTotal = normalizeCents(event.finalTotalCents);
+  if (finalTotal !== null) return `Collected ${formatUsdCents(finalTotal)}`;
+
+  const pricing = event.bookingDetails?.pricing;
+  const exact = normalizeCents(event.quotedTotalCents);
+  const rangeMin = normalizeCents(pricing?.rangeMinCents);
+  const rangeMax = normalizeCents(pricing?.rangeMaxCents);
+  const rangeLabel =
+    rangeMin !== null && rangeMax !== null
+      ? `${formatUsdCents(rangeMin)} - ${formatUsdCents(rangeMax)}`
+      : null;
+  const exactLabel = exact !== null ? formatUsdCents(exact) : null;
+
+  if (pricing?.mode === "range") return rangeLabel ? `Range ${rangeLabel}` : null;
+  if (pricing?.mode === "both") {
+    if (rangeLabel && exactLabel) return `${rangeLabel} / exact ${exactLabel}`;
+    return rangeLabel ? `Range ${rangeLabel}` : exactLabel ? `Exact ${exactLabel}` : null;
+  }
+  if (pricing?.mode === "exact") return exactLabel ? `Exact ${exactLabel}` : null;
+  return exactLabel ? `Quoted ${exactLabel}` : null;
+}
+
+function formatEventAmountBadge(event: CalendarEvent): string | null {
+  if (event.source !== "db" || isCanceledEvent(event)) return null;
+  const finalTotal = normalizeCents(event.finalTotalCents);
+  if (finalTotal !== null) return formatUsdCents(finalTotal);
+  const range = getProjectedEventRange(event);
+  if (!range) return null;
+  if (range.minCents === range.maxCents) return formatUsdCents(range.maxCents);
+  return `${formatCompactUsdCents(range.minCents)} - ${formatCompactUsdCents(range.maxCents)}`;
 }
 
 function eventTone(event: CalendarEvent): {
@@ -526,6 +607,7 @@ function MobileCompleteAppointmentForm({
       : normalizeCents(event.quotedTotalCents) !== null
         ? (normalizeCents(event.quotedTotalCents)! / 100).toFixed(2)
         : "";
+  const pricingContext = formatEventPricing(event);
 
   if (isQuoteOnly) {
     return (
@@ -555,6 +637,11 @@ function MobileCompleteAppointmentForm({
         <input type="hidden" name="screen" value={screen} />
         <input type="hidden" name="appointmentType" value={event.appointmentType ?? ""} />
         <input type="hidden" name="status" value="completed" />
+        {pricingContext ? (
+          <div className="rounded-md border border-emerald-300/20 bg-slate-950 px-3 py-2 text-sm font-semibold text-emerald-100">
+            {pricingContext}
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-2">
           <label className="block">
             <span className="text-xs font-semibold text-slate-300">Collected $</span>
@@ -615,7 +702,7 @@ function MobileWeekStrip({
   events: CalendarEvent[];
   screen: "myday" | "calendar";
 }) {
-  const weekProjectedCents = projectedCentsForEvents(events);
+  const weekProjectedLabel = formatProjectedRange(events);
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
       <div className="flex items-center justify-between gap-3">
@@ -625,13 +712,13 @@ function MobileWeekStrip({
         </div>
         <div className="text-right">
           <p className="text-xs text-slate-400">Week projected</p>
-          <p className="text-xl font-semibold text-cyan-200">{formatUsdCents(weekProjectedCents)}</p>
+          <p className="text-xl font-semibold text-cyan-200">{weekProjectedLabel}</p>
         </div>
       </div>
       <div className="mt-4 grid grid-cols-7 gap-1.5">
         {days.map((dayKey) => {
           const dayEvents = eventsForDay(events, dayKey);
-          const dayProjectedCents = projectedCentsForEvents(dayEvents);
+          const dayProjectedLabel = formatCompactProjectedRange(dayEvents);
           const active = dayKey === activeDay;
           const canceledCount = dayEvents.filter(isCanceledEvent).length;
           return (
@@ -650,7 +737,7 @@ function MobileWeekStrip({
               </span>
               <span className="mt-1 block text-base font-semibold leading-none">{dayNumberLabel(dayKey)}</span>
               <span className={active ? "mt-1 block truncate text-[10px] font-semibold text-slate-800" : "mt-1 block truncate text-[10px] font-semibold text-cyan-200"}>
-                {formatCompactUsdCents(dayProjectedCents)}
+                {dayProjectedLabel}
               </span>
               <span className={active ? "mt-0.5 block text-[10px] text-slate-800" : "mt-0.5 block text-[10px] text-slate-500"}>
                 {dayEvents.length}{canceledCount ? `/${canceledCount}x` : ""}
@@ -659,6 +746,183 @@ function MobileWeekStrip({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function MobileWeekAgenda({
+  days,
+  events,
+  canOpenMessageThreads
+}: {
+  days: string[];
+  events: CalendarEvent[];
+  canOpenMessageThreads: boolean;
+}) {
+  const weekProjectedLabel = formatProjectedRange(events);
+  const weekJobCount = events.filter((event) => event.source === "db" && !isQuoteOnlyAppointmentType(event.appointmentType)).length;
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-2">
+        <div className="rounded-md border border-cyan-300/20 bg-cyan-300/10 p-3">
+          <p className="text-xs text-cyan-100">Projected</p>
+          <p className="mt-1 text-lg font-semibold text-cyan-100">{weekProjectedLabel}</p>
+        </div>
+        <div className="rounded-md border border-emerald-300/20 bg-emerald-300/10 p-3">
+          <p className="text-xs text-emerald-100">Jobs</p>
+          <p className="mt-1 text-lg font-semibold text-emerald-100">{weekJobCount}</p>
+        </div>
+        <div className="rounded-md border border-white/10 bg-white/[0.08] p-3">
+          <p className="text-xs text-slate-400">Stops</p>
+          <p className="mt-1 text-lg font-semibold text-white">{events.length}</p>
+        </div>
+      </div>
+
+      {days.map((dayKey) => {
+        const dayEvents = eventsForDay(events, dayKey);
+        const dayProjectedLabel = formatProjectedRange(dayEvents);
+        const dayJobCount = dayEvents.filter((event) => event.source === "db" && !isQuoteOnlyAppointmentType(event.appointmentType)).length;
+        const dayCanceledCount = dayEvents.filter(isCanceledEvent).length;
+        return (
+          <section key={dayKey} className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.08]">
+            <div className="flex items-start justify-between gap-3 border-b border-white/10 bg-slate-900/80 p-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">{dayShortLabel(dayKey)}</p>
+                <h3 className="mt-1 text-lg font-semibold">{formatDateLabel(dayKey)}</h3>
+                <p className="mt-1 text-xs text-slate-400">
+                  {dayJobCount} {dayJobCount === 1 ? "job" : "jobs"}
+                  {dayCanceledCount ? ` • ${dayCanceledCount} canceled` : ""}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-slate-400">Day total</p>
+                <p className="mt-1 text-xl font-semibold text-cyan-100">{dayProjectedLabel}</p>
+              </div>
+            </div>
+
+            <div className="space-y-2 p-3">
+              {dayEvents.length ? (
+                dayEvents.map((event) => {
+                  const appointmentId = event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : "");
+                  const canUpdate = Boolean(appointmentId && event.source === "db");
+                  const eventAmountLabel = formatEventAmountBadge(event);
+                  const eventPricing = formatEventPricing(event);
+                  const tone = eventTone(event);
+                  return (
+                    <div key={event.id} className={`rounded-md border p-3 ${tone.card}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className={`text-sm font-semibold ${tone.time}`}>
+                            {formatTime(event.start)} - {formatTime(event.end)}
+                          </p>
+                          <h4 className="mt-1 line-clamp-2 text-base font-semibold text-white">{event.contactName ?? event.title}</h4>
+                          {event.address ? <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-300">{event.address}</p> : null}
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone.badge}`}>
+                            {eventKindLabel(event)}
+                          </span>
+                          {eventAmountLabel ? <span className={`text-sm font-semibold ${tone.amount}`}>{eventAmountLabel}</span> : null}
+                        </div>
+                      </div>
+
+                      {event.notes?.length ? (
+                        <div className="mt-3 rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-6 text-slate-300">
+                          {event.notes[0]?.body}
+                        </div>
+                      ) : null}
+                      {eventPricing ? (
+                        <div className="mt-3 rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100">
+                          {eventPricing}
+                        </div>
+                      ) : null}
+
+                      {canUpdate ? (
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          {canOpenMessageThreads ? (
+                            <form action={openMobileAppointmentThreadAction}>
+                              <input type="hidden" name="appointmentId" value={appointmentId} />
+                              <input type="hidden" name="date" value={dayKey} />
+                              <input type="hidden" name="screen" value="calendar" />
+                              <button
+                                type="submit"
+                                className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200"
+                              >
+                                <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                                Message
+                              </button>
+                            </form>
+                          ) : null}
+                          {!isCanceledEvent(event) ? (
+                            <form action={updateMobileAppointmentStatusAction}>
+                              <input type="hidden" name="appointmentId" value={appointmentId} />
+                              <input type="hidden" name="date" value={dayKey} />
+                              <input type="hidden" name="screen" value="calendar" />
+                              <button
+                                type="submit"
+                                name="status"
+                                value="canceled"
+                                className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm font-semibold text-rose-100"
+                              >
+                                Cancel
+                              </button>
+                            </form>
+                          ) : (
+                            <div className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-center text-sm font-semibold text-rose-100">
+                              Canceled
+                            </div>
+                          )}
+                          <details className="col-span-2 rounded-md border border-white/10 bg-slate-900 p-3">
+                            <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
+                              Reschedule
+                            </summary>
+                            <form action={rescheduleMobileAppointmentAction} className="mt-3 space-y-3">
+                              <input type="hidden" name="appointmentId" value={appointmentId} />
+                              <input type="hidden" name="currentDate" value={dayKey} />
+                              <label className="block">
+                                <span className="text-xs font-semibold text-slate-300">Date</span>
+                                <input
+                                  type="date"
+                                  name="preferredDate"
+                                  defaultValue={formatDayKey(new Date(event.start))}
+                                  required
+                                  className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="text-xs font-semibold text-slate-300">Time</span>
+                                <input
+                                  type="time"
+                                  name="startTime"
+                                  defaultValue={formatTimeInputValue(event.start)}
+                                  step={900}
+                                  required
+                                  className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                                />
+                                <span className="mt-1 block text-xs text-slate-500">Eastern time</span>
+                              </label>
+                              <button
+                                type="submit"
+                                className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
+                              >
+                                Save new time
+                              </button>
+                            </form>
+                          </details>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="rounded-md border border-dashed border-white/15 bg-slate-900 p-4 text-sm leading-6 text-slate-400">
+                  No appointments.
+                </div>
+              )}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -848,7 +1112,7 @@ export default async function MobileHomePage({
   const ownerSummary = activeScreen === "owner" && session.isOwner ? await loadMobileOwnerSummary() : null;
   const accessData = activeScreen === "access" && session.isOwner ? await loadMobileAccess() : null;
   const canOpenMessageThreads = hasMobilePermission(session.teamMember.permissions, "messages.read");
-  const projectedCents = projectedCentsForEvents(visibleTodayEvents);
+  const calendarWeekProjectedLabel = formatProjectedRange(calendarWeekEvents);
   const selectedThread = activeScreen === "inbox" && threadId ? await loadMobileThread(threadId) : null;
   const selectedContact = selectedThread?.thread?.contact?.id
     ? await loadMobileContact(selectedThread.thread.contact.id)
@@ -1282,7 +1546,10 @@ export default async function MobileHomePage({
                         <input type="hidden" name="propertyId" value="" />
                       )}
                       <div className="rounded-md border border-white/10 bg-slate-950 p-3">
-                        <p className="text-xs font-semibold text-slate-300">New property address</p>
+                        <p className="text-xs font-semibold text-slate-300">New address</p>
+                        <p className="mt-1 text-xs leading-5 text-slate-400">
+                          Fill this out to save and use a different address for this booking.
+                        </p>
                         {detectedThreadAddress ? (
                           <p className="mt-1 text-xs leading-5 text-cyan-100">
                             Found in the thread and prefilled. Booking will save it to the contact.
@@ -1337,17 +1604,6 @@ export default async function MobileHomePage({
                         </div>
                       </div>
                       <label className="block">
-                        <span className="text-xs font-semibold text-slate-300">Type</span>
-                        <select
-                          name="appointmentType"
-                          defaultValue="job"
-                          className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                        >
-                          <option value="job">Job</option>
-                          <option value="in_person_quote">In-person quote</option>
-                        </select>
-                      </label>
-                      <label className="block">
                         <span className="text-xs font-semibold text-slate-300">Start</span>
                         <input
                           name="startAt"
@@ -1356,28 +1612,18 @@ export default async function MobileHomePage({
                           className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
                         />
                       </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <label className="block">
-                          <span className="text-xs font-semibold text-slate-300">Minutes</span>
-                          <input
-                            name="durationMinutes"
-                            type="number"
-                            min="15"
-                            step="15"
-                            defaultValue="60"
-                            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                          />
-                        </label>
-                        <label className="block">
-                          <span className="text-xs font-semibold text-slate-300">Quoted $</span>
-                          <input
-                            name="quotedTotal"
-                            inputMode="decimal"
-                            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                            placeholder="450"
-                          />
-                        </label>
-                      </div>
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-300">Minutes</span>
+                        <input
+                          name="durationMinutes"
+                          type="number"
+                          min="15"
+                          step="15"
+                          defaultValue="60"
+                          className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                        />
+                      </label>
+                      <MobileAppointmentPricingFields sourceTeamMemberId={session.teamMember.id} />
                       <label className="block">
                         <span className="text-xs font-semibold text-slate-300">Notes</span>
                         <textarea
@@ -1392,62 +1638,6 @@ export default async function MobileHomePage({
                       </button>
                     </form>
                   </details>
-
-                  {selectedContact.properties?.length ? (
-                    <details className="mt-3 rounded-md border border-white/10 bg-slate-900 p-3">
-                      <summary className="cursor-pointer text-sm font-semibold text-slate-100">Create quote</summary>
-                      <form action={createMobileQuoteAction} className="mt-3 space-y-3">
-                        <input type="hidden" name="contactId" value={selectedContact.id} />
-                        <label className="block">
-                          <span className="text-xs font-semibold text-slate-300">Property</span>
-                          <select
-                            name="propertyId"
-                            defaultValue={selectedContact.properties[0]?.id ?? ""}
-                            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                          >
-                            {selectedContact.properties.map((property) => (
-                              <option key={property.id} value={property.id}>
-                                {[property.addressLine1, property.city, property.state].filter(Boolean).join(", ")}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold text-slate-300">Services and price</p>
-                          {mobileQuoteServices.map((service) => (
-                            <div key={service.id} className="grid grid-cols-[1fr_7rem] gap-2 rounded-md border border-white/10 bg-slate-950 p-2">
-                              <label className="flex items-center gap-2 text-sm text-slate-200">
-                                <input name="services" type="checkbox" value={service.id} className="rounded border-slate-600 bg-slate-900" />
-                                {service.label}
-                              </label>
-                              <input
-                                name={`servicePrice:${service.id}`}
-                                inputMode="decimal"
-                                className="w-full rounded-md border border-white/10 bg-slate-900 px-2 py-1 text-sm text-white outline-none focus:border-cyan-300"
-                                placeholder="$"
-                              />
-                            </div>
-                          ))}
-                        </div>
-                        <label className="block">
-                          <span className="text-xs font-semibold text-slate-300">Notes</span>
-                          <textarea
-                            name="notes"
-                            rows={3}
-                            className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
-                            placeholder="Scope, exclusions, or customer details..."
-                          />
-                        </label>
-                        <label className="flex items-center gap-2 text-sm text-slate-200">
-                          <input name="sendQuote" type="checkbox" className="rounded border-slate-600 bg-slate-900" defaultChecked={Boolean(selectedContact.email)} />
-                          Send now
-                        </label>
-                        <button type="submit" className="w-full rounded-md bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950">
-                          Create quote
-                        </button>
-                      </form>
-                    </details>
-                  ) : null}
 
                   <form action={addMobileContactNoteAction} className="mt-4 border-t border-white/10 pt-4">
                     <input type="hidden" name="contactId" value={selectedContact.id} />
@@ -1492,7 +1682,7 @@ export default async function MobileHomePage({
                   </div>
                   <div className="rounded-md border border-white/10 bg-slate-900 p-3">
                     <p className="text-xs text-slate-400">Projected</p>
-                    <p className="mt-1 text-lg font-semibold text-cyan-200">{formatUsdCents(projectedCents)}</p>
+                    <p className="mt-1 text-lg font-semibold text-cyan-200">{formatProjectedRange(visibleTodayEvents)}</p>
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2">
@@ -1515,7 +1705,8 @@ export default async function MobileHomePage({
                     visibleTodayEvents.map((event) => {
                       const appointmentId = event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : "");
                       const canUpdate = Boolean(appointmentId && event.source === "db");
-                      const eventAmount = getProjectedEventCents(event);
+                      const eventAmountLabel = formatEventAmountBadge(event);
+                      const eventPricing = formatEventPricing(event);
                       const mapsHref = event.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.address)}` : null;
                       const tone = eventTone(event);
                       return (
@@ -1554,6 +1745,11 @@ export default async function MobileHomePage({
                                 ))}
                               </div>
                             </details>
+                          ) : null}
+                          {eventPricing ? (
+                            <div className="mt-3 rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100">
+                              {eventPricing}
+                            </div>
                           ) : null}
                           {canUpdate ? (
                             <details className="mt-3 rounded-md border border-white/10 bg-slate-950 p-3">
@@ -1605,7 +1801,7 @@ export default async function MobileHomePage({
                                 </button>
                               </form>
                             ) : null}
-                            {eventAmount > 0 ? <span className={`ml-auto py-2 text-xs font-semibold ${tone.amount}`}>{formatUsdCents(eventAmount)}</span> : null}
+                            {eventAmountLabel ? <span className={`ml-auto py-2 text-xs font-semibold ${tone.amount}`}>{eventAmountLabel}</span> : null}
                           </div>
                           {canUpdate ? (
                             <div className="mt-3">
@@ -1992,11 +2188,13 @@ export default async function MobileHomePage({
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Calendar</p>
-                    <h2 className="mt-1 text-lg font-semibold">{formatDateLabel(calendarDay)}</h2>
+                    <h2 className="mt-1 text-lg font-semibold">
+                      {formatDateLabel(calendarWeekDays[0] ?? calendarDay)} - {formatDateLabel(calendarWeekDays[6] ?? calendarDay)}
+                    </h2>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs text-slate-400">Day projected</p>
-                    <p className="text-xl font-semibold text-cyan-200">{formatUsdCents(projectedCents)}</p>
+                    <p className="text-xs text-slate-400">Week projected</p>
+                    <p className="text-xl font-semibold text-cyan-200">{calendarWeekProjectedLabel}</p>
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-3 gap-2">
@@ -2040,119 +2238,11 @@ export default async function MobileHomePage({
                 screen="calendar"
               />
 
-              <div className="space-y-3">
-                {calendarEvents.length > 0 ? (
-                  calendarEvents.map((event) => {
-                    const appointmentId = event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : "");
-                    const canUpdate = Boolean(appointmentId && event.source === "db");
-                    const eventAmount = getProjectedEventCents(event);
-                    const tone = eventTone(event);
-                    return (
-                      <div key={event.id} className={`rounded-lg border p-4 ${tone.card}`}>
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className={`text-sm font-semibold ${tone.time}`}>
-                              {formatTime(event.start)} - {formatTime(event.end)}
-                            </p>
-                            <h3 className="mt-1 truncate text-base font-semibold">{event.contactName ?? event.title}</h3>
-                            {event.address ? <p className="mt-1 text-sm leading-5 text-slate-300">{event.address}</p> : null}
-                          </div>
-                          <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone.badge}`}>
-                            {eventKindLabel(event)}
-                          </span>
-                        </div>
-                        <div className="mt-3 flex items-center justify-between gap-3 text-sm">
-                          <span className="text-slate-400">{event.appointmentType ? formatStage(event.appointmentType) : "Calendar event"}</span>
-                          {eventAmount > 0 ? <span className={`font-semibold ${tone.amount}`}>{formatUsdCents(eventAmount)}</span> : null}
-                        </div>
-                        {event.notes?.length ? (
-                          <div className="mt-3 rounded-md border border-white/10 bg-slate-900 p-3 text-sm leading-6 text-slate-300">
-                            {event.notes[0]?.body}
-                          </div>
-                        ) : null}
-                        {canUpdate ? (
-                          <div className="mt-3 grid grid-cols-2 gap-2">
-                            {canOpenMessageThreads ? (
-                              <form action={openMobileAppointmentThreadAction}>
-                                <input type="hidden" name="appointmentId" value={appointmentId} />
-                                <input type="hidden" name="date" value={calendarDay} />
-                                <input type="hidden" name="screen" value="calendar" />
-                                <button
-                                  type="submit"
-                                  className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200"
-                                >
-                                  <MessageSquare className="h-4 w-4" aria-hidden="true" />
-                                  Message
-                                </button>
-                              </form>
-                            ) : null}
-                            {!isCanceledEvent(event) ? (
-                              <form action={updateMobileAppointmentStatusAction}>
-                                <input type="hidden" name="appointmentId" value={appointmentId} />
-                                <input type="hidden" name="date" value={calendarDay} />
-                                <input type="hidden" name="screen" value="calendar" />
-                                <button
-                                  type="submit"
-                                  name="status"
-                                  value="canceled"
-                                  className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm font-semibold text-rose-100"
-                                >
-                                  Cancel
-                                </button>
-                              </form>
-                            ) : (
-                              <div className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-center text-sm font-semibold text-rose-100">
-                                Canceled
-                              </div>
-                            )}
-                            <details className="rounded-md border border-white/10 bg-slate-900 p-3">
-                              <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
-                                Reschedule
-                              </summary>
-                              <form action={rescheduleMobileAppointmentAction} className="mt-3 space-y-3">
-                                <input type="hidden" name="appointmentId" value={appointmentId} />
-                                <input type="hidden" name="currentDate" value={calendarDay} />
-                                <label className="block">
-                                  <span className="text-xs font-semibold text-slate-300">Date</span>
-                                  <input
-                                    type="date"
-                                    name="preferredDate"
-                                    defaultValue={formatDayKey(new Date(event.start))}
-                                    required
-                                    className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
-                                  />
-                                </label>
-                                <label className="block">
-                                  <span className="text-xs font-semibold text-slate-300">Time</span>
-                                  <input
-                                    type="time"
-                                    name="startTime"
-                                    defaultValue={formatTimeInputValue(event.start)}
-                                    step={900}
-                                    required
-                                    className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
-                                  />
-                                  <span className="mt-1 block text-xs text-slate-500">Eastern time</span>
-                                </label>
-                                <button
-                                  type="submit"
-                                  className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
-                                >
-                                  Save new time
-                                </button>
-                              </form>
-                            </details>
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="rounded-lg border border-dashed border-white/15 bg-slate-900 p-4 text-sm leading-6 text-slate-300">
-                    No appointments for this day.
-                  </div>
-                )}
-              </div>
+              <MobileWeekAgenda
+                days={calendarWeekDays}
+                events={calendarWeekEvents}
+                canOpenMessageThreads={canOpenMessageThreads}
+              />
             </div>
           ) : activeScreen === "owner" && ownerSummary ? (
             <div className="space-y-4">

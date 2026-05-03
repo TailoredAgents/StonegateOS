@@ -2,9 +2,10 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { and, gte, inArray, lte, eq, desc } from "drizzle-orm";
-import { getDb, appointmentNotes, appointments, contacts, crmTasks, properties } from "@/db";
+import { getDb, appointmentNotes, appointments, contacts, crmTasks, properties, type AppointmentBookingDetails } from "@/db";
 import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "@/lib/calendar";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
 import { isAdminRequest } from "../../../web/admin";
 
 type CalendarEvent = {
@@ -21,6 +22,7 @@ type CalendarEvent = {
   status?: string | null;
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
+  bookingDetails?: AppointmentBookingDetails | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
 };
 
@@ -55,6 +57,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
       rescheduleToken: appointments.rescheduleToken,
       quotedTotalCents: appointments.quotedTotalCents,
       finalTotalCents: appointments.finalTotalCents,
+      bookingDetails: appointments.bookingDetails,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
       addressLine1: properties.addressLine1,
@@ -169,6 +172,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
         status: row.status ?? null,
         quotedTotalCents: row.quotedTotalCents ?? null,
         finalTotalCents: row.finalTotalCents ?? null,
+        bookingDetails: parseAppointmentBookingDetails(row.bookingDetails),
         notes
       };
     });

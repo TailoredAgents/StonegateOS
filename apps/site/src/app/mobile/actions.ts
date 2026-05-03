@@ -7,6 +7,7 @@ import type { Route } from "next";
 import { TEAM_SESSION_COOKIE } from "@/lib/team-session";
 import { callAdminApi } from "../team/lib/api";
 import { callTeamApi, callTeamPublicApi } from "../team/login/lib/api";
+import { parseAppointmentBookingFormData } from "../team/lib/booking-details";
 import type { MobileSession } from "./lib/session";
 import { hasMobilePermission, resolveMobileSessionFromCookies } from "./lib/session";
 
@@ -748,7 +749,6 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   const appointmentTypeRaw = formData.get("appointmentType");
   const startAtRaw = formData.get("startAt");
   const durationRaw = formData.get("durationMinutes");
-  const quotedTotalRaw = formData.get("quotedTotal");
   const notesRaw = formData.get("notes");
   const addressLine1Raw = formData.get("addressLine1");
   const addressLine2Raw = formData.get("addressLine2");
@@ -764,7 +764,6 @@ export async function bookMobileAppointmentAction(formData: FormData) {
       : "job";
   const startAt = typeof startAtRaw === "string" ? startAtRaw.trim() : "";
   const durationMinutes = typeof durationRaw === "string" ? Number(durationRaw) : NaN;
-  const quotedTotalCents = parseUsdToCents(quotedTotalRaw);
   const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
   const addressLine1 = typeof addressLine1Raw === "string" ? addressLine1Raw.trim() : "";
   const addressLine2 = typeof addressLine2Raw === "string" ? addressLine2Raw.trim() : "";
@@ -780,15 +779,16 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   if (!startAt) {
     redirect(errorRedirect("start_time_required"));
   }
-  const hasNewAddress = Boolean(addressLine1 || city || state || postalCode);
+  const hasNewAddress = Boolean(addressLine1 || addressLine2 || city || state || postalCode);
+  const hasCompleteNewAddress = Boolean(addressLine1 && city && state && postalCode);
   if (!propertyId && !hasNewAddress) {
     redirect(errorRedirect("property_required"));
   }
-  if (!propertyId && (!addressLine1 || !city || !state || !postalCode)) {
+  if (hasNewAddress && !hasCompleteNewAddress) {
     redirect(errorRedirect("complete_address_required"));
   }
 
-  if (!propertyId) {
+  if (hasCompleteNewAddress) {
     const propertyResponse = await callAdminApi(`/api/admin/contacts/${encodeURIComponent(contactId)}/properties`, {
       method: "POST",
       body: JSON.stringify({
@@ -824,7 +824,16 @@ export async function bookMobileAppointmentAction(formData: FormData) {
     source: "mobile"
   };
 
-  if (quotedTotalCents !== null) payload["quotedTotalCents"] = quotedTotalCents;
+  if (appointmentType === "job") {
+    const bookingDetailsResult = parseAppointmentBookingFormData(formData);
+    if (!bookingDetailsResult.ok) {
+      redirect(errorRedirect(bookingDetailsResult.error));
+    }
+    payload["bookingDetails"] = bookingDetailsResult.bookingDetails;
+    if (bookingDetailsResult.quotedTotalCents !== null) {
+      payload["quotedTotalCents"] = bookingDetailsResult.quotedTotalCents;
+    }
+  }
   if (notes) payload["notes"] = notes;
 
   const response = await callAdminApi("/api/admin/booking/book", {
