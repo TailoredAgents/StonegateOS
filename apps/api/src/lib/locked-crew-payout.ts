@@ -53,9 +53,9 @@ const EXACT_CREW_RULES: readonly ExactCrewRule[] = [
       TEAM_MEMBER_IDS.jeffrey,
     ],
     splitBpsByMemberId: {
-      [TEAM_MEMBER_IDS.austin]: 4000,
-      [TEAM_MEMBER_IDS.devon]: 2000,
-      [TEAM_MEMBER_IDS.jeffrey]: 4000,
+      [TEAM_MEMBER_IDS.austin]: 3000,
+      [TEAM_MEMBER_IDS.devon]: 4000,
+      [TEAM_MEMBER_IDS.jeffrey]: 3000,
     },
   },
 ] as const;
@@ -86,6 +86,19 @@ function isValidSplitTotal(splits: LockedCrewPayoutSplit[]): boolean {
   return splits.reduce((sum, entry) => sum + entry.splitBps, 0) > 0;
 }
 
+function buildEqualSplits(memberIds: string[]): LockedCrewPayoutSplit[] {
+  const baseSplitBps = Math.floor(10000 / memberIds.length);
+  let remainingBps = 10000 - baseSplitBps * memberIds.length;
+  return memberIds.map((memberId) => {
+    const extraBps = remainingBps > 0 ? 1 : 0;
+    remainingBps -= extraBps;
+    return {
+      memberId,
+      splitBps: baseSplitBps + extraBps,
+    };
+  });
+}
+
 export function resolveLockedCrewPayout(
   memberIds: string[],
 ): LockedCrewPayoutResolution {
@@ -114,9 +127,10 @@ export function resolveLockedCrewPayout(
   );
   if (!exactRule) {
     return {
-      ok: false,
-      normalizedMemberIds,
-      reason: "missing_rule",
+      ok: true,
+      splits: buildEqualSplits(normalizedMemberIds),
+      ruleKey: "equal",
+      isFallback: true,
     };
   }
 

@@ -23,7 +23,7 @@ Build a repeatable operating system for local service businesses:
 **Platform (shared codebase)**
 - CRM: contacts, pipeline, appointments, reminders, tasks, outbox worker
 - Unified inbox: SMS/DM/email threads, media, suggestions, drafts
-- Ops: calendar, job completion, payments tracking, commissions
+- Ops: calendar, job completion, payments tracking, commissions following `COMMISSION_POLICY.md`
 - Marketing: Google Ads sync + analyst dashboard
 - Admin: roles, settings, audits, exports
 

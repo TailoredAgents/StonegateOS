@@ -119,14 +119,13 @@ export function CrewPayoutSelector({
           </div>
           <div className="mt-2 text-[11px] text-emerald-700">
             {showSplitPercentages
-              ? "Crew payout is locked by this combo and cannot be edited manually."
-              : "Crew payout is locked by this combo. Split percentages stay in Payroll only."}
+              ? "Labor payout uses the fixed 25% pool and this saved split."
+              : "Labor payout uses the fixed 25% pool. Split percentages stay in Payroll only."}
           </div>
         </div>
       ) : (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-[11px] text-amber-800">
-          No locked payout rule exists for this crew combination yet. Mark
-          complete will be blocked until that combo has a saved rule.
+          Select at least one crew member before marking this job complete.
         </div>
       )}
     </div>

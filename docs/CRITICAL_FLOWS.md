@@ -43,6 +43,8 @@ These are the workflows we treat as production-critical. Any change that touches
 
 2. Commissions
    - Commissions calculate from final amount paid.
+   - Sales commission is retired; management is 20% split 10% Jeffrey / 10% Austin.
+   - Labor is fixed at 25%; Jeffrey + Austin + Devon split labor as 7.5% / 7.5% / 10%.
    - Weekly payout run can be generated and exported.
 
 3. Partner portal (if enabled)
@@ -61,4 +63,3 @@ These are the workflows we treat as production-critical. Any change that touches
 3. Google Ads
    - Sync runs successfully.
    - Analyst report generates (manual mode) and stays approve-first.
-

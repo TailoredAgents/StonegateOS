@@ -18,14 +18,14 @@ describe("describeCommissionMath", () => {
       describeCommissionMath({
         role: "marketing",
         meta: {
-          totalRateBps: 1000,
+          totalRateBps: 2000,
           splitBps: 5000,
           totalSplitBps: 10000,
         },
       }),
     ).toEqual({
-      mathLabel: "10% management pool x 50% split",
-      effectivePercentLabel: "5%",
+      mathLabel: "20% management pool x 50% split",
+      effectivePercentLabel: "10%",
     });
   });
 
@@ -34,15 +34,15 @@ describe("describeCommissionMath", () => {
       describeCommissionMath({
         role: "crew",
         meta: {
-          poolRateBps: 3000,
+          poolRateBps: 2500,
           splitBps: 2,
           totalSplitBps: 3,
-          poolSource: "demo",
+          poolSource: "default",
         },
       }),
     ).toEqual({
-      mathLabel: "30% demo pool x 2/3 (66.67%) split",
-      effectivePercentLabel: "20%",
+      mathLabel: "25% crew pool x 2/3 (66.67%) split",
+      effectivePercentLabel: "16.67%",
     });
   });
 });

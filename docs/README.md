@@ -10,6 +10,7 @@ This folder contains the current operational docs for the monorepo.
 - System “AI briefing pack” (architecture + API + data): `system/README.md`
 
 ## Operations
+- Commission policy: `COMMISSION_POLICY.md`
 - Outbox worker (background jobs): `outbox-worker.md`
 - SEO agent (autopublishing blog): `seo-agent.md`
 - Meta (Facebook) setup: `meta-facebook-setup.md`

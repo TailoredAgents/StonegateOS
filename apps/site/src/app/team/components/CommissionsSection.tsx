@@ -208,9 +208,9 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         <h2 className={TEAM_SECTION_TITLE}>Commissions</h2>
         <p className={TEAM_SECTION_SUBTITLE}>
           Weekly payouts use the current Monday-Sunday week and final amount
-          paid. Sales is assigned on each appointment through Who sold the job,
-          management pays Jeffrey and Austin 5% each, and crews are selected
-          when marking a job complete.
+          paid. Sales commission is retired for new calculations, management
+          pays Jeffrey and Austin 10% each, and labor stays at 25% of the job
+          total regardless of the crew.
         </p>
       </header>
 
@@ -587,22 +587,21 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
       <div className={TEAM_CARD_PADDED}>
         <h3 className="text-lg font-semibold text-slate-900">Settings</h3>
         <p className="mt-1 text-sm text-slate-600">
-          Sales and management are fixed. Adjust the standard crew pool here.
+          Sales, management, and labor rates are fixed under the current
+          commission structure.
         </p>
 
         {commissionSettings ? (
-          <form
-            action="/api/team/commissions/settings"
-            method="post"
+          <div
             className="mt-4 grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700 sm:grid-cols-2"
           >
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
               <div className="text-xs font-medium text-slate-600">Sales</div>
               <div className="mt-1 text-base font-semibold text-slate-900">
-                5%
+                Retired
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                Paid to the seller on the job.
+                No new sales commission is generated.
               </div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -610,46 +609,39 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 Management
               </div>
               <div className="mt-1 text-base font-semibold text-slate-900">
-                5% total
+                20% total
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                Split 2.5% to Jeffrey and 2.5% to Austin.
+                Split 10% to Jeffrey and 10% to Austin.
               </div>
             </div>
-            <label className="flex flex-col gap-1">
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
               <span className="text-xs font-medium text-slate-600">
-                Crew pool %
+                Labor pool
               </span>
-              <input
-                name="crewPoolRatePercent"
-                defaultValue={fmtPercent(commissionSettings.crewPoolRateBps)}
-                inputMode="decimal"
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              />
-            </label>
+              <div className="mt-1 text-base font-semibold text-slate-900">
+                {fmtPercent(commissionSettings.crewPoolRateBps)}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                Fixed for every completed job.
+              </div>
+            </div>
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-3">
               <div className="text-xs font-medium text-slate-600">
                 Locked labor splits
               </div>
               <div className="mt-1 text-sm text-slate-700">
-                Jeffrey + Austin: 50/50
+                Most crew combinations split the 25% labor pool evenly.
               </div>
               <div className="mt-1 text-sm text-slate-700">
-                Jeffrey + Austin + Devon: 40/40/20
+                Jeffrey + Austin + Devon: 7.5% / 7.5% / 10%
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                30% override days still apply when that override is saved.
+                That three-person split gives Devon 10% and Jeffrey/Austin
+                7.5% each.
               </div>
             </div>
-            <div className="sm:col-span-2">
-              <SubmitButton
-                className={teamButtonClass("secondary")}
-                pendingLabel="Saving..."
-              >
-                Save commission settings
-              </SubmitButton>
-            </div>
-          </form>
+          </div>
         ) : (
           <p className="mt-3 text-sm text-slate-600">
             Commission settings not available yet.
@@ -658,59 +650,13 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
       </div>
 
       <div className={TEAM_CARD_PADDED}>
-        <h3 className="text-lg font-semibold text-slate-900">30% labor days</h3>
+        <h3 className="text-lg font-semibold text-slate-900">
+          Labor override days
+        </h3>
         <p className="mt-1 text-sm text-slate-600">
-          Mark a date as a labor override day. This applies a different crew
-          pool only when Austin, Devon, and Jeffrey are the selected crew, and
-          draft payouts recalculate automatically when you save it.
+          Retired. Labor now stays at 25% for every completed job, so saved
+          override days are ignored by new commission calculations.
         </p>
-
-        <form
-          action="/api/team/commissions/crew-pool-overrides"
-          method="post"
-          className="mt-4 grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-700 sm:grid-cols-3"
-        >
-          <input type="hidden" name="action" value="save" />
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-slate-600">Date</span>
-            <input
-              type="date"
-              name="localDate"
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              required
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-slate-600">
-              Crew pool %
-            </span>
-            <input
-              name="crewPoolRatePercent"
-              defaultValue="30"
-              inputMode="decimal"
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-              required
-            />
-          </label>
-          <label className="flex flex-col gap-1 sm:col-span-3">
-            <span className="text-xs font-medium text-slate-600">
-              Note (optional)
-            </span>
-            <input
-              name="note"
-              placeholder="Example: Devon labor day with Austin + Jeffrey"
-              className="rounded-xl border border-slate-200 bg-white px-3 py-2"
-            />
-          </label>
-          <div className="sm:col-span-3">
-            <SubmitButton
-              className={teamButtonClass("secondary")}
-              pendingLabel="Saving..."
-            >
-              Save labor override day
-            </SubmitButton>
-          </div>
-        </form>
 
         {overrideError ? (
           <p className="mt-3 text-sm text-amber-700">{overrideError}</p>
@@ -732,8 +678,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                     {fmtLocalDate(override.localDate, overrideDaysTimeZone)}
                   </div>
                   <div className="text-xs text-slate-600">
-                    Crew pool {fmtPercent(override.crewPoolRateBps)} for Austin
-                    + Devon + Jeffrey jobs
+                    Retired {fmtPercent(override.crewPoolRateBps)} override
                   </div>
                   {override.note ? (
                     <div className="mt-1 text-[11px] text-slate-500">
@@ -741,23 +686,9 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                     </div>
                   ) : null}
                 </div>
-                <form
-                  action="/api/team/commissions/crew-pool-overrides"
-                  method="post"
-                >
-                  <input type="hidden" name="action" value="delete" />
-                  <input
-                    type="hidden"
-                    name="localDate"
-                    value={override.localDate}
-                  />
-                  <SubmitButton
-                    className={teamButtonClass("secondary", "sm")}
-                    pendingLabel="Deleting..."
-                  >
-                    Delete
-                  </SubmitButton>
-                </form>
+                <div className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Ignored
+                </div>
               </div>
             ))
           )}

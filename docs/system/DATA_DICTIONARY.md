@@ -113,6 +113,10 @@ Revenue summaries are served by API routes such as:
 If enabled, commissions and payout runs are tracked in tables such as:
 - `commission_settings`, `appointment_commissions`, `payout_runs`, `payout_run_lines`
 
+Current policy: sales commission is retired for new calculations; management is
+20% split evenly between Jeffrey and Austin; labor is fixed at 25% with the
+Jeffrey + Austin + Devon crew split set to 7.5% / 7.5% / 10%.
+
 ---
 
 ## Auditing + security

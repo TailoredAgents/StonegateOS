@@ -4,8 +4,9 @@ import { callAdminApi } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
 const ADMIN_COOKIE = "myst-admin-session";
-const SALES_RATE_BPS = 500;
-const MANAGEMENT_RATE_BPS = 1000;
+const SALES_RATE_BPS = 0;
+const MANAGEMENT_RATE_BPS = 2000;
+const LABOR_RATE_BPS = 2500;
 
 export const dynamic = "force-dynamic";
 
@@ -34,13 +35,14 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const formData = await request.formData();
-  const crewPoolRateBps = parsePercentToBps(formData.get("crewPoolRatePercent"));
+  const crewPoolRateBps =
+    parsePercentToBps(formData.get("crewPoolRatePercent")) ?? LABOR_RATE_BPS;
 
-  if (crewPoolRateBps === null) {
+  if (crewPoolRateBps !== LABOR_RATE_BPS) {
     const response = NextResponse.redirect(redirectTo, 303);
     response.cookies.set({
       name: "myst-flash-error",
-      value: "Commission rates must be between 0 and 100",
+      value: "Labor is fixed at 25%.",
       path: "/"
     });
     return response;

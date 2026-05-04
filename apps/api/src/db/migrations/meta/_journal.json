@@ -330,6 +330,13 @@
       "when": 1775649600000,
       "tag": "0046_commission_restructure",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1777838400000,
+      "tag": "0047_commission_retire_sales_raise_management",
+      "breakpoints": true
     }
   ]
 }

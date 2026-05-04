@@ -133,8 +133,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       const response = NextResponse.redirect(redirectTo, 303);
       response.cookies.set({
         name: "myst-flash-error",
-        value:
-          "No locked crew payout rule exists for that crew combination yet.",
+        value: "Invalid crew payout split for that crew combination.",
         path: "/",
       });
       return response;

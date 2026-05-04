@@ -99,7 +99,8 @@ Planned approach (Phase 1 in `docs/TA_PLATFORM_PLAN.md`):
 
 **Ops + Owner**
 - Job completion updates revenue.
-- Commissions/payout calculations are visible.
+- Commissions/payout calculations are visible and follow
+  `docs/COMMISSION_POLICY.md`.
 
 ## 8) Go-live
 - Switch ads/campaigns to the new domain/phone if needed.

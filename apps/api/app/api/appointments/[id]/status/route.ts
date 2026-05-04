@@ -126,7 +126,7 @@ export async function POST(
         {
           error: "invalid_crew_combo",
           message:
-            "No locked crew payout rule exists for that crew combination yet.",
+            "Invalid crew payout split for that crew combination.",
         },
         { status: 400 },
       );

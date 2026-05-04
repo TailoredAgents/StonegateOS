@@ -1137,8 +1137,8 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   </label>
                   <p className="sm:col-span-2 text-[11px] text-slate-500">
                     Assigned Associate controls call routing and follow-up
-                    ownership. Who sold the job controls sales commission, and
-                    changing it later requires the secret code.
+                    ownership. Who sold the job is kept for attribution only,
+                    and changing it later requires the secret code.
                   </p>
                   <AppointmentBookingDetailsFields
                     teamMembers={teamMembers}
