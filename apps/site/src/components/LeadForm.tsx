@@ -1907,9 +1907,10 @@ export function LeadForm({
     return path === "/book" || path === "/bookbrush" || path === "/bookdemo";
   }, []);
 
-  const displayedJunkSizeOptions = contactFirst
-    ? JUNK_SIZE_OPTIONS_NO_PRICE
-    : JUNK_SIZE_OPTIONS;
+  const displayedJunkSizeOptions =
+    contactFirst || requireName
+      ? JUNK_SIZE_OPTIONS_NO_PRICE
+      : JUNK_SIZE_OPTIONS;
 
   const validateJobDetails = React.useCallback(() => {
     if (!isBrush && !isDemo && !types.length && !otherSelected) {
