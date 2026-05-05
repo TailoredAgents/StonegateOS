@@ -522,11 +522,13 @@ function getPreDiscountDisplayPrice(
 export function LeadForm({
   variant = "junk",
   contactFirst = false,
+  requireName = false,
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement> & {
   variant?: LeadFormVariant;
   contactFirst?: boolean;
+  requireName?: boolean;
 }) {
   const utm = useUTM();
   const isBrush = variant === "brush";
@@ -975,7 +977,8 @@ export function LeadForm({
       });
     }
 
-    if ((contactFirst && missingName) || missingPhone || missingZip) {
+    const nameRequired = contactFirst || requireName;
+    if ((nameRequired && missingName) || missingPhone || missingZip) {
       if (isBookAnalyticsPath(analyticsPath)) {
         trackWebEvent({
           event: "book_quote_blocked_missing_fields",
@@ -990,7 +993,7 @@ export function LeadForm({
         });
       }
       setError(
-        contactFirst && missingName
+        nameRequired && missingName
           ? "Please enter your first name to continue."
           : isDemo || isBrush
             ? "Please enter your mobile number to see your estimate."
@@ -1975,7 +1978,7 @@ export function LeadForm({
           Step {step} of 2
         </span>
         <span className="text-[10px] font-medium normal-case tracking-normal">
-          Takes &lt; 1 minute. No spam.
+          No spam. No obligation.
         </span>
       </div>
 
@@ -1994,7 +1997,9 @@ export function LeadForm({
               ? "Where should we text your estimate?"
               : isDemo
                 ? "Where should we text your demo estimate?"
-                : "Where should we text your estimate?"}
+                : requireName
+                  ? "Save your estimate"
+                  : "Where should we text your estimate?"}
       </h2>
       <p className="mt-1 text-sm text-neutral-600">
         {contactFirst
@@ -2009,7 +2014,9 @@ export function LeadForm({
                 : "Answer a few quick questions to see a ballpark range before booking."
             : isDemo
               ? "Enter a mobile number to see your estimate range. Name is optional."
-              : "Enter a mobile number to see your estimate range. Name is optional."}
+              : requireName
+                ? "Enter your name and mobile number so we can text your estimate link. No spam or obligation."
+                : "Enter a mobile number to see your estimate range. Name is optional."}
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs text-neutral-700">
@@ -2196,7 +2203,7 @@ export function LeadForm({
                   placeholder="(404) 777-2631"
                 />
                 <p className="mt-1 text-[11px] text-neutral-500">
-                  We will text your estimate here. No spam.
+                  We will text your estimate link here. No spam, no obligation.
                 </p>
               </div>
               <div className="sm:col-span-2">
@@ -2525,11 +2532,12 @@ export function LeadForm({
                       : JUNK_PRIMARY_OPTIONS;
                     return options.map((opt) => {
                       const selected = types.includes(opt.id);
-                      const checkboxId = `junk-type-${opt.id}`;
                       return (
-                        <label
+                        <button
                           key={opt.id}
-                          htmlFor={checkboxId}
+                          type="button"
+                          aria-pressed={selected}
+                          onClick={() => toggleType(opt.id)}
                           className={cn(
                             "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition",
                             selected
@@ -2537,14 +2545,6 @@ export function LeadForm({
                               : "border-neutral-200 bg-white text-neutral-700",
                           )}
                         >
-                          <input
-                            id={checkboxId}
-                            type="checkbox"
-                            className="sr-only"
-                            checked={selected}
-                            onChange={() => toggleType(opt.id)}
-                            aria-label={opt.label}
-                          />
                           <span
                             className={cn(
                               "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
@@ -2557,7 +2557,7 @@ export function LeadForm({
                             <Check className="h-3.5 w-3.5" strokeWidth={3} />
                           </span>
                           <span>{opt.label}</span>
-                        </label>
+                        </button>
                       );
                     });
                   })()}
@@ -2609,8 +2609,10 @@ export function LeadForm({
                       hasSecondarySelection;
                     if (!isMoreOpen) return null;
                     return (
-                      <label
-                        htmlFor="junk-type-other"
+                      <button
+                        type="button"
+                        aria-pressed={otherSelected}
+                        onClick={() => setOtherSelected((prev) => !prev)}
                         className={cn(
                           "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition sm:col-span-2",
                           otherSelected
@@ -2618,14 +2620,6 @@ export function LeadForm({
                             : "border-neutral-200 bg-white text-neutral-700",
                         )}
                       >
-                        <input
-                          id="junk-type-other"
-                          type="checkbox"
-                          className="sr-only"
-                          checked={otherSelected}
-                          onChange={() => setOtherSelected((prev) => !prev)}
-                          aria-label="Other (describe below)"
-                        />
                         <span
                           className={cn(
                             "flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
@@ -2638,7 +2632,7 @@ export function LeadForm({
                           <Check className="h-3.5 w-3.5" strokeWidth={3} />
                         </span>
                         <span>Other (describe below)</span>
-                      </label>
+                      </button>
                     );
                   })()}
                 </div>
@@ -3053,12 +3047,11 @@ export function LeadForm({
                     ? "Get my estimate"
                     : isBrush || isDemo
                       ? "Continue to my estimate"
-                      : "Continue to my price"}
+                      : "Continue to estimate"}
               </Button>
               {!contactFirst ? (
                 <p className="text-xs text-neutral-500">
-                  Next: enter your mobile number to see your{" "}
-                  {isBrush || isDemo ? "estimate" : "price"}.
+                  Next: enter your mobile number to see your estimate.
                 </p>
               ) : null}
             </div>
@@ -3123,7 +3116,7 @@ export function LeadForm({
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <label className="text-sm font-semibold text-neutral-800">
-                  First name (optional)
+                  {requireName ? "First name" : "First name (optional)"}
                 </label>
                 <input
                   name="name"
@@ -3131,6 +3124,7 @@ export function LeadForm({
                   autoComplete="name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  required={requireName}
                   className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
                   placeholder="Jamie"
                 />
@@ -3152,8 +3146,7 @@ export function LeadForm({
                   placeholder="(404) 777-2631"
                 />
                 <p className="mt-1 text-[11px] text-neutral-500">
-                  We’ll text your {isBrush || isDemo ? "estimate" : "price"}{" "}
-                  here. No spam.
+                  We’ll text your estimate link here. No spam, no obligation.
                 </p>
               </div>
               <div className="sm:col-span-2">
@@ -3875,7 +3868,7 @@ function QuoteResult({
             {quoteState.tier}
           </span>
           <span className="text-neutral-300">|</span>
-          <span>Saved to your phone number</span>
+          <span>Estimate saved</span>
         </div>
       </div>
       <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm leading-relaxed text-neutral-700">
@@ -3994,8 +3987,7 @@ function QuoteResult({
             </div>
           ) : null}
           <div className="text-[11px] text-neutral-500">
-            No need to repeat the form if you call. We can look up this estimate
-            from your phone number.
+            If you call, we can pull up this estimate from your phone number.
           </div>
         </div>
       ) : (

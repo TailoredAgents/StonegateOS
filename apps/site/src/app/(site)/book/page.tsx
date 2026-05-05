@@ -21,13 +21,13 @@ export default function BookPage() {
     <Section>
       <div className="mx-auto grid max-w-6xl gap-10 lg:grid-cols-[420px_1fr] lg:items-start">
         <header className="space-y-4">
-          <Badge tone="highlight">Book Online</Badge>
+          <Badge tone="highlight">Instant Estimate</Badge>
           <h1 className="font-display text-display text-primary-800">
-            Get your junk removal quote started
+            See your junk removal estimate
           </h1>
           <p className="text-body text-neutral-600">
-            Tell us who to text, then answer a few quick job questions. We save
-            your estimate so you can book, call, or come back to it later.
+            No call required. If the estimate looks good, we&apos;ll text it to
+            you so you can book or come back later.
           </p>
           <ul className="space-y-2 text-sm text-neutral-600">
             <li>Full-service pickup (we do the lifting)</li>
@@ -37,7 +37,7 @@ export default function BookPage() {
           </ul>
         </header>
 
-        <LeadForm contactFirst />
+        <LeadForm requireName />
       </div>
     </Section>
   );
