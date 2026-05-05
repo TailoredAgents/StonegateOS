@@ -168,7 +168,7 @@ const JUNK_SIZE_OPTIONS: Array<{
   {
     id: "min_pickup",
     label: "Small pickup",
-    hint: "A few items or a small pile ($220-$400 depending on weight)",
+    hint: "A few items or a small pile ($195-$310 depending on weight)",
   },
   {
     id: "half_trailer",
@@ -3674,6 +3674,7 @@ export function LeadForm({
                       <a
                         href="tel:+14047772631"
                         aria-label="Call to confirm and book"
+                        data-cta="book-call"
                       >
                         Call to confirm &amp; book
                       </a>
@@ -3965,7 +3966,11 @@ function QuoteResult({
               Book online
             </Button>
             <Button asChild variant="secondary" className="justify-center">
-              <a href="tel:+14047772631" aria-label="Call to confirm and book">
+              <a
+                href="tel:+14047772631"
+                aria-label="Call to confirm and book"
+                data-cta="book-call"
+              >
                 Call to confirm
               </a>
             </Button>
@@ -4308,7 +4313,11 @@ function QuoteResult({
                       : "Book this pickup"}
             </Button>
             <Button asChild variant="secondary" className="justify-center">
-              <a href="tel:+14047772631" aria-label="Call to confirm and book">
+              <a
+                href="tel:+14047772631"
+                aria-label="Call to confirm and book"
+                data-cta="book-call"
+              >
                 Call to confirm &amp; book
               </a>
             </Button>

@@ -230,10 +230,10 @@ const ROUGH_ESTIMATE_DISCLAIMER =
 
 const JUNK_TIER_PRICE_BANDS: Record<number, { min: number; max: number }> = {
   0: { min: 175, max: 175 },
-  1: { min: 220, max: 400 },
-  2: { min: 350, max: 600 },
-  3: { min: 500, max: 800 },
-  4: { min: 750, max: 1050 },
+  1: { min: 195, max: 310 },
+  2: { min: 320, max: 470 },
+  3: { min: 480, max: 620 },
+  4: { min: 630, max: 850 },
 };
 
 function clampInt(value: number, min: number, max: number): number {
@@ -571,7 +571,12 @@ function applyTierBandPricingToQuote(
   const rangeWidth = span <= 100 ? span : 100;
   const maxStart = band.max - rangeWidth;
   const rawStart = band.min + (maxStart - band.min) * context.rangePosition;
-  const low = span <= 0 ? band.min : roundToNearest(rawStart, 25);
+  const low =
+    span <= 0
+      ? band.min
+      : context.risk === "high"
+        ? maxStart
+        : roundToNearest(rawStart, 25);
   const clampedLow = clampInt(low, band.min, maxStart);
   const high = clampedLow + rangeWidth;
   const reasonBase =
@@ -582,7 +587,7 @@ function applyTierBandPricingToQuote(
       : context.risk === "medium"
         ? " Heavier materials are included in this estimate range."
         : "";
-  const reasonSummary = `${reasonBase || "This estimate is based on your selected volume and material type."}${weightSentence}`;
+  const reasonSummary = `${reasonBase || "This estimate is a ballpark range based on pickup size, material mix, and likely weight."}${weightSentence} The crew confirms the final price on site before loading.`;
 
   return {
     ...quote,
@@ -692,21 +697,28 @@ function formatFraction(units: number): string {
   return formatLoadCount(units);
 }
 
+function formatRangeEndpoint(units: number): string {
+  if (units === 0) return "Minimum";
+  if (units === 4) return "full";
+  return formatFraction(units);
+}
+
 function formatTierLabel(minUnits: number, maxUnits: number): string {
   if (minUnits === maxUnits) {
     if (minUnits === 0) return "Minimum pickup";
-    if (minUnits === 1) return "Small pickup (1-4 items)";
-    if (minUnits <= 4)
-      return minUnits === 4
-        ? "Full trailer"
-        : `${formatFraction(minUnits)} trailer`;
-    return `${formatLoadCount(minUnits)} trailer loads`;
+    if (minUnits === 1) return "1/4-1/2 trailer range";
+    if (minUnits === 2) return "1/2-3/4 trailer range";
+    if (minUnits === 3) return "3/4-full trailer range";
+    if (minUnits === 4) return "Full trailer+ range";
+    return `${formatLoadCount(minUnits)}+ trailer load range`;
+  }
+
+  if (minUnits === 0 && maxUnits <= 1) {
+    return "Minimum-small pickup range";
   }
 
   if (maxUnits <= 4) {
-    const left = minUnits === 2 ? "Half" : formatFraction(minUnits);
-    const right = maxUnits === 2 ? "Half" : formatFraction(maxUnits);
-    return `${left} to ${right} trailer`;
+    return `${formatRangeEndpoint(minUnits)}-${formatRangeEndpoint(maxUnits)} trailer range`;
   }
 
   const left =
@@ -715,7 +727,15 @@ function formatTierLabel(minUnits: number, maxUnits: number): string {
       : minUnits < 4
         ? formatFraction(minUnits)
         : formatLoadCount(minUnits);
-  return `${left} to ${formatLoadCount(maxUnits)} trailer loads`;
+  return `${left}-${formatLoadCount(maxUnits)} trailer load range`;
+}
+
+function buildCustomerReasonSummary(forcedMultiLoad: boolean): string {
+  if (forcedMultiLoad) {
+    return "This estimate is a ballpark range for a larger pickup that may span more than one load depending on actual volume and weight.";
+  }
+
+  return "This estimate is a ballpark range based on pickup size, material mix, and likely weight.";
 }
 
 function shouldMentionMultiLoad(
@@ -808,39 +828,7 @@ function applyBoundsToQuote(
   );
 
   const forcedMultiLoad = shouldMentionMultiLoad(job, bounds, priceHigh);
-  const genericReason = forcedMultiLoad
-    ? "Based on your answers, this range may span multiple trailer loads depending on actual volume. Final price is confirmed on site before we start loading."
-    : "Based on your answers, this range matches our trailer volume pricing.";
-
-  const mentionsMultipleLoads = (text: string): boolean => {
-    const normalized = text.toLowerCase();
-    if (normalized.includes("more than one")) return true;
-    if (normalized.includes("multiple")) return true;
-    if (
-      normalized.includes("multi-trailer") ||
-      normalized.includes("multi trailer")
-    )
-      return true;
-    if (
-      /\b([2-9]|[1-9]\d+|two|three|four|five)\s*(trailer\s*)?loads?\b/iu.test(
-        normalized,
-      )
-    )
-      return true;
-    if (/\b1\.\d+\s*(trailer\s*)?loads?\b/iu.test(normalized)) return true;
-    return false;
-  };
-
-  const providedReason =
-    typeof quote.reasonSummary === "string" ? quote.reasonSummary.trim() : "";
-  let reasonSummary = providedReason || genericReason;
-
-  if (forcedMultiLoad && !mentionsMultipleLoads(reasonSummary)) {
-    reasonSummary = genericReason;
-  }
-  if (!forcedMultiLoad && mentionsMultipleLoads(reasonSummary)) {
-    reasonSummary = genericReason;
-  }
+  const reasonSummary = buildCustomerReasonSummary(forcedMultiLoad);
 
   return {
     ...quote,
@@ -872,9 +860,7 @@ function getFallbackQuote(job: JobInput, bounds: QuoteBounds): QuoteResult {
     job.perceivedSize === "not_sure" || job.perceivedSize === "big_cleanout";
 
   const mentionMultiLoad = shouldMentionMultiLoad(job, bounds, priceHigh);
-  const reasonSummary = mentionMultiLoad
-    ? "Based on your selected size, this range may span multiple trailer loads depending on actual volume. Final price is confirmed on site before we start loading."
-    : "Based on your selected size, this range matches our trailer volume pricing.";
+  const reasonSummary = buildCustomerReasonSummary(mentionMultiLoad);
 
   return {
     loadFractionEstimate,
@@ -1557,10 +1543,10 @@ Do NOT add charges for stairs, distance, time, urgency, or general difficulty.
 
 Customer-facing tier bands:
 - Single item / minimum pickup: $175
-- 1/4 trailer: $220-$400 depending on weight
-- 1/2 trailer: $350-$600 depending on weight
-- 3/4 trailer: $500-$800 depending on weight
-- Full trailer: $750-$1050 depending on weight
+- 1/4 trailer: $195-$310 depending on weight
+- 1/2 trailer: $320-$470 depending on weight
+- 3/4 trailer: $480-$620 depending on weight
+- Full trailer: $630-$850 depending on weight
 
 Weight:
 - Dense materials like concrete, dirt, tile, brick, stone, roofing, or large amounts of books/paper can change the final price.
@@ -1582,6 +1568,6 @@ Rules:
   not_sure -> err on 0.5+ unless clearly tiny
 - Use the tier bands above; do not invent unrelated pricing schemes.
 - If the job seems uncertain or could be multiple loads, widen the range and set needsInPersonEstimate=true.
-- displayTierLabel: short category like "Small load", "Half trailer", "Large to full trailer", "Multi-trailer project".
-- reasonSummary: one friendly sentence that describes the estimate basis without sounding like a guaranteed final price.
+- displayTierLabel: short range category like "1/2-3/4 trailer range", "3/4-full trailer range", or "Full trailer+ range". Avoid exact single-fraction labels such as "Half trailer" in customer-facing wording.
+- reasonSummary: one friendly sentence that describes the estimate as a ballpark based on size, material mix, weight, and on-site review. Avoid wording like "half-trailer worth" that makes the estimate sound tied to one exact trailer volume.
 `.trim();

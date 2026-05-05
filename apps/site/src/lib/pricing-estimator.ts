@@ -9,10 +9,10 @@ export type LoadTier = Readonly<{
 }>;
 
 export const LOAD_TIERS: readonly LoadTier[] = [
-  { id: "quarter", label: "¼ load", sliderValue: 25, min: 175, max: 250 },
-  { id: "half", label: "½ load", sliderValue: 50, min: 350, max: 500 },
-  { id: "threeQuarter", label: "¾ load", sliderValue: 75, min: 525, max: 700 },
-  { id: "full", label: "Full load", sliderValue: 100, min: 700, max: 900 }
+  { id: "quarter", label: "¼ load", sliderValue: 25, min: 195, max: 310 },
+  { id: "half", label: "½ load", sliderValue: 50, min: 320, max: 470 },
+  { id: "threeQuarter", label: "¾ load", sliderValue: 75, min: 480, max: 620 },
+  { id: "full", label: "Full load", sliderValue: 100, min: 630, max: 850 },
 ];
 
 export type AddonId = "mattress" | "paint" | "tire";
@@ -26,14 +26,14 @@ export type Addon = Readonly<{
 export const ADDONS: readonly Addon[] = [
   { id: "mattress", label: "Mattresses", unitPrice: 30 },
   { id: "paint", label: "Paint cans", unitPrice: 10 },
-  { id: "tire", label: "Tires", unitPrice: 10 }
+  { id: "tire", label: "Tires", unitPrice: 10 },
 ];
 
 export const PRICING_ESTIMATOR_QUERY_KEYS = {
   load: "pe_load",
   mattress: "pe_mattress",
   paint: "pe_paint",
-  tire: "pe_tire"
+  tire: "pe_tire",
 } as const;
 
 export function getTierBySliderValue(value: number): LoadTier {
@@ -50,12 +50,20 @@ export function normalizeTierId(value: string | null): LoadTierId | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  if (trimmed === "quarter" || trimmed === "half" || trimmed === "threeQuarter" || trimmed === "full") {
+  if (
+    trimmed === "quarter" ||
+    trimmed === "half" ||
+    trimmed === "threeQuarter" ||
+    trimmed === "full"
+  ) {
     return trimmed;
   }
   return null;
 }
 
 export function computeAddonTotal(addons: Record<AddonId, number>): number {
-  return ADDONS.reduce((total, addon) => total + addon.unitPrice * (addons[addon.id] ?? 0), 0);
+  return ADDONS.reduce(
+    (total, addon) => total + addon.unitPrice * (addons[addon.id] ?? 0),
+    0,
+  );
 }

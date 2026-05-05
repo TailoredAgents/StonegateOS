@@ -21,7 +21,9 @@ export function Footer() {
           }
           secondaryAction={
             <Button variant="secondary" asChild>
-              <a href={`tel:${company.phoneE164}`}>Call {company.phoneDisplay}</a>
+              <a href={`tel:${company.phoneE164}`} data-cta="footer-call">
+                Call {company.phoneDisplay}
+              </a>
             </Button>
           }
         />
@@ -34,7 +36,11 @@ export function Footer() {
             <p className="font-semibold text-neutral-800">Contact</p>
             <ul className="mt-2 space-y-1">
               <li>
-                <a href={`tel:${company.phoneE164}`} className="text-neutral-700 hover:text-primary-700">
+                <a
+                  href={`tel:${company.phoneE164}`}
+                  className="text-neutral-700 hover:text-primary-700"
+                  data-cta="footer-call"
+                >
                   {company.phoneDisplay}
                 </a>
               </li>

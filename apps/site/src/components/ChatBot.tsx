@@ -44,7 +44,7 @@ function fallbackResponse(message: string): string {
     m.includes("quote") ||
     m.includes("estimate")
   )
-    return "We price by load size. Minimum pickup starts at $150; 1/4 trailer $175, 1/2 $350, 3/4 $525, and a full load $700. We’ll confirm the exact price before we arrive.";
+    return "We price by load size and material weight. Minimum pickup is $175; 1/4 trailer is typically $195-$310, 1/2 trailer $320-$470, 3/4 trailer $480-$620, and a full load $630-$850. We’ll confirm the exact price before loading.";
   if (m.includes("mattress") || m.includes("paint") || m.includes("tire"))
     return "Base pricing is by volume. Some items have dump pass-through fees, such as mattresses or paint cans.";
   if (m.includes("insurance") || m.includes("licensed"))
@@ -54,15 +54,12 @@ function fallbackResponse(message: string): string {
 
 export function ChatBot() {
   const pathname = usePathname();
-  if (
+  const shouldHide =
     pathname === "/book" ||
     pathname === "/bookbrush" ||
     pathname === "/bookdemo" ||
     pathname.startsWith("/book/") ||
-    pathname.startsWith("/quote")
-  ) {
-    return null;
-  }
+    pathname.startsWith("/quote");
 
   const [isOpen, setIsOpen] = React.useState(false);
   const [input, setInput] = React.useState("");
@@ -94,6 +91,10 @@ export function ChatBot() {
       timersRef.current = [];
     };
   }, []);
+
+  if (shouldHide) {
+    return null;
+  }
 
   function pickResponseDelayMs(): number {
     const range = RESPONSE_DELAY_MAX_MS - RESPONSE_DELAY_MIN_MS;

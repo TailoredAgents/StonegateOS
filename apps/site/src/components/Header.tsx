@@ -100,7 +100,12 @@ export function Header() {
             variant="ghost"
             className="border border-neutral-300/70 text-primary-800 hover:border-primary-300"
           >
-            <a href={`tel:${phoneE164}`}>{isBookingLanding ? `Call ${phoneDisplay}` : "Call"}</a>
+            <a
+              href={`tel:${phoneE164}`}
+              data-cta={pathname === "/book" ? "book-call" : undefined}
+            >
+              {isBookingLanding ? `Call ${phoneDisplay}` : "Call"}
+            </a>
           </Button>
         </div>
         {isBookingLanding ? (
@@ -109,7 +114,12 @@ export function Header() {
             variant="ghost"
             className="border border-neutral-300/70 text-primary-800 hover:border-primary-300 md:hidden"
           >
-            <a href={`tel:${phoneE164}`}>Call</a>
+            <a
+              href={`tel:${phoneE164}`}
+              data-cta={pathname === "/book" ? "book-call" : undefined}
+            >
+              Call
+            </a>
           </Button>
         ) : (
           <button
