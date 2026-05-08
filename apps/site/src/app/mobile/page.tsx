@@ -1552,20 +1552,23 @@ export default async function MobileHomePage({
                                 {[property.addressLine1, property.city, property.state].filter(Boolean).join(", ")}
                               </option>
                             ))}
-                            <option value="">Add new property below</option>
+                            <option value="">Add a new address below</option>
                           </select>
+                          <span className="mt-1 block text-xs leading-5 text-slate-400">
+                            Pick a saved address, or choose add new to save a different one.
+                          </span>
                         </label>
                       ) : (
                         <input type="hidden" name="propertyId" value="" />
                       )}
                       <div className="rounded-md border border-white/10 bg-slate-950 p-3">
-                        <p className="text-xs font-semibold text-slate-300">New address</p>
+                        <p className="text-xs font-semibold text-slate-300">Add new address</p>
                         <p className="mt-1 text-xs leading-5 text-slate-400">
-                          Fill this out to save and use a different address for this booking.
+                          Only used when you choose add new above, or when this contact has no saved address.
                         </p>
                         {detectedThreadAddress ? (
                           <p className="mt-1 text-xs leading-5 text-cyan-100">
-                            Found in the thread and prefilled. Booking will save it to the contact.
+                            Found in the thread and prefilled for faster new-address booking.
                           </p>
                         ) : null}
                         <div className="mt-2 space-y-2">

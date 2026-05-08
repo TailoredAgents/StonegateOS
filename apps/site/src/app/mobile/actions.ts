@@ -779,16 +779,17 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   if (!startAt) {
     redirect(errorRedirect("start_time_required"));
   }
+  const shouldCreateProperty = !propertyId;
   const hasNewAddress = Boolean(addressLine1 || addressLine2 || city || state || postalCode);
   const hasCompleteNewAddress = Boolean(addressLine1 && city && state && postalCode);
-  if (!propertyId && !hasNewAddress) {
+  if (shouldCreateProperty && !hasNewAddress) {
     redirect(errorRedirect("property_required"));
   }
-  if (hasNewAddress && !hasCompleteNewAddress) {
+  if (shouldCreateProperty && hasNewAddress && !hasCompleteNewAddress) {
     redirect(errorRedirect("complete_address_required"));
   }
 
-  if (hasCompleteNewAddress) {
+  if (shouldCreateProperty && hasCompleteNewAddress) {
     const propertyResponse = await callAdminApi(`/api/admin/contacts/${encodeURIComponent(contactId)}/properties`, {
       method: "POST",
       body: JSON.stringify({
