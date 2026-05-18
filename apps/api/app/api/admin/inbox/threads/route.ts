@@ -346,10 +346,17 @@ export async function GET(request: NextRequest): Promise<Response> {
     .leftJoin(outboundLatest, eq(outboundLatest.threadId, conversationThreads.id))
     .leftJoin(activityLatest, eq(activityLatest.threadId, conversationThreads.id));
 
-  const rows = await (whereClause ? rowsQuery.where(whereClause) : rowsQuery)
-    .orderBy(sql`${priorityScoreSql} desc`, sql`${activityLatest.lastActivityAt} desc nulls last`, desc(conversationThreads.updatedAt))
-    .limit(limit)
-    .offset(offset);
+  const filteredRowsQuery = whereClause ? rowsQuery.where(whereClause) : rowsQuery;
+  const sortedRowsQuery =
+    view === "attention" && !searchTerm
+      ? filteredRowsQuery.orderBy(
+          sql`${priorityScoreSql} desc`,
+          sql`${activityLatest.lastActivityAt} desc nulls last`,
+          desc(conversationThreads.updatedAt)
+        )
+      : filteredRowsQuery.orderBy(sql`${activityLatest.lastActivityAt} desc nulls last`, desc(conversationThreads.updatedAt));
+
+  const rows = await sortedRowsQuery.limit(limit).offset(offset);
 
   const serviceArea = await getServiceAreaPolicy(db);
 
