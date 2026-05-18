@@ -337,6 +337,13 @@
       "when": 1777838400000,
       "tag": "0047_commission_retire_sales_raise_management",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1778918400000,
+      "tag": "0048_mobile_inbox_organization",
+      "breakpoints": true
     }
   ]
 }

@@ -10,7 +10,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const params = new URLSearchParams();
   const input = request.nextUrl.searchParams;
 
-  const passthroughKeys = ["q", "status", "channel", "contactId", "limit", "offset"] as const;
+  const passthroughKeys = ["q", "status", "channel", "contactId", "limit", "offset", "view"] as const;
   for (const key of passthroughKeys) {
     const value = input.get(key);
     if (typeof value === "string" && value.trim().length) {
@@ -30,4 +30,3 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
   });
 }
-

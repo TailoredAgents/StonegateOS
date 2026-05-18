@@ -8,7 +8,9 @@ import {
   addMobileContactNoteAction,
   addMobileAppointmentNoteAction,
   bookMobileAppointmentAction,
+  closeMobileThreadAction,
   createMobileTeamMemberAction,
+  markMobileThreadHandledAction,
   mobileLogoutAction,
   openMobileAppointmentThreadAction,
   runMobilePayoutAction,
@@ -53,10 +55,22 @@ function labelForRole(role: string | null): string {
 type ThreadSummary = {
   id: string;
   status: string;
+  state?: string;
   channel: string;
   subject: string | null;
+  sourceFamily?: string | null;
   lastMessagePreview: string | null;
   lastMessageAt: string | null;
+  lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
+  waitingSince?: string | null;
+  attentionReason?: string | null;
+  needsAttention?: boolean;
+  priorityScore?: number;
+  closedReason?: string | null;
+  closedAt?: string | null;
+  doNotContact?: boolean;
+  mediaCount?: number;
   contact: {
     id: string;
     name: string;
@@ -88,9 +102,16 @@ type MessageDetail = {
 type ThreadDetail = {
   id: string;
   status: string;
+  state?: string;
   channel: string;
   subject: string | null;
   lastMessageAt: string | null;
+  lastInboundAt?: string | null;
+  attentionHandledAt?: string | null;
+  closedReason?: string | null;
+  closedAt?: string | null;
+  doNotContact?: boolean;
+  doNotContactReason?: string | null;
   contact: ThreadSummary["contact"];
   property: ThreadSummary["property"];
 };
@@ -544,6 +565,32 @@ function formatChannel(value: string): string {
   return value || "Thread";
 }
 
+function sourceBadgeClass(value: string | null | undefined): string {
+  if (value === "Google") return "border-emerald-300/30 bg-emerald-300/10 text-emerald-100";
+  if (value === "Facebook") return "border-sky-300/30 bg-sky-300/10 text-sky-100";
+  if (value === "Missed Call") return "border-amber-300/30 bg-amber-300/10 text-amber-100";
+  if (value === "Website") return "border-cyan-300/30 bg-cyan-300/10 text-cyan-100";
+  if (value === "Partner") return "border-violet-300/30 bg-violet-300/10 text-violet-100";
+  return "border-white/10 bg-slate-800 text-slate-200";
+}
+
+function attentionLabel(thread: ThreadSummary): string {
+  if (thread.doNotContact) return "DNC";
+  if (thread.closedReason === "lost") return "Lost";
+  if (thread.status === "closed") return "Closed";
+  if (thread.attentionReason === "follow_up_due") return "Follow-up due";
+  if (thread.attentionReason === "needs_reply") return "Needs reply";
+  if (thread.attentionReason === "new_lead") return "New";
+  if (thread.state === "booked") return "Booked";
+  return thread.lastOutboundAt ? "Waiting" : formatStage(thread.state);
+}
+
+function attentionBadgeClass(thread: ThreadSummary): string {
+  if (thread.doNotContact || thread.status === "closed") return "bg-slate-800 text-slate-300";
+  if (thread.needsAttention) return "bg-cyan-300 text-slate-950";
+  return "bg-slate-800 text-slate-300";
+}
+
 function formatProviderLabel(value: string): string {
   return value
     .split("_")
@@ -940,9 +987,10 @@ function MobileWeekAgenda({
   );
 }
 
-async function loadMobileThreads(input: { status: string; q: string }): Promise<ThreadSummary[]> {
+async function loadMobileThreads(input: { view?: string; status?: string; q?: string; limit?: number }): Promise<ThreadSummary[]> {
   const params = new URLSearchParams();
-  params.set("limit", "25");
+  params.set("limit", String(input.limit ?? 25));
+  if (input.view) params.set("view", input.view);
   if (input.status) params.set("status", input.status);
   if (input.q) params.set("q", input.q);
   const response = await callAdminApi(`/api/admin/inbox/threads?${params.toString()}`, { method: "GET" });
@@ -1055,6 +1103,7 @@ export default async function MobileHomePage({
     task?: string;
     contact?: string;
     status?: string;
+    view?: string;
     q?: string;
     date?: string;
     appointment?: string;
@@ -1067,6 +1116,8 @@ export default async function MobileHomePage({
     invite?: string;
     password?: string;
     call?: string;
+    handled?: string;
+    closed?: string;
     error?: string;
   }>;
 }) {
@@ -1083,7 +1134,9 @@ export default async function MobileHomePage({
   const needsPasswordSetup = params.setup === "1" && !session.teamMember.passwordSet;
   const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
   const contactId = typeof params.contactId === "string" ? params.contactId.trim() : "";
-  const inboxStatus = typeof params.status === "string" && params.status.trim() ? params.status.trim() : "open";
+  const requestedInboxView = typeof params.view === "string" ? params.view.trim() : "";
+  const inboxView = requestedInboxView === "google" || requestedInboxView === "all" ? requestedInboxView : "attention";
+  const inboxStatus = typeof params.status === "string" && params.status.trim() ? params.status.trim() : "";
   const inboxQuery = typeof params.q === "string" ? params.q.trim() : "";
   const calendarDay = typeof params.date === "string" && params.date.trim() ? params.date.trim() : formatDayKey(new Date());
   const quoteStatus =
@@ -1106,8 +1159,22 @@ export default async function MobileHomePage({
   const inviteSent = params.invite === "sent";
   const passwordSaved = params.password === "saved";
   const callStarted = params.call === "started";
+  const handledSaved = params.handled === "1";
+  const threadClosed = params.closed === "1";
   const error = typeof params.error === "string" && params.error.trim().length ? params.error.trim() : null;
-  const threads = activeScreen === "inbox" ? await loadMobileThreads({ status: inboxStatus, q: inboxQuery }) : [];
+  const [threads, inboxCountThreads] =
+    activeScreen === "inbox"
+      ? await Promise.all([
+          loadMobileThreads({ view: inboxView, status: inboxStatus, q: inboxQuery }),
+          loadMobileThreads({ view: "all", limit: 200 })
+        ])
+      : [[], []];
+  const inboxCounts = {
+    attention: inboxCountThreads.filter((thread) => thread.needsAttention).length,
+    google: inboxCountThreads.filter((thread) => thread.sourceFamily === "Google" && thread.status !== "closed" && !thread.doNotContact).length,
+    facebook: inboxCountThreads.filter((thread) => thread.sourceFamily === "Facebook" && thread.status !== "closed" && !thread.doNotContact).length,
+    due: inboxCountThreads.filter((thread) => thread.attentionReason === "follow_up_due").length
+  };
   const contacts = activeScreen === "contacts" ? await loadMobileContacts({ q: inboxQuery }) : [];
   const contactDetail = activeScreen === "contacts" && contactId ? await loadMobileContact(contactId) : null;
   const calendarWeekDays = weekDayKeys(calendarDay);
@@ -1284,25 +1351,28 @@ export default async function MobileHomePage({
               Ringing your phone now. Answer to connect with the customer.
             </div>
           ) : null}
+          {handledSaved ? (
+            <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
+              Thread marked handled.
+            </div>
+          ) : null}
+          {threadClosed ? (
+            <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
+              Thread closed.
+            </div>
+          ) : null}
           {error ? (
             <div className="rounded-lg border border-rose-300/30 bg-rose-300/10 p-4 text-sm text-rose-100">
               {error}
             </div>
           ) : null}
 
-          <div className="rounded-lg border border-cyan-300/20 bg-cyan-300/10 p-4">
-            <p className="text-sm font-semibold text-cyan-100">Mobile shell is active</p>
-            <p className="mt-1 text-sm leading-6 text-slate-300">
-              Inbox, contact detail, and calendar appointment controls are now connected to live CRM data.
-            </p>
-          </div>
-
           {activeScreen === "inbox" ? (
             <div className="space-y-4">
               {selectedThread?.thread ? (
                 <div className="rounded-lg border border-white/10 bg-white/[0.08]">
                   <div className="border-b border-white/10 p-4">
-                    <Link href="/mobile" className="text-sm font-semibold text-cyan-200">
+                    <Link href={`/mobile?view=${encodeURIComponent(inboxView)}` as Route} className="text-sm font-semibold text-cyan-200">
                       Back to inbox
                     </Link>
                     <div className="mt-3 flex items-start justify-between gap-3">
@@ -1316,12 +1386,56 @@ export default async function MobileHomePage({
                       {selectedThread.thread.contact?.id && (selectedThread.thread.contact.phone || selectedContact?.phoneE164 || selectedContact?.phone) ? (
                         <form action={startMobileContactCallAction}>
                           <input type="hidden" name="contactId" value={selectedThread.thread.contact.id} />
+                          <input type="hidden" name="threadId" value={selectedThread.thread.id} />
                           <input type="hidden" name="returnTo" value={`/mobile?threadId=${encodeURIComponent(threadId)}`} />
                           <button type="submit" className="rounded-md bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950">
                             Call
                           </button>
                         </form>
                       ) : null}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {selectedThread.thread.doNotContact ? (
+                        <span className="rounded-full bg-rose-300/15 px-2.5 py-1 text-xs font-semibold text-rose-100">DNC</span>
+                      ) : null}
+                      {selectedThread.thread.closedReason ? (
+                        <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">
+                          {formatStage(selectedThread.thread.closedReason)}
+                        </span>
+                      ) : null}
+                      <form action={markMobileThreadHandledAction}>
+                        <input type="hidden" name="threadId" value={selectedThread.thread.id} />
+                        <button type="submit" className="rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200">
+                          Mark handled
+                        </button>
+                      </form>
+                      <details className="relative">
+                        <summary className="cursor-pointer list-none rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200">
+                          Close
+                        </summary>
+                        <div className="absolute right-0 z-20 mt-2 w-64 rounded-md border border-white/10 bg-slate-950 p-3 shadow-xl">
+                          <form action={closeMobileThreadAction} className="space-y-2">
+                            <input type="hidden" name="threadId" value={selectedThread.thread.id} />
+                            <button name="closeReason" value="lost" className="w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-left text-sm font-semibold text-slate-100">
+                              Lost
+                            </button>
+                            <label className="block rounded-md border border-white/10 bg-slate-900 p-2">
+                              <span className="text-xs font-semibold text-slate-300">DNC note</span>
+                              <input
+                                name="doNotContactReason"
+                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-2 py-2 text-sm text-white outline-none focus:border-cyan-300"
+                                placeholder="Stop request, wrong number..."
+                              />
+                              <button name="closeReason" value="do_not_contact" className="mt-2 w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-left text-sm font-semibold text-rose-100">
+                                Do Not Contact
+                              </button>
+                            </label>
+                            <button name="closeReason" value="closed" className="w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-left text-sm font-semibold text-slate-100">
+                              Closed
+                            </button>
+                          </form>
+                        </div>
+                      </details>
                     </div>
                   </div>
 
@@ -1345,17 +1459,63 @@ export default async function MobileHomePage({
                     threadId={selectedThread.thread.id}
                     channel={selectedThread.thread.channel}
                     initialMessages={selectedThread.messages ?? []}
+                    doNotContact={selectedThread.thread.doNotContact === true}
                   />
                 </div>
               ) : (
                 <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
                   <div className="flex items-center justify-between gap-3">
-                    <h2 className="text-base font-semibold">Open threads</h2>
+                    <h2 className="text-base font-semibold">
+                      {inboxView === "google" ? "Google Leads" : inboxView === "all" ? "All Messages" : "Needs Attention"}
+                    </h2>
                     <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">{threads.length}</span>
                   </div>
 
-                  <form action="/mobile" className="mt-4 space-y-3">
+                  <div className="mt-4 grid grid-cols-4 gap-2">
+                    <div className="rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-center">
+                      <p className="text-[10px] font-semibold text-slate-400">Attention</p>
+                      <p className="mt-0.5 text-sm font-semibold text-white">{inboxCounts.attention}</p>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-center">
+                      <p className="text-[10px] font-semibold text-slate-400">Google</p>
+                      <p className="mt-0.5 text-sm font-semibold text-emerald-100">{inboxCounts.google}</p>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-center">
+                      <p className="text-[10px] font-semibold text-slate-400">Facebook</p>
+                      <p className="mt-0.5 text-sm font-semibold text-sky-100">{inboxCounts.facebook}</p>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-center">
+                      <p className="text-[10px] font-semibold text-slate-400">Due</p>
+                      <p className="mt-0.5 text-sm font-semibold text-amber-100">{inboxCounts.due}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    {[
+                      { id: "attention", label: "Needs Attention" },
+                      { id: "google", label: "Google Leads" },
+                      { id: "all", label: "All Messages" }
+                    ].map((view) => {
+                      const href = `/mobile?view=${view.id}${inboxQuery ? `&q=${encodeURIComponent(inboxQuery)}` : ""}` as Route;
+                      return (
+                        <Link
+                          key={view.id}
+                          href={href}
+                          className={`rounded-md border px-2 py-2 text-center text-xs font-semibold ${
+                            inboxView === view.id
+                              ? "border-cyan-300 bg-cyan-300 text-slate-950"
+                              : "border-white/10 bg-slate-900 text-slate-200"
+                          }`}
+                        >
+                          {view.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+
+                  <form action="/mobile" className="mt-4">
                     <input type="hidden" name="screen" value="inbox" />
+                    <input type="hidden" name="view" value={inboxView} />
                     <label className="block">
                       <span className="text-xs font-semibold text-slate-300">Search</span>
                       <input
@@ -1365,53 +1525,60 @@ export default async function MobileHomePage({
                         placeholder="Name, phone, message..."
                       />
                     </label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {["open", "pending", "closed"].map((status) => (
-                        <button
-                          key={status}
-                          type="submit"
-                          name="status"
-                          value={status}
-                          className={`rounded-md border px-3 py-2 text-xs font-semibold capitalize ${
-                            inboxStatus === status
-                              ? "border-cyan-300 bg-cyan-300 text-slate-950"
-                              : "border-white/10 bg-slate-900 text-slate-200"
-                          }`}
-                        >
-                          {status}
-                        </button>
-                      ))}
-                    </div>
                   </form>
 
                   <div className="mt-4 space-y-2">
                     {threads.length > 0 ? (
-                      threads.map((thread) => (
-                        <Link
-                          key={thread.id}
-                          href={`/mobile?threadId=${encodeURIComponent(thread.id)}` as Route}
-                          className="block rounded-md border border-white/10 bg-slate-900 p-3"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-white">{thread.contact?.name ?? thread.subject ?? "Thread"}</p>
-                              <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-300">
-                                {thread.lastMessagePreview ?? "No preview"}
-                              </p>
-                            </div>
-                            <div className="shrink-0 text-right">
-                              <p className="text-xs font-semibold text-cyan-200">{formatChannel(thread.channel)}</p>
-                              <p className="mt-1 text-xs text-slate-400">{formatRelativeTime(thread.lastMessageAt)}</p>
-                            </div>
+                      threads.map((thread) => {
+                        const source = thread.sourceFamily ?? "Other";
+                        const phone = thread.contact?.phone ?? null;
+                        const threadHref = `/mobile?threadId=${encodeURIComponent(thread.id)}&view=${encodeURIComponent(inboxView)}` as Route;
+                        return (
+                          <div key={thread.id} className="rounded-md border border-white/10 bg-slate-900 p-3">
+                            <Link href={threadHref} className="block">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                    <p className="truncate text-sm font-semibold text-white">{thread.contact?.name ?? thread.subject ?? "Thread"}</p>
+                                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${sourceBadgeClass(source)}`}>
+                                      {source}
+                                    </span>
+                                  </div>
+                                  <p className="mt-1 line-clamp-2 text-sm leading-5 text-slate-300">
+                                    {thread.lastMessagePreview ?? "No preview"}
+                                  </p>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${attentionBadgeClass(thread)}`}>
+                                    {attentionLabel(thread)}
+                                  </span>
+                                  <p className="mt-1 text-xs text-slate-400">
+                                    {formatRelativeTime(thread.waitingSince ?? thread.lastMessageAt)}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="mt-2 flex min-w-0 items-center gap-2 text-xs text-slate-400">
+                                <span>{formatChannel(thread.channel)}</span>
+                                {thread.property?.addressLine1 ? <span className="truncate">{thread.property.addressLine1}</span> : null}
+                                {(thread.mediaCount ?? 0) > 0 ? <span className="ml-auto shrink-0">{thread.mediaCount} photos</span> : null}
+                              </div>
+                            </Link>
+                            {phone && thread.contact?.id ? (
+                              <form action={startMobileContactCallAction} className="mt-3">
+                                <input type="hidden" name="contactId" value={thread.contact.id} />
+                                <input type="hidden" name="threadId" value={thread.id} />
+                                <input type="hidden" name="returnTo" value={`/mobile?view=${encodeURIComponent(inboxView)}`} />
+                                <button type="submit" className="w-full rounded-md border border-cyan-300/40 bg-cyan-300/10 px-3 py-2 text-sm font-semibold text-cyan-100">
+                                  Call
+                                </button>
+                              </form>
+                            ) : null}
                           </div>
-                          {thread.property?.addressLine1 ? (
-                            <p className="mt-2 truncate text-xs text-slate-400">{thread.property.addressLine1}</p>
-                          ) : null}
-                        </Link>
-                      ))
+                        );
+                      })
                     ) : (
                       <div className="rounded-md border border-dashed border-white/15 bg-slate-900 p-4 text-sm leading-6 text-slate-300">
-                        No open inbox threads found.
+                        No inbox threads found for this view.
                       </div>
                     )}
                   </div>
@@ -1433,6 +1600,7 @@ export default async function MobileHomePage({
                       {(selectedContact.phoneE164 ?? selectedContact.phone) ? (
                         <form action={startMobileContactCallAction}>
                           <input type="hidden" name="contactId" value={selectedContact.id} />
+                          <input type="hidden" name="threadId" value={threadId} />
                           <input type="hidden" name="returnTo" value={`/mobile?threadId=${encodeURIComponent(threadId)}`} />
                           <button type="submit" className="rounded-md bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950">
                             Call

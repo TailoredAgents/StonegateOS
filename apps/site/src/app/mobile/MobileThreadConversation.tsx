@@ -30,6 +30,7 @@ type MobileThreadConversationProps = {
   threadId: string;
   channel: string;
   initialMessages: MessageDetail[];
+  doNotContact?: boolean;
 };
 
 function formatRelativeTime(value: string | null): string {
@@ -74,7 +75,8 @@ function mergeMessages(current: ConversationMessage[], serverMessages: MessageDe
 export function MobileThreadConversation({
   threadId,
   channel,
-  initialMessages
+  initialMessages,
+  doNotContact = false
 }: MobileThreadConversationProps): ReactElement {
   const [messages, setMessages] = useState<ConversationMessage[]>(initialMessages);
   const [body, setBody] = useState("");
@@ -148,6 +150,10 @@ export function MobileThreadConversation({
     event.preventDefault();
     const trimmed = body.trim();
     if (!trimmed || isSending) return;
+    const allowDncOverride =
+      doNotContact &&
+      window.confirm("This contact is marked Do Not Contact. Send this manual reply anyway?");
+    if (doNotContact && !allowDncOverride) return;
 
     const optimisticId = `pending-${Date.now()}`;
     const optimisticMessage: OptimisticMessage = {
@@ -171,7 +177,7 @@ export function MobileThreadConversation({
       const response = await fetch(`/api/mobile/inbox/threads/${encodeURIComponent(threadId)}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: trimmed, channel })
+        body: JSON.stringify({ body: trimmed, channel, ...(allowDncOverride ? { allowDncOverride: true } : {}) })
       });
 
       if (!response.ok) {

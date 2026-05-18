@@ -273,6 +273,10 @@ export const contacts = pgTable(
     partnerLastReferralAt: timestamp("partner_last_referral_at", {
       withTimezone: true,
     }),
+    doNotContact: boolean("do_not_contact").default(false).notNull(),
+    doNotContactAt: timestamp("do_not_contact_at", { withTimezone: true }),
+    doNotContactBy: uuid("do_not_contact_by"),
+    doNotContactReason: text("do_not_contact_reason"),
     preferredContactMethod: text("preferred_contact_method").default("phone"),
     source: text("source"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -809,6 +813,17 @@ export const conversationThreads = pgTable(
     lastMessagePreview: text("last_message_preview"),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }),
     assignedTo: uuid("assigned_to").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    attentionHandledAt: timestamp("attention_handled_at", {
+      withTimezone: true,
+    }),
+    attentionHandledBy: uuid("attention_handled_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    closedReason: text("closed_reason"),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    closedBy: uuid("closed_by").references(() => teamMembers.id, {
       onDelete: "set null",
     }),
     stateUpdatedAt: timestamp("state_updated_at", { withTimezone: true })

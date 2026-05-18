@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 type SendMessageBody = {
   body?: unknown;
   channel?: unknown;
+  allowDncOverride?: unknown;
 };
 
 export async function POST(
@@ -33,6 +34,7 @@ export async function POST(
   const input = (await request.json().catch(() => null)) as SendMessageBody | null;
   const body = typeof input?.body === "string" ? input.body.trim() : "";
   const channel = typeof input?.channel === "string" ? input.channel.trim() : "";
+  const allowDncOverride = input?.allowDncOverride === true;
 
   if (!body) {
     return NextResponse.json({ error: "message_required" }, { status: 400 });
@@ -43,6 +45,7 @@ export async function POST(
     body: JSON.stringify({
       body,
       direction: "outbound",
+      ...(allowDncOverride ? { allowDncOverride: true } : {}),
       ...(channel ? { channel } : {})
     })
   });

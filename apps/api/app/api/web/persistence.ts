@@ -34,6 +34,10 @@ const CONTACT_SELECT = {
   partnerNextTouchAt: contacts.partnerNextTouchAt,
   partnerReferralCount: contacts.partnerReferralCount,
   partnerLastReferralAt: contacts.partnerLastReferralAt,
+  doNotContact: contacts.doNotContact,
+  doNotContactAt: contacts.doNotContactAt,
+  doNotContactBy: contacts.doNotContactBy,
+  doNotContactReason: contacts.doNotContactReason,
   preferredContactMethod: contacts.preferredContactMethod,
   source: contacts.source,
   createdAt: contacts.createdAt,
@@ -54,7 +58,7 @@ export async function upsertContact(
   input: UpsertContactInput
 ): Promise<ContactRecord> {
   const email = input.email?.trim().toLowerCase();
-  const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(db as any);
+  const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(db);
   let contact: ContactRecord | undefined;
 
   if (email) {

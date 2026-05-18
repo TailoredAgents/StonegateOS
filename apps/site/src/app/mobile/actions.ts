@@ -223,8 +223,10 @@ export async function openMobileAppointmentThreadAction(formData: FormData) {
 export async function startMobileContactCallAction(formData: FormData) {
   const session = await requireAnyMobilePermission(["messages.read", "messages.send", "bookings.manage", "appointments.read"]);
   const contactIdRaw = formData.get("contactId");
+  const threadIdRaw = formData.get("threadId");
   const returnTo = mobileReturnTo(formData.get("returnTo"));
   const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
+  const threadId = typeof threadIdRaw === "string" ? threadIdRaw.trim() : "";
 
   if (!contactId) {
     redirect(mobileReturnWithParam(returnTo, "error", "contact_required"));
@@ -243,8 +245,79 @@ export async function startMobileContactCallAction(formData: FormData) {
     redirect(mobileReturnWithParam(returnTo, "error", message));
   }
 
+  if (threadId) {
+    await callAdminApi(`/api/admin/inbox/threads/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ action: "mark_handled" })
+    }).catch(() => null);
+  }
+
   revalidatePath("/mobile");
   redirect(mobileReturnWithParam(returnTo, "call", "started"));
+}
+
+export async function markMobileThreadHandledAction(formData: FormData) {
+  await requireMobilePermission("messages.send");
+
+  const threadIdRaw = formData.get("threadId");
+  const threadId = typeof threadIdRaw === "string" ? threadIdRaw.trim() : "";
+  if (!threadId) {
+    redirect("/mobile?error=thread_required" as Route);
+  }
+
+  const response = await callAdminApi(`/api/admin/inbox/threads/${encodeURIComponent(threadId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action: "mark_handled" })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "mark_handled_failed");
+    redirect(`/mobile?threadId=${encodeURIComponent(threadId)}&error=${encodeURIComponent(message)}` as Route);
+  }
+
+  revalidatePath("/mobile");
+  redirect(`/mobile?threadId=${encodeURIComponent(threadId)}&handled=1` as Route);
+}
+
+export async function closeMobileThreadAction(formData: FormData) {
+  await requireMobilePermission("messages.send");
+
+  const threadIdRaw = formData.get("threadId");
+  const closeReasonRaw = formData.get("closeReason");
+  const dncReasonRaw = formData.get("doNotContactReason");
+  const threadId = typeof threadIdRaw === "string" ? threadIdRaw.trim() : "";
+  const closeReason = typeof closeReasonRaw === "string" ? closeReasonRaw.trim() : "";
+  const doNotContactReason = typeof dncReasonRaw === "string" ? dncReasonRaw.trim() : "";
+  const allowedReasons = new Set(["lost", "do_not_contact", "closed"]);
+
+  if (!threadId) {
+    redirect("/mobile?error=thread_required" as Route);
+  }
+  if (!allowedReasons.has(closeReason)) {
+    redirect(`/mobile?threadId=${encodeURIComponent(threadId)}&error=invalid_close_reason` as Route);
+  }
+
+  const response = await callAdminApi(`/api/admin/inbox/threads/${encodeURIComponent(threadId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      status: "closed",
+      closeReason,
+      ...(closeReason === "do_not_contact"
+        ? {
+            doNotContact: true,
+            doNotContactReason: doNotContactReason || "Marked Do Not Contact from mobile inbox."
+          }
+        : {})
+    })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "close_failed");
+    redirect(`/mobile?threadId=${encodeURIComponent(threadId)}&error=${encodeURIComponent(message)}` as Route);
+  }
+
+  revalidatePath("/mobile");
+  redirect(`/mobile?closed=1` as Route);
 }
 
 function makeNoteTitle(body: string): string {

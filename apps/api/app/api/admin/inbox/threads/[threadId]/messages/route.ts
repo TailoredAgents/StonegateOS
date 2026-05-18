@@ -55,6 +55,7 @@ export async function POST(
     mediaUrls?: string[];
     toAddress?: string;
     fromAddress?: string;
+    allowDncOverride?: boolean;
   } | null;
 
   if (!payload || typeof payload !== "object") {
@@ -73,6 +74,7 @@ export async function POST(
     typeof payload.fromAddress === "string" && payload.fromAddress.trim().length > 0
       ? payload.fromAddress.trim()
       : null;
+  const allowDncOverride = payload.allowDncOverride === true;
 
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
@@ -88,14 +90,19 @@ export async function POST(
       .select({
         id: conversationThreads.id,
         channel: conversationThreads.channel,
-        contactId: conversationThreads.contactId
+        contactId: conversationThreads.contactId,
+        doNotContact: contacts.doNotContact
       })
       .from(conversationThreads)
+      .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
       .where(eq(conversationThreads.id, threadId))
       .limit(1);
 
       if (!thread) {
         throw new Error("thread_not_found");
+      }
+      if (direction === "outbound" && thread.doNotContact === true && !allowDncOverride) {
+        throw new Error("dnc_confirmation_required");
       }
 
     const messageChannel = channel ?? thread.channel ?? "sms";
@@ -207,7 +214,7 @@ export async function POST(
           .limit(1);
 
         resolvedToAddress = resolvedToAddress ?? (lastInboundDm?.fromAddress ?? null);
-        resolvedMetadata = isRecord(lastInboundDm?.metadata) ? lastInboundDm!.metadata : null;
+        resolvedMetadata = isRecord(lastInboundDm?.metadata) ? lastInboundDm.metadata : null;
         resolvedMetadata = resolvedMetadata ?? { source: "facebook" };
       } else {
         const [contact] = thread.contactId
@@ -223,7 +230,7 @@ export async function POST(
               .limit(1)
           : [null];
 
-        salespersonMemberId = (contact?.salespersonMemberId ?? null) as string | null;
+        salespersonMemberId = contact?.salespersonMemberId ?? null;
         resolvedToAddress =
           resolvedToAddress ??
           (messageChannel === "email"

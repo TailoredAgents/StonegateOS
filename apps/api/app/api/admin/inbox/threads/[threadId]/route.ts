@@ -7,6 +7,8 @@ import {
   conversationMessages,
   conversationParticipants,
   contacts,
+  crmPipeline,
+  leadAutomationStates,
   properties,
   teamMembers,
   messageDeliveryEvents
@@ -22,12 +24,18 @@ import { isAdminRequest } from "../../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 
 const THREAD_STATUS = ["open", "pending", "closed"] as const;
+const CLOSE_REASONS = ["lost", "do_not_contact", "closed"] as const;
 
 type ThreadStatus = (typeof THREAD_STATUS)[number];
 type ThreadState = ConversationState;
+type CloseReason = (typeof CLOSE_REASONS)[number];
 
 function isStatus(value: string | null): value is ThreadStatus {
   return value ? (THREAD_STATUS as readonly string[]).includes(value) : false;
+}
+
+function isCloseReason(value: string | null): value is CloseReason {
+  return value ? (CLOSE_REASONS as readonly string[]).includes(value) : false;
 }
 
 export async function GET(
@@ -58,6 +66,9 @@ export async function GET(
       updatedAt: conversationThreads.updatedAt,
       createdAt: conversationThreads.createdAt,
       stateUpdatedAt: conversationThreads.stateUpdatedAt,
+      attentionHandledAt: conversationThreads.attentionHandledAt,
+      closedReason: conversationThreads.closedReason,
+      closedAt: conversationThreads.closedAt,
       contactId: conversationThreads.contactId,
       leadId: conversationThreads.leadId,
       propertyId: conversationThreads.propertyId,
@@ -67,6 +78,8 @@ export async function GET(
       contactEmail: contacts.email,
       contactPhone: contacts.phone,
       contactPhoneE164: contacts.phoneE164,
+      doNotContact: contacts.doNotContact,
+      doNotContactReason: contacts.doNotContactReason,
       propertyAddressLine1: properties.addressLine1,
       propertyCity: properties.city,
       propertyState: properties.state,
@@ -252,6 +265,11 @@ export async function GET(
       createdAt: threadRow.createdAt.toISOString(),
       lastInboundAt: lastInboundIso,
       stateUpdatedAt: threadRow.stateUpdatedAt ? threadRow.stateUpdatedAt.toISOString() : null,
+      attentionHandledAt: threadRow.attentionHandledAt ? threadRow.attentionHandledAt.toISOString() : null,
+      closedReason: threadRow.closedReason ?? null,
+      closedAt: threadRow.closedAt ? threadRow.closedAt.toISOString() : null,
+      doNotContact: threadRow.doNotContact === true,
+      doNotContactReason: threadRow.doNotContactReason ?? null,
       contact: threadRow.contactId
         ? {
             id: threadRow.contactId,
@@ -296,18 +314,43 @@ export async function PATCH(
   }
 
   const payload = (await request.json().catch(() => null)) as {
+    action?: string;
     status?: string;
     assignedTo?: string | null;
     subject?: string | null;
     state?: string;
     allowBackward?: boolean;
+    closeReason?: string;
+    doNotContact?: boolean;
+    doNotContactReason?: string | null;
   } | null;
 
   if (!payload || typeof payload !== "object") {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
 
+  const db = getDb();
+  const actor = getAuditActorFromRequest(request);
+  const now = new Date();
+  const [existingThread] = await db
+    .select({
+      state: conversationThreads.state,
+      contactId: conversationThreads.contactId,
+      leadId: conversationThreads.leadId
+    })
+    .from(conversationThreads)
+    .where(eq(conversationThreads.id, threadId))
+    .limit(1);
+
+  if (!existingThread) {
+    return NextResponse.json({ error: "thread_not_found" }, { status: 404 });
+  }
+
   const updates: Record<string, unknown> = {};
+  if (payload.action === "mark_handled") {
+    updates["attentionHandledAt"] = now;
+    updates["attentionHandledBy"] = actor.id ?? null;
+  }
   if (typeof payload.status === "string" && isStatus(payload.status)) {
     updates["status"] = payload.status;
   }
@@ -322,25 +365,14 @@ export async function PATCH(
     updates["subject"] = null;
   }
 
-  const db = getDb();
   let currentState: ThreadState | null = null;
   if (typeof payload.state === "string") {
     if (!isConversationState(payload.state)) {
       return NextResponse.json({ error: "invalid_state" }, { status: 400 });
     }
 
-    const [existing] = await db
-      .select({ state: conversationThreads.state })
-      .from(conversationThreads)
-      .where(eq(conversationThreads.id, threadId))
-      .limit(1);
-
-    if (!existing) {
-      return NextResponse.json({ error: "thread_not_found" }, { status: 404 });
-    }
-
-    currentState = existing.state as ThreadState;
-    const nextState = payload.state as ThreadState;
+    currentState = existingThread.state;
+    const nextState = payload.state;
     const allowBackward = payload.allowBackward === true;
 
     if (!canTransitionConversationState(currentState, nextState, { allowBackward })) {
@@ -349,32 +381,105 @@ export async function PATCH(
 
     if (nextState !== currentState) {
       updates["state"] = nextState;
-      updates["stateUpdatedAt"] = new Date();
+      updates["stateUpdatedAt"] = now;
     }
+  }
+
+  const requestedCloseReason = isCloseReason(payload.closeReason ?? null)
+    ? (payload.closeReason as CloseReason)
+    : payload.doNotContact === true
+      ? "do_not_contact"
+      : payload.status === "closed"
+        ? "closed"
+        : null;
+  if (requestedCloseReason) {
+    updates["status"] = "closed";
+    updates["closedReason"] = requestedCloseReason;
+    updates["closedAt"] = now;
+    updates["closedBy"] = actor.id ?? null;
+    updates["attentionHandledAt"] = now;
+    updates["attentionHandledBy"] = actor.id ?? null;
   }
 
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "no_updates" }, { status: 400 });
   }
 
-  updates["updatedAt"] = new Date();
+  updates["updatedAt"] = now;
 
-  const [thread] = await db
-    .update(conversationThreads)
-    .set(updates)
-    .where(eq(conversationThreads.id, threadId))
-    .returning();
+  const thread = await db.transaction(async (tx) => {
+    const [updatedThread] = await tx
+      .update(conversationThreads)
+      .set(updates)
+      .where(eq(conversationThreads.id, threadId))
+      .returning();
+
+    if (!updatedThread) return null;
+
+    if (requestedCloseReason === "lost" && existingThread.contactId) {
+      await tx
+        .insert(crmPipeline)
+        .values({
+          contactId: existingThread.contactId,
+          stage: "lost",
+          notes: "Closed from mobile inbox as lost.",
+          createdAt: now,
+          updatedAt: now
+        })
+        .onConflictDoUpdate({
+          target: crmPipeline.contactId,
+          set: {
+            stage: "lost",
+            notes: "Closed from mobile inbox as lost.",
+            updatedAt: now
+          }
+        });
+    }
+
+    if (requestedCloseReason === "do_not_contact" && existingThread.contactId) {
+      await tx
+        .update(contacts)
+        .set({
+          doNotContact: true,
+          doNotContactAt: now,
+          doNotContactBy: actor.id ?? null,
+          doNotContactReason:
+            typeof payload.doNotContactReason === "string" && payload.doNotContactReason.trim().length > 0
+              ? payload.doNotContactReason.trim()
+              : "Marked Do Not Contact from mobile inbox.",
+          updatedAt: now
+        })
+        .where(eq(contacts.id, existingThread.contactId));
+    }
+
+    if (requestedCloseReason === "do_not_contact" && existingThread.leadId) {
+      await tx
+        .update(leadAutomationStates)
+        .set({
+          paused: true,
+          dnc: true,
+          followupState: "stopped",
+          nextFollowupAt: null,
+          pausedAt: now,
+          pausedBy: actor.id ?? null,
+          updatedAt: now
+        })
+        .where(eq(leadAutomationStates.leadId, existingThread.leadId));
+    }
+
+    return updatedThread;
+  });
 
   if (!thread) {
     return NextResponse.json({ error: "thread_not_found" }, { status: 404 });
   }
 
   await recordAuditEvent({
-    actor: getAuditActorFromRequest(request),
+    actor,
     action: "thread.updated",
     entityType: "conversation_thread",
     entityId: threadId,
-    meta: { updates, previousState: currentState }
+    meta: { updates, previousState: currentState, closeReason: requestedCloseReason }
   });
 
   return NextResponse.json({ ok: true });
