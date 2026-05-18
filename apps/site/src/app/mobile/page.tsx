@@ -2052,6 +2052,113 @@ export default async function MobileHomePage({
                     </div>
                   </div>
 
+                  <details className="mt-4 rounded-md border border-cyan-300/30 bg-cyan-300/10 p-3">
+                    <summary className="cursor-pointer text-sm font-semibold text-cyan-100">Book appointment</summary>
+                    <form action={bookMobileAppointmentAction} className="mt-3 space-y-3">
+                      <input type="hidden" name="contactId" value={contactDetail.id} />
+                      <input type="hidden" name="returnTo" value={`/mobile?screen=contacts&contactId=${encodeURIComponent(contactDetail.id)}`} />
+                      {contactDetail.properties?.length ? (
+                        <label className="block">
+                          <span className="text-xs font-semibold text-slate-300">Property</span>
+                          <select
+                            name="propertyId"
+                            defaultValue={contactDetail.properties[0]?.id ?? ""}
+                            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                          >
+                            {contactDetail.properties.map((property) => (
+                              <option key={property.id} value={property.id}>
+                                {[property.addressLine1, property.city, property.state].filter(Boolean).join(", ")}
+                              </option>
+                            ))}
+                            <option value="">Add a new address below</option>
+                          </select>
+                        </label>
+                      ) : (
+                        <input type="hidden" name="propertyId" value="" />
+                      )}
+                      <div className="rounded-md border border-white/10 bg-slate-950 p-3">
+                        <p className="text-xs font-semibold text-slate-300">Add new address</p>
+                        <div className="mt-2 space-y-2">
+                          <label className="block">
+                            <span className="text-xs font-semibold text-slate-400">Street</span>
+                            <input
+                              name="addressLine1"
+                              className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                              placeholder="123 Main St"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-slate-400">Unit / details</span>
+                            <input
+                              name="addressLine2"
+                              className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                              placeholder="Apt, gate, building..."
+                            />
+                          </label>
+                          <div className="grid grid-cols-[1fr_4rem_6rem] gap-2">
+                            <label className="block">
+                              <span className="text-xs font-semibold text-slate-400">City</span>
+                              <input
+                                name="city"
+                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold text-slate-400">State</span>
+                              <input
+                                name="state"
+                                defaultValue="GA"
+                                maxLength={2}
+                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-base uppercase text-white outline-none focus:border-cyan-300"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold text-slate-400">ZIP</span>
+                              <input
+                                name="postalCode"
+                                inputMode="numeric"
+                                className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-base text-white outline-none focus:border-cyan-300"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-300">Start</span>
+                        <input
+                          name="startAt"
+                          type="datetime-local"
+                          required
+                          className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-300">Minutes</span>
+                        <input
+                          name="durationMinutes"
+                          type="number"
+                          min="15"
+                          step="15"
+                          defaultValue="60"
+                          className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                        />
+                      </label>
+                      <MobileAppointmentPricingFields sourceTeamMemberId={session.teamMember.id} />
+                      <label className="block">
+                        <span className="text-xs font-semibold text-slate-300">Notes</span>
+                        <textarea
+                          name="notes"
+                          rows={3}
+                          className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                          placeholder="Gate code, job details, crew notes..."
+                        />
+                      </label>
+                      <button type="submit" className="w-full rounded-md bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950">
+                        Book appointment
+                      </button>
+                    </form>
+                  </details>
+
                   {contactDetail.properties?.length ? (
                     <div className="mt-4 space-y-2">
                       <p className="text-xs font-semibold text-slate-300">Properties</p>

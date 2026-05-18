@@ -819,6 +819,7 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   const contactIdRaw = formData.get("contactId");
   const propertyIdRaw = formData.get("propertyId");
   const threadIdRaw = formData.get("threadId");
+  const returnToRaw = formData.get("returnTo");
   const appointmentTypeRaw = formData.get("appointmentType");
   const startAtRaw = formData.get("startAt");
   const durationRaw = formData.get("durationMinutes");
@@ -831,6 +832,8 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
   let propertyId = typeof propertyIdRaw === "string" ? propertyIdRaw.trim() : "";
   const threadId = typeof threadIdRaw === "string" ? threadIdRaw.trim() : "";
+  const requestedReturnTo = typeof returnToRaw === "string" ? returnToRaw.trim() : "";
+  const returnTo = requestedReturnTo ? mobileReturnTo(requestedReturnTo) : null;
   const appointmentType =
     typeof appointmentTypeRaw === "string" && appointmentTypeRaw.trim() === "in_person_quote"
       ? "in_person_quote"
@@ -844,7 +847,10 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   const state = typeof stateRaw === "string" ? stateRaw.trim() : "";
   const postalCode = typeof postalCodeRaw === "string" ? postalCodeRaw.trim() : "";
   const threadParam = threadId ? `&threadId=${encodeURIComponent(threadId)}` : "";
-  const errorRedirect = (message: string): Route => `/mobile?${threadParam ? `threadId=${encodeURIComponent(threadId)}&` : ""}error=${encodeURIComponent(message)}` as Route;
+  const errorRedirect = (message: string): Route =>
+    returnTo
+      ? mobileReturnWithParam(returnTo, "error", message)
+      : (`/mobile?${threadParam ? `threadId=${encodeURIComponent(threadId)}&` : ""}error=${encodeURIComponent(message)}` as Route);
 
   if (!contactId) {
     redirect(errorRedirect("contact_required"));
@@ -921,6 +927,9 @@ export async function bookMobileAppointmentAction(formData: FormData) {
   }
 
   revalidatePath("/mobile");
+  if (returnTo) {
+    redirect(mobileReturnWithParam(returnTo, "booked", "1"));
+  }
   const dayKey = startAt.slice(0, 10);
   const calendarRedirect = dayKey
     ? `/mobile?screen=calendar&date=${encodeURIComponent(dayKey)}&booked=1`
