@@ -113,6 +113,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const db = getDb();
   const now = new Date();
+  const nowIso = now.toISOString();
   const lastInboundForThread = sql<Date | null>`(
     select max(coalesce(cm.received_at, cm.created_at))
     from conversation_messages cm
@@ -159,7 +160,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const activeThreadFilter = sql`${conversationThreads.status} <> 'closed' and coalesce(${contacts.doNotContact}, false) = false`;
   const dueFollowupFilter = sql`(
     ${leadAutomationStates.nextFollowupAt} is not null
-    and ${leadAutomationStates.nextFollowupAt} <= ${now}
+    and ${leadAutomationStates.nextFollowupAt} <= ${nowIso}::timestamptz
     and coalesce(${leadAutomationStates.paused}, false) = false
     and coalesce(${leadAutomationStates.dnc}, false) = false
   )`;
