@@ -1135,7 +1135,7 @@ export default async function MobileHomePage({
   const threadId = typeof params.threadId === "string" ? params.threadId.trim() : "";
   const contactId = typeof params.contactId === "string" ? params.contactId.trim() : "";
   const requestedInboxView = typeof params.view === "string" ? params.view.trim() : "";
-  const inboxView = requestedInboxView === "google" || requestedInboxView === "all" ? requestedInboxView : "attention";
+  const inboxView = requestedInboxView === "attention" || requestedInboxView === "google" ? requestedInboxView : "all";
   const inboxStatus = typeof params.status === "string" && params.status.trim() ? params.status.trim() : "";
   const inboxQuery = typeof params.q === "string" ? params.q.trim() : "";
   const calendarDay = typeof params.date === "string" && params.date.trim() ? params.date.trim() : formatDayKey(new Date());
