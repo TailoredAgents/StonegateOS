@@ -43,7 +43,7 @@ describe("commission rules", () => {
     ).toBe(false);
   });
 
-  it("pays Austin and Jeffrey an even split of the 25% labor pool", () => {
+  it("pays Austin and Jeffrey an even split of the 22.5% labor pool", () => {
     const resolved = resolveLockedCrewPayout([
       "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
       "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
@@ -54,21 +54,21 @@ describe("commission rules", () => {
       throw new Error("Expected Austin + Jeffrey locked payout rule");
     }
 
-    const poolCents = Math.round(240000 * (2500 / 10000));
+    const poolCents = Math.round(240000 * (2250 / 10000));
     const allocations = allocateCrewPoolCents(poolCents, resolved.splits);
     const amountByMemberId = new Map(
       allocations.map((entry) => [entry.memberId, entry.cents]),
     );
 
     expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
-      30000,
+      27000,
     );
     expect(amountByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3")).toBe(
-      30000,
+      27000,
     );
   });
 
-  it("pays Austin, Jeffrey, and Devon at 7.5%, 7.5%, and 10%", () => {
+  it("pays Austin, Jeffrey, and Devon an even split at 7.5% each", () => {
     const resolved = resolveLockedCrewPayout([
       "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
       "b45988bb-7417-48c5-af6d-fcdf71088282",
@@ -77,10 +77,10 @@ describe("commission rules", () => {
 
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) {
-      throw new Error("Expected Austin + Devon + Jeffrey locked payout rule");
+      throw new Error("Expected Austin + Devon + Jeffrey payout rule");
     }
 
-    const allocations = allocateCrewPoolCents(25000, resolved.splits);
+    const allocations = allocateCrewPoolCents(22500, resolved.splits);
     const amountByMemberId = new Map(
       allocations.map((entry) => [entry.memberId, entry.cents]),
     );
@@ -92,7 +92,7 @@ describe("commission rules", () => {
       7500,
     );
     expect(amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282")).toBe(
-      10000,
+      7500,
     );
   });
 
@@ -108,8 +108,8 @@ describe("commission rules", () => {
     }
     expect(resolved.ruleKey).toBe("equal");
     expect(resolved.splits).toEqual([
-      { memberId: "5ac5217e-3905-4ea3-bdeb-65456982f5e3", splitBps: 5000 },
-      { memberId: "b45988bb-7417-48c5-af6d-fcdf71088282", splitBps: 5000 },
+      { memberId: "5ac5217e-3905-4ea3-bdeb-65456982f5e3", splitBps: 1 },
+      { memberId: "b45988bb-7417-48c5-af6d-fcdf71088282", splitBps: 1 },
     ]);
   });
 });

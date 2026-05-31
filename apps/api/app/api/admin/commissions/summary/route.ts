@@ -5,6 +5,7 @@ import { appointmentCommissions, appointments, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import {
   getOrCreateCommissionSettings,
+  recalculateCurrentPayoutPeriodAppointments,
   resolveCurrentPayoutPeriod
 } from "@/lib/commissions";
 import { isAdminRequest } from "../../../web/admin";
@@ -32,6 +33,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   try {
     const settings = await getOrCreateCommissionSettings(db);
     const period = resolveCurrentPayoutPeriod(new Date(), settings);
+    await recalculateCurrentPayoutPeriodAppointments(db);
     let cardTipsCents = 0;
 
     const rows = await db

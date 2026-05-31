@@ -28,8 +28,8 @@ export type CommissionSettingsRow = {
 
 const SETTINGS_KEY = "default";
 const DEFAULT_SALES_RATE_BPS = 0;
-const DEFAULT_MANAGEMENT_RATE_BPS = 2000;
-const DEFAULT_CREW_POOL_RATE_BPS = 2500;
+const DEFAULT_MANAGEMENT_RATE_BPS = 1500;
+const DEFAULT_CREW_POOL_RATE_BPS = 2250;
 const TEAM_MEMBER_IDS = {
   austin: "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
   devon: "b45988bb-7417-48c5-af6d-fcdf71088282",
@@ -526,6 +526,11 @@ export async function createOrGetCurrentPayoutRun(
 ): Promise<{ payoutRunId: string }> {
   const settings = await getOrCreateCommissionSettings(db);
   const period = resolveCurrentPayoutPeriod(new Date(), settings);
+  await recalculatePayoutPeriodAppointments(
+    db,
+    period.periodStart,
+    period.periodEnd,
+  );
 
   const [existing] = await db
     .select({ id: payoutRuns.id, status: payoutRuns.status })
@@ -564,19 +569,19 @@ export async function createOrGetCurrentPayoutRun(
   return { payoutRunId: created.id };
 }
 
-export async function recalculateCurrentPayoutPeriodAppointments(
+async function recalculatePayoutPeriodAppointments(
   db: DatabaseClient,
+  periodStart: Date,
+  periodEnd: Date,
 ): Promise<void> {
-  const settings = await getOrCreateCommissionSettings(db);
-  const period = resolveCurrentPayoutPeriod(new Date(), settings);
   const rows = await db
     .select({ id: appointments.id })
     .from(appointments)
     .where(
       and(
         eq(appointments.status, "completed"),
-        gte(appointments.completedAt, period.periodStart),
-        lt(appointments.completedAt, period.periodEnd),
+        gte(appointments.completedAt, periodStart),
+        lt(appointments.completedAt, periodEnd),
       ),
     );
 
@@ -585,6 +590,18 @@ export async function recalculateCurrentPayoutPeriodAppointments(
   }
 
   await refreshDraftPayoutReports(db);
+}
+
+export async function recalculateCurrentPayoutPeriodAppointments(
+  db: DatabaseClient,
+): Promise<void> {
+  const settings = await getOrCreateCommissionSettings(db);
+  const period = resolveCurrentPayoutPeriod(new Date(), settings);
+  await recalculatePayoutPeriodAppointments(
+    db,
+    period.periodStart,
+    period.periodEnd,
+  );
 }
 
 export async function lockPayoutRun(
@@ -605,6 +622,7 @@ export async function lockPayoutRun(
 
   if (!run) throw new Error("payout_run_not_found");
   if (run.status !== "draft") return;
+  await recalculatePayoutPeriodAppointments(db, run.periodStart, run.periodEnd);
 
   await db.transaction(async (tx) => {
     await tx

@@ -5,8 +5,8 @@ import { getSafeRedirectUrl } from "@/app/api/team/redirects";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const SALES_RATE_BPS = 0;
-const MANAGEMENT_RATE_BPS = 2000;
-const LABOR_RATE_BPS = 2500;
+const MANAGEMENT_RATE_BPS = 1500;
+const LABOR_RATE_BPS = 2250;
 
 export const dynamic = "force-dynamic";
 
@@ -42,7 +42,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     const response = NextResponse.redirect(redirectTo, 303);
     response.cookies.set({
       name: "myst-flash-error",
-      value: "Labor is fixed at 25%.",
+      value: "Labor is fixed at 22.5%.",
       path: "/"
     });
     return response;

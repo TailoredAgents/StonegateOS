@@ -209,7 +209,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         <p className={TEAM_SECTION_SUBTITLE}>
           Weekly payouts use the current Monday-Sunday week and final amount
           paid. Sales commission is retired for new calculations, management
-          pays Jeffrey and Austin 10% each, and labor stays at 25% of the job
+          pays Jeffrey and Austin 7.5% each, and labor stays at 22.5% of the job
           total regardless of the crew.
         </p>
       </header>
@@ -609,10 +609,10 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 Management
               </div>
               <div className="mt-1 text-base font-semibold text-slate-900">
-                20% total
+                15% total
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                Split 10% to Jeffrey and 10% to Austin.
+                Split 7.5% to Jeffrey and 7.5% to Austin.
               </div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -631,14 +631,13 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 Locked labor splits
               </div>
               <div className="mt-1 text-sm text-slate-700">
-                Most crew combinations split the 25% labor pool evenly.
+                All crew combinations split the 22.5% labor pool evenly.
               </div>
               <div className="mt-1 text-sm text-slate-700">
-                Jeffrey + Austin + Devon: 7.5% / 7.5% / 10%
+                Jeffrey + Austin + Devon: 7.5% each
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                That three-person split gives Devon 10% and Jeffrey/Austin
-                7.5% each.
+                Two-person crews receive 11.25% each.
               </div>
             </div>
           </div>
@@ -654,7 +653,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
           Labor override days
         </h3>
         <p className="mt-1 text-sm text-slate-600">
-          Retired. Labor now stays at 25% for every completed job, so saved
+          Retired. Labor now stays at 22.5% for every completed job, so saved
           override days are ignored by new commission calculations.
         </p>
 
