@@ -9,7 +9,7 @@ import * as notifications from "@/lib/notifications";
 import type { QuoteNotificationPayload } from "@/lib/notifications";
 import { POST as createQuote } from "../../app/api/quotes/route";
 import { POST as sendQuote } from "../../app/api/quotes/[id]/send/route";
-import { POST as publicDecision } from "../../app/api/public/quotes/[token]/route";
+import { GET as publicQuote, POST as publicDecision } from "../../app/api/public/quotes/[token]/route";
 
 const hasDatabase = Boolean(process.env["DATABASE_URL"]);
 const describeOrSkip = hasDatabase ? describe : describe.skip;
@@ -67,10 +67,12 @@ describeOrSkip("Quote lifecycle integration", () => {
 
   const originalAdminKey = process.env["ADMIN_API_KEY"];
   const originalAlertEmail = process.env["QUOTE_ALERT_EMAIL"];
+  const originalSiteUrl = process.env["SITE_URL"];
 
   beforeAll(async () => {
     process.env["ADMIN_API_KEY"] = ADMIN_KEY;
     process.env["QUOTE_ALERT_EMAIL"] = "";
+    process.env["SITE_URL"] = "https://example.com";
     db = getDb();
 
     const [contact] = await db
@@ -83,6 +85,9 @@ describeOrSkip("Quote lifecycle integration", () => {
       })
       .returning({ id: contacts.id });
 
+    if (!contact) {
+      throw new Error("Failed to create quote lifecycle contact");
+    }
     contactId = contact.id;
 
     const [property] = await db
@@ -96,6 +101,9 @@ describeOrSkip("Quote lifecycle integration", () => {
       })
       .returning({ id: properties.id });
 
+    if (!property) {
+      throw new Error("Failed to create quote lifecycle property");
+    }
     propertyId = property.id;
   });
 
@@ -114,6 +122,7 @@ describeOrSkip("Quote lifecycle integration", () => {
 
     process.env["ADMIN_API_KEY"] = originalAdminKey;
     process.env["QUOTE_ALERT_EMAIL"] = originalAlertEmail;
+    process.env["SITE_URL"] = originalSiteUrl;
   });
 
   it("creates, sends, and finalizes a quote while processing outbox notifications", async () => {
@@ -123,7 +132,9 @@ describeOrSkip("Quote lifecycle integration", () => {
       zoneId: "zone-core",
       selectedServices: ["furniture"],
       selectedAddOns: [],
-      applyBundles: true
+      applyBundles: true,
+      jobDurationMinutes: 180,
+      clientScope: "Remove the quoted furniture and sweep the pickup area."
     };
 
     const headers = new Headers({ "x-api-key": ADMIN_KEY });
@@ -155,7 +166,13 @@ describeOrSkip("Quote lifecycle integration", () => {
         id: quotes.id,
         status: quotes.status,
         shareToken: quotes.shareToken,
-        sentAt: quotes.sentAt
+        sentAt: quotes.sentAt,
+        expiresAt: quotes.expiresAt,
+        viewedAt: quotes.viewedAt,
+        lastViewedAt: quotes.lastViewedAt,
+        viewCount: quotes.viewCount,
+        jobDurationMinutes: quotes.jobDurationMinutes,
+        clientScope: quotes.clientScope
       })
       .from(quotes)
       .where(eq(quotes.id, quoteId))
@@ -164,6 +181,47 @@ describeOrSkip("Quote lifecycle integration", () => {
     expect(quoteRecord[0]?.status).toBe("sent");
     expect(quoteRecord[0]?.shareToken).toBeTruthy();
     expect(quoteRecord[0]?.sentAt).not.toBeNull();
+    expect(quoteRecord[0]?.expiresAt).not.toBeNull();
+    expect(quoteRecord[0]?.jobDurationMinutes).toBe(180);
+    expect(quoteRecord[0]?.clientScope).toContain("quoted furniture");
+    if (!quoteRecord[0]?.sentAt || !quoteRecord[0]?.expiresAt) {
+      throw new Error("Expected sent and expiry timestamps");
+    }
+    const validDays = Math.round((quoteRecord[0].expiresAt.getTime() - quoteRecord[0].sentAt.getTime()) / (24 * 60 * 60 * 1000));
+    expect(validDays).toBe(7);
+
+    const previewRequest = {
+      nextUrl: new URL(`https://example.com/api/public/quotes/${sentBody.shareToken}?preview=1`)
+    } as unknown as NextRequest;
+    const previewResponse = await publicQuote(previewRequest, {
+      params: Promise.resolve({ token: sentBody.shareToken! })
+    });
+    expect(previewResponse.ok).toBe(true);
+
+    const afterPreview = await db
+      .select({ viewCount: quotes.viewCount, viewedAt: quotes.viewedAt })
+      .from(quotes)
+      .where(eq(quotes.id, quoteId))
+      .limit(1);
+    expect(afterPreview[0]?.viewCount).toBe(0);
+    expect(afterPreview[0]?.viewedAt).toBeNull();
+
+    const viewRequest = {
+      nextUrl: new URL(`https://example.com/api/public/quotes/${sentBody.shareToken}`)
+    } as unknown as NextRequest;
+    const viewResponse = await publicQuote(viewRequest, {
+      params: Promise.resolve({ token: sentBody.shareToken! })
+    });
+    expect(viewResponse.ok).toBe(true);
+
+    const afterView = await db
+      .select({ viewCount: quotes.viewCount, viewedAt: quotes.viewedAt, lastViewedAt: quotes.lastViewedAt })
+      .from(quotes)
+      .where(eq(quotes.id, quoteId))
+      .limit(1);
+    expect(afterView[0]?.viewCount).toBe(1);
+    expect(afterView[0]?.viewedAt).not.toBeNull();
+    expect(afterView[0]?.lastViewedAt).not.toBeNull();
 
     const sentSpy = jest
       .spyOn(notifications, "sendQuoteSentNotification")

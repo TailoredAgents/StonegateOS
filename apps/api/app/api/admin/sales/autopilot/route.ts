@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { getDb, policySettings } from "@/db";
+import { desc, eq } from "drizzle-orm";
+import { facebookSalesAutopilotActions, getDb, policySettings } from "@/db";
 import { getSalesAutopilotPolicy } from "@/lib/policy";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
@@ -51,6 +51,8 @@ const AUTOSEND_ACTIONS = new Set([
   "handle_price_objection",
 ]);
 const AUTOPILOT_MODES = new Set(["off", "partial", "full"]);
+const FACEBOOK_CLOSER_MODES = new Set(["off", "shadow", "assist", "auto"]);
+const FACEBOOK_CLOSER_SERVICES = new Set(["junk_removal"]);
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -61,7 +63,36 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const db = getDb();
   const policy = await getSalesAutopilotPolicy(db);
-  return NextResponse.json({ ok: true, policy });
+  const recentFacebookActions = await db
+    .select({
+      id: facebookSalesAutopilotActions.id,
+      contactId: facebookSalesAutopilotActions.contactId,
+      leadId: facebookSalesAutopilotActions.leadId,
+      threadId: facebookSalesAutopilotActions.threadId,
+      stage: facebookSalesAutopilotActions.stage,
+      proposedAction: facebookSalesAutopilotActions.proposedAction,
+      executedAction: facebookSalesAutopilotActions.executedAction,
+      autonomyMode: facebookSalesAutopilotActions.autonomyMode,
+      decisionReason: facebookSalesAutopilotActions.decisionReason,
+      humanReviewReason: facebookSalesAutopilotActions.humanReviewReason,
+      error: facebookSalesAutopilotActions.error,
+      createdAt: facebookSalesAutopilotActions.createdAt,
+    })
+    .from(facebookSalesAutopilotActions)
+    .orderBy(desc(facebookSalesAutopilotActions.createdAt))
+    .limit(10);
+
+  const readiness = {
+    facebookWebhookConfigured: Boolean(process.env["FB_VERIFY_TOKEN"] || process.env["META_WEBHOOK_VERIFY_TOKEN"]),
+    messengerTokenConfigured: Boolean(process.env["FB_PAGE_ACCESS_TOKEN"] || process.env["FB_MESSENGER_ACCESS_TOKEN"]),
+    outboxWorkerConfigured: Boolean(process.env["OUTBOX_WORKER_ENABLED"] !== "0"),
+    openAiKeyConfigured: Boolean(process.env["OPENAI_API_KEY"]),
+    bookingEndpointReachable: Boolean((process.env["API_BASE_URL"] || process.env["NEXT_PUBLIC_API_BASE_URL"]) && process.env["ADMIN_API_KEY"]),
+    calendarConfigured: Boolean(process.env["GOOGLE_CALENDAR_ID"] || process.env["GOOGLE_CALENDAR_IDS"]),
+    serviceAreaPolicyConfigured: true,
+  };
+
+  return NextResponse.json({ ok: true, policy, facebookReadiness: readiness, recentFacebookActions });
 }
 
 export async function PATCH(request: NextRequest): Promise<Response> {
@@ -77,6 +108,8 @@ export async function PATCH(request: NextRequest): Promise<Response> {
   }
 
   const next: Record<string, unknown> = {};
+  const db = getDb();
+  const currentPolicy = await getSalesAutopilotPolicy(db);
 
   if ("enabled" in payload) {
     const raw = payload["enabled"];
@@ -94,7 +127,7 @@ export async function PATCH(request: NextRequest): Promise<Response> {
   }
 
   if (isRecord(payload["channelModes"])) {
-    const raw = payload["channelModes"] as Record<string, unknown>;
+    const raw = payload["channelModes"];
     const channelModes: Record<string, string> = {};
     for (const channel of ["sms", "email", "dm"]) {
       const value = typeof raw[channel] === "string" ? raw[channel].trim() : "";
@@ -186,7 +219,36 @@ export async function PATCH(request: NextRequest): Promise<Response> {
     next["liveReplyAutonomyActions"] = liveReplyAutonomyActions.filter((value) => AUTOSEND_ACTIONS.has(value));
   }
 
-  const db = getDb();
+  if (isRecord(payload["facebookCloser"])) {
+    const raw = payload["facebookCloser"];
+    const facebookCloser: Record<string, unknown> = {};
+    const fbMode = typeof raw["mode"] === "string" && FACEBOOK_CLOSER_MODES.has(raw["mode"].trim()) ? raw["mode"].trim() : null;
+    if (fbMode) facebookCloser["mode"] = fbMode;
+    const allowedServices = coerceStringArray(raw["allowedServices"]);
+    if (allowedServices !== null) {
+      facebookCloser["allowedServices"] = allowedServices.filter((value) => FACEBOOK_CLOSER_SERVICES.has(value));
+    }
+    const maxAutoBookTotalCents = clampInt(raw["maxAutoBookTotalCents"], { min: 15000, max: 500000 });
+    if (maxAutoBookTotalCents !== null) facebookCloser["maxAutoBookTotalCents"] = maxAutoBookTotalCents;
+    const requirePhotosAboveCents = clampInt(raw["requirePhotosAboveCents"], { min: 0, max: 500000 });
+    if (requirePhotosAboveCents !== null) facebookCloser["requirePhotosAboveCents"] = requirePhotosAboveCents;
+    const messengerResponseWindowHours = clampInt(raw["messengerResponseWindowHours"], { min: 1, max: 24 });
+    if (messengerResponseWindowHours !== null) facebookCloser["messengerResponseWindowHours"] = messengerResponseWindowHours;
+    if (raw["minConfidence"] === "medium" || raw["minConfidence"] === "high") {
+      facebookCloser["minConfidence"] = raw["minConfidence"];
+    }
+    for (const key of ["requireCustomerConfirmation", "allowDmSmsFallback", "emergencyStop"] as const) {
+      if (typeof raw[key] === "boolean") facebookCloser[key] = raw[key];
+      else if (typeof raw[key] === "string") facebookCloser[key] = raw[key] === "true" || raw[key] === "on";
+    }
+    if (Object.keys(facebookCloser).length > 0) {
+      next["facebookCloser"] = {
+        ...currentPolicy.facebookCloser,
+        ...facebookCloser,
+      };
+    }
+  }
+
   const actor = getAuditActorFromRequest(request);
 
   const [existing] = await db
@@ -194,7 +256,8 @@ export async function PATCH(request: NextRequest): Promise<Response> {
     .from(policySettings)
     .where(eq(policySettings.key, POLICY_KEY))
     .limit(1);
-  const merged: Record<string, unknown> = isRecord(existing?.value) ? { ...(existing!.value as Record<string, unknown>) } : {};
+  const existingValue = existing?.value;
+  const merged: Record<string, unknown> = isRecord(existingValue) ? { ...existingValue } : {};
   for (const [key, value] of Object.entries(next)) {
     merged[key] = value;
   }

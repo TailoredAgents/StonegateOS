@@ -97,6 +97,7 @@ export type FollowUpSequencePolicy = {
 };
 
 export type SalesAutopilotMode = "off" | "partial" | "full";
+export type FacebookSalesAutopilotMode = "off" | "shadow" | "assist" | "auto";
 export type SalesAutopilotChannel = "sms" | "email" | "dm";
 export type SalesPlannerActionClass = "follow_up" | "live_reply";
 export type SalesCloseLoopPolicySummaryMode =
@@ -131,6 +132,17 @@ export type SalesAutopilotPolicy = {
   liveReplyAutonomyEnabled: boolean;
   liveReplyAutonomyChannels: string[];
   liveReplyAutonomyActions: string[];
+  facebookCloser: {
+    mode: FacebookSalesAutopilotMode;
+    allowedServices: string[];
+    maxAutoBookTotalCents: number;
+    minConfidence: "medium" | "high";
+    requireCustomerConfirmation: boolean;
+    requirePhotosAboveCents: number;
+    allowDmSmsFallback: boolean;
+    emergencyStop: boolean;
+    messengerResponseWindowHours: number;
+  };
 };
 
 export type InboxAlertsPolicy = {
@@ -226,7 +238,18 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
   plannerAutoSendActions: ["missed_call_recovery", "dm_sms_handoff", "follow_up_quote", "collect_missing_info"],
   liveReplyAutonomyEnabled: false,
   liveReplyAutonomyChannels: [],
-  liveReplyAutonomyActions: []
+  liveReplyAutonomyActions: [],
+  facebookCloser: {
+    mode: "shadow",
+    allowedServices: ["junk_removal"],
+    maxAutoBookTotalCents: 85000,
+    minConfidence: "medium",
+    requireCustomerConfirmation: true,
+    requirePhotosAboveCents: 35000,
+    allowDmSmsFallback: true,
+    emergencyStop: false,
+    messengerResponseWindowHours: 24
+  }
 };
 
 export const DEFAULT_INBOX_ALERTS_POLICY: InboxAlertsPolicy = {
@@ -1196,6 +1219,47 @@ function coerceSalesAutopilotMode(value: unknown, fallback: SalesAutopilotMode):
   return value === "off" || value === "partial" || value === "full" ? value : fallback;
 }
 
+function coerceFacebookSalesAutopilotMode(
+  value: unknown,
+  fallback: FacebookSalesAutopilotMode,
+): FacebookSalesAutopilotMode {
+  return value === "off" || value === "shadow" || value === "assist" || value === "auto" ? value : fallback;
+}
+
+function coerceFacebookCloserPolicy(value: unknown): SalesAutopilotPolicy["facebookCloser"] {
+  const fallback = DEFAULT_SALES_AUTOPILOT_POLICY.facebookCloser;
+  const source = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const minConfidence = source["minConfidence"] === "high" ? "high" : source["minConfidence"] === "medium" ? "medium" : fallback.minConfidence;
+  const allowedServices = coerceStringArray(source["allowedServices"], fallback.allowedServices).filter(
+    (item) => item === "junk_removal",
+  );
+  return {
+    mode: coerceFacebookSalesAutopilotMode(source["mode"], fallback.mode),
+    allowedServices: allowedServices.length ? allowedServices : fallback.allowedServices,
+    maxAutoBookTotalCents: coerceInt(source["maxAutoBookTotalCents"], fallback.maxAutoBookTotalCents, {
+      min: 15000,
+      max: 500000,
+    }),
+    minConfidence,
+    requireCustomerConfirmation:
+      typeof source["requireCustomerConfirmation"] === "boolean"
+        ? source["requireCustomerConfirmation"]
+        : fallback.requireCustomerConfirmation,
+    requirePhotosAboveCents: coerceInt(source["requirePhotosAboveCents"], fallback.requirePhotosAboveCents, {
+      min: 0,
+      max: 500000,
+    }),
+    allowDmSmsFallback:
+      typeof source["allowDmSmsFallback"] === "boolean" ? source["allowDmSmsFallback"] : fallback.allowDmSmsFallback,
+    emergencyStop: typeof source["emergencyStop"] === "boolean" ? source["emergencyStop"] : fallback.emergencyStop,
+    messengerResponseWindowHours: coerceInt(
+      source["messengerResponseWindowHours"],
+      fallback.messengerResponseWindowHours,
+      { min: 1, max: 24 },
+    ),
+  };
+}
+
 function coerceSalesAutopilotChannelModes(
   value: unknown,
   fallbackMode: SalesAutopilotMode,
@@ -1343,6 +1407,7 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
       stored["liveReplyAutonomyActions"],
       DEFAULT_SALES_AUTOPILOT_POLICY.liveReplyAutonomyActions
     ),
+    facebookCloser: coerceFacebookCloserPolicy(stored["facebookCloser"]),
   };
 }
 

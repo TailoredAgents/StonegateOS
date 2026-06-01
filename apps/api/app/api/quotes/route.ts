@@ -9,9 +9,11 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../web/admin";
 import { eq, desc } from "drizzle-orm";
+import { nanoid } from "nanoid";
 
 const STATUS_FILTERS = ["pending", "sent", "accepted", "declined"] as const;
 type QuoteStatusFilter = (typeof STATUS_FILTERS)[number];
+const DEFAULT_QUOTE_JOB_DURATION_MINUTES = 120;
 
 const SERVICE_ID_SET = new Set<ServiceCategory>(serviceRates.map((rate) => rate.service));
 
@@ -34,6 +36,8 @@ const CreateQuoteSchema = z.object({
   depositRate: z.number().positive().max(1).optional(),
   expiresInDays: z.number().int().min(1).max(90).optional(),
   notes: z.string().max(2000).optional(),
+  clientScope: z.string().max(4000).optional(),
+  jobDurationMinutes: z.number().int().min(30).max(8 * 60).optional(),
   serviceOverrides: z.record(z.string().min(1), z.number().positive()).optional(),
   concreteSurfaces: z
     .array(
@@ -50,6 +54,28 @@ const toPgNumeric = (value: number | string): string => value.toString();
 const toOptionalPgNumeric = (value?: number | string | null): string | null =>
   value === null || value === undefined ? null : value.toString();
 
+function generateQuoteNumber(now = new Date()): string {
+  const ymd = now.toISOString().slice(0, 10).replace(/-/g, "");
+  return `Q-${ymd}-${nanoid(6).toUpperCase()}`;
+}
+
+function displayStatus(row: {
+  status: string;
+  expiresAt: Date | null;
+  viewedAt: Date | null;
+  refreshRequestedAt: Date | null;
+  acceptedAppointmentId: string | null;
+}): string {
+  if (row.acceptedAppointmentId) return "booked";
+  if (row.refreshRequestedAt) return "refresh_requested";
+  if (row.status === "declined") return "rejected";
+  if (row.status === "accepted") return "accepted";
+  if (row.status === "sent" && row.expiresAt && row.expiresAt.getTime() < Date.now()) return "expired";
+  if (row.status === "sent" && row.viewedAt) return "viewed";
+  if (row.status === "sent") return "sent";
+  return "draft";
+}
+
 function formatQuoteResponse(row: {
   id: string;
   status: string;
@@ -58,10 +84,21 @@ function formatQuoteResponse(row: {
   total: unknown;
   lineItems: unknown;
   notes: string | null;
+  quoteNumber: string | null;
+  jobDurationMinutes: number;
+  clientScope: string | null;
+  revision: number;
   createdAt: Date;
   updatedAt: Date;
   sentAt: Date | null;
   expiresAt: Date | null;
+  viewedAt: Date | null;
+  lastViewedAt: Date | null;
+  viewCount: number;
+  decisionAt: Date | null;
+  decisionNotes: string | null;
+  refreshRequestedAt: Date | null;
+  acceptedAppointmentId: string | null;
   shareToken: string | null;
   contactName: string | null;
   contactEmail: string | null;
@@ -84,10 +121,22 @@ function formatQuoteResponse(row: {
     total: Number(row.total),
     lineItems: row.lineItems,
     notes: row.notes,
+    quoteNumber: row.quoteNumber ?? row.id.slice(0, 8).toUpperCase(),
+    jobDurationMinutes: row.jobDurationMinutes,
+    clientScope: row.clientScope,
+    revision: row.revision,
+    displayStatus: displayStatus(row),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     sentAt: row.sentAt ? row.sentAt.toISOString() : null,
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+    viewedAt: row.viewedAt ? row.viewedAt.toISOString() : null,
+    lastViewedAt: row.lastViewedAt ? row.lastViewedAt.toISOString() : null,
+    viewCount: row.viewCount,
+    decisionAt: row.decisionAt ? row.decisionAt.toISOString() : null,
+    decisionNotes: row.decisionNotes,
+    refreshRequestedAt: row.refreshRequestedAt ? row.refreshRequestedAt.toISOString() : null,
+    acceptedAppointmentId: row.acceptedAppointmentId,
     shareToken: row.shareToken,
     contact: {
       name: contactName && contactName.length ? contactName : "Customer",
@@ -126,10 +175,21 @@ export async function GET(request: NextRequest): Promise<Response> {
       total: quotes.total,
       lineItems: quotes.lineItems,
       notes: quotes.notes,
+      quoteNumber: quotes.quoteNumber,
+      jobDurationMinutes: quotes.jobDurationMinutes,
+      clientScope: quotes.clientScope,
+      revision: quotes.revision,
       createdAt: quotes.createdAt,
       updatedAt: quotes.updatedAt,
       sentAt: quotes.sentAt,
       expiresAt: quotes.expiresAt,
+      viewedAt: quotes.viewedAt,
+      lastViewedAt: quotes.lastViewedAt,
+      viewCount: quotes.viewCount,
+      decisionAt: quotes.decisionAt,
+      decisionNotes: quotes.decisionNotes,
+      refreshRequestedAt: quotes.refreshRequestedAt,
+      acceptedAppointmentId: quotes.acceptedAppointmentId,
       shareToken: quotes.shareToken,
       contactName: contacts.firstName,
       contactEmail: contacts.email,
@@ -234,6 +294,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   const expiresAt = body.expiresInDays
     ? new Date(Date.now() + body.expiresInDays * 24 * 60 * 60 * 1000)
     : null;
+  const jobDurationMinutes =
+    body.jobDurationMinutes ?? DEFAULT_QUOTE_JOB_DURATION_MINUTES;
 
   const quoteValues: typeof quotes.$inferInsert = {
     contactId: body.contactId,
@@ -253,6 +315,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     balanceDue: toPgNumeric(breakdown.balanceDue),
     lineItems: breakdown.lineItems,
     notes: body.notes ?? null,
+    quoteNumber: generateQuoteNumber(),
+    jobDurationMinutes,
+    clientScope: body.clientScope ?? null,
     expiresAt
   };
 
@@ -282,7 +347,18 @@ export async function POST(request: NextRequest): Promise<Response> {
       createdAt: inserted.createdAt.toISOString(),
       updatedAt: inserted.updatedAt.toISOString(),
       sentAt: inserted.sentAt ? inserted.sentAt.toISOString() : null,
-      expiresAt: inserted.expiresAt ? inserted.expiresAt.toISOString() : null
+      expiresAt: inserted.expiresAt ? inserted.expiresAt.toISOString() : null,
+      viewedAt: inserted.viewedAt ? inserted.viewedAt.toISOString() : null,
+      lastViewedAt: inserted.lastViewedAt ? inserted.lastViewedAt.toISOString() : null,
+      decisionAt: inserted.decisionAt ? inserted.decisionAt.toISOString() : null,
+      refreshRequestedAt: inserted.refreshRequestedAt ? inserted.refreshRequestedAt.toISOString() : null,
+      displayStatus: displayStatus({
+        status: inserted.status,
+        expiresAt: inserted.expiresAt,
+        viewedAt: inserted.viewedAt,
+        refreshRequestedAt: inserted.refreshRequestedAt,
+        acceptedAppointmentId: inserted.acceptedAppointmentId
+      })
     },
     breakdown
   });

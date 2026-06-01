@@ -353,13 +353,14 @@ export async function createQuoteAction(formData: FormData) {
 
   const contactId = formData.get("contactId");
   const propertyId = formData.get("propertyId");
-  const appointmentId = formData.get("appointmentId");
   const zoneId = formData.get("zoneId");
   const workflow = formData.get("workflow");
   const servicesRaw = formData.get("services");
   const depositRate = formData.get("depositRate");
   const expiresInDays = formData.get("expiresInDays");
   const notes = formData.get("notes");
+  const clientScope = formData.get("clientScope");
+  const jobDurationMinutes = formData.get("jobDurationMinutes");
   const serviceOverridesRaw = formData.get("serviceOverrides");
 
   if (
@@ -419,8 +420,19 @@ export async function createQuoteAction(formData: FormData) {
     }
   }
 
+  if (typeof jobDurationMinutes === "string" && jobDurationMinutes.trim().length > 0) {
+    const minutes = Number(jobDurationMinutes);
+    if (Number.isFinite(minutes) && minutes >= 30 && minutes <= 8 * 60) {
+      payload["jobDurationMinutes"] = Math.trunc(minutes);
+    }
+  }
+
   if (typeof notes === "string" && notes.trim().length > 0) {
     payload["notes"] = notes.trim();
+  }
+
+  if (typeof clientScope === "string" && clientScope.trim().length > 0) {
+    payload["clientScope"] = clientScope.trim();
   }
 
   if (
@@ -497,8 +509,8 @@ export async function createQuoteAction(formData: FormData) {
 
       if (sendResponse.ok) {
         successMessage = shareLink
-          ? `Quote emailed. Share link: ${shareLink}`
-          : "Quote emailed";
+          ? `Quote sent. Share link: ${shareLink}`
+          : "Quote sent";
       } else {
         sendError = await readErrorMessage(
           sendResponse,
@@ -2993,8 +3005,8 @@ export async function updateAutomationModeAction(formData: FormData) {
 export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const jar = await cookies();
 
-  const mode =
-    typeof formData.get("mode") === "string" ? String(formData.get("mode")).trim() : "";
+  const modeEntry = formData.get("mode");
+  const mode = typeof modeEntry === "string" ? modeEntry.trim() : "";
   const plannerAutoSendEnabled = formData.get("plannerAutoSendEnabled") === "on";
   const liveReplyAutonomyEnabled = formData.get("liveReplyAutonomyEnabled") === "on";
   const autoSendAfterMinutes = formData.get("autoSendAfterMinutes");
@@ -3009,6 +3021,18 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const dmObjectionFollowupDelayMinutes = formData.get("dmObjectionFollowupDelayMinutes");
   const plannerAutoSendMinDraftAgeMinutes = formData.get(
     "plannerAutoSendMinDraftAgeMinutes",
+  );
+  const facebookCloserModeEntry = formData.get("facebookCloserMode");
+  const facebookCloserMode = typeof facebookCloserModeEntry === "string" ? facebookCloserModeEntry.trim() : "";
+  const facebookCloserMaxAutoBookDollars = formData.get("facebookCloserMaxAutoBookDollars");
+  const facebookCloserMinConfidenceEntry = formData.get("facebookCloserMinConfidence");
+  const facebookCloserMinConfidence =
+    typeof facebookCloserMinConfidenceEntry === "string" ? facebookCloserMinConfidenceEntry.trim() : "";
+  const facebookCloserRequirePhotosAboveDollars = formData.get(
+    "facebookCloserRequirePhotosAboveDollars",
+  );
+  const facebookCloserMessengerResponseWindowHours = formData.get(
+    "facebookCloserMessengerResponseWindowHours",
   );
   const agentDisplayName = formData.get("agentDisplayName");
   const plannerAutoSendChannels = formData
@@ -3027,11 +3051,13 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     .getAll("liveReplyAutonomyActions")
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .map((value) => value.trim());
+  const channelModeSms = formData.get("channelMode_sms");
+  const channelModeEmail = formData.get("channelMode_email");
+  const channelModeDm = formData.get("channelMode_dm");
   const channelModes = {
-    sms: typeof formData.get("channelMode_sms") === "string" ? String(formData.get("channelMode_sms")).trim() : "",
-    email:
-      typeof formData.get("channelMode_email") === "string" ? String(formData.get("channelMode_email")).trim() : "",
-    dm: typeof formData.get("channelMode_dm") === "string" ? String(formData.get("channelMode_dm")).trim() : "",
+    sms: typeof channelModeSms === "string" ? channelModeSms.trim() : "",
+    email: typeof channelModeEmail === "string" ? channelModeEmail.trim() : "",
+    dm: typeof channelModeDm === "string" ? channelModeDm.trim() : "",
   };
 
   const payload: Record<string, unknown> = { plannerAutoSendEnabled, liveReplyAutonomyEnabled };
@@ -3070,6 +3096,37 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   payload["plannerAutoSendActions"] = plannerAutoSendActions;
   payload["liveReplyAutonomyChannels"] = liveReplyAutonomyChannels;
   payload["liveReplyAutonomyActions"] = liveReplyAutonomyActions;
+
+  const facebookCloser: Record<string, unknown> = {
+    allowedServices: ["junk_removal"],
+    requireCustomerConfirmation: true,
+    allowDmSmsFallback: formData.get("facebookCloserAllowDmSmsFallback") === "on",
+    emergencyStop: formData.get("facebookCloserEmergencyStop") === "on",
+  };
+  if (["off", "shadow", "assist", "auto"].includes(facebookCloserMode)) {
+    facebookCloser["mode"] = facebookCloserMode;
+  }
+  if (facebookCloserMinConfidence === "medium" || facebookCloserMinConfidence === "high") {
+    facebookCloser["minConfidence"] = facebookCloserMinConfidence;
+  }
+  const maxAutoBookCents = parseUsdToCents(facebookCloserMaxAutoBookDollars);
+  if (maxAutoBookCents !== null) {
+    facebookCloser["maxAutoBookTotalCents"] = maxAutoBookCents;
+  }
+  const requirePhotosAboveCents = parseUsdToCents(facebookCloserRequirePhotosAboveDollars);
+  if (requirePhotosAboveCents !== null) {
+    facebookCloser["requirePhotosAboveCents"] = requirePhotosAboveCents;
+  }
+  if (
+    typeof facebookCloserMessengerResponseWindowHours === "string" &&
+    facebookCloserMessengerResponseWindowHours.trim().length > 0
+  ) {
+    const hours = Number(facebookCloserMessengerResponseWindowHours);
+    if (!Number.isNaN(hours)) {
+      facebookCloser["messengerResponseWindowHours"] = hours;
+    }
+  }
+  payload["facebookCloser"] = facebookCloser;
 
   const response = await callAdminApi("/api/admin/sales/autopilot", {
     method: "PATCH",

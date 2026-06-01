@@ -11,7 +11,8 @@ import {
   teamMembers,
   leadAutomationStates,
   leads,
-  outboxEvents
+  outboxEvents,
+  facebookSalesAutopilotSessions
 } from "@/db";
 import { isConversationState, type ConversationState } from "@/lib/conversation-state";
 import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
@@ -378,6 +379,29 @@ export async function GET(request: NextRequest): Promise<Response> {
     messageCountMap.set(row.threadId, Number(row.count));
   }
 
+  const facebookSessions =
+    threadIds.length > 0
+      ? await db
+          .select({
+            threadId: facebookSalesAutopilotSessions.threadId,
+            stage: facebookSalesAutopilotSessions.stage,
+            autonomyMode: facebookSalesAutopilotSessions.autonomyMode,
+            lastDecision: facebookSalesAutopilotSessions.lastDecision,
+            lastDecisionReason: facebookSalesAutopilotSessions.lastDecisionReason,
+            lastHumanReviewReason: facebookSalesAutopilotSessions.lastHumanReviewReason,
+            quoteLowCents: facebookSalesAutopilotSessions.quoteLowCents,
+            quoteHighCents: facebookSalesAutopilotSessions.quoteHighCents,
+            updatedAt: facebookSalesAutopilotSessions.updatedAt
+          })
+          .from(facebookSalesAutopilotSessions)
+          .where(inArray(facebookSalesAutopilotSessions.threadId, threadIds))
+      : [];
+
+  const facebookSessionMap = new Map<string, (typeof facebookSessions)[number]>();
+  for (const session of facebookSessions) {
+    facebookSessionMap.set(session.threadId, session);
+  }
+
   const normalizeIsoTimestamp = (value: unknown): string | null => {
     if (value instanceof Date) return value.toISOString();
     if (value && typeof (value as { toISOString?: unknown }).toISOString === "function") {
@@ -415,6 +439,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       contactSource: row.contactSource,
       channel: row.channel
     });
+    const facebookSession = facebookSessionMap.get(row.id);
     const lastInboundMs = lastInboundIso ? Date.parse(lastInboundIso) : NaN;
     const lastOutboundMs = lastOutboundIso ? Date.parse(lastOutboundIso) : NaN;
     const handledMs = attentionHandledIso ? Date.parse(attentionHandledIso) : NaN;
@@ -498,6 +523,18 @@ export async function GET(request: NextRequest): Promise<Response> {
             state: row.followupState ?? null,
             step: typeof row.followupStep === "number" ? row.followupStep : null,
             nextAt: nextFollowupIso
+          }
+        : null,
+      facebookSales: facebookSession
+        ? {
+            stage: facebookSession.stage,
+            autonomyMode: facebookSession.autonomyMode,
+            lastDecision: facebookSession.lastDecision ?? null,
+            lastDecisionReason: facebookSession.lastDecisionReason ?? null,
+            lastHumanReviewReason: facebookSession.lastHumanReviewReason ?? null,
+            quoteLowCents: facebookSession.quoteLowCents ?? null,
+            quoteHighCents: facebookSession.quoteHighCents ?? null,
+            updatedAt: normalizeIsoTimestamp(facebookSession.updatedAt)
           }
         : null
     };

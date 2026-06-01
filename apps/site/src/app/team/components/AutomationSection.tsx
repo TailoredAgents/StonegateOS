@@ -34,6 +34,42 @@ type SalesAutopilotPolicy = {
   liveReplyAutonomyEnabled: boolean;
   liveReplyAutonomyChannels: string[];
   liveReplyAutonomyActions: string[];
+  facebookCloser: {
+    mode: "off" | "shadow" | "assist" | "auto";
+    allowedServices: string[];
+    maxAutoBookTotalCents: number;
+    minConfidence: "medium" | "high";
+    requireCustomerConfirmation: boolean;
+    requirePhotosAboveCents: number;
+    allowDmSmsFallback: boolean;
+    emergencyStop: boolean;
+    messengerResponseWindowHours: number;
+  };
+};
+
+type FacebookReadiness = Record<
+  | "facebookWebhookConfigured"
+  | "messengerTokenConfigured"
+  | "outboxWorkerConfigured"
+  | "openAiKeyConfigured"
+  | "bookingEndpointReachable"
+  | "calendarConfigured"
+  | "serviceAreaPolicyConfigured",
+  boolean
+>;
+
+type FacebookAction = {
+  id: string;
+  contactId: string | null;
+  threadId: string | null;
+  stage: string;
+  proposedAction: string;
+  executedAction: string | null;
+  autonomyMode: string;
+  decisionReason: string | null;
+  humanReviewReason: string | null;
+  error: string | null;
+  createdAt: string | null;
 };
 
 const SALES_AGENT_AUTOSEND_CHANNELS = [
@@ -81,6 +117,20 @@ const AUTOPILOT_MODE_OPTIONS = [
   { value: "full", label: "Full" },
 ] as const;
 
+const FACEBOOK_READINESS_LABELS: Record<keyof FacebookReadiness, string> = {
+  facebookWebhookConfigured: "Facebook webhook configured",
+  messengerTokenConfigured: "Messenger token configured",
+  outboxWorkerConfigured: "Outbox worker running",
+  openAiKeyConfigured: "OpenAI key configured",
+  bookingEndpointReachable: "Booking endpoint reachable",
+  calendarConfigured: "Calendar configured",
+  serviceAreaPolicyConfigured: "Service-area policy configured",
+};
+
+function centsToDollars(cents: number): string {
+  return String(Math.round((Number.isFinite(cents) ? cents : 0) / 100));
+}
+
 export async function AutomationSection(): Promise<React.ReactElement> {
   const response = await callAdminApi("/api/admin/automation");
   if (!response.ok) {
@@ -94,13 +144,29 @@ export async function AutomationSection(): Promise<React.ReactElement> {
   if (!autopilotResponse.ok) {
     throw new Error("Failed to load Sales Autopilot settings");
   }
-  const autopilotPayload = (await autopilotResponse.json()) as { policy?: SalesAutopilotPolicy };
+  const autopilotPayload = (await autopilotResponse.json()) as {
+    policy?: SalesAutopilotPolicy;
+    facebookReadiness?: FacebookReadiness;
+    recentFacebookActions?: FacebookAction[];
+  };
   const autopilot = autopilotPayload.policy;
   if (!autopilot) {
     throw new Error("Missing Sales Autopilot policy");
   }
   const selectedPlannerActions = new Set(autopilot.plannerAutoSendActions);
   const selectedLiveReplyActions = new Set(autopilot.liveReplyAutonomyActions);
+  const facebookReadiness = autopilotPayload.facebookReadiness ?? {
+    facebookWebhookConfigured: false,
+    messengerTokenConfigured: false,
+    outboxWorkerConfigured: false,
+    openAiKeyConfigured: false,
+    bookingEndpointReachable: false,
+    calendarConfigured: false,
+    serviceAreaPolicyConfigured: false,
+  };
+  const recentFacebookActions = autopilotPayload.recentFacebookActions ?? [];
+  const readinessPassed = Object.values(facebookReadiness).filter(Boolean).length;
+  const readinessTotal = Object.values(facebookReadiness).length;
 
   return (
     <section className="space-y-6">
@@ -461,6 +527,111 @@ export async function AutomationSection(): Promise<React.ReactElement> {
               </div>
             </div>
 
+            <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-4">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h4 className="text-sm font-semibold text-slate-900">Facebook Sales Autopilot</h4>
+                  <p className="text-xs text-slate-600">
+                    Junk removal only. Auto-booking requires a shown price, an offered time, and a clear customer yes.
+                  </p>
+                </div>
+                <span className="rounded-full border border-blue-200 bg-white px-3 py-1 text-[11px] font-semibold text-blue-800">
+                  Ready {readinessPassed}/{readinessTotal}
+                </span>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <label className="flex flex-col gap-1">
+                  <span>Closer mode</span>
+                  <select
+                    name="facebookCloserMode"
+                    defaultValue={autopilot.facebookCloser.mode}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  >
+                    <option value="off">Off</option>
+                    <option value="shadow">Shadow</option>
+                    <option value="assist">Assist</option>
+                    <option value="auto">Auto</option>
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>Max auto-book price ($)</span>
+                  <input
+                    name="facebookCloserMaxAutoBookDollars"
+                    type="number"
+                    min={150}
+                    max={5000}
+                    defaultValue={centsToDollars(autopilot.facebookCloser.maxAutoBookTotalCents)}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>Minimum confidence</span>
+                  <select
+                    name="facebookCloserMinConfidence"
+                    defaultValue={autopilot.facebookCloser.minConfidence}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  >
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>Require photos above ($)</span>
+                  <input
+                    name="facebookCloserRequirePhotosAboveDollars"
+                    type="number"
+                    min={0}
+                    max={5000}
+                    defaultValue={centsToDollars(autopilot.facebookCloser.requirePhotosAboveCents)}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span>Messenger response window (hours)</span>
+                  <input
+                    name="facebookCloserMessengerResponseWindowHours"
+                    type="number"
+                    min={1}
+                    max={24}
+                    defaultValue={autopilot.facebookCloser.messengerResponseWindowHours}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  />
+                </label>
+                <div className="space-y-2 pt-5">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      name="facebookCloserAllowDmSmsFallback"
+                      defaultChecked={autopilot.facebookCloser.allowDmSmsFallback}
+                      className="h-4 w-4 rounded border-slate-300"
+                    />
+                    DM-to-SMS fallback
+                  </label>
+                  <label className="flex items-center gap-2 text-rose-700">
+                    <input
+                      type="checkbox"
+                      name="facebookCloserEmergencyStop"
+                      defaultChecked={autopilot.facebookCloser.emergencyStop}
+                      className="h-4 w-4 rounded border-slate-300"
+                    />
+                    Emergency stop
+                  </label>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {(Object.entries(FACEBOOK_READINESS_LABELS) as Array<[keyof FacebookReadiness, string]>).map(([key, label]) => (
+                  <div key={key} className="flex items-center justify-between rounded-xl border border-blue-100 bg-white/80 px-3 py-2">
+                    <span>{label}</span>
+                    <span className={facebookReadiness[key] ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
+                      {facebookReadiness[key] ? "Ready" : "Check"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <SubmitButton
               className="inline-flex items-center rounded-full bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-primary-200/50 transition hover:bg-primary-700"
               pendingLabel="Saving..."
@@ -485,6 +656,40 @@ export async function AutomationSection(): Promise<React.ReactElement> {
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
               <span className="font-semibold text-slate-900">Full:</span> the system is allowed to run live channel autopilot where supported and trusted, but live replies still stay approval-only until the live reply autonomy gate below is enabled.
           </div>
+          </div>
+
+          <div className="mt-6">
+            <h4 className="text-sm font-semibold text-slate-900">Recent Facebook actions</h4>
+            <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
+              {recentFacebookActions.length === 0 ? (
+                <div className="bg-slate-50 px-4 py-3 text-xs text-slate-500">
+                  No autonomous Facebook decisions recorded yet.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-200 text-xs">
+                  {recentFacebookActions.map((action) => (
+                    <a
+                      key={action.id}
+                      href={action.threadId ? `/team?tab=inbox&threadId=${action.threadId}` : "/team?tab=inbox"}
+                      className="block bg-white px-4 py-3 transition hover:bg-slate-50"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-semibold text-slate-900">{action.proposedAction}</span>
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                          {action.autonomyMode}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-slate-500">
+                        {action.stage} · {action.executedAction ?? "not executed"}
+                      </div>
+                      <div className={action.error ? "mt-1 text-rose-600" : "mt-1 text-slate-500"}>
+                        {action.error ?? action.humanReviewReason ?? action.decisionReason ?? "No reason saved"}
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

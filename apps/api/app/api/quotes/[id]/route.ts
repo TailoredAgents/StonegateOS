@@ -11,6 +11,7 @@ import { isAdminRequest } from "../../web/admin";
 import { eq } from "drizzle-orm";
 
 const SERVICE_ID_SET = new Set<ServiceCategory>(serviceRates.map((rate) => rate.service));
+const DEFAULT_QUOTE_VALID_DAYS = 7;
 
 const serviceIdSchema = z
   .string()
@@ -29,6 +30,8 @@ const UpdateQuoteSchema = z.object({
   depositRate: z.number().positive().max(1).optional(),
   expiresInDays: z.number().int().min(1).max(90).optional(),
   notes: z.string().max(2000).nullable().optional(),
+  clientScope: z.string().max(4000).nullable().optional(),
+  jobDurationMinutes: z.number().int().min(30).max(8 * 60).optional(),
   serviceOverrides: z.record(z.string().min(1), z.number().positive()).optional(),
   concreteSurfaces: z
     .array(
@@ -44,6 +47,23 @@ const UpdateQuoteSchema = z.object({
 const toPgNumeric = (value: number | string): string => value.toString();
 const toOptionalPgNumeric = (value?: number | string | null): string | null =>
   value === null || value === undefined ? null : value.toString();
+
+function displayStatus(row: {
+  status: string;
+  expiresAt: Date | null;
+  viewedAt: Date | null;
+  refreshRequestedAt: Date | null;
+  acceptedAppointmentId: string | null;
+}): string {
+  if (row.acceptedAppointmentId) return "booked";
+  if (row.refreshRequestedAt) return "refresh_requested";
+  if (row.status === "declined") return "rejected";
+  if (row.status === "accepted") return "accepted";
+  if (row.status === "sent" && row.expiresAt && row.expiresAt.getTime() < Date.now()) return "expired";
+  if (row.status === "sent" && row.viewedAt) return "viewed";
+  if (row.status === "sent") return "sent";
+  return "draft";
+}
 
 export async function GET(
   request: NextRequest,
@@ -79,11 +99,20 @@ export async function GET(
       balanceDue: quotes.balanceDue,
       lineItems: quotes.lineItems,
       notes: quotes.notes,
+      quoteNumber: quotes.quoteNumber,
+      jobDurationMinutes: quotes.jobDurationMinutes,
+      clientScope: quotes.clientScope,
+      revision: quotes.revision,
       shareToken: quotes.shareToken,
       sentAt: quotes.sentAt,
       expiresAt: quotes.expiresAt,
+      viewedAt: quotes.viewedAt,
+      lastViewedAt: quotes.lastViewedAt,
+      viewCount: quotes.viewCount,
       decisionAt: quotes.decisionAt,
       decisionNotes: quotes.decisionNotes,
+      refreshRequestedAt: quotes.refreshRequestedAt,
+      acceptedAppointmentId: quotes.acceptedAppointmentId,
       createdAt: quotes.createdAt,
       updatedAt: quotes.updatedAt,
       contactName: contacts.firstName,
@@ -122,11 +151,21 @@ export async function GET(
       balanceDue: Number(quote.balanceDue),
       lineItems: quote.lineItems,
       notes: quote.notes,
+      quoteNumber: quote.quoteNumber ?? quote.id.slice(0, 8).toUpperCase(),
+      jobDurationMinutes: quote.jobDurationMinutes,
+      clientScope: quote.clientScope,
+      revision: quote.revision,
+      displayStatus: displayStatus(quote),
       shareToken: quote.shareToken,
       sentAt: quote.sentAt ? quote.sentAt.toISOString() : null,
       expiresAt: quote.expiresAt ? quote.expiresAt.toISOString() : null,
+      viewedAt: quote.viewedAt ? quote.viewedAt.toISOString() : null,
+      lastViewedAt: quote.lastViewedAt ? quote.lastViewedAt.toISOString() : null,
+      viewCount: quote.viewCount,
       decisionAt: quote.decisionAt ? quote.decisionAt.toISOString() : null,
       decisionNotes: quote.decisionNotes,
+      refreshRequestedAt: quote.refreshRequestedAt ? quote.refreshRequestedAt.toISOString() : null,
+      acceptedAppointmentId: quote.acceptedAppointmentId,
       createdAt: quote.createdAt.toISOString(),
       updatedAt: quote.updatedAt.toISOString(),
       contact: {
@@ -171,7 +210,10 @@ export async function PATCH(
   const [existing] = await db
     .select({
       id: quotes.id,
-      status: quotes.status
+      status: quotes.status,
+      shareToken: quotes.shareToken,
+      sentAt: quotes.sentAt,
+      revision: quotes.revision
     })
     .from(quotes)
     .where(eq(quotes.id, id))
@@ -215,13 +257,17 @@ export async function PATCH(
     concreteSurfaces
   });
 
+  const wasShared = Boolean(existing.shareToken || existing.sentAt || existing.status === "sent");
   const expiresAt = body.expiresInDays
     ? new Date(Date.now() + body.expiresInDays * 24 * 60 * 60 * 1000)
-    : undefined;
+    : wasShared
+      ? new Date(Date.now() + DEFAULT_QUOTE_VALID_DAYS * 24 * 60 * 60 * 1000)
+      : undefined;
 
   const [updated] = await db
     .update(quotes)
     .set({
+      status: wasShared ? "sent" : existing.status,
       services: selectedServices,
       addOns: body.selectedAddOns ?? null,
       surfaceArea: toOptionalPgNumeric(body.surfaceArea),
@@ -236,6 +282,17 @@ export async function PATCH(
       balanceDue: toPgNumeric(breakdown.balanceDue),
       lineItems: breakdown.lineItems,
       notes: body.notes ?? null,
+      clientScope: body.clientScope ?? null,
+      ...(body.jobDurationMinutes ? { jobDurationMinutes: body.jobDurationMinutes } : {}),
+      ...(wasShared
+        ? {
+            revision: existing.revision + 1,
+            viewedAt: null,
+            lastViewedAt: null,
+            viewCount: 0,
+            refreshRequestedAt: null
+          }
+        : {}),
       ...(expiresAt ? { expiresAt } : {}),
       updatedAt: new Date()
     })
@@ -265,7 +322,17 @@ export async function PATCH(
       updatedAt: updated.updatedAt.toISOString(),
       sentAt: updated.sentAt ? updated.sentAt.toISOString() : null,
       expiresAt: updated.expiresAt ? updated.expiresAt.toISOString() : null,
-      decisionAt: updated.decisionAt ? updated.decisionAt.toISOString() : null
+      viewedAt: updated.viewedAt ? updated.viewedAt.toISOString() : null,
+      lastViewedAt: updated.lastViewedAt ? updated.lastViewedAt.toISOString() : null,
+      decisionAt: updated.decisionAt ? updated.decisionAt.toISOString() : null,
+      refreshRequestedAt: updated.refreshRequestedAt ? updated.refreshRequestedAt.toISOString() : null,
+      displayStatus: displayStatus({
+        status: updated.status,
+        expiresAt: updated.expiresAt,
+        viewedAt: updated.viewedAt,
+        refreshRequestedAt: updated.refreshRequestedAt,
+        acceptedAppointmentId: updated.acceptedAppointmentId
+      })
     },
     breakdown
   });

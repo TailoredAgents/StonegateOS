@@ -13,6 +13,7 @@ const SendQuoteSchema = z.object({
   expiresInDays: z.number().int().min(1).max(120).optional(),
   shareBaseUrl: z.string().url().optional()
 });
+const DEFAULT_QUOTE_VALID_DAYS = 7;
 
 function buildShareUrl(token: string, baseUrl?: string): string | null {
   // Safety: never generate localhost/0.0.0.0 links in production. If an unsafe base
@@ -82,9 +83,8 @@ export async function POST(
   }
 
   const shareToken = existing.shareToken ?? nanoid(24);
-  const expiresAt = parsedBody.data.expiresInDays
-    ? new Date(Date.now() + parsedBody.data.expiresInDays * 24 * 60 * 60 * 1000)
-    : null;
+  const expiresInDays = parsedBody.data.expiresInDays ?? DEFAULT_QUOTE_VALID_DAYS;
+  const expiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
 
   const shareUrl = buildShareUrl(shareToken, parsedBody.data.shareBaseUrl);
   if (!shareUrl) {
@@ -104,6 +104,7 @@ export async function POST(
       sentAt: new Date(),
       expiresAt,
       status: "sent",
+      refreshRequestedAt: null,
       updatedAt: new Date()
     })
     .where(eq(quotes.id, id))

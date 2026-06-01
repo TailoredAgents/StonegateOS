@@ -1,4 +1,3 @@
-/* eslint-disable react/jsx-no-bind */
 "use client";
 
 import React from "react";
@@ -75,12 +74,18 @@ export function QuoteBuilderClient({
     if (initialContactId) {
       const match = contacts.find((contact) => contact.id === initialContactId);
       if (match) {
-        return Boolean(match.email);
+        return Boolean(match.email || match.phone);
       }
     }
-    return Boolean(contacts[0]?.email);
+    return Boolean(contacts[0]?.email || contacts[0]?.phone);
   });
   const [servicePrices, setServicePrices] = React.useState<Record<string, string>>({});
+  const [jobDurationMinutes, setJobDurationMinutes] = React.useState("120");
+  const [depositRate, setDepositRate] = React.useState("0");
+  const [scopeNotes, setScopeNotes] = React.useState("");
+  const [clientScope, setClientScope] = React.useState("");
+  const [scopeDrafting, setScopeDrafting] = React.useState(false);
+  const [scopeDraftError, setScopeDraftError] = React.useState<string | null>(null);
   // Concrete surface state removed
 
   const selectedContact = React.useMemo(
@@ -88,7 +93,7 @@ export function QuoteBuilderClient({
     [contactId, contacts]
   );
 
-  const canSendEmail = Boolean(selectedContact?.email);
+  const canSendQuote = Boolean(selectedContact?.email || selectedContact?.phone);
   const serviceLookup = React.useMemo(() => new Map(services.map((service) => [service.id, service])), [services]);
   const selectableServices = services;
   // Concrete computations removed
@@ -137,6 +142,9 @@ export function QuoteBuilderClient({
     });
   }, [selectedServices, serviceLookup, servicePrices]);
   const serializedOverrides = React.useMemo(() => JSON.stringify(serviceOverrides), [serviceOverrides]);
+  const estimatedTotal = React.useMemo(() => {
+    return Object.values(serviceOverrides).reduce((sum, value) => sum + value, 0);
+  }, [serviceOverrides]);
 
   React.useEffect(() => {
     if (!initialContactId) return;
@@ -145,7 +153,7 @@ export function QuoteBuilderClient({
     if (match.id === contactId) return;
     setContactId(match.id);
     setPropertyId(match.properties[0]?.id ?? "");
-    setSendQuote(Boolean(match.email));
+    setSendQuote(Boolean(match.email || match.phone));
   }, [initialContactId, contacts, contactId]);
 
   React.useEffect(() => {
@@ -160,10 +168,10 @@ export function QuoteBuilderClient({
   }, [propertyId, selectedContact]);
 
   React.useEffect(() => {
-    if (!canSendEmail) {
+    if (!canSendQuote) {
       setSendQuote(false);
     }
-  }, [canSendEmail]);
+  }, [canSendQuote]);
 
   const toggleService = React.useCallback(
     (serviceId: string) => {
@@ -193,6 +201,33 @@ export function QuoteBuilderClient({
     },
     [setServicePrices]
   );
+
+  const draftClientScope = React.useCallback(async () => {
+    setScopeDrafting(true);
+    setScopeDraftError(null);
+    try {
+      const response = await fetch("/api/team/quotes/scope-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerName: selectedContact?.name ?? null,
+          services: selectedServices,
+          total: estimatedTotal > 0 ? estimatedTotal : undefined,
+          roughNotes: scopeNotes
+        })
+      });
+      const payload = (await response.json().catch(() => null)) as { draft?: string; error?: string } | null;
+      if (!response.ok || !payload?.draft) {
+        setScopeDraftError(payload?.error ?? "Unable to draft scope.");
+        return;
+      }
+      setClientScope(payload.draft);
+    } catch (error) {
+      setScopeDraftError(error instanceof Error ? error.message : "Unable to draft scope.");
+    } finally {
+      setScopeDrafting(false);
+    }
+  }, [estimatedTotal, scopeNotes, selectedContact?.name, selectedServices]);
 
   const canSubmit =
     selectedContact !== null &&
@@ -252,11 +287,13 @@ export function QuoteBuilderClient({
                   </option>
                 ))}
               </select>
-              {selectedContact?.email ? (
-                <span className="text-xs text-slate-500">Email on file: {selectedContact.email}</span>
+              {selectedContact?.email || selectedContact?.phone ? (
+                <span className="text-xs text-slate-500">
+                  Send to: {[selectedContact.email, selectedContact.phone].filter(Boolean).join(" / ")}
+                </span>
               ) : (
                 <span className="text-xs text-slate-400">
-                  This contact does not have an email yet. Add one to send quotes.
+                  This contact does not have an email or phone yet. Add one to send quotes.
                 </span>
               )}
             </label>
@@ -361,9 +398,92 @@ export function QuoteBuilderClient({
               })}
             </div>
             <p className="text-xs text-slate-500">
-              Select at least one service to calculate pricing and generate the quote PDF.
+              Select at least one service to calculate pricing and generate the quote link.
             </p>
           </fieldset>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <label className="flex flex-col gap-2 text-sm text-slate-600">
+              <span>Job duration</span>
+              <select
+                name="jobDurationMinutes"
+                value={jobDurationMinutes}
+                onChange={(event) => setJobDurationMinutes(event.target.value)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="60">1 hour</option>
+                <option value="120">2 hours</option>
+                <option value="180">3 hours</option>
+                <option value="240">Half day</option>
+                <option value="480">Full day</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-2 text-sm text-slate-600">
+              <span>Deposit terms</span>
+              <select
+                name="depositRate"
+                value={depositRate}
+                onChange={(event) => setDepositRate(event.target.value)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="0">No deposit</option>
+                <option value="0.1">10% deposit listed</option>
+                <option value="0.25">25% deposit listed</option>
+                <option value="0.5">50% deposit listed</option>
+              </select>
+              <span className="text-xs text-slate-500">Deposits are shown as terms only; online collection is not enabled.</span>
+            </label>
+            <label className="flex flex-col gap-2 text-sm text-slate-600">
+              <span>Quote validity</span>
+              <input
+                name="expiresInDays"
+                type="number"
+                min="1"
+                max="90"
+                defaultValue="7"
+                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </label>
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800">Client-facing scope</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Add rough notes, draft polished proposal language, then review/edit before sending.
+              </p>
+            </div>
+            <label className="flex flex-col gap-2 text-sm text-slate-600">
+              <span>Rough notes for AI draft</span>
+              <textarea
+                value={scopeNotes}
+                onChange={(event) => setScopeNotes(event.target.value)}
+                rows={3}
+                placeholder="Example: garage cleanout, appliances included, driveway access is clear..."
+                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void draftClientScope()}
+              disabled={scopeDrafting || selectedServices.length === 0}
+              className="rounded-full border border-primary-200 bg-primary-50 px-4 py-2 text-xs font-semibold text-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {scopeDrafting ? "Drafting..." : "Draft polished scope"}
+            </button>
+            {scopeDraftError ? <p className="text-xs text-rose-600">{scopeDraftError}</p> : null}
+            <label className="flex flex-col gap-2 text-sm text-slate-600">
+              <span>Scope shown to customer</span>
+              <textarea
+                name="clientScope"
+                value={clientScope}
+                onChange={(event) => setClientScope(event.target.value)}
+                rows={5}
+                placeholder="This scope appears on the public quote page."
+                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </label>
+          </div>
 
           <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4 text-sm text-slate-600">
             <label className="inline-flex items-center gap-2">
@@ -372,18 +492,18 @@ export function QuoteBuilderClient({
                 name="sendQuote"
                 checked={sendQuote}
                 onChange={(event) => setSendQuote(event.target.checked)}
-                disabled={!canSendEmail}
+                disabled={!canSendQuote}
                 className="rounded border-slate-300 text-primary-600 focus:ring-primary-400 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300"
-                title={!canSendEmail ? "Add an email to this contact to enable sending" : undefined}
+                title={!canSendQuote ? "Add an email or phone to this contact to enable sending" : undefined}
               />
-              Email the quote to this contact immediately
+              Send the quote link by SMS/email immediately
             </label>
             <p className="text-xs text-slate-500">
-              We'll still show the share link so you can copy it into SMS or chat, even when the email goes out.
+              We&apos;ll still show the share link so you can copy it into chat, even when messages go out.
             </p>
-            {!canSendEmail ? (
+            {!canSendQuote ? (
               <p className="text-xs font-medium text-amber-600">
-                Add an email address to this contact to enable sending the quote automatically.
+                Add an email address or phone to this contact to enable sending the quote automatically.
               </p>
             ) : null}
           </div>

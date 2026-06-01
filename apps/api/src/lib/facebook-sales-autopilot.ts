@@ -1,0 +1,752 @@
+import { DateTime } from "luxon";
+import { and, eq, gt } from "drizzle-orm";
+import {
+  conversationMessages,
+  conversationParticipants,
+  conversationThreads,
+  crmTasks,
+  facebookSalesAutopilotActions,
+  facebookSalesAutopilotSessions,
+  getDb,
+  outboxEvents,
+} from "@/db";
+import type { DatabaseClient } from "@/db";
+import { recordAuditEvent } from "@/lib/audit";
+import { buildMediaJobAnalysisWithVision, getMediaJobAnalysis, upsertMediaJobAnalysis } from "@/lib/media-job-analysis";
+import { loadOmniLeadContext, type OmniLeadContext } from "@/lib/omni-lead-context";
+import { getSalesAutopilotPolicy, type SalesAutopilotPolicy } from "@/lib/policy";
+
+type AutonomyMode = SalesAutopilotPolicy["facebookCloser"]["mode"];
+type Stage =
+  | "new_inquiry"
+  | "missing_info"
+  | "quote_ready"
+  | "quote_sent"
+  | "offered_times"
+  | "confirmed_booking"
+  | "needs_human_review"
+  | "booked";
+type ProposedAction =
+  | "no_op"
+  | "request_photos"
+  | "request_address"
+  | "send_quote_range"
+  | "offer_times"
+  | "book_job"
+  | "handoff_sms"
+  | "human_review";
+
+type OfferedSlot = { label: string; startAt: string; endAt?: string | null };
+
+type EvaluatedMessage = {
+  id: string;
+  threadId: string;
+  channel: string;
+  direction: string;
+  body: string;
+  mediaUrls: string[] | null;
+  provider: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+  receivedAt: Date | null;
+  contactId: string | null;
+  leadId: string | null;
+  propertyId: string | null;
+  toAddress: string | null;
+  fromAddress: string | null;
+};
+
+const RISK_PATTERNS: Array<[RegExp, string]> = [
+  [/\b(demo|demolition|tear\s?down|knock\s?down)\b/i, "demolition"],
+  [/\b(brush|land clearing|tree|stump|forestry)\b/i, "brush_or_land_clearing"],
+  [/\b(dumpster|roll off|rolloff)\b/i, "dumpster"],
+  [/\b(hot\s?tub|playset|shed|concrete|dirt|rock|paint|hazmat|hazardous|oil|chemical)\b/i, "non_standard_item"],
+  [/\b(hoard|estate|whole house|entire house|commercial cleanout)\b/i, "large_cleanout"],
+];
+
+export function detectClearBookingConfirmation(body: string, offeredSlots: OfferedSlot[]): OfferedSlot | null {
+  const text = body.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text || offeredSlots.length === 0) return null;
+  const positive = /\b(yes|yeah|yep|ok|okay|sure|works|book|schedule|confirm|lock it|that works)\b/i.test(text);
+  if (!positive) return null;
+
+  const ordinalMatch = text.match(/\b(option\s*)?([123]|first|second|third|1st|2nd|3rd)\b/i);
+  if (ordinalMatch) {
+    const token = ordinalMatch[2]?.toLowerCase();
+    const idx = token === "first" || token === "1st" || token === "1" ? 0 : token === "second" || token === "2nd" || token === "2" ? 1 : 2;
+    return offeredSlots[idx] ?? null;
+  }
+
+  for (const slot of offeredSlots) {
+    const dt = DateTime.fromISO(slot.startAt, { zone: "utc" }).setZone(process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York");
+    if (!dt.isValid) continue;
+    const weekday = dt.toFormat("cccc").toLowerCase();
+    const shortWeekday = dt.toFormat("ccc").toLowerCase();
+    const hour = dt.toFormat("h");
+    const hourAmPm = dt.toFormat("h a").toLowerCase();
+    if ((text.includes(weekday) || text.includes(shortWeekday)) && (text.includes(hourAmPm) || text.includes(`${hour} `) || text.endsWith(hour))) {
+      return slot;
+    }
+  }
+
+  return offeredSlots.length === 1 ? offeredSlots[0] ?? null : null;
+}
+
+export function estimateJunkQuoteRangeFromVolume(input: {
+  volumeRange?: string | null;
+  confidence?: string | null;
+}): { lowCents: number; highCents: number; confidence: "low" | "medium" | "high" } | null {
+  const confidence = input.confidence === "high" || input.confidence === "medium" ? input.confidence : "low";
+  switch ((input.volumeRange ?? "").toLowerCase()) {
+    case "under_quarter":
+      return { lowCents: 17500, highCents: 19500, confidence };
+    case "quarter":
+      return { lowCents: 19500, highCents: 31000, confidence };
+    case "quarter_to_half":
+      return { lowCents: 25000, highCents: 40000, confidence };
+    case "half":
+      return { lowCents: 32000, highCents: 47000, confidence };
+    case "half_to_three_quarters":
+      return { lowCents: 48000, highCents: 62000, confidence };
+    case "three_quarters":
+      return { lowCents: 55000, highCents: 70000, confidence };
+    case "three_quarters_to_full":
+      return { lowCents: 63000, highCents: 85000, confidence };
+    case "full":
+      return { lowCents: 85000, highCents: 110000, confidence };
+    default:
+      return null;
+  }
+}
+
+function money(cents: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(cents / 100);
+}
+
+function latestMeaningfulInboundAt(context: OmniLeadContext): Date | null {
+  for (let i = context.recentMessages.length - 1; i >= 0; i -= 1) {
+    const msg = context.recentMessages[i];
+    if (msg?.channel === "dm" && msg.direction === "inbound" && msg.body.trim().length > 0) {
+      const parsed = new Date(msg.receivedAt ?? msg.createdAt);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+  }
+  return null;
+}
+
+function hasUsableProperty(context: OmniLeadContext): boolean {
+  const property = context.properties[0];
+  if (!property) return false;
+  if (!property.addressLine1 || /^\[(FB Lead|Manual booking)/i.test(property.addressLine1)) return false;
+  if (!property.city || property.city === "Unknown") return false;
+  if (!property.postalCode || property.postalCode === "00000") return false;
+  return true;
+}
+
+function detectRisk(context: OmniLeadContext): string | null {
+  const text = [
+    context.latestLead?.notes,
+    context.instantQuote?.notes,
+    ...context.recentMessages.filter((msg) => msg.direction === "inbound").map((msg) => msg.body),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  for (const [pattern, reason] of RISK_PATTERNS) {
+    if (pattern.test(text)) return reason;
+  }
+  return null;
+}
+
+function customerAskedForTimes(body: string): boolean {
+  return /\b(when|time|times|available|availability|schedule|book|appointment|come out|today|tomorrow|friday|saturday|sunday|monday|tuesday|wednesday|thursday)\b/i.test(body);
+}
+
+function customerAskedForQuote(body: string): boolean {
+  return /\b(price|pricing|quote|estimate|cost|how much|\$)\b/i.test(body);
+}
+
+function confidenceMeetsPolicy(confidence: "low" | "medium" | "high", min: "medium" | "high"): boolean {
+  if (min === "high") return confidence === "high";
+  return confidence === "medium" || confidence === "high";
+}
+
+async function getEvaluatedMessage(db: DatabaseClient, messageId: string): Promise<EvaluatedMessage | null> {
+  const [row] = await db
+    .select({
+      id: conversationMessages.id,
+      threadId: conversationMessages.threadId,
+      channel: conversationMessages.channel,
+      direction: conversationMessages.direction,
+      body: conversationMessages.body,
+      mediaUrls: conversationMessages.mediaUrls,
+      provider: conversationMessages.provider,
+      metadata: conversationMessages.metadata,
+      createdAt: conversationMessages.createdAt,
+      receivedAt: conversationMessages.receivedAt,
+      contactId: conversationThreads.contactId,
+      leadId: conversationThreads.leadId,
+      propertyId: conversationThreads.propertyId,
+      toAddress: conversationMessages.toAddress,
+      fromAddress: conversationMessages.fromAddress,
+    })
+    .from(conversationMessages)
+    .innerJoin(conversationThreads, eq(conversationMessages.threadId, conversationThreads.id))
+    .where(eq(conversationMessages.id, messageId))
+    .limit(1);
+  return row ? (row as EvaluatedMessage) : null;
+}
+
+async function ensureSession(input: {
+  db: DatabaseClient;
+  row: EvaluatedMessage;
+  stage: Stage;
+  mode: AutonomyMode;
+  lastDecision: ProposedAction;
+  reason: string;
+  humanReviewReason?: string | null;
+  quoteLowCents?: number | null;
+  quoteHighCents?: number | null;
+  offeredSlots?: OfferedSlot[] | null;
+  lastMeaningfulInboundAt?: Date | null;
+}) {
+  const now = new Date();
+  const values = {
+    contactId: input.row.contactId,
+    leadId: input.row.leadId,
+    threadId: input.row.threadId,
+    channel: "dm",
+    stage: input.stage,
+    autonomyMode: input.mode,
+    lastDecision: input.lastDecision,
+    lastDecisionReason: input.reason,
+    lastHumanReviewReason: input.humanReviewReason ?? null,
+    lastEvaluatedMessageId: input.row.id,
+    lastMeaningfulInboundAt: input.lastMeaningfulInboundAt ?? input.row.receivedAt ?? input.row.createdAt,
+    quoteLowCents: input.quoteLowCents ?? null,
+    quoteHighCents: input.quoteHighCents ?? null,
+    offeredSlotsJson: input.offeredSlots ?? null,
+    metadata: { source: "facebook_sales_autopilot_v1" },
+    createdAt: now,
+    updatedAt: now,
+  };
+  const [session] = await input.db
+    .insert(facebookSalesAutopilotSessions)
+    .values(values)
+    .onConflictDoUpdate({
+      target: facebookSalesAutopilotSessions.threadId,
+      set: {
+        contactId: values.contactId,
+        leadId: values.leadId,
+        stage: values.stage,
+        autonomyMode: values.autonomyMode,
+        lastDecision: values.lastDecision,
+        lastDecisionReason: values.lastDecisionReason,
+        lastHumanReviewReason: values.lastHumanReviewReason,
+        lastEvaluatedMessageId: values.lastEvaluatedMessageId,
+        lastMeaningfulInboundAt: values.lastMeaningfulInboundAt,
+        quoteLowCents: values.quoteLowCents,
+        quoteHighCents: values.quoteHighCents,
+        offeredSlotsJson: values.offeredSlotsJson,
+        metadata: values.metadata,
+        updatedAt: now,
+      },
+    })
+    .returning();
+  return session;
+}
+
+async function recordAction(input: {
+  db: DatabaseClient;
+  sessionId: string | null;
+  row: EvaluatedMessage;
+  stage: Stage;
+  mode: AutonomyMode;
+  proposedAction: ProposedAction;
+  executedAction?: string | null;
+  confidence?: "low" | "medium" | "high";
+  reason: string;
+  humanReviewReason?: string | null;
+  inputSnapshot?: Record<string, unknown> | null;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+}) {
+  const [action] = await input.db
+    .insert(facebookSalesAutopilotActions)
+    .values({
+      sessionId: input.sessionId,
+      contactId: input.row.contactId,
+      leadId: input.row.leadId,
+      threadId: input.row.threadId,
+      messageId: input.row.id,
+      proposedAction: input.proposedAction,
+      executedAction: input.executedAction ?? null,
+      autonomyMode: input.mode,
+      stage: input.stage,
+      confidence: input.confidence ?? "medium",
+      decisionReason: input.reason,
+      humanReviewReason: input.humanReviewReason ?? null,
+      inputSnapshot: input.inputSnapshot ?? null,
+      resultJson: input.result ?? null,
+      error: input.error ?? null,
+      createdAt: new Date(),
+    })
+    .returning({ id: facebookSalesAutopilotActions.id });
+  return action?.id ?? null;
+}
+
+async function createOutboundDmDraft(input: {
+  db: DatabaseClient;
+  row: EvaluatedMessage;
+  body: string;
+  mode: AutonomyMode;
+  send: boolean;
+}): Promise<string | null> {
+  const now = new Date();
+  const [existingRecentOutbound] = await input.db
+    .select({ id: conversationMessages.id })
+    .from(conversationMessages)
+    .where(
+      and(
+        eq(conversationMessages.threadId, input.row.threadId),
+        eq(conversationMessages.direction, "outbound"),
+        gt(conversationMessages.createdAt, input.row.createdAt),
+      ),
+    )
+    .limit(1);
+  if (existingRecentOutbound?.id) return null;
+
+  let [participant] = await input.db
+    .select({ id: conversationParticipants.id })
+    .from(conversationParticipants)
+    .where(and(eq(conversationParticipants.threadId, input.row.threadId), eq(conversationParticipants.participantType, "system")))
+    .limit(1);
+  if (!participant?.id) {
+    [participant] = await input.db
+      .insert(conversationParticipants)
+      .values({
+        threadId: input.row.threadId,
+        participantType: "system",
+        displayName: "Stonegate Assistant",
+        createdAt: now,
+      })
+      .returning({ id: conversationParticipants.id });
+  }
+
+  const [message] = await input.db
+    .insert(conversationMessages)
+    .values({
+      threadId: input.row.threadId,
+      participantId: participant?.id ?? null,
+      direction: "outbound",
+      channel: "dm",
+      body: input.body,
+      toAddress: input.row.fromAddress,
+      deliveryStatus: input.send ? "queued" : "queued",
+      metadata: {
+        ...(input.row.metadata ?? {}),
+        ...(input.send ? {} : { draft: true }),
+        facebookSalesAutopilot: true,
+        facebookSalesAutopilotMode: input.mode,
+      },
+      createdAt: now,
+    })
+    .returning({ id: conversationMessages.id });
+
+  if (!message?.id) return null;
+  if (input.send) {
+    await input.db.insert(outboxEvents).values({
+      type: "message.send",
+      payload: { messageId: message.id },
+      createdAt: now,
+    });
+  }
+  return message.id;
+}
+
+function buildQuoteMessage(range: { lowCents: number; highCents: number }, summary: string | null): string {
+  const scope = summary ? ` From the photos, ${summary.replace(/\s+/g, " ").slice(0, 180)}` : "";
+  return `Based on what I can see, you're likely around ${money(range.lowCents)}-${money(range.highCents)}.${scope} Final price only changes if volume, weight, access, or materials differ in person. Want me to send a couple available times?`;
+}
+
+function buildAddressAsk(): string {
+  return "I can get this moving. What's the pickup address or at least the ZIP code?";
+}
+
+function buildPhotoAsk(): string {
+  return "Can you send a couple photos of what needs to go? Once I can see it, I can give you a tighter range and times.";
+}
+
+async function fetchBookingAssist(input: {
+  property: OmniLeadContext["properties"][number];
+  durationMinutes?: number;
+}): Promise<OfferedSlot[]> {
+  const apiBase = process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"];
+  const adminKey = process.env["ADMIN_API_KEY"];
+  if (!apiBase || !adminKey) return [];
+  const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/admin/booking/assist`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": adminKey },
+    body: JSON.stringify({
+      addressLine1: input.property.addressLine1,
+      city: input.property.city,
+      state: input.property.state,
+      postalCode: input.property.postalCode,
+      durationMinutes: input.durationMinutes ?? 120,
+      windowDays: 7,
+    }),
+  });
+  if (!response.ok) return [];
+  const data = (await response.json().catch(() => null)) as { suggestions?: Array<{ startAt?: string; endAt?: string }> } | null;
+  return (data?.suggestions ?? [])
+    .filter((slot): slot is { startAt: string; endAt?: string } => typeof slot.startAt === "string")
+    .slice(0, 3)
+    .map((slot, index) => {
+      const dt = DateTime.fromISO(slot.startAt, { zone: "utc" }).setZone(process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York");
+      return {
+        label: `Option ${index + 1}: ${dt.isValid ? dt.toFormat("ccc, LLL d 'at' h:mm a") : slot.startAt}`,
+        startAt: slot.startAt,
+        endAt: slot.endAt ?? null,
+      };
+    });
+}
+
+function buildSlotsMessage(slots: OfferedSlot[]): string {
+  return `I can do ${slots.map((slot) => slot.label.replace(/^Option \d+:\s*/, "")).join(" or ")}. Which one works best?`;
+}
+
+function buildBookingDetails(range: { lowCents: number; highCents: number }) {
+  return {
+    serviceType: "junk_removal",
+    source: { type: "facebook" },
+    pricing: { mode: "range", rangeMinCents: range.lowCents, rangeMaxCents: range.highCents },
+    loadSize: { kind: "custom", customLoads: Math.max(0.25, Math.round((range.highCents / 85000) * 4) / 4) },
+  };
+}
+
+async function bookSlot(input: {
+  contactId: string;
+  propertyId: string;
+  slot: OfferedSlot;
+  range: { lowCents: number; highCents: number };
+}): Promise<{ ok: true; appointmentId: string; startAt: string } | { ok: false; error: string }> {
+  const apiBase = process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"];
+  const adminKey = process.env["ADMIN_API_KEY"];
+  if (!apiBase || !adminKey) return { ok: false, error: "api_not_configured" };
+  const response = await fetch(`${apiBase.replace(/\/$/, "")}/api/admin/booking/book`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": adminKey, "x-actor-label": "facebook-autopilot" },
+    body: JSON.stringify({
+      contactId: input.contactId,
+      propertyId: input.propertyId,
+      appointmentType: "job",
+      startAt: input.slot.startAt,
+      durationMinutes: 120,
+      travelBufferMinutes: 30,
+      source: "facebook_autopilot",
+      services: ["junk_removal"],
+      bookingDetails: buildBookingDetails(input.range),
+      notes: `Autonomous Facebook booking. Quoted range ${money(input.range.lowCents)}-${money(input.range.highCents)}.`,
+    }),
+  });
+  const data = (await response.json().catch(() => null)) as { appointmentId?: string; startAt?: string; error?: string } | null;
+  if (!response.ok || !data?.appointmentId) return { ok: false, error: data?.error ?? `booking_failed_${response.status}` };
+  return { ok: true, appointmentId: data.appointmentId, startAt: data.startAt ?? input.slot.startAt };
+}
+
+async function createHumanReviewTask(db: DatabaseClient, contactId: string | null, reason: string): Promise<void> {
+  if (!contactId) return;
+  const title = `Review Facebook autopilot: ${reason.replace(/_/g, " ")}`.slice(0, 180);
+  await db.insert(crmTasks).values({
+    contactId,
+    title,
+    status: "open",
+    notes: "Facebook Sales Autopilot blocked this thread for human review.",
+    dueAt: new Date(),
+    assignedTo: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+}
+
+export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ status: "processed" | "skipped" | "retry"; error?: string | null }> {
+  const db = getDb();
+  const row = await getEvaluatedMessage(db, messageId);
+  if (!row || row.direction !== "inbound" || row.channel !== "dm") return { status: "skipped" };
+  const metadataSource = row.metadata?.["source"];
+  const source =
+    (typeof metadataSource === "string" ? metadataSource : row.provider ?? "").toLowerCase();
+  if (!source.includes("facebook")) return { status: "skipped" };
+  if (!row.contactId) return { status: "skipped" };
+
+  const policy = await getSalesAutopilotPolicy(db);
+  const closer = policy.facebookCloser;
+  const mode = closer.mode;
+  const context = await loadOmniLeadContext(db, { contactId: row.contactId, includeQuotePrice: true, messageLimit: 60 });
+  if (!context) return { status: "skipped" };
+
+  const latestInboundAt = latestMeaningfulInboundAt(context) ?? row.receivedAt ?? row.createdAt;
+  const responseWindowMs = closer.messengerResponseWindowHours * 60 * 60 * 1000;
+  const outsideMessengerWindow = Date.now() - latestInboundAt.getTime() > responseWindowMs;
+  const leadAutomation = context.automation.find((entry) => entry.channel === "dm");
+  const hasBookedAppointment = Boolean(context.nextAppointment && context.nextAppointment.status !== "canceled");
+  const riskReason = detectRisk(context);
+  const latestBody = row.body ?? "";
+  const mediaCount = context.recentMessages.reduce((sum, msg) => sum + (msg.mediaUrls?.length ?? 0), 0);
+  const snapshot = {
+    contactId: row.contactId,
+    threadId: row.threadId,
+    leadId: row.leadId,
+    body: latestBody.slice(0, 500),
+    mediaCount,
+    mode,
+  };
+
+  let stage: Stage = "new_inquiry";
+  let action: ProposedAction = "no_op";
+  let reason = "no_action_needed";
+  let humanReviewReason: string | null = null;
+  let confidence: "low" | "medium" | "high" = "medium";
+  let quoteRange: { lowCents: number; highCents: number; confidence: "low" | "medium" | "high" } | null =
+    context.instantQuote?.priceLow && context.instantQuote.priceHigh
+      ? { lowCents: Math.round(context.instantQuote.priceLow * 100), highCents: Math.round(context.instantQuote.priceHigh * 100), confidence: "medium" }
+      : null;
+
+  if (context.mediaAnalysis && !quoteRange) {
+    quoteRange = estimateJunkQuoteRangeFromVolume({
+      volumeRange: context.mediaAnalysis.mergedVolumeRange,
+      confidence: context.mediaAnalysis.confidence,
+    });
+  }
+
+  if (!quoteRange) {
+    const existingAnalysis = await getMediaJobAnalysis(db, row.contactId);
+    if (!existingAnalysis && context.recentMessages.some((msg) => (msg.mediaUrls?.length ?? 0) > 0)) {
+      const analysis = await buildMediaJobAnalysisWithVision(context);
+      await upsertMediaJobAnalysis(db, { contactId: row.contactId, leadId: row.leadId, analysis });
+      quoteRange = estimateJunkQuoteRangeFromVolume({
+        volumeRange: analysis.mergedVolumeRange,
+        confidence: analysis.confidence,
+      });
+    }
+  }
+  if (quoteRange) confidence = quoteRange.confidence;
+
+  const [existingSession] = await db
+    .select()
+    .from(facebookSalesAutopilotSessions)
+    .where(eq(facebookSalesAutopilotSessions.threadId, row.threadId))
+    .limit(1);
+  const offeredSlots = Array.isArray(existingSession?.offeredSlotsJson) ? existingSession.offeredSlotsJson : [];
+  const confirmedSlot = detectClearBookingConfirmation(latestBody, offeredSlots);
+  const rangeFromSession =
+    typeof existingSession?.quoteLowCents === "number" && typeof existingSession.quoteHighCents === "number"
+      ? { lowCents: existingSession.quoteLowCents, highCents: existingSession.quoteHighCents, confidence: quoteRange?.confidence ?? "medium" }
+      : null;
+  quoteRange = quoteRange ?? rangeFromSession;
+
+  if (mode === "off" || closer.emergencyStop) {
+    action = "no_op";
+    reason = mode === "off" ? "facebook_closer_off" : "facebook_closer_emergency_stop";
+  } else if (leadAutomation?.dnc || leadAutomation?.humanTakeover || leadAutomation?.paused) {
+    stage = "needs_human_review";
+    action = "human_review";
+    humanReviewReason = leadAutomation.dnc ? "dnc" : leadAutomation.humanTakeover ? "human_takeover" : "automation_paused";
+    reason = humanReviewReason;
+  } else if (outsideMessengerWindow) {
+    stage = "needs_human_review";
+    action = closer.allowDmSmsFallback && (context.contact.phoneE164 || context.contact.phone) ? "handoff_sms" : "human_review";
+    humanReviewReason = action === "human_review" ? "messenger_window_expired" : null;
+    reason = "messenger_window_expired";
+  } else if (hasBookedAppointment) {
+    stage = "booked";
+    action = "no_op";
+    reason = "already_booked";
+  } else if (riskReason) {
+    stage = "needs_human_review";
+    action = "human_review";
+    humanReviewReason = riskReason;
+    reason = riskReason;
+  } else if (confirmedSlot && quoteRange && row.propertyId && row.contactId) {
+    stage = "confirmed_booking";
+    action = "book_job";
+    reason = "customer_confirmed_offered_slot";
+  } else if (confirmedSlot && !quoteRange) {
+    stage = "needs_human_review";
+    action = "human_review";
+    humanReviewReason = "confirmation_without_quote";
+    reason = "confirmation_without_quote";
+  } else if (customerAskedForTimes(latestBody) && quoteRange) {
+    if (!hasUsableProperty(context)) {
+      stage = "missing_info";
+      action = "request_address";
+      reason = "address_required_before_booking";
+    } else {
+      stage = "quote_ready";
+      action = "offer_times";
+      reason = "customer_asked_for_times_after_quote";
+    }
+  } else if (quoteRange && customerAskedForQuote(latestBody)) {
+    stage = "quote_ready";
+    action = "send_quote_range";
+    reason = "quote_range_available";
+  } else if (!quoteRange) {
+    stage = "missing_info";
+    action = "request_photos";
+    reason = "photos_or_more_job_detail_required";
+  }
+
+  if (quoteRange && quoteRange.highCents > closer.maxAutoBookTotalCents && action === "book_job") {
+    stage = "needs_human_review";
+    action = "human_review";
+    humanReviewReason = "quote_above_auto_book_limit";
+    reason = "quote_above_auto_book_limit";
+  }
+  if (
+    quoteRange &&
+    quoteRange.highCents > closer.requirePhotosAboveCents &&
+    mediaCount === 0 &&
+    (action === "send_quote_range" || action === "offer_times" || action === "book_job")
+  ) {
+    stage = "missing_info";
+    action = "request_photos";
+    humanReviewReason = null;
+    reason = "photos_required_above_threshold";
+  }
+  if (quoteRange && !confidenceMeetsPolicy(quoteRange.confidence, closer.minConfidence) && (action === "book_job" || action === "offer_times")) {
+    stage = "needs_human_review";
+    action = "human_review";
+    humanReviewReason = "quote_confidence_too_low";
+    reason = "quote_confidence_too_low";
+  }
+
+  let slotsForSession = offeredSlots;
+  if (action === "offer_times" && hasUsableProperty(context)) {
+    slotsForSession = await fetchBookingAssist({ property: context.properties[0]! });
+    if (slotsForSession.length === 0) {
+      stage = "needs_human_review";
+      action = "human_review";
+      humanReviewReason = "availability_unavailable";
+      reason = "availability_unavailable";
+    }
+  }
+
+  const session = await ensureSession({
+    db,
+    row,
+    stage,
+    mode,
+    lastDecision: action,
+    reason,
+    humanReviewReason,
+    quoteLowCents: quoteRange?.lowCents ?? null,
+    quoteHighCents: quoteRange?.highCents ?? null,
+    offeredSlots: slotsForSession.length ? slotsForSession : null,
+    lastMeaningfulInboundAt: latestInboundAt,
+  });
+
+  let executedAction: string | null = null;
+  let result: Record<string, unknown> | null = null;
+  let error: string | null = null;
+
+  try {
+    if (mode === "assist" && (action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times")) {
+      const body =
+        action === "request_address"
+          ? buildAddressAsk()
+          : action === "request_photos"
+            ? buildPhotoAsk()
+            : action === "send_quote_range" && quoteRange
+              ? buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null)
+              : action === "offer_times"
+                ? buildSlotsMessage(slotsForSession)
+                : "";
+      const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: false }) : null;
+      executedAction = messageId ? "draft_created" : "draft_reused_or_skipped";
+      result = { messageId };
+    } else if (mode === "auto") {
+      if (action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times") {
+        const body =
+          action === "request_address"
+            ? buildAddressAsk()
+            : action === "request_photos"
+              ? buildPhotoAsk()
+              : action === "send_quote_range" && quoteRange
+                ? buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null)
+                : action === "offer_times"
+                  ? buildSlotsMessage(slotsForSession)
+                  : "";
+        const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: true }) : null;
+        executedAction = messageId ? "message_queued" : "message_reused_or_skipped";
+        result = { messageId };
+      } else if (action === "book_job" && confirmedSlot && quoteRange && row.contactId && row.propertyId) {
+        const [newerInbound] = await db
+          .select({ id: conversationMessages.id })
+          .from(conversationMessages)
+          .where(
+            and(
+              eq(conversationMessages.threadId, row.threadId),
+              eq(conversationMessages.direction, "inbound"),
+              gt(conversationMessages.createdAt, row.createdAt),
+            ),
+          )
+          .limit(1);
+        if (newerInbound?.id) {
+          executedAction = "stale_action_skipped";
+          result = { newerInboundMessageId: newerInbound.id };
+          await createHumanReviewTask(db, row.contactId, "newer_inbound_message");
+        } else {
+          const booked = await bookSlot({ contactId: row.contactId, propertyId: row.propertyId, slot: confirmedSlot, range: quoteRange });
+          if (booked.ok) {
+            executedAction = "appointment_booked";
+            result = booked;
+            await db.update(conversationThreads).set({ state: "booked", stateUpdatedAt: new Date(), updatedAt: new Date() }).where(eq(conversationThreads.id, row.threadId));
+            await createOutboundDmDraft({
+              db,
+              row,
+              body: `You're booked for ${confirmedSlot.label.replace(/^Option \d+:\s*/, "")}. We'll text confirmation details too.`,
+              mode,
+              send: true,
+            });
+          } else {
+            executedAction = "booking_failed";
+            error = booked.error;
+            await createHumanReviewTask(db, row.contactId, booked.error);
+          }
+        }
+      } else if (action === "human_review") {
+        await createHumanReviewTask(db, row.contactId, humanReviewReason ?? reason);
+        executedAction = "human_review_task_created";
+      }
+    } else if (mode === "shadow") {
+      executedAction = "shadow_logged";
+    }
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+  }
+
+  const actionId = await recordAction({
+    db,
+    sessionId: session?.id ?? null,
+    row,
+    stage,
+    mode,
+    proposedAction: action,
+    executedAction,
+    confidence,
+    reason,
+    humanReviewReason,
+    inputSnapshot: snapshot,
+    result,
+    error,
+  });
+
+  await recordAuditEvent({
+    actor: { type: "ai", label: "facebook-sales-autopilot" },
+    action: "facebook.sales.autopilot.evaluated",
+    entityType: "conversation_thread",
+    entityId: row.threadId,
+    meta: { actionId, proposedAction: action, executedAction, mode, stage, reason, humanReviewReason, error },
+  });
+
+  return { status: error ? "retry" : "processed", error };
+}

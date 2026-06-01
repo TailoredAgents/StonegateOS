@@ -747,6 +747,106 @@ export const salesAgentNextActions = pgTable(
   }),
 );
 
+export const facebookSalesAutopilotSessions = pgTable(
+  "facebook_sales_autopilot_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    leadId: uuid("lead_id").references(() => leads.id, {
+      onDelete: "set null",
+    }),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => conversationThreads.id, { onDelete: "cascade" }),
+    channel: text("channel").default("dm").notNull(),
+    stage: text("stage").default("new_inquiry").notNull(),
+    autonomyMode: text("autonomy_mode").default("shadow").notNull(),
+    lastDecision: text("last_decision"),
+    lastDecisionReason: text("last_decision_reason"),
+    lastHumanReviewReason: text("last_human_review_reason"),
+    lastEvaluatedMessageId: uuid("last_evaluated_message_id").references(
+      () => conversationMessages.id,
+      { onDelete: "set null" },
+    ),
+    lastMeaningfulInboundAt: timestamp("last_meaningful_inbound_at", {
+      withTimezone: true,
+    }),
+    quoteLowCents: integer("quote_low_cents"),
+    quoteHighCents: integer("quote_high_cents"),
+    offeredSlotsJson: jsonb("offered_slots_json").$type<
+      Array<{ label: string; startAt: string; endAt?: string | null }> | null
+    >(),
+    metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    threadIdx: uniqueIndex("facebook_sales_autopilot_sessions_thread_key").on(
+      table.threadId,
+    ),
+    contactIdx: index("facebook_sales_autopilot_sessions_contact_idx").on(
+      table.contactId,
+    ),
+    stageIdx: index("facebook_sales_autopilot_sessions_stage_idx").on(
+      table.stage,
+    ),
+  }),
+);
+
+export const facebookSalesAutopilotActions = pgTable(
+  "facebook_sales_autopilot_actions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    sessionId: uuid("session_id").references(
+      () => facebookSalesAutopilotSessions.id,
+      { onDelete: "cascade" },
+    ),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    leadId: uuid("lead_id").references(() => leads.id, {
+      onDelete: "set null",
+    }),
+    threadId: uuid("thread_id").references(() => conversationThreads.id, {
+      onDelete: "cascade",
+    }),
+    messageId: uuid("message_id").references(() => conversationMessages.id, {
+      onDelete: "set null",
+    }),
+    proposedAction: text("proposed_action").notNull(),
+    executedAction: text("executed_action"),
+    autonomyMode: text("autonomy_mode").default("shadow").notNull(),
+    stage: text("stage").default("new_inquiry").notNull(),
+    confidence: text("confidence").default("medium").notNull(),
+    decisionReason: text("decision_reason"),
+    humanReviewReason: text("human_review_reason"),
+    inputSnapshot: jsonb("input_snapshot").$type<Record<string, unknown> | null>(),
+    resultJson: jsonb("result_json").$type<Record<string, unknown> | null>(),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    sessionIdx: index("facebook_sales_autopilot_actions_session_idx").on(
+      table.sessionId,
+    ),
+    threadIdx: index("facebook_sales_autopilot_actions_thread_idx").on(
+      table.threadId,
+    ),
+    createdIdx: index("facebook_sales_autopilot_actions_created_idx").on(
+      table.createdAt,
+    ),
+  }),
+);
+
 export const mediaJobAnalyses = pgTable(
   "media_job_analyses",
   {
@@ -1990,11 +2090,22 @@ export const quotes = pgTable(
     availability: jsonb("availability").$type<Record<string, unknown> | null>(),
     marketing: jsonb("marketing").$type<Record<string, unknown> | null>(),
     notes: text("notes"),
+    quoteNumber: text("quote_number"),
+    jobDurationMinutes: integer("job_duration_minutes").default(120).notNull(),
+    clientScope: text("client_scope"),
+    revision: integer("revision").default(1).notNull(),
     shareToken: text("share_token"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    viewedAt: timestamp("viewed_at", { withTimezone: true }),
+    lastViewedAt: timestamp("last_viewed_at", { withTimezone: true }),
+    viewCount: integer("view_count").default(0).notNull(),
     decisionAt: timestamp("decision_at", { withTimezone: true }),
     decisionNotes: text("decision_notes"),
+    refreshRequestedAt: timestamp("refresh_requested_at", { withTimezone: true }),
+    acceptedAppointmentId: uuid("accepted_appointment_id").references(() => appointments.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -2006,7 +2117,9 @@ export const quotes = pgTable(
   (table) => ({
     contactIdx: index("quotes_contact_idx").on(table.contactId),
     propertyIdx: index("quotes_property_idx").on(table.propertyId),
+    quoteNumberIdx: index("quotes_quote_number_idx").on(table.quoteNumber),
     shareTokenIdx: uniqueIndex("quotes_share_token_key").on(table.shareToken),
+    acceptedAppointmentIdx: index("quotes_accepted_appointment_idx").on(table.acceptedAppointmentId),
   }),
 );
 

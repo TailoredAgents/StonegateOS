@@ -9,16 +9,52 @@ type Quote = {
   services: string[];
   addOns: string[] | null;
   total: number;
+  quoteNumber: string | null;
+  displayStatus: string;
+  jobDurationMinutes: number;
+  clientScope: string | null;
+  revision: number;
   createdAt: string;
   updatedAt: string;
   sentAt: string | null;
   expiresAt: string | null;
+  viewedAt: string | null;
+  lastViewedAt: string | null;
+  viewCount: number;
+  decisionAt: string | null;
+  decisionNotes: string | null;
+  refreshRequestedAt: string | null;
+  acceptedAppointmentId: string | null;
   shareToken: string | null;
   contact: { name: string; email: string | null };
   property: { addressLine1: string; city: string; state: string; postalCode: string };
 };
 
-type ServerAction = (formData: FormData) => void;
+type ServerAction = (formData: FormData) => void | Promise<void>;
+
+function fmtDate(value: string | null): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
+}
+
+function statusLabel(value: string): string {
+  if (value === "rejected") return "Rejected";
+  if (value === "refresh_requested") return "Refresh requested";
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function statusClass(value: string): string {
+  if (value === "accepted" || value === "booked") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (value === "rejected" || value === "expired") return "border-rose-200 bg-rose-50 text-rose-700";
+  if (value === "viewed" || value === "sent" || value === "refresh_requested") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-neutral-200 bg-neutral-100 text-neutral-600";
+}
 
 export function QuotesList({
   initial,
@@ -59,10 +95,10 @@ export function QuotesList({
         />
         <select value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-md border border-neutral-300 px-2 py-1 text-sm">
           <option value="all">All</option>
-          <option value="pending">Pending</option>
-          <option value="sent">Sent</option>
+          <option value="pending">Draft</option>
+          <option value="sent">Open / Sent</option>
           <option value="accepted">Accepted</option>
-          <option value="declined">Declined</option>
+          <option value="declined">Rejected</option>
         </select>
       </div>
       {filtered.length === 0 ? (
@@ -72,13 +108,35 @@ export function QuotesList({
           <article key={q.id} className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm text-neutral-500">
-                  {q.status.toUpperCase()} - {q.contact.name}
-                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${statusClass(q.displayStatus)}`}>
+                    {statusLabel(q.displayStatus)}
+                  </span>
+                  <p className="text-sm text-neutral-500">{q.quoteNumber ?? q.id.slice(0, 8).toUpperCase()} - {q.contact.name}</p>
+                </div>
                 <p className="text-sm text-neutral-700">{q.property.addressLine1}, {q.property.city}</p>
               </div>
               <p className="text-sm font-semibold text-primary-900">{q.total.toLocaleString("en-US", { style: "currency", currency: "USD" })}</p>
             </div>
+            <div className="mt-3 grid gap-2 text-xs text-neutral-600 sm:grid-cols-4">
+              <div className="rounded-md border border-neutral-200 bg-neutral-50 p-2">
+                <div className="font-semibold text-neutral-500">Viewed</div>
+                <div>{q.viewedAt ? `${q.viewCount}x, last ${fmtDate(q.lastViewedAt)}` : "Not viewed"}</div>
+              </div>
+              <div className="rounded-md border border-neutral-200 bg-neutral-50 p-2">
+                <div className="font-semibold text-neutral-500">Valid until</div>
+                <div>{fmtDate(q.expiresAt)}</div>
+              </div>
+              <div className="rounded-md border border-neutral-200 bg-neutral-50 p-2">
+                <div className="font-semibold text-neutral-500">Decision</div>
+                <div>{q.decisionAt ? fmtDate(q.decisionAt) : "Waiting"}</div>
+              </div>
+              <div className="rounded-md border border-neutral-200 bg-neutral-50 p-2">
+                <div className="font-semibold text-neutral-500">Booking</div>
+                <div>{q.acceptedAppointmentId ? "Booked" : q.refreshRequestedAt ? "Refresh requested" : `${Math.round(q.jobDurationMinutes / 60 * 10) / 10} hr`}</div>
+              </div>
+            </div>
+            {q.clientScope ? <p className="mt-3 line-clamp-2 text-sm text-neutral-600">{q.clientScope}</p> : null}
             <div className="mt-3 flex flex-wrap gap-2">
               {(q.status === "pending" || q.status === "sent") ? (
                 <form action={sendAction}>
@@ -110,7 +168,7 @@ export function QuotesList({
                 </SubmitButton>
               </form>
               {q.shareToken ? (
-                <a href={`/quote/${q.shareToken}`} target="_blank" rel="noreferrer" className="rounded-md border border-neutral-300 px-3 py-1 text-xs text-neutral-700">Open link</a>
+                <a href={`/quote/${q.shareToken}?preview=1`} target="_blank" rel="noreferrer" className="rounded-md border border-neutral-300 px-3 py-1 text-xs text-neutral-700">Preview link</a>
               ) : null}
             </div>
           </article>
@@ -119,4 +177,3 @@ export function QuotesList({
     </section>
   );
 }
-

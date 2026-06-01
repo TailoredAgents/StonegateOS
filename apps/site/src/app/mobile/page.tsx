@@ -9,6 +9,7 @@ import {
   addMobileAppointmentNoteAction,
   bookMobileAppointmentAction,
   closeMobileThreadAction,
+  createMobileQuoteAction,
   createMobileTeamMemberAction,
   markMobileThreadHandledAction,
   mobileLogoutAction,
@@ -197,11 +198,22 @@ type CalendarFeedResponse = {
 type QuoteSummary = {
   id: string;
   status: string;
+  displayStatus: string;
+  quoteNumber: string | null;
   services: string[];
   addOns: string[] | null;
   total: number;
   lineItems?: Array<{ id?: string; label?: string; amount?: number; category?: string }> | null;
   notes?: string | null;
+  clientScope?: string | null;
+  jobDurationMinutes: number;
+  viewedAt: string | null;
+  lastViewedAt: string | null;
+  viewCount: number;
+  decisionAt: string | null;
+  decisionNotes: string | null;
+  refreshRequestedAt: string | null;
+  acceptedAppointmentId: string | null;
   createdAt: string;
   updatedAt: string;
   sentAt: string | null;
@@ -1175,7 +1187,7 @@ export default async function MobileHomePage({
     facebook: inboxCountThreads.filter((thread) => thread.sourceFamily === "Facebook" && thread.status !== "closed" && !thread.doNotContact).length,
     due: inboxCountThreads.filter((thread) => thread.attentionReason === "follow_up_due").length
   };
-  const contacts = activeScreen === "contacts" ? await loadMobileContacts({ q: inboxQuery }) : [];
+  const contacts = activeScreen === "contacts" || activeScreen === "quotes" ? await loadMobileContacts({ q: inboxQuery }) : [];
   const contactDetail = activeScreen === "contacts" && contactId ? await loadMobileContact(contactId) : null;
   const calendarWeekDays = weekDayKeys(calendarDay);
   const calendarWeekEvents =
@@ -2334,6 +2346,92 @@ export default async function MobileHomePage({
                 </div>
               </div>
 
+              <details className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
+                  Create quote
+                </summary>
+                <form action={createMobileQuoteAction} className="mt-4 space-y-3">
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-300">Contact / property</span>
+                    <select
+                      name="contactProperty"
+                      required
+                      className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                    >
+                      <option value="">Choose contact</option>
+                      {contacts.flatMap((contact) =>
+                        (contact.properties ?? []).map((property) => (
+                          <option key={`${contact.id}:${property.id}`} value={`${contact.id}:${property.id}`}>
+                            {contact.name} - {property.addressLine1}, {property.city}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </label>
+                  <div className="space-y-2">
+                    {mobileQuoteServices.map((service) => (
+                      <div key={service.id} className="grid grid-cols-[1fr_7rem] gap-2 rounded-md border border-white/10 bg-slate-950 p-2">
+                        <label className="flex items-center gap-2 text-sm text-slate-200">
+                          <input name="services" type="checkbox" value={service.id} className="rounded border-slate-600 bg-slate-900" />
+                          {service.label}
+                        </label>
+                        <input
+                          name={`servicePrice:${service.id}`}
+                          inputMode="decimal"
+                          className="w-full rounded-md border border-white/10 bg-slate-900 px-2 py-1 text-sm text-white outline-none focus:border-cyan-300"
+                          placeholder="$"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-300">Duration</span>
+                      <select name="jobDurationMinutes" defaultValue="120" className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white">
+                        <option value="60">1h</option>
+                        <option value="120">2h</option>
+                        <option value="180">3h</option>
+                        <option value="240">Half day</option>
+                        <option value="480">Full day</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-300">Deposit</span>
+                      <select name="depositRate" defaultValue="0" className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white">
+                        <option value="0">None</option>
+                        <option value="0.1">10%</option>
+                        <option value="0.25">25%</option>
+                        <option value="0.5">50%</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-300">Client scope</span>
+                    <textarea
+                      name="clientScope"
+                      rows={3}
+                      className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                      placeholder="What the customer will see on the quote..."
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-300">Internal notes</span>
+                    <textarea
+                      name="notes"
+                      rows={2}
+                      className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-200">
+                    <input name="sendQuote" type="checkbox" className="rounded border-slate-600 bg-slate-900" />
+                    Send SMS/email after creating
+                  </label>
+                  <button type="submit" className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950">
+                    Create quote
+                  </button>
+                </form>
+              </details>
+
               <div className="space-y-3">
                 {quotes.length > 0 ? (
                   quotes.map((quote) => {
@@ -2350,11 +2448,12 @@ export default async function MobileHomePage({
                             {quote.contact.email ? <p className="mt-1 truncate text-xs text-slate-500">{quote.contact.email}</p> : null}
                           </div>
                           <span className="shrink-0 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold capitalize text-slate-300">
-                            {quote.status}
+                            {formatStage(quote.displayStatus ?? quote.status)}
                           </span>
                         </div>
                         <p className="mt-3 text-sm text-slate-300">{quote.services.map(formatStage).join(", ")}</p>
                         {quote.notes ? <p className="mt-2 text-sm leading-5 text-slate-400">{quote.notes}</p> : null}
+                        {quote.clientScope ? <p className="mt-2 text-sm leading-5 text-slate-300">{quote.clientScope}</p> : null}
                         <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
                           <div className="rounded-md border border-white/10 bg-slate-900 px-3 py-2">
                             <p className="text-slate-500">Updated</p>
@@ -2366,6 +2465,18 @@ export default async function MobileHomePage({
                               {quote.sentAt ? formatRelativeTime(quote.sentAt) : quote.expiresAt ? formatMobileDateTime(quote.expiresAt) : "Not sent"}
                             </p>
                           </div>
+                          <div className="rounded-md border border-white/10 bg-slate-900 px-3 py-2">
+                            <p className="text-slate-500">Viewed</p>
+                            <p className="mt-0.5 font-semibold text-slate-200">
+                              {quote.viewedAt ? `${quote.viewCount}x ${formatRelativeTime(quote.lastViewedAt)}` : "No"}
+                            </p>
+                          </div>
+                          <div className="rounded-md border border-white/10 bg-slate-900 px-3 py-2">
+                            <p className="text-slate-500">Booking</p>
+                            <p className="mt-0.5 font-semibold text-slate-200">
+                              {quote.acceptedAppointmentId ? "Booked" : quote.refreshRequestedAt ? "Refresh requested" : `${Math.round((quote.jobDurationMinutes ?? 120) / 60 * 10) / 10}h`}
+                            </p>
+                          </div>
                         </div>
                         {quote.status === "pending" || quote.status === "sent" ? (
                           <details className="mt-3 rounded-md border border-white/10 bg-slate-900 p-3">
@@ -2374,6 +2485,27 @@ export default async function MobileHomePage({
                             </summary>
                             <form action={updateMobileQuoteAction} className="mt-3 space-y-3">
                               <input type="hidden" name="quoteId" value={quote.id} />
+                              <div className="grid grid-cols-2 gap-2">
+                                <label className="block">
+                                  <span className="text-xs font-semibold text-slate-300">Duration</span>
+                                  <select name="jobDurationMinutes" defaultValue={String(quote.jobDurationMinutes ?? 120)} className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white">
+                                    <option value="60">1h</option>
+                                    <option value="120">2h</option>
+                                    <option value="180">3h</option>
+                                    <option value="240">Half day</option>
+                                    <option value="480">Full day</option>
+                                  </select>
+                                </label>
+                                <label className="block">
+                                  <span className="text-xs font-semibold text-slate-300">Deposit</span>
+                                  <select name="depositRate" defaultValue="0" className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white">
+                                    <option value="0">None</option>
+                                    <option value="0.1">10%</option>
+                                    <option value="0.25">25%</option>
+                                    <option value="0.5">50%</option>
+                                  </select>
+                                </label>
+                              </div>
                               <div className="space-y-2">
                                 {mobileQuoteServices.map((service) => {
                                   const checked = quote.services.includes(service.id);
@@ -2400,6 +2532,15 @@ export default async function MobileHomePage({
                                   );
                                 })}
                               </div>
+                              <label className="block">
+                                <span className="text-xs font-semibold text-slate-300">Client scope</span>
+                                <textarea
+                                  name="clientScope"
+                                  rows={3}
+                                  defaultValue={quote.clientScope ?? ""}
+                                  className="mt-1 w-full resize-none rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                                />
+                              </label>
                               <label className="block">
                                 <span className="text-xs font-semibold text-slate-300">Notes</span>
                                 <textarea
@@ -2454,7 +2595,7 @@ export default async function MobileHomePage({
                           </form>
                           {quote.shareToken ? (
                             <a
-                              href={`/quote/${quote.shareToken}`}
+                              href={`/quote/${quote.shareToken}?preview=1`}
                               target="_blank"
                               rel="noreferrer"
                               className="rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-center text-sm font-semibold text-slate-200"

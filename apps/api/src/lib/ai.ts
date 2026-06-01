@@ -31,6 +31,13 @@ interface QuoteSummary {
   reason: "sent" | "accepted" | "declined";
 }
 
+interface QuoteScopeDraftSummary {
+  customerName?: string | null;
+  services: string[];
+  total?: number | null;
+  roughNotes?: string | null;
+}
+
 export interface NotificationCopy {
   emailSubject?: string;
   emailBody?: string;
@@ -244,7 +251,7 @@ Constraints:
 - Tone: confident, courteous, transparent. No emojis.
 - Mention "Stonegate Junk Removal" once.
 - Include the share link exactly as provided.
-- Highlight the pickup scope and total value, and remind customers that no deposit is required.
+- Highlight the pickup scope and total value.
 - If the quote is accepted, outline next steps briefly. If declined, invite feedback.
 - Keep email body under 600 characters and SMS under 240 characters.
 - Respond ONLY as JSON with keys: email_subject, email_body, sms_body.`;
@@ -268,7 +275,9 @@ Constraints:
     `Total: $${total.toFixed(2)}`,
     `Share link: ${shareUrl}`,
     expiresText,
-    `Payment terms: No deposit required; payment is due after service.`,
+    summary.depositDue > 0
+      ? `Payment terms: $${summary.depositDue.toFixed(2)} deposit is listed on the quote; balance is due after service.`
+      : `Payment terms: No deposit required; payment is due after service.`,
     notes ? `Internal notes: ${notes}` : null,
     `Reason: ${reason}`
   ]
@@ -276,4 +285,29 @@ Constraints:
     .join("\n");
 
   return callOpenAI({ apiKey: config.apiKey, model: config.model, systemPrompt, userPrompt });
+}
+
+export async function generateQuoteScopeDraft(summary: QuoteScopeDraftSummary): Promise<string | null> {
+  const config = getOpenAIConfig();
+  if (!config) return null;
+
+  const systemPrompt = `You draft customer-facing scope text for Stonegate Junk Removal quotes.
+Constraints:
+- Professional, specific, and plain-spoken.
+- Do not invent facts not present in the notes or service list.
+- Mention that final pricing can change only if volume, access, weight, or materials differ from the quoted scope.
+- Keep it under 900 characters.
+- Respond ONLY as JSON with key email_body.`;
+
+  const userPrompt = [
+    summary.customerName ? `Customer: ${summary.customerName}` : null,
+    `Services: ${joinServiceLabels(summary.services)}`,
+    typeof summary.total === "number" ? `Total: $${summary.total.toFixed(2)}` : null,
+    summary.roughNotes ? `Rough notes: ${summary.roughNotes}` : "Rough notes: none"
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const generated = await callOpenAI({ apiKey: config.apiKey, model: config.model, systemPrompt, userPrompt });
+  return generated?.emailBody?.trim() || null;
 }

@@ -942,10 +942,21 @@ export async function createMobileQuoteAction(formData: FormData) {
 
   const contactIdRaw = formData.get("contactId");
   const propertyIdRaw = formData.get("propertyId");
+  const contactPropertyRaw = formData.get("contactProperty");
   const notesRaw = formData.get("notes");
+  const clientScopeRaw = formData.get("clientScope");
+  const jobDurationRaw = formData.get("jobDurationMinutes");
+  const depositRateRaw = formData.get("depositRate");
   const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
   const propertyId = typeof propertyIdRaw === "string" ? propertyIdRaw.trim() : "";
+  const contactProperty = typeof contactPropertyRaw === "string" ? contactPropertyRaw.trim() : "";
+  const [combinedContactId, combinedPropertyId] = contactProperty.includes(":") ? contactProperty.split(":") : ["", ""];
+  const resolvedContactId = contactId || combinedContactId || "";
+  const resolvedPropertyId = propertyId || combinedPropertyId || "";
   const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
+  const clientScope = typeof clientScopeRaw === "string" ? clientScopeRaw.trim() : "";
+  const jobDurationMinutes = typeof jobDurationRaw === "string" ? Number(jobDurationRaw) : 120;
+  const depositRate = typeof depositRateRaw === "string" ? Number(depositRateRaw) : 0;
   const selectedServices = formData
     .getAll("services")
     .filter((value): value is string => typeof value === "string")
@@ -955,7 +966,7 @@ export async function createMobileQuoteAction(formData: FormData) {
   const errorRedirect = (message: string): Route =>
     `/mobile?screen=quotes&error=${encodeURIComponent(message)}` as Route;
 
-  if (!contactId || !propertyId) {
+  if (!resolvedContactId || !resolvedPropertyId) {
     redirect(errorRedirect("contact_and_property_required"));
   }
   if (!selectedServices.length) {
@@ -974,13 +985,16 @@ export async function createMobileQuoteAction(formData: FormData) {
   const response = await callAdminApi("/api/quotes", {
     method: "POST",
     body: JSON.stringify({
-      contactId,
-      propertyId,
+      contactId: resolvedContactId,
+      propertyId: resolvedPropertyId,
       zoneId: "zone-core",
       selectedServices,
       serviceOverrides,
-      expiresInDays: 30,
-      ...(notes ? { notes } : {})
+      expiresInDays: 7,
+      jobDurationMinutes: Number.isFinite(jobDurationMinutes) && jobDurationMinutes >= 30 ? Math.trunc(jobDurationMinutes) : 120,
+      ...(depositRate > 0 ? { depositRate } : {}),
+      ...(notes ? { notes } : {}),
+      ...(clientScope ? { clientScope } : {})
     })
   });
 
@@ -1019,8 +1033,14 @@ export async function updateMobileQuoteAction(formData: FormData) {
 
   const quoteIdRaw = formData.get("quoteId");
   const notesRaw = formData.get("notes");
+  const clientScopeRaw = formData.get("clientScope");
+  const jobDurationRaw = formData.get("jobDurationMinutes");
+  const depositRateRaw = formData.get("depositRate");
   const quoteId = typeof quoteIdRaw === "string" ? quoteIdRaw.trim() : "";
   const notes = typeof notesRaw === "string" ? notesRaw.trim() : "";
+  const clientScope = typeof clientScopeRaw === "string" ? clientScopeRaw.trim() : "";
+  const jobDurationMinutes = typeof jobDurationRaw === "string" ? Number(jobDurationRaw) : null;
+  const depositRate = typeof depositRateRaw === "string" ? Number(depositRateRaw) : null;
   const selectedServices = formData
     .getAll("services")
     .filter((value): value is string => typeof value === "string")
@@ -1052,7 +1072,12 @@ export async function updateMobileQuoteAction(formData: FormData) {
       zoneId: "zone-core",
       selectedServices,
       serviceOverrides,
-      notes: notes || null
+      notes: notes || null,
+      clientScope: clientScope || null,
+      ...(typeof jobDurationMinutes === "number" && Number.isFinite(jobDurationMinutes) && jobDurationMinutes >= 30
+        ? { jobDurationMinutes: Math.trunc(jobDurationMinutes) }
+        : {}),
+      ...(typeof depositRate === "number" && Number.isFinite(depositRate) && depositRate > 0 ? { depositRate } : {})
     })
   });
 

@@ -62,6 +62,16 @@ type ThreadSummary = {
     step: number | null;
     nextAt: string | null;
   } | null;
+  facebookSales?: {
+    stage: string;
+    autonomyMode: string;
+    lastDecision: string | null;
+    lastDecisionReason: string | null;
+    lastHumanReviewReason: string | null;
+    quoteLowCents: number | null;
+    quoteHighCents: number | null;
+    updatedAt: string | null;
+  } | null;
 };
 
 type ThreadDetail = {
@@ -828,6 +838,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         threads.find((t) => t.contact?.id === activeContactId) ??
         null
       : null;
+  const activeFacebookSales = activeThreadSummary?.facebookSales ?? null;
   const activeProperty = activeThread?.property ?? activeThreadSummary?.property ?? null;
   const activePhone = normalizePhoneLink(activeContact?.phone);
   const canCall = Boolean(activeContactId && activePhone);
@@ -1285,6 +1296,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                   outOfArea: boolean;
                   followupNextAt: string | null;
                   followupRunning: boolean;
+                  facebookSales: ThreadSummary["facebookSales"];
                   expired: boolean;
                   messageCount: number;
                 };
@@ -1321,6 +1333,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                       outOfArea: Boolean(thread.property?.outOfArea),
                       followupNextAt,
                       followupRunning,
+                      facebookSales: thread.facebookSales ?? null,
                       expired,
                       messageCount: thread.messageCount ?? 0
                     });
@@ -1331,6 +1344,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                   existing.messageCount += thread.messageCount ?? 0;
                   existing.outOfArea = existing.outOfArea || Boolean(thread.property?.outOfArea);
                   existing.expired = existing.expired || expired;
+                  existing.facebookSales = existing.facebookSales ?? thread.facebookSales ?? null;
 
                   if (followupRunning) {
                     if (!existing.followupNextAt) {
@@ -1415,6 +1429,16 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                           {group.followupRunning && group.followupNextAt ? (
                             <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
                               Follow-up {formatTimestamp(group.followupNextAt)}
+                            </span>
+                          ) : null}
+                          {group.facebookSales ? (
+                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-800">
+                              FB auto: {formatMetaLabel(group.facebookSales.stage)}
+                            </span>
+                          ) : null}
+                          {group.facebookSales?.lastHumanReviewReason ? (
+                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                              Needs review
                             </span>
                           ) : null}
                           {group.expired ? (
@@ -1607,6 +1631,23 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     <p className="text-[11px] text-slate-400">
                       State updated {formatTimestamp((selectedThread as { stateUpdatedAt: string }).stateUpdatedAt)}
                     </p>
+                  ) : null}
+                  {activeFacebookSales ? (
+                    <details className="mt-2 rounded-2xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-blue-900">
+                      <summary className="cursor-pointer list-none font-semibold">
+                        Facebook Autopilot · {formatMetaLabel(activeFacebookSales.stage)}
+                      </summary>
+                      <div className="mt-2 space-y-1 text-blue-800">
+                        <p>Mode: {formatMetaLabel(activeFacebookSales.autonomyMode)}</p>
+                        <p>Last decision: {formatMetaLabel(activeFacebookSales.lastDecision ?? "none")}</p>
+                        <p>Reason: {activeFacebookSales.lastHumanReviewReason ?? activeFacebookSales.lastDecisionReason ?? "No reason saved"}</p>
+                        {activeFacebookSales.quoteLowCents && activeFacebookSales.quoteHighCents ? (
+                          <p>
+                            Quote range: ${(activeFacebookSales.quoteLowCents / 100).toFixed(0)}-${(activeFacebookSales.quoteHighCents / 100).toFixed(0)}
+                          </p>
+                        ) : null}
+                      </div>
+                    </details>
                   ) : null}
                 </div>
                 <div className="hidden min-w-[280px] xl:block">

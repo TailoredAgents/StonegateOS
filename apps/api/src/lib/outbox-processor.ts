@@ -92,6 +92,7 @@ import {
   handleInboundSalesAutopilot,
   handleSalesAutopilotAutosend,
 } from "@/lib/sales-autopilot";
+import { handleFacebookSalesEvaluate } from "@/lib/facebook-sales-autopilot";
 import { recordAuditEvent } from "@/lib/audit";
 import {
   recordProviderFailure,
@@ -5285,8 +5286,38 @@ async function handleOutboxEvent(
           });
         return { status: "processed" };
       }
+
+      await getDb()
+        .insert(outboxEvents)
+        .values({
+          type: "facebook.sales.evaluate",
+          payload: { messageId },
+          createdAt: new Date(),
+        });
       return { status: "processed" };
     }
+
+    case "facebook.sales.evaluate": {
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const messageId =
+        typeof payload?.["messageId"] === "string"
+          ? payload["messageId"]
+          : null;
+      if (!messageId) {
+        console.warn("[outbox] facebook.sales.evaluate.missing_id", {
+          id: event.id,
+        });
+        return { status: "skipped" };
+      }
+
+      return await handleFacebookSalesEvaluate(messageId);
+    }
+
+    case "facebook.sales.action.proposed":
+    case "facebook.sales.action.execute":
+    case "facebook.sales.human_review":
+    case "facebook.sales.shadow_decision":
+      return { status: "processed" };
 
     case "sales.autopilot.draft": {
       const payload = isRecord(event.payload) ? event.payload : null;

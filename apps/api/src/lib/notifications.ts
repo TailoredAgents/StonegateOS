@@ -567,6 +567,10 @@ export async function sendEstimateReminder2h(payload: EstimateNotificationPayloa
 
 export async function sendQuoteSentNotification(payload: QuoteNotificationPayload): Promise<void> {
   const expiresIso = payload.expiresAt ? payload.expiresAt.toISOString() : null;
+  const paymentTerms =
+    payload.depositDue > 0
+      ? `Deposit listed on quote: ${formatCurrency(payload.depositDue)}. Balance due after service: ${formatCurrency(payload.balanceDue)}.`
+      : "No deposit is required; payment is due after the work is complete.";
 
   const fallbackSubject = "Your Stonegate Junk Removal quote is ready";
   const fallbackBody = [
@@ -574,7 +578,7 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
     "",
     `Your quote for ${joinServiceLabels(payload.services)} is ready.`,
     `Total: ${formatCurrency(payload.total)}.`,
-    "No deposit is required; payment is due after the work is complete.",
+    paymentTerms,
     `Review and approve: ${payload.shareUrl}`,
     expiresIso ? `Expires: ${expiresIso}` : null,
     "",
@@ -583,7 +587,10 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
     .filter((line): line is string => Boolean(line))
     .join("\n");
 
-  const fallbackSms = `Stonegate quote ready: ${formatCurrency(payload.total)}. Review ${payload.shareUrl}`;
+  const fallbackSms =
+    payload.depositDue > 0
+      ? `Stonegate quote ready: ${formatCurrency(payload.total)} (${formatCurrency(payload.depositDue)} deposit listed). Review ${payload.shareUrl}`
+      : `Stonegate quote ready: ${formatCurrency(payload.total)}. Review ${payload.shareUrl}`;
 
   let generated = null;
   try {
@@ -643,7 +650,8 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
   const body = [
     `Customer: ${payload.contact.name}`,
     `Services: ${servicesSummary(payload.services)}`,
-    `Total: ${formatCurrency(payload.total)} (no deposit required)`,
+    `Total: ${formatCurrency(payload.total)}`,
+    paymentTerms,
     `Share link: ${payload.shareUrl}`,
     expiresIso ? `Expires: ${expiresIso}` : null,
     payload.notes ? `Notes: ${payload.notes}` : null
@@ -666,6 +674,10 @@ export async function sendQuoteSentNotification(payload: QuoteNotificationPayloa
 export async function sendQuoteDecisionNotification(
   payload: QuoteNotificationPayload & { decision: "accepted" | "declined"; source: "customer" | "admin" }
 ): Promise<void> {
+  const paymentTerms =
+    payload.depositDue > 0
+      ? `Deposit listed on quote: ${formatCurrency(payload.depositDue)}. Balance due after service: ${formatCurrency(payload.balanceDue)}.`
+      : "No deposit is required; payment will be collected after service.";
   const fallbackSubject =
     payload.decision === "accepted"
       ? "Stonegate quote approved"
@@ -678,7 +690,7 @@ export async function sendQuoteDecisionNotification(
       : "We've recorded your decision. If you'd like revisions or have questions, we're happy to help.",
     `Services: ${joinServiceLabels(payload.services)}`,
     `Total: ${formatCurrency(payload.total)}.`,
-    "No deposit is required; payment will be collected after service.",
+    paymentTerms,
     `Quote link: ${payload.shareUrl}`,
     payload.notes ? `Notes: ${payload.notes}` : null
   ]
@@ -758,7 +770,8 @@ export async function sendQuoteDecisionNotification(
     `Customer: ${payload.contact.name}`,
     `Services: ${servicesSummary(payload.services)}`,
     `Decision: ${payload.decision.toUpperCase()} (source: ${payload.source})`,
-    `Total: ${formatCurrency(payload.total)} (no deposit required)`,
+    `Total: ${formatCurrency(payload.total)}`,
+    paymentTerms,
     `Quote link: ${payload.shareUrl}`,
     payload.notes ? `Notes: ${payload.notes}` : null
   ]
