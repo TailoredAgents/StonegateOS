@@ -45,6 +45,15 @@ type SalesAutopilotPolicy = {
     emergencyStop: boolean;
     messengerResponseWindowHours: number;
   };
+  facebookCoaching: {
+    enabled: boolean;
+    tone: "friendly" | "professional" | "concise";
+    playbook: string;
+    requirePhotosBeforeQuote: boolean;
+    requireHumanReviewBeforeBooking: boolean;
+    humanReviewKeywords: string[];
+    blockedAutoReplyKeywords: string[];
+  };
 };
 
 type FacebookReadiness = Record<
@@ -129,6 +138,10 @@ const FACEBOOK_READINESS_LABELS: Record<keyof FacebookReadiness, string> = {
 
 function centsToDollars(cents: number): string {
   return String(Math.round((Number.isFinite(cents) ? cents : 0) / 100));
+}
+
+function keywordList(values: string[]): string {
+  return values.join(", ");
 }
 
 export async function AutomationSection(): Promise<React.ReactElement> {
@@ -629,6 +642,99 @@ export async function AutomationSection(): Promise<React.ReactElement> {
                     </span>
                   </div>
                 ))}
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-blue-100 bg-white/90 p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h5 className="text-sm font-semibold text-slate-900">Owner Coaching</h5>
+                    <p className="text-xs text-slate-600">
+                      Approved guidance for tone and flow. Keyword guardrails immediately route risky conversations to review.
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs font-semibold text-blue-900">
+                    <input
+                      type="checkbox"
+                      name="facebookCoachingEnabled"
+                      defaultChecked={autopilot.facebookCoaching.enabled}
+                      className="h-4 w-4 rounded border-slate-300"
+                    />
+                    Coaching active
+                  </label>
+                </div>
+
+                <div className="mt-4 grid gap-3 lg:grid-cols-[220px_1fr]">
+                  <label className="flex flex-col gap-1">
+                    <span>Tone</span>
+                    <select
+                      name="facebookCoachingTone"
+                      defaultValue={autopilot.facebookCoaching.tone}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                    >
+                      <option value="friendly">Friendly</option>
+                      <option value="professional">Professional</option>
+                      <option value="concise">Concise</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span>Approved playbook</span>
+                    <textarea
+                      name="facebookCoachingPlaybook"
+                      defaultValue={autopilot.facebookCoaching.playbook}
+                      rows={5}
+                      maxLength={3000}
+                      className="min-h-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                    />
+                  </label>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      name="facebookCoachingRequirePhotosBeforeQuote"
+                      defaultChecked={autopilot.facebookCoaching.requirePhotosBeforeQuote}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                    />
+                    <span>
+                      <span className="block font-semibold text-slate-800">Require photos before quote/time offers</span>
+                      <span className="block text-slate-500">If no photos are present, the agent asks for photos instead of quoting or offering times.</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      name="facebookCoachingRequireHumanReviewBeforeBooking"
+                      defaultChecked={autopilot.facebookCoaching.requireHumanReviewBeforeBooking}
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                    />
+                    <span>
+                      <span className="block font-semibold text-slate-800">Human review before auto-booking</span>
+                      <span className="block text-slate-500">The agent can still draft and offer times, but confirmed bookings wait for review.</span>
+                    </span>
+                  </label>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <span>Always human-review keywords</span>
+                    <input
+                      name="facebookCoachingHumanReviewKeywords"
+                      defaultValue={keywordList(autopilot.facebookCoaching.humanReviewKeywords)}
+                      placeholder="hot tub, hazmat, complaint"
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span>Block auto-reply keywords</span>
+                    <input
+                      name="facebookCoachingBlockedAutoReplyKeywords"
+                      defaultValue={keywordList(autopilot.facebookCoaching.blockedAutoReplyKeywords)}
+                      placeholder="refund, lawsuit, angry"
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                    />
+                  </label>
+                </div>
               </div>
             </div>
 

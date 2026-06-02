@@ -98,6 +98,7 @@ export type FollowUpSequencePolicy = {
 
 export type SalesAutopilotMode = "off" | "partial" | "full";
 export type FacebookSalesAutopilotMode = "off" | "shadow" | "assist" | "auto";
+export type FacebookSalesAutopilotTone = "friendly" | "professional" | "concise";
 export type SalesAutopilotChannel = "sms" | "email" | "dm";
 export type SalesPlannerActionClass = "follow_up" | "live_reply";
 export type SalesCloseLoopPolicySummaryMode =
@@ -142,6 +143,15 @@ export type SalesAutopilotPolicy = {
     allowDmSmsFallback: boolean;
     emergencyStop: boolean;
     messengerResponseWindowHours: number;
+  };
+  facebookCoaching: {
+    enabled: boolean;
+    tone: FacebookSalesAutopilotTone;
+    playbook: string;
+    requirePhotosBeforeQuote: boolean;
+    requireHumanReviewBeforeBooking: boolean;
+    humanReviewKeywords: string[];
+    blockedAutoReplyKeywords: string[];
   };
 };
 
@@ -249,6 +259,16 @@ export const DEFAULT_SALES_AUTOPILOT_POLICY: SalesAutopilotPolicy = {
     allowDmSmsFallback: true,
     emergencyStop: false,
     messengerResponseWindowHours: 24
+  },
+  facebookCoaching: {
+    enabled: true,
+    tone: "friendly",
+    playbook:
+      "Stay short, friendly, and practical. Ask for photos before confident pricing when the job is unclear. Escalate non-standard items, angry customers, and anything that feels outside normal junk removal.",
+    requirePhotosBeforeQuote: false,
+    requireHumanReviewBeforeBooking: false,
+    humanReviewKeywords: ["hot tub", "hazmat", "paint", "shed", "demolition", "commercial cleanout"],
+    blockedAutoReplyKeywords: ["angry", "complaint", "refund", "lawsuit"]
   }
 };
 
@@ -884,7 +904,7 @@ export async function getBusinessHoursPolicy(db: DbExecutor = getDb()): Promise<
   }
 
   const timezone = resolveTimezone(stored["timezone"]);
-  const weeklyRaw = isRecord(stored["weekly"]) ? (stored["weekly"] as Record<string, unknown>) : {};
+  const weeklyRaw = isRecord(stored["weekly"]) ? stored["weekly"] : {};
 
   const weekly = WEEKDAY_KEYS.reduce<Record<WeekdayKey, TimeWindow[]>>((acc, key) => {
     acc[key] = coerceTimeWindowList(weeklyRaw[key], DEFAULT_BUSINESS_HOURS_POLICY.weekly[key]);
@@ -900,7 +920,7 @@ export async function getQuietHoursPolicy(db: DbExecutor = getDb()): Promise<Qui
     return DEFAULT_QUIET_HOURS_POLICY;
   }
 
-  const channelsRaw = isRecord(stored["channels"]) ? (stored["channels"] as Record<string, unknown>) : {};
+  const channelsRaw = isRecord(stored["channels"]) ? stored["channels"] : {};
   const channels: Record<string, TimeWindow> = { ...DEFAULT_QUIET_HOURS_POLICY.channels };
 
   for (const [channel, value] of Object.entries(channelsRaw)) {
@@ -1260,6 +1280,53 @@ function coerceFacebookCloserPolicy(value: unknown): SalesAutopilotPolicy["faceb
   };
 }
 
+function coerceFacebookTone(value: unknown, fallback: FacebookSalesAutopilotTone): FacebookSalesAutopilotTone {
+  return value === "friendly" || value === "professional" || value === "concise" ? value : fallback;
+}
+
+function coerceBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value === "true" || value === "on";
+  return fallback;
+}
+
+function coercePlaybook(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim().replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+  if (!trimmed) return "";
+  return trimmed.slice(0, 3000);
+}
+
+function coerceCoachingKeywords(value: unknown, fallback: string[]): string[] {
+  const rawValues = Array.isArray(value) ? value : fallback;
+  const values = rawValues
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .map((entry) => entry.toLowerCase().replace(/\s+/g, " ").trim())
+    .filter((entry) => entry.length >= 2 && entry.length <= 60)
+    .slice(0, 30);
+  return [...new Set(values)];
+}
+
+function coerceFacebookCoachingPolicy(value: unknown): SalesAutopilotPolicy["facebookCoaching"] {
+  const fallback = DEFAULT_SALES_AUTOPILOT_POLICY.facebookCoaching;
+  const source = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  return {
+    enabled: coerceBoolean(source["enabled"], fallback.enabled),
+    tone: coerceFacebookTone(source["tone"], fallback.tone),
+    playbook: coercePlaybook(source["playbook"], fallback.playbook),
+    requirePhotosBeforeQuote: coerceBoolean(source["requirePhotosBeforeQuote"], fallback.requirePhotosBeforeQuote),
+    requireHumanReviewBeforeBooking: coerceBoolean(
+      source["requireHumanReviewBeforeBooking"],
+      fallback.requireHumanReviewBeforeBooking,
+    ),
+    humanReviewKeywords: coerceCoachingKeywords(source["humanReviewKeywords"], fallback.humanReviewKeywords),
+    blockedAutoReplyKeywords: coerceCoachingKeywords(
+      source["blockedAutoReplyKeywords"],
+      fallback.blockedAutoReplyKeywords,
+    ),
+  };
+}
+
 function coerceSalesAutopilotChannelModes(
   value: unknown,
   fallbackMode: SalesAutopilotMode,
@@ -1408,6 +1475,7 @@ export async function getSalesAutopilotPolicy(db: DbExecutor = getDb()): Promise
       DEFAULT_SALES_AUTOPILOT_POLICY.liveReplyAutonomyActions
     ),
     facebookCloser: coerceFacebookCloserPolicy(stored["facebookCloser"]),
+    facebookCoaching: coerceFacebookCoachingPolicy(stored["facebookCoaching"]),
   };
 }
 
@@ -1666,10 +1734,9 @@ export async function getInboxAlertsPolicy(db: DbExecutor = getDb()): Promise<In
   }
 
   return {
-    sms: typeof stored["sms"] === "boolean" ? (stored["sms"] as boolean) : DEFAULT_INBOX_ALERTS_POLICY.sms,
-    dm: typeof stored["dm"] === "boolean" ? (stored["dm"] as boolean) : DEFAULT_INBOX_ALERTS_POLICY.dm,
-    email:
-      typeof stored["email"] === "boolean" ? (stored["email"] as boolean) : DEFAULT_INBOX_ALERTS_POLICY.email
+    sms: typeof stored["sms"] === "boolean" ? stored["sms"] : DEFAULT_INBOX_ALERTS_POLICY.sms,
+    dm: typeof stored["dm"] === "boolean" ? stored["dm"] : DEFAULT_INBOX_ALERTS_POLICY.dm,
+    email: typeof stored["email"] === "boolean" ? stored["email"] : DEFAULT_INBOX_ALERTS_POLICY.email
   };
 }
 

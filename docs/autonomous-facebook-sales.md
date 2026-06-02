@@ -198,6 +198,28 @@ Event types:
 - `facebook.sales.human_review`
 - `facebook.sales.shadow_decision`
 
+## Owner Coaching
+
+The Facebook sales agent supports owner-approved coaching in Team Automation. This is not uncontrolled self-learning. Owners update the playbook and guardrails, and the next Facebook evaluation reads the saved policy.
+
+Available controls:
+
+- Coaching active toggle.
+- Tone: friendly, professional, or concise.
+- Approved playbook text for owner guidance and audit context.
+- Require photos before quote or time offers.
+- Require human review before auto-booking.
+- Always human-review keywords.
+- Block auto-reply keywords.
+
+Runtime behavior:
+
+- Matching human-review keywords route the conversation to human review.
+- Matching blocked auto-reply keywords prevent automated replies and route to human review.
+- The photos-before-quote rule asks for photos instead of quoting, offering times, or booking when no media is present.
+- The booking-review rule blocks autonomous booking while still allowing safe drafting and time offers.
+- Tone changes the canned customer-facing messages used in assist and auto modes.
+
 ## Implementation Checklist
 
 - [x] Create this implementation guide.
@@ -216,6 +238,8 @@ Event types:
 - [x] Add outbox event handling.
 - [x] Add audit logging for decisions.
 - [x] Add focused unit tests for confirmation parsing and quote mapping.
+- [x] Add owner coaching policy controls.
+- [x] Add coaching guardrails to Facebook evaluation.
 - [ ] Add formal quote-link executor from Messenger request.
 - [ ] Add assist-mode approve/reject endpoint for proposed quote or booking.
 - [ ] Add dedicated “Needs human review” Inbox filter.
@@ -229,6 +253,8 @@ Unit tests:
 - Parse clear booking confirmation.
 - Reject vague confirmation.
 - Map media volume into quote range.
+- Route owner coaching keywords to human review.
+- Apply photos-before-quote coaching.
 - Block non-standard/risky language.
 - Block low-confidence or out-of-policy jobs.
 - Prevent sending outside the allowed Messenger window.

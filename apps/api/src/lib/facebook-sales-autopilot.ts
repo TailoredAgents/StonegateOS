@@ -17,6 +17,7 @@ import { loadOmniLeadContext, type OmniLeadContext } from "@/lib/omni-lead-conte
 import { getSalesAutopilotPolicy, type SalesAutopilotPolicy } from "@/lib/policy";
 
 type AutonomyMode = SalesAutopilotPolicy["facebookCloser"]["mode"];
+type FacebookCoaching = SalesAutopilotPolicy["facebookCoaching"];
 type Stage =
   | "new_inquiry"
   | "missing_info"
@@ -168,6 +169,78 @@ function customerAskedForQuote(body: string): boolean {
 function confidenceMeetsPolicy(confidence: "low" | "medium" | "high", min: "medium" | "high"): boolean {
   if (min === "high") return confidence === "high";
   return confidence === "medium" || confidence === "high";
+}
+
+function normalizeKeywordText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function findCoachingKeyword(body: string, keywords: string[]): string | null {
+  const text = normalizeKeywordText(body);
+  for (const keyword of keywords) {
+    const normalized = normalizeKeywordText(keyword);
+    if (normalized && text.includes(normalized)) return normalized;
+  }
+  return null;
+}
+
+function isOutboundAutomationAction(action: ProposedAction): boolean {
+  return action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times" || action === "book_job";
+}
+
+export function applyFacebookCoachingGuards(input: {
+  body: string;
+  action: ProposedAction;
+  stage: Stage;
+  mediaCount: number;
+  coaching: FacebookCoaching;
+}): { action: ProposedAction; stage: Stage; reason: string | null; humanReviewReason: string | null } | null {
+  const { body, coaching } = input;
+  if (!coaching.enabled) return null;
+
+  const reviewKeyword = findCoachingKeyword(body, coaching.humanReviewKeywords);
+  if (reviewKeyword) {
+    return {
+      action: "human_review",
+      stage: "needs_human_review",
+      reason: `owner_coaching_review_keyword:${reviewKeyword}`,
+      humanReviewReason: `owner_coaching_review_keyword:${reviewKeyword}`,
+    };
+  }
+
+  const blockedKeyword = findCoachingKeyword(body, coaching.blockedAutoReplyKeywords);
+  if (blockedKeyword && isOutboundAutomationAction(input.action)) {
+    return {
+      action: "human_review",
+      stage: "needs_human_review",
+      reason: `owner_coaching_blocked_auto_reply:${blockedKeyword}`,
+      humanReviewReason: `owner_coaching_blocked_auto_reply:${blockedKeyword}`,
+    };
+  }
+
+  if (
+    coaching.requirePhotosBeforeQuote &&
+    input.mediaCount === 0 &&
+    (input.action === "send_quote_range" || input.action === "offer_times" || input.action === "book_job")
+  ) {
+    return {
+      action: "request_photos",
+      stage: "missing_info",
+      reason: "owner_coaching_photos_required",
+      humanReviewReason: null,
+    };
+  }
+
+  if (coaching.requireHumanReviewBeforeBooking && input.action === "book_job") {
+    return {
+      action: "human_review",
+      stage: "needs_human_review",
+      reason: "owner_coaching_booking_review_required",
+      humanReviewReason: "owner_coaching_booking_review_required",
+    };
+  }
+
+  return null;
 }
 
 async function getEvaluatedMessage(db: DatabaseClient, messageId: string): Promise<EvaluatedMessage | null> {
@@ -363,16 +436,34 @@ async function createOutboundDmDraft(input: {
   return message.id;
 }
 
-function buildQuoteMessage(range: { lowCents: number; highCents: number }, summary: string | null): string {
+function buildQuoteMessage(range: { lowCents: number; highCents: number }, summary: string | null, coaching: FacebookCoaching): string {
   const scope = summary ? ` From the photos, ${summary.replace(/\s+/g, " ").slice(0, 180)}` : "";
+  if (coaching.enabled && coaching.tone === "concise") {
+    return `Looks like ${money(range.lowCents)}-${money(range.highCents)} based on what I can see.${scope} Want a couple available times?`;
+  }
+  if (coaching.enabled && coaching.tone === "professional") {
+    return `Based on the information available, the job is likely around ${money(range.lowCents)}-${money(range.highCents)}.${scope} Final pricing can change if volume, weight, access, or materials differ in person. Would you like available appointment options?`;
+  }
   return `Based on what I can see, you're likely around ${money(range.lowCents)}-${money(range.highCents)}.${scope} Final price only changes if volume, weight, access, or materials differ in person. Want me to send a couple available times?`;
 }
 
-function buildAddressAsk(): string {
+function buildAddressAsk(coaching: FacebookCoaching): string {
+  if (coaching.enabled && coaching.tone === "concise") {
+    return "What's the pickup address or ZIP code?";
+  }
+  if (coaching.enabled && coaching.tone === "professional") {
+    return "I can help with that. What is the pickup address or ZIP code?";
+  }
   return "I can get this moving. What's the pickup address or at least the ZIP code?";
 }
 
-function buildPhotoAsk(): string {
+function buildPhotoAsk(coaching: FacebookCoaching): string {
+  if (coaching.enabled && coaching.tone === "concise") {
+    return "Can you send a couple photos? I can price it tighter once I can see it.";
+  }
+  if (coaching.enabled && coaching.tone === "professional") {
+    return "Could you send a couple photos of what needs to be removed? Once I can see it, I can provide a tighter range and appointment options.";
+  }
   return "Can you send a couple photos of what needs to go? Once I can see it, I can give you a tighter range and times.";
 }
 
@@ -410,7 +501,13 @@ async function fetchBookingAssist(input: {
     });
 }
 
-function buildSlotsMessage(slots: OfferedSlot[]): string {
+function buildSlotsMessage(slots: OfferedSlot[], coaching: FacebookCoaching): string {
+  if (coaching.enabled && coaching.tone === "concise") {
+    return `${slots.map((slot) => slot.label.replace(/^Option \d+:\s*/, "")).join(" or ")}. Which works?`;
+  }
+  if (coaching.enabled && coaching.tone === "professional") {
+    return `I have availability for ${slots.map((slot) => slot.label.replace(/^Option \d+:\s*/, "")).join(" or ")}. Which option works best for you?`;
+  }
   return `I can do ${slots.map((slot) => slot.label.replace(/^Option \d+:\s*/, "")).join(" or ")}. Which one works best?`;
 }
 
@@ -480,6 +577,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
 
   const policy = await getSalesAutopilotPolicy(db);
   const closer = policy.facebookCloser;
+  const coaching = policy.facebookCoaching;
   const mode = closer.mode;
   const context = await loadOmniLeadContext(db, { contactId: row.contactId, includeQuotePrice: true, messageLimit: 60 });
   if (!context) return { status: "skipped" };
@@ -499,6 +597,16 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
     body: latestBody.slice(0, 500),
     mediaCount,
     mode,
+    ownerCoaching: coaching.enabled
+      ? {
+          tone: coaching.tone,
+          requirePhotosBeforeQuote: coaching.requirePhotosBeforeQuote,
+          requireHumanReviewBeforeBooking: coaching.requireHumanReviewBeforeBooking,
+          humanReviewKeywords: coaching.humanReviewKeywords,
+          blockedAutoReplyKeywords: coaching.blockedAutoReplyKeywords,
+          playbook: coaching.playbook.slice(0, 1000),
+        }
+      : { enabled: false },
   };
 
   let stage: Stage = "new_inquiry";
@@ -619,6 +727,20 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
     reason = "quote_confidence_too_low";
   }
 
+  const coachingOverride = applyFacebookCoachingGuards({
+    body: latestBody,
+    action,
+    stage,
+    mediaCount,
+    coaching,
+  });
+  if (coachingOverride) {
+    stage = coachingOverride.stage;
+    action = coachingOverride.action;
+    reason = coachingOverride.reason ?? reason;
+    humanReviewReason = coachingOverride.humanReviewReason;
+  }
+
   let slotsForSession = offeredSlots;
   if (action === "offer_times" && hasUsableProperty(context)) {
     slotsForSession = await fetchBookingAssist({ property: context.properties[0]! });
@@ -652,13 +774,13 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
     if (mode === "assist" && (action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times")) {
       const body =
         action === "request_address"
-          ? buildAddressAsk()
+          ? buildAddressAsk(coaching)
           : action === "request_photos"
-            ? buildPhotoAsk()
+            ? buildPhotoAsk(coaching)
             : action === "send_quote_range" && quoteRange
-              ? buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null)
+              ? buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null, coaching)
               : action === "offer_times"
-                ? buildSlotsMessage(slotsForSession)
+                ? buildSlotsMessage(slotsForSession, coaching)
                 : "";
       const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: false }) : null;
       executedAction = messageId ? "draft_created" : "draft_reused_or_skipped";
@@ -667,13 +789,13 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
       if (action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times") {
         const body =
           action === "request_address"
-            ? buildAddressAsk()
+            ? buildAddressAsk(coaching)
             : action === "request_photos"
-              ? buildPhotoAsk()
+              ? buildPhotoAsk(coaching)
               : action === "send_quote_range" && quoteRange
-                ? buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null)
+                ? buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null, coaching)
                 : action === "offer_times"
-                  ? buildSlotsMessage(slotsForSession)
+                  ? buildSlotsMessage(slotsForSession, coaching)
                   : "";
         const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: true }) : null;
         executedAction = messageId ? "message_queued" : "message_reused_or_skipped";

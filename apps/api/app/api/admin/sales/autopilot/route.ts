@@ -53,6 +53,7 @@ const AUTOSEND_ACTIONS = new Set([
 const AUTOPILOT_MODES = new Set(["off", "partial", "full"]);
 const FACEBOOK_CLOSER_MODES = new Set(["off", "shadow", "assist", "auto"]);
 const FACEBOOK_CLOSER_SERVICES = new Set(["junk_removal"]);
+const FACEBOOK_COACHING_TONES = new Set(["friendly", "professional", "concise"]);
 
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -245,6 +246,36 @@ export async function PATCH(request: NextRequest): Promise<Response> {
       next["facebookCloser"] = {
         ...currentPolicy.facebookCloser,
         ...facebookCloser,
+      };
+    }
+  }
+
+  if (isRecord(payload["facebookCoaching"])) {
+    const raw = payload["facebookCoaching"];
+    const facebookCoaching: Record<string, unknown> = {};
+    for (const key of ["enabled", "requirePhotosBeforeQuote", "requireHumanReviewBeforeBooking"] as const) {
+      if (typeof raw[key] === "boolean") facebookCoaching[key] = raw[key];
+      else if (typeof raw[key] === "string") facebookCoaching[key] = raw[key] === "true" || raw[key] === "on";
+    }
+    const tone = typeof raw["tone"] === "string" && FACEBOOK_COACHING_TONES.has(raw["tone"].trim())
+      ? raw["tone"].trim()
+      : null;
+    if (tone) facebookCoaching["tone"] = tone;
+    if (typeof raw["playbook"] === "string") {
+      facebookCoaching["playbook"] = raw["playbook"].trim().slice(0, 3000);
+    }
+    const humanReviewKeywords = coerceStringArray(raw["humanReviewKeywords"]);
+    if (humanReviewKeywords !== null) {
+      facebookCoaching["humanReviewKeywords"] = humanReviewKeywords.slice(0, 30);
+    }
+    const blockedAutoReplyKeywords = coerceStringArray(raw["blockedAutoReplyKeywords"]);
+    if (blockedAutoReplyKeywords !== null) {
+      facebookCoaching["blockedAutoReplyKeywords"] = blockedAutoReplyKeywords.slice(0, 30);
+    }
+    if (Object.keys(facebookCoaching).length > 0) {
+      next["facebookCoaching"] = {
+        ...currentPolicy.facebookCoaching,
+        ...facebookCoaching,
       };
     }
   }

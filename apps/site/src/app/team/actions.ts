@@ -3034,6 +3034,11 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const facebookCloserMessengerResponseWindowHours = formData.get(
     "facebookCloserMessengerResponseWindowHours",
   );
+  const facebookCoachingToneEntry = formData.get("facebookCoachingTone");
+  const facebookCoachingTone = typeof facebookCoachingToneEntry === "string" ? facebookCoachingToneEntry.trim() : "";
+  const facebookCoachingPlaybook = formData.get("facebookCoachingPlaybook");
+  const facebookCoachingHumanReviewKeywords = formData.get("facebookCoachingHumanReviewKeywords");
+  const facebookCoachingBlockedAutoReplyKeywords = formData.get("facebookCoachingBlockedAutoReplyKeywords");
   const agentDisplayName = formData.get("agentDisplayName");
   const plannerAutoSendChannels = formData
     .getAll("plannerAutoSendChannels")
@@ -3127,6 +3132,28 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     }
   }
   payload["facebookCloser"] = facebookCloser;
+
+  const splitKeywordList = (value: FormDataEntryValue | null): string[] =>
+    typeof value === "string"
+      ? value
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0)
+      : [];
+  const facebookCoaching: Record<string, unknown> = {
+    enabled: formData.get("facebookCoachingEnabled") === "on",
+    requirePhotosBeforeQuote: formData.get("facebookCoachingRequirePhotosBeforeQuote") === "on",
+    requireHumanReviewBeforeBooking: formData.get("facebookCoachingRequireHumanReviewBeforeBooking") === "on",
+    humanReviewKeywords: splitKeywordList(facebookCoachingHumanReviewKeywords),
+    blockedAutoReplyKeywords: splitKeywordList(facebookCoachingBlockedAutoReplyKeywords),
+  };
+  if (["friendly", "professional", "concise"].includes(facebookCoachingTone)) {
+    facebookCoaching["tone"] = facebookCoachingTone;
+  }
+  if (typeof facebookCoachingPlaybook === "string") {
+    facebookCoaching["playbook"] = facebookCoachingPlaybook.trim();
+  }
+  payload["facebookCoaching"] = facebookCoaching;
 
   const response = await callAdminApi("/api/admin/sales/autopilot", {
     method: "PATCH",

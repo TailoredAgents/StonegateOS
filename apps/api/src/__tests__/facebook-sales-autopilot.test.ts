@@ -1,7 +1,9 @@
 import {
+  applyFacebookCoachingGuards,
   detectClearBookingConfirmation,
   estimateJunkQuoteRangeFromVolume,
 } from "@/lib/facebook-sales-autopilot";
+import { DEFAULT_SALES_AUTOPILOT_POLICY } from "@/lib/policy";
 
 describe("facebook sales autopilot helpers", () => {
   const offeredSlots = [
@@ -28,5 +30,43 @@ describe("facebook sales autopilot helpers", () => {
         confidence: "high",
       }),
     ).toEqual({ lowCents: 48000, highCents: 62000, confidence: "high" });
+  });
+
+  it("routes owner coaching review keywords to human review", () => {
+    expect(
+      applyFacebookCoachingGuards({
+        body: "Can you remove a hot tub?",
+        action: "send_quote_range",
+        stage: "quote_ready",
+        mediaCount: 2,
+        coaching: DEFAULT_SALES_AUTOPILOT_POLICY.facebookCoaching,
+      }),
+    ).toEqual({
+      action: "human_review",
+      stage: "needs_human_review",
+      reason: "owner_coaching_review_keyword:hot tub",
+      humanReviewReason: "owner_coaching_review_keyword:hot tub",
+    });
+  });
+
+  it("can require photos before quote or time offers", () => {
+    expect(
+      applyFacebookCoachingGuards({
+        body: "How much and can you come tomorrow?",
+        action: "offer_times",
+        stage: "quote_ready",
+        mediaCount: 0,
+        coaching: {
+          ...DEFAULT_SALES_AUTOPILOT_POLICY.facebookCoaching,
+          humanReviewKeywords: [],
+          requirePhotosBeforeQuote: true,
+        },
+      }),
+    ).toEqual({
+      action: "request_photos",
+      stage: "missing_info",
+      reason: "owner_coaching_photos_required",
+      humanReviewReason: null,
+    });
   });
 });
