@@ -119,6 +119,8 @@ type MessageDetail = {
   deliveryStatus: string;
   participantName: string | null;
   createdAt: string;
+  sentAt?: string | null;
+  receivedAt?: string | null;
   metadata?: Record<string, unknown> | null;
 };
 
@@ -335,6 +337,10 @@ function formatTimestamp(value: string | null): string {
   }).format(parsed);
 }
 
+function readMessageActivityAt(message: MessageDetail): string | null {
+  return message.receivedAt ?? message.sentAt ?? message.createdAt ?? null;
+}
+
 function formatFailureDetail(detail: string | null): string {
   if (!detail) return "Send failed";
   return detail.replace(/_/g, " ");
@@ -542,6 +548,11 @@ export async function InboxSection({ threadId, status, contactId, channel, q, vi
   const activeContact = timeline?.contact ?? activeThread?.contact ?? null;
   const timelineThreads = timeline?.threads ?? [];
   const timelineMessages = timeline?.messages?.length ? timeline.messages : activeThreadMessages;
+  const latestTimelineMessage = timelineMessages.length ? timelineMessages[timelineMessages.length - 1] ?? null : null;
+  const latestTimelineMessageAt =
+    latestTimelineMessage
+      ? readMessageActivityAt(latestTimelineMessage)
+      : activeThread?.lastMessageAt ?? null;
   const latestInboundMessage = [...timelineMessages]
     .reverse()
     .find((message) => message.direction === "inbound") ?? null;
@@ -1243,6 +1254,19 @@ export async function InboxSection({ threadId, status, contactId, channel, q, vi
       count: threads.length
     }
   ];
+  const inboxThreadsSignature = threads
+    .map((thread) =>
+      [
+        thread.id,
+        thread.messageCount,
+        thread.lastMessageAt ?? "",
+        thread.lastInboundAt ?? "",
+        thread.updatedAt ?? "",
+        thread.status,
+        thread.state ?? "",
+      ].join(":"),
+    )
+    .join("|");
   const inboxUtilityPanel = (
     <div className="grid gap-3 lg:grid-cols-2">
       <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_18px_36px_var(--team-card-shadow)]">
@@ -1373,6 +1397,19 @@ export async function InboxSection({ threadId, status, contactId, channel, q, vi
           </div>
         ) : null}
       </header>
+
+      <InboxLiveUpdatesClient
+        threadId={selectedThreadId}
+        contactId={activeContactId}
+        channel={requestedChannel}
+        initialMessageCount={timelineMessages.length}
+        initialLastMessageAt={latestTimelineMessageAt}
+        initialThreadsSignature={inboxThreadsSignature}
+        status={activeStatus}
+        view={activeView}
+        q={searchQuery || null}
+        offset={offset ?? null}
+      />
 
       <details className={`${showConversation ? "hidden lg:block" : ""} rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 text-sm shadow-[0_18px_36px_var(--team-card-shadow)]`}>
         <summary className="cursor-pointer list-none font-semibold text-[color:var(--team-text)]">Tools and diagnostics</summary>
@@ -1838,15 +1875,6 @@ export async function InboxSection({ threadId, status, contactId, channel, q, vi
               ) : null}
 
               <div id="inbox-thread-scroll" className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-                {selectedThreadId && activeContactId ? (
-                  <InboxLiveUpdatesClient
-                    threadId={selectedThreadId}
-                    contactId={activeContactId}
-                    channel={requestedChannel}
-                    initialMessageCount={timelineMessages.length}
-                    initialLastMessageAt={activeThread?.lastMessageAt ?? null}
-                  />
-                ) : null}
                 {selectedThreadId ? (
                   <InboxAutoDraftClient
                     threadId={selectedThreadId}

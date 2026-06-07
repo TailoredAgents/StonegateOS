@@ -7,10 +7,25 @@ type ThreadSummary = {
   id: string;
   messageCount: number;
   lastMessageAt: string | null;
+  lastInboundAt?: string | null;
+  updatedAt?: string | null;
+  status?: string | null;
+  state?: string | null;
 };
 
 type ThreadsPayload = {
   threads?: ThreadSummary[];
+};
+
+type TimelineMessage = {
+  id: string;
+  createdAt?: string | null;
+  sentAt?: string | null;
+  receivedAt?: string | null;
+};
+
+type TimelinePayload = {
+  messages?: TimelineMessage[];
 };
 
 function getComposeTextarea(): HTMLTextAreaElement | null {
@@ -55,12 +70,21 @@ function restoreComposeDraft(storageKey: string): void {
   }
 }
 
+function getLatestTimelineMessageAt(message: TimelineMessage | null): string | null {
+  return message?.receivedAt ?? message?.sentAt ?? message?.createdAt ?? null;
+}
+
 export function InboxLiveUpdatesClient(props: {
   threadId: string | null;
   contactId: string | null;
   channel: "sms" | "email" | "dm";
   initialMessageCount: number;
   initialLastMessageAt: string | null;
+  initialThreadsSignature: string;
+  status: string | null;
+  view: string | null;
+  q: string | null;
+  offset: string | null;
 }): React.ReactElement | null {
   const router = useRouter();
   const [hasUpdate, setHasUpdate] = React.useState(false);
@@ -69,11 +93,13 @@ export function InboxLiveUpdatesClient(props: {
     messageCount: props.initialMessageCount,
     lastMessageAt: props.initialLastMessageAt
   });
+  const threadsSignatureRef = React.useRef(props.initialThreadsSignature);
 
   React.useEffect(() => {
     baselineRef.current = { messageCount: props.initialMessageCount, lastMessageAt: props.initialLastMessageAt };
+    threadsSignatureRef.current = props.initialThreadsSignature;
     setHasUpdate(false);
-  }, [props.threadId, props.channel, props.initialMessageCount, props.initialLastMessageAt]);
+  }, [props.threadId, props.channel, props.initialMessageCount, props.initialLastMessageAt, props.initialThreadsSignature]);
 
   const storageKey =
     props.threadId && props.threadId.trim().length
@@ -98,11 +124,7 @@ export function InboxLiveUpdatesClient(props: {
   }, [storageKey]);
 
   React.useEffect(() => {
-    if (!props.threadId || !props.contactId) return;
-
     let stopped = false;
-    const contactId = props.contactId;
-    const threadId = props.threadId;
     const pollMs = 8_000;
 
     const tick = async () => {
@@ -110,30 +132,74 @@ export function InboxLiveUpdatesClient(props: {
       if (document.hidden) return;
 
       try {
-        const url = new URL("/api/team/inbox/threads", window.location.origin);
-        url.searchParams.set("contactId", contactId);
-        url.searchParams.set("channel", props.channel);
-        url.searchParams.set("limit", "25");
+        if (props.contactId) {
+          const timelineUrl = new URL("/api/team/inbox/timeline", window.location.origin);
+          timelineUrl.searchParams.set("contactId", props.contactId);
+          timelineUrl.searchParams.set("limit", "50");
 
-        const res = await fetch(url.toString(), { method: "GET", cache: "no-store" });
-        if (!res.ok) return;
-        const payload = (await res.json().catch(() => null)) as ThreadsPayload | null;
-        const thread = payload?.threads?.find((t) => t.id === threadId) ?? null;
-        if (!thread) return;
+          const timelineRes = await fetch(timelineUrl.toString(), { method: "GET", cache: "no-store" });
+          if (timelineRes.ok) {
+            const payload = (await timelineRes.json().catch(() => null)) as TimelinePayload | null;
+            const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+            const latestMessage = messages.length ? messages[messages.length - 1] ?? null : null;
+            const nextSnapshot = {
+              messageCount: messages.length,
+              lastMessageAt: getLatestTimelineMessageAt(latestMessage),
+            };
+            const baseline = baselineRef.current;
+            const changed =
+              nextSnapshot.messageCount !== baseline.messageCount ||
+              (nextSnapshot.lastMessageAt ?? null) !== (baseline.lastMessageAt ?? null);
 
-        const baseline = baselineRef.current;
-        const changed =
-          thread.messageCount !== baseline.messageCount || (thread.lastMessageAt ?? null) !== (baseline.lastMessageAt ?? null);
-        if (!changed) return;
+            if (changed) {
+              if (isComposeDirty() || isComposeFocused()) {
+                setHasUpdate(true);
+                return;
+              }
 
-        if (isComposeDirty() || isComposeFocused()) {
-          setHasUpdate(true);
-          return;
+              baselineRef.current = nextSnapshot;
+              setHasUpdate(false);
+              doRefresh("auto");
+              return;
+            }
+          }
         }
 
-        baselineRef.current = { messageCount: thread.messageCount, lastMessageAt: thread.lastMessageAt ?? null };
-        setHasUpdate(false);
-        doRefresh("auto");
+        const threadsUrl = new URL("/api/team/inbox/threads", window.location.origin);
+        threadsUrl.searchParams.set("limit", props.q ? "200" : "50");
+        if (props.view && props.view !== "all" && !props.q) threadsUrl.searchParams.set("view", props.view);
+        if (props.status && props.status !== "all") threadsUrl.searchParams.set("status", props.status);
+        if (props.q) threadsUrl.searchParams.set("q", props.q);
+        if (props.offset) threadsUrl.searchParams.set("offset", props.offset);
+
+        const threadsRes = await fetch(threadsUrl.toString(), { method: "GET", cache: "no-store" });
+        if (!threadsRes.ok) return;
+        const threadsPayload = (await threadsRes.json().catch(() => null)) as ThreadsPayload | null;
+        const threads = Array.isArray(threadsPayload?.threads) ? threadsPayload.threads : [];
+        const nextThreadsSignature = threads
+          .map((thread) =>
+            [
+              thread.id,
+              thread.messageCount,
+              thread.lastMessageAt ?? "",
+              thread.lastInboundAt ?? "",
+              thread.updatedAt ?? "",
+              thread.status ?? "",
+              thread.state ?? "",
+            ].join(":"),
+          )
+          .join("|");
+
+        if (nextThreadsSignature && nextThreadsSignature !== threadsSignatureRef.current) {
+          if (isComposeDirty() || isComposeFocused()) {
+            setHasUpdate(true);
+            return;
+          }
+
+          threadsSignatureRef.current = nextThreadsSignature;
+          setHasUpdate(false);
+          doRefresh("auto");
+        }
       } catch {
         // ignore poll errors
       }
@@ -146,13 +212,13 @@ export function InboxLiveUpdatesClient(props: {
       stopped = true;
       window.clearInterval(timerId);
     };
-  }, [props.threadId, props.contactId, props.channel, doRefresh]);
+  }, [props.contactId, props.offset, props.q, props.status, props.view, doRefresh]);
 
   if (!hasUpdate) return null;
 
   return (
     <div className="mb-3 flex items-center justify-between rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-      <span>New activity in this thread.</span>
+      <span>New inbox activity.</span>
       <button
         type="button"
         className="rounded-full bg-amber-900/90 px-3 py-1 font-semibold text-white hover:bg-amber-900"
