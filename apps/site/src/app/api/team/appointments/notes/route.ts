@@ -7,7 +7,7 @@ import { requireTeamRole } from "@/app/api/team/auth";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const redirectTo = getSafeRedirectUrl(request, "/team?tab=myday");
+  const redirectTo = getSafeRedirectUrl(request, "/team?tab=calendar");
   const auth = await requireTeamRole(request, {
     redirectTo,
     roles: ["owner", "office", "crew"],

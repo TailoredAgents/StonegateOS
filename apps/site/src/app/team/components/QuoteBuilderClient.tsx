@@ -39,7 +39,6 @@ interface QuoteBuilderClientProps {
   zones: QuoteBuilderZoneOption[];
   defaultZoneId: string | null;
   initialContactId?: string;
-  workflow?: "canvass" | null;
 }
 
 export function QuoteBuilderClient({
@@ -47,8 +46,7 @@ export function QuoteBuilderClient({
   services,
   zones,
   defaultZoneId,
-  initialContactId,
-  workflow
+  initialContactId
 }: QuoteBuilderClientProps) {
   const [contactId, setContactId] = React.useState<string>(() => {
     if (initialContactId) {
@@ -69,6 +67,7 @@ export function QuoteBuilderClient({
     return contacts[0]?.properties[0]?.id ?? "";
   });
   const zoneId = React.useMemo(() => defaultZoneId ?? zones[0]?.id ?? "", [defaultZoneId, zones]);
+  const [contactSearch, setContactSearch] = React.useState("");
   const [selectedServices, setSelectedServices] = React.useState<string[]>([]);
   const [sendQuote, setSendQuote] = React.useState<boolean>(() => {
     if (initialContactId) {
@@ -92,6 +91,24 @@ export function QuoteBuilderClient({
     () => contacts.find((contact) => contact.id === contactId) ?? null,
     [contactId, contacts]
   );
+  const filteredContacts = React.useMemo(() => {
+    const query = contactSearch.trim().toLowerCase();
+    if (!query) return contacts.slice(0, 12);
+    return contacts
+      .filter((contact) => {
+        const propertyText = contact.properties.map((property) => property.label).join(" ");
+        return [
+          contact.name,
+          contact.email ?? "",
+          contact.phone ?? "",
+          propertyText
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+      .slice(0, 12);
+  }, [contactSearch, contacts]);
 
   const canSendQuote = Boolean(selectedContact?.email || selectedContact?.phone);
   const serviceLookup = React.useMemo(() => new Map(services.map((service) => [service.id, service])), [services]);
@@ -202,6 +219,12 @@ export function QuoteBuilderClient({
     [setServicePrices]
   );
 
+  const chooseContact = React.useCallback((contact: QuoteBuilderContactOption) => {
+    setContactId(contact.id);
+    setPropertyId(contact.properties[0]?.id ?? "");
+    setSendQuote(Boolean(contact.email || contact.phone));
+  }, []);
+
   const draftClientScope = React.useCallback(async () => {
     setScopeDrafting(true);
     setScopeDraftError(null);
@@ -249,19 +272,16 @@ export function QuoteBuilderClient({
   }
 
   const propertyOptions = selectedContact?.properties ?? [];
+  const selectedContactMeta = [selectedContact?.email, selectedContact?.phone].filter(Boolean).join(" / ");
 
   return (
     <section className="space-y-6">
       <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-xl shadow-slate-200/60 backdrop-blur">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">
-              {workflow === "canvass" ? "Build a canvass quote" : "Build and send a quote"}
-            </h2>
+            <h2 className="text-xl font-semibold text-slate-900">Create quote</h2>
             <p className="text-sm text-slate-600">
-              {workflow === "canvass"
-                ? "Create the quote, then the system prepares an SMS draft for you to send from the Unified Inbox."
-                : "Choose a saved contact and property, bundle the services, and optionally email the proposal right away."}
+              Search the client, confirm the property, set service pricing, and send the quote from one form.
             </p>
           </div>
         </div>
@@ -270,61 +290,99 @@ export function QuoteBuilderClient({
             <input type="hidden" name="services" value={JSON.stringify(selectedServices)} />
             <input type="hidden" name="serviceOverrides" value={serializedOverrides} />
             <input type="hidden" name="zoneId" value={zoneId} />
-            {workflow ? <input type="hidden" name="workflow" value={workflow} /> : null}
+            <input type="hidden" name="contactId" value={contactId} />
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <label className="flex flex-col gap-2 text-sm text-slate-600">
-              <span>Contact</span>
-              <select
-                name="contactId"
-                value={contactId}
-                onChange={(event) => setContactId(event.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-              >
-                {contacts.map((contact) => (
-                  <option key={contact.id} value={contact.id}>
-                    {contact.name}
-                  </option>
-                ))}
-              </select>
-              {selectedContact?.email || selectedContact?.phone ? (
-                <span className="text-xs text-slate-500">
-                  Send to: {[selectedContact.email, selectedContact.phone].filter(Boolean).join(" / ")}
-                </span>
-              ) : (
-                <span className="text-xs text-slate-400">
-                  This contact does not have an email or phone yet. Add one to send quotes.
-                </span>
-              )}
-            </label>
-
-            <label className="flex flex-col gap-2 text-sm text-slate-600">
-              <span>Property</span>
-              <select
-                name="propertyId"
-                value={propertyId}
-                onChange={(event) => setPropertyId(event.target.value)}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-                disabled={propertyOptions.length === 0}
-              >
-                {propertyOptions.length === 0 ? (
-                  <option value="">
-                    {selectedContact ? "No property on file" : "Select a contact first"}
-                  </option>
+          <div className="grid gap-5 xl:grid-cols-[minmax(280px,0.95fr)_minmax(0,1.35fr)]">
+            <section className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-800">Find client</h3>
+                <p className="mt-1 text-xs text-slate-500">Search by name, phone, email, or property address.</p>
+              </div>
+              <label className="flex flex-col gap-2 text-sm text-slate-600">
+                <span className="sr-only">Search clients</span>
+                <input
+                  value={contactSearch}
+                  onChange={(event) => setContactSearch(event.target.value)}
+                  placeholder="Search clients"
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                />
+              </label>
+              <div className="max-h-[22rem] space-y-2 overflow-y-auto pr-1">
+                {filteredContacts.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-300 bg-white p-3 text-sm text-slate-500">
+                    No matching clients.
+                  </p>
                 ) : (
-                  propertyOptions.map((property) => (
-                    <option key={property.id} value={property.id}>
-                      {property.label}
-                    </option>
-                  ))
+                  filteredContacts.map((contact) => {
+                    const active = contact.id === contactId;
+                    const firstProperty = contact.properties[0]?.label ?? "No property on file";
+                    return (
+                      <button
+                        key={contact.id}
+                        type="button"
+                        onClick={() => chooseContact(contact)}
+                        className={`w-full rounded-xl border px-3 py-3 text-left transition ${
+                          active
+                            ? "border-primary-300 bg-primary-50 text-primary-900 shadow-sm"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-primary-200"
+                        }`}
+                      >
+                        <span className="block text-sm font-semibold">{contact.name}</span>
+                        <span className="mt-1 block truncate text-xs text-slate-500">
+                          {[contact.email, contact.phone].filter(Boolean).join(" / ") || "No email or phone"}
+                        </span>
+                        <span className="mt-1 block truncate text-xs text-slate-500">{firstProperty}</span>
+                      </button>
+                    );
+                  })
                 )}
-              </select>
-              {propertyOptions.length === 0 ? (
-                <span className="text-xs text-slate-400">
-                  Save a property for this contact in the Contacts tab to enable quoting.
-                </span>
-              ) : null}
-            </label>
+              </div>
+            </section>
+
+            <section className="space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-800">Selected client</h3>
+                    <p className="mt-1 text-lg font-semibold text-slate-950">{selectedContact?.name ?? "No client selected"}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {selectedContactMeta || "Add an email or phone before sending automatically."}
+                    </p>
+                  </div>
+                  <span className="inline-flex w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                    {propertyOptions.length} {propertyOptions.length === 1 ? "property" : "properties"}
+                  </span>
+                </div>
+              </div>
+
+              <label className="flex flex-col gap-2 text-sm text-slate-600">
+                <span>Property</span>
+                <select
+                  name="propertyId"
+                  value={propertyId}
+                  onChange={(event) => setPropertyId(event.target.value)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                  disabled={propertyOptions.length === 0}
+                >
+                  {propertyOptions.length === 0 ? (
+                    <option value="">
+                      {selectedContact ? "No property on file" : "Select a contact first"}
+                    </option>
+                  ) : (
+                    propertyOptions.map((property) => (
+                      <option key={property.id} value={property.id}>
+                        {property.label}
+                      </option>
+                    ))
+                  )}
+                </select>
+                {propertyOptions.length === 0 ? (
+                  <span className="text-xs text-slate-400">
+                    Save a property for this contact in the Contacts tab to enable quoting.
+                  </span>
+                ) : null}
+              </label>
+            </section>
           </div>
 
           {/* Removed concrete surfaces UI for junk removal */}

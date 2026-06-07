@@ -895,7 +895,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
             </a>
             <a
               className={`${teamButtonClass("secondary", "sm")} gap-2`}
-              href={teamLink("myday", { contactId: contactState.id })}
+              href={teamLink("calendar", { contactId: contactState.id })}
             >
               <ClipboardList className="h-4 w-4" aria-hidden="true" />
               Schedule visit

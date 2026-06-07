@@ -178,6 +178,165 @@ export async function sendQuoteAction(formData: FormData) {
   revalidatePath("/team");
 }
 
+type InboxWorkflowActionResult = {
+  ok: boolean;
+  error?: string;
+  draftText?: string;
+  recordId?: string;
+  refreshKey?: string;
+};
+
+function readFormString(formData: FormData, key: string): string {
+  const value = formData.get(key);
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function firstNameFromDisplayName(value: string): string {
+  const cleaned = value.trim();
+  if (!cleaned) return "there";
+  return cleaned.split(/\s+/)[0] ?? "there";
+}
+
+function formatInboxAppointmentTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function buildLocalStartAt(formData: FormData): string {
+  const startAt = readFormString(formData, "startAt");
+  if (startAt) return startAt;
+  const preferredDate = readFormString(formData, "preferredDate");
+  const startTime = readFormString(formData, "startTime");
+  return preferredDate && startTime ? `${preferredDate}T${startTime}` : "";
+}
+
+export async function createInboxQuoteAction(
+  formData: FormData,
+): Promise<InboxWorkflowActionResult> {
+  try {
+    const contactId = readFormString(formData, "contactId");
+    const contactName = readFormString(formData, "contactName");
+    const propertyId = readFormString(formData, "propertyId");
+    const zoneId = readFormString(formData, "zoneId");
+    const servicesRaw = readFormString(formData, "services");
+    const serviceOverridesRaw = readFormString(formData, "serviceOverrides");
+
+    if (!contactId || !propertyId || !zoneId) {
+      return { ok: false, error: "Missing quote details" };
+    }
+
+    let services: string[] = [];
+    try {
+      const parsed = JSON.parse(servicesRaw) as unknown;
+      services = Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        : [];
+    } catch {
+      services = [];
+    }
+
+    if (!services.length) {
+      return { ok: false, error: "Select at least one service" };
+    }
+
+    const payload: Record<string, unknown> = {
+      contactId,
+      propertyId,
+      zoneId,
+      selectedServices: services,
+    };
+
+    const depositRate = Number(readFormString(formData, "depositRate"));
+    if (Number.isFinite(depositRate) && depositRate > 0 && depositRate <= 1) {
+      payload["depositRate"] = depositRate;
+    }
+
+    const expiresInDays = Number(readFormString(formData, "expiresInDays"));
+    if (Number.isFinite(expiresInDays) && expiresInDays > 0) {
+      payload["expiresInDays"] = Math.trunc(expiresInDays);
+    }
+
+    const jobDurationMinutes = Number(readFormString(formData, "jobDurationMinutes"));
+    if (
+      Number.isFinite(jobDurationMinutes) &&
+      jobDurationMinutes >= 30 &&
+      jobDurationMinutes <= 8 * 60
+    ) {
+      payload["jobDurationMinutes"] = Math.trunc(jobDurationMinutes);
+    }
+
+    const notes = readFormString(formData, "notes");
+    if (notes) payload["notes"] = notes;
+
+    const clientScope = readFormString(formData, "clientScope");
+    if (clientScope) payload["clientScope"] = clientScope;
+
+    if (serviceOverridesRaw) {
+      try {
+        const parsed = JSON.parse(serviceOverridesRaw) as Record<string, unknown>;
+        const sanitized: Record<string, number> = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          const numeric = typeof value === "number" ? value : Number(value);
+          if (Number.isFinite(numeric) && numeric > 0 && key !== "driveway") {
+            sanitized[key] = numeric;
+          }
+        }
+        if (Object.keys(sanitized).length > 0) {
+          payload["serviceOverrides"] = sanitized;
+        }
+      } catch {
+        // ignore malformed overrides
+      }
+    }
+
+    const response = await callAdminApi("/api/quotes", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+
+    type CreateQuoteResponse = {
+      quote?: { id?: string; shareToken?: string | null };
+      shareUrl?: string;
+      error?: string;
+      message?: string;
+    };
+    const data = (await response.json().catch(() => null)) as CreateQuoteResponse | null;
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: data?.message ?? data?.error ?? "Unable to create quote",
+      };
+    }
+
+    const recordId = data?.quote?.id ?? undefined;
+    const shareLink =
+      data?.shareUrl ??
+      (data?.quote?.shareToken ? `/quote/${data.quote.shareToken}` : null);
+    const draftText = shareLink
+      ? `Hi ${firstNameFromDisplayName(contactName)}, I put together your quote here: ${shareLink}. Take a look and reply with any questions.`
+      : `Hi ${firstNameFromDisplayName(contactName)}, I put together your quote. Take a look and reply with any questions.`;
+
+    revalidatePath("/team");
+    return {
+      ok: true,
+      draftText,
+      recordId,
+      refreshKey: String(Date.now()),
+    };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, "Unable to create quote") };
+  }
+}
+
 export async function quoteDecisionAction(formData: FormData) {
   const id = formData.get("quoteId");
   const decision = formData.get("decision");
@@ -999,6 +1158,170 @@ export async function bookAppointmentAction(formData: FormData) {
   }
 }
 
+export async function bookInboxAppointmentAction(
+  formData: FormData,
+): Promise<InboxWorkflowActionResult> {
+  try {
+    const contactId = readFormString(formData, "contactId");
+    const propertyId = readFormString(formData, "propertyId");
+    const propertyLabel = readFormString(formData, "propertyLabel");
+    const appointmentType = readFormString(formData, "appointmentType");
+    const assignedAssociateMemberId = readFormString(formData, "assignedAssociateMemberId");
+    const soldByMemberId = readFormString(formData, "soldByMemberId");
+    const startAt = readFormString(formData, "startAt");
+    const durationMinutes = Number(readFormString(formData, "durationMinutes"));
+    const travelBufferMinutes = Number(readFormString(formData, "travelBufferMinutes"));
+    const notes = readFormString(formData, "notes");
+
+    if (!contactId) return { ok: false, error: "Contact ID missing" };
+    if (!startAt) return { ok: false, error: "Start time is required" };
+
+    const bookingSelection = resolveBookingSelection(appointmentType);
+    const isInPersonQuote = bookingSelection === "in_person_quote";
+    if (isInPersonQuote && !propertyId) {
+      return { ok: false, error: "Address is required to book an in-person quote." };
+    }
+    if (!isInPersonQuote && !soldByMemberId) {
+      return { ok: false, error: "Who sold the job is required to book a job." };
+    }
+
+    let bookingDetailsResult:
+      | ReturnType<typeof parseAppointmentBookingFormData>
+      | { ok: true; bookingDetails: null; quotedTotalCents: null };
+    if (isInPersonQuote) {
+      bookingDetailsResult = {
+        ok: true,
+        bookingDetails: null,
+        quotedTotalCents: null,
+      };
+    } else {
+      bookingDetailsResult = parseAppointmentBookingFormData(formData);
+      if (!bookingDetailsResult.ok) {
+        return { ok: false, error: bookingDetailsResult.error };
+      }
+    }
+
+    const payload: Record<string, unknown> = {
+      contactId,
+      startAt,
+      durationMinutes:
+        Number.isFinite(durationMinutes) && durationMinutes > 0
+          ? durationMinutes
+          : 60,
+      travelBufferMinutes:
+        Number.isFinite(travelBufferMinutes) && travelBufferMinutes >= 0
+          ? travelBufferMinutes
+          : 30,
+      services: isInPersonQuote ? [] : [bookingSelection],
+      appointmentType: isInPersonQuote ? "in_person_quote" : "job",
+    };
+
+    if (propertyId) payload["propertyId"] = propertyId;
+    if (assignedAssociateMemberId) payload["assignedAssociateMemberId"] = assignedAssociateMemberId;
+    if (soldByMemberId) payload["soldByMemberId"] = soldByMemberId;
+    if (notes) payload["notes"] = notes;
+    if (bookingDetailsResult.quotedTotalCents !== null) {
+      payload["quotedTotalCents"] = bookingDetailsResult.quotedTotalCents;
+    }
+    if (bookingDetailsResult.bookingDetails) {
+      payload["bookingDetails"] = bookingDetailsResult.bookingDetails;
+    }
+
+    const response = await callAdminApi("/api/admin/booking/book", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const data = (await response.json().catch(() => null)) as {
+      appointment?: { id?: string; startAt?: string | null };
+      appointmentId?: string;
+      id?: string;
+      startAt?: string | null;
+      error?: string;
+      message?: string;
+    } | null;
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: data?.message ?? data?.error ?? "Unable to book appointment",
+      };
+    }
+
+    const recordId =
+      data?.appointment?.id ?? data?.appointmentId ?? data?.id ?? undefined;
+    const bookedStartAt = data?.appointment?.startAt ?? data?.startAt ?? startAt;
+    const timeText = formatInboxAppointmentTime(bookedStartAt);
+    const addressText = propertyLabel ? ` at ${propertyLabel}` : "";
+    const draftText = `You're booked for ${timeText}${addressText}. Reply here if anything changes.`;
+
+    revalidatePath("/team");
+    return {
+      ok: true,
+      draftText,
+      recordId,
+      refreshKey: String(Date.now()),
+    };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, "Unable to book appointment") };
+  }
+}
+
+export async function rescheduleInboxAppointmentAction(
+  formData: FormData,
+): Promise<InboxWorkflowActionResult> {
+  try {
+    const appointmentId = readFormString(formData, "appointmentId");
+    const startAt = buildLocalStartAt(formData);
+    if (!appointmentId) return { ok: false, error: "Appointment ID missing" };
+    if (!startAt) return { ok: false, error: "Pick a new date and time" };
+
+    const payload: Record<string, unknown> = {};
+    const preferredDate = readFormString(formData, "preferredDate");
+    const startTime = readFormString(formData, "startTime");
+    if (preferredDate && startTime) {
+      payload["preferredDate"] = preferredDate;
+      payload["startTime"] = startTime;
+    } else {
+      payload["startAt"] = startAt;
+    }
+
+    const response = await callAdminApi(
+      `/api/web/appointments/${encodeURIComponent(appointmentId)}/reschedule`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    );
+    const data = (await response.json().catch(() => null)) as {
+      appointmentId?: string;
+      startAt?: string | null;
+      preferredDate?: string | null;
+      error?: string;
+      message?: string;
+    } | null;
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: data?.message ?? data?.error ?? "Unable to reschedule appointment",
+      };
+    }
+
+    const rescheduledAt = data?.startAt ?? startAt;
+    const draftText = `I moved your appointment to ${formatInboxAppointmentTime(rescheduledAt)}. Reply if that doesn't work.`;
+
+    revalidatePath("/team");
+    return {
+      ok: true,
+      draftText,
+      recordId: data?.appointmentId ?? appointmentId,
+      refreshKey: String(Date.now()),
+    };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, "Unable to reschedule appointment") };
+  }
+}
+
 export async function updateAppointmentBookingDetailsAction(
   formData: FormData,
 ) {
@@ -1307,6 +1630,11 @@ async function readErrorMessage(
   return fallback;
 }
 
+async function readJsonRecord(response: Response): Promise<Record<string, unknown>> {
+  const data = (await response.json().catch(() => null)) as unknown;
+  return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+}
+
 function formatActionError(error: unknown, fallback: string): string {
   if (
     error &&
@@ -1409,8 +1737,12 @@ export async function createCanvassLeadAction(formData: FormData) {
     },
   };
 
-  if (hasPhone) payload["phone"] = (phone as string).trim();
-  if (hasEmail) payload["email"] = (email as string).trim();
+  if (typeof phone === "string" && phone.trim().length > 0) {
+    payload["phone"] = phone.trim();
+  }
+  if (typeof email === "string" && email.trim().length > 0) {
+    payload["email"] = email.trim();
+  }
   if (
     typeof salespersonMemberId === "string" &&
     salespersonMemberId.trim().length > 0
@@ -1449,9 +1781,7 @@ export async function createCanvassLeadAction(formData: FormData) {
           value: "Contact already exists. Opening existing record.",
           path: "/",
         });
-        redirect(
-          `/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(existingId)}`,
-        );
+        redirect(`/team?tab=quotes&contactId=${encodeURIComponent(existingId)}`);
       }
     }
 
@@ -1511,7 +1841,7 @@ export async function createCanvassLeadAction(formData: FormData) {
 
   jar.set({ name: "myst-flash", value: "Canvass lead created", path: "/" });
   redirect(
-    `/team?tab=quotes&quoteMode=canvass&contactId=${encodeURIComponent(contactId)}${
+    `/team?tab=quotes&contactId=${encodeURIComponent(contactId)}${
       assignee ? `&memberId=${encodeURIComponent(assignee)}` : ""
     }`,
   );
@@ -2898,8 +3228,7 @@ export async function updateReviewRequestPolicyAction(formData: FormData) {
     const normalized = /^https?:\/\//i.test(reviewUrl)
       ? reviewUrl
       : `https://${reviewUrl}`;
-    // eslint-disable-next-line no-new
-    new URL(normalized);
+    void new URL(normalized);
   } catch {
     jar.set({
       name: "myst-flash-error",
@@ -4290,33 +4619,36 @@ export async function runSeoAutopublishAction() {
     redirect("/team?tab=seo");
   }
 
-  const payload = (await response.json().catch(() => ({}))) as any;
-  const result = payload?.result;
+  const payload = await readJsonRecord(response);
+  const result =
+    payload["result"] && typeof payload["result"] === "object"
+      ? (payload["result"] as Record<string, unknown>)
+      : null;
 
   if (
-    result?.ok === true &&
-    result?.skipped === false &&
-    typeof result?.slug === "string"
+    result?.["ok"] === true &&
+    result?.["skipped"] === false &&
+    typeof result?.["slug"] === "string"
   ) {
     jar.set({
       name: "myst-flash",
-      value: `SEO post published: /blog/${result.slug}`,
+      value: `SEO post published: /blog/${result["slug"]}`,
       path: "/",
     });
   } else if (
-    result?.ok === true &&
-    result?.skipped === true &&
-    typeof result?.reason === "string"
+    result?.["ok"] === true &&
+    result?.["skipped"] === true &&
+    typeof result?.["reason"] === "string"
   ) {
     jar.set({
       name: "myst-flash",
-      value: `SEO run skipped: ${result.reason}`,
+      value: `SEO run skipped: ${result["reason"]}`,
       path: "/",
     });
-  } else if (result?.ok === false && typeof result?.error === "string") {
+  } else if (result?.["ok"] === false && typeof result?.["error"] === "string") {
     jar.set({
       name: "myst-flash-error",
-      value: `SEO run failed: ${result.error}`,
+      value: `SEO run failed: ${result["error"]}`,
       path: "/",
     });
   } else {
@@ -4825,14 +5157,14 @@ export async function importOutboundProspectsAction(formData: FormData) {
     redirect("/team?tab=outbound");
   }
 
-  const payload = (await response.json().catch(() => ({}))) as any;
-  const created = Number(payload?.created ?? 0);
-  const updated = Number(payload?.updated ?? 0);
-  const tasksCreated = Number(payload?.tasksCreated ?? 0);
-  const skipped = Number(payload?.skipped ?? 0);
+  const payload = await readJsonRecord(response);
+  const created = Number(payload["created"] ?? 0);
+  const updated = Number(payload["updated"] ?? 0);
+  const tasksCreated = Number(payload["tasksCreated"] ?? 0);
+  const skipped = Number(payload["skipped"] ?? 0);
   const resolvedAssignee =
-    typeof payload?.assignedToMemberId === "string"
-      ? payload.assignedToMemberId
+    typeof payload["assignedToMemberId"] === "string"
+      ? payload["assignedToMemberId"]
       : assignedToMemberId;
 
   jar.set({
@@ -5198,9 +5530,9 @@ export async function bulkOutboundAction(formData: FormData) {
     return;
   }
 
-  const payload = (await response.json().catch(() => ({}))) as any;
-  const updated = Number(payload?.updated ?? 0);
-  const skipped = Number(payload?.skipped ?? 0);
+  const payload = await readJsonRecord(response);
+  const updated = Number(payload["updated"] ?? 0);
+  const skipped = Number(payload["skipped"] ?? 0);
   jar.set({
     name: "myst-flash",
     value: `Outbound updated: ${updated} changed (${skipped} skipped).`,

@@ -8,7 +8,6 @@ import {
   updatePipelineStageAction
 } from "./actions";
 import { teamLogoutAction, teamSetPasswordAction } from "./login/actions";
-import { MyDaySection } from "./components/MyDaySection";
 import { ContactsSection } from "./components/ContactsSection";
 import { PipelineSection } from "./components/PipelineSection";
 import { ChatSection } from "./components/ChatSection";
@@ -36,7 +35,7 @@ import { getCompanyShortName, getPublicCompanyProfile } from "../../lib/company"
 import { callAdminApi, resolveTeamMemberFromSessionCookie } from "./lib/api";
 import { FlashClearer } from "./components/FlashClearer";
 import { TeamSkeletonCard } from "./components/TeamSkeleton";
-import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE, teamButtonClass } from "./components/team-ui";
+import { TEAM_CARD_PADDED, TEAM_SECTION_SUBTITLE, TEAM_SECTION_TITLE } from "./components/team-ui";
 
 const ADMIN_COOKIE = "myst-admin-session";
 const CREW_COOKIE = "myst-crew-session";
@@ -77,6 +76,7 @@ export default async function TeamPage({
     tab?: string;
     q?: string;
     inbox_q?: string;
+    inbox_view?: string;
     inbox_offset?: string;
     offset?: string;
     includeOutbound?: string;
@@ -108,7 +108,11 @@ export default async function TeamPage({
     waRangeDays?: string;
     cal?: string;
     calView?: string;
-    myDayMode?: string;
+    addr?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+    propertyId?: string;
     setup?: string;
     saved?: string;
     error?: string;
@@ -198,13 +202,15 @@ export default async function TeamPage({
     forcedQuoteMode = "canvass";
   } else if (requestedTab === "marketing") {
     normalizedRequestedTab = "google-ads";
+  } else if (requestedTab === "myday") {
+    normalizedRequestedTab = "calendar";
   }
   const tab =
     normalizedRequestedTab === "estimates"
       ? hasOwner
         ? "inbox"
-        : "myday"
-      : normalizedRequestedTab || (hasCrew && !hasOwner && !hasOffice ? "myday" : "inbox");
+        : "calendar"
+      : normalizedRequestedTab || (hasCrew && !hasOwner && !hasOffice ? "calendar" : "inbox");
   const contactsQuery = typeof params?.q === "string" ? params.q : undefined;
   const contactsView = typeof params?.view === "string" ? params.view.trim().toLowerCase() : "";
   const contactsOnlyOutbound = contactsView === "outbound" || params?.onlyOutbound === "1";
@@ -226,6 +232,7 @@ export default async function TeamPage({
   const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
   const inboxQuery = typeof params?.inbox_q === "string" ? params.inbox_q : undefined;
+  const inboxView = typeof params?.inbox_view === "string" ? params.inbox_view : undefined;
   const inboxOffset = typeof params?.inbox_offset === "string" ? params.inbox_offset : undefined;
   const memberIdParam = typeof params?.memberId === "string" ? params.memberId : undefined;
   const quoteModeParam = forcedQuoteMode ?? requestedQuoteMode;
@@ -234,8 +241,6 @@ export default async function TeamPage({
   const settingsError = typeof params?.error === "string" && params.error.trim().length ? params.error.trim() : null;
   const layoutMode = typeof params?.layout === "string" ? params.layout.trim().toLowerCase() : "";
   const useClassicLayout = layoutMode === "classic";
-  const myDayModeParam = typeof params?.myDayMode === "string" ? params.myDayMode.trim().toLowerCase() : "";
-  const myDayMode = myDayModeParam === "manage" ? "manage" : "run";
   const outboundFilters = {
     q: typeof params?.out_q === "string" ? params.out_q : undefined,
     campaign: typeof params?.out_campaign === "string" ? params.out_campaign : undefined,
@@ -277,7 +282,6 @@ export default async function TeamPage({
   }
 
   const tabs: TabNavItem[] = [
-    { id: "myday", label: "My Day", href: "/team?tab=myday", requires: "appointments.read" },
     { id: "expenses", label: "Expenses", href: "/team?tab=expenses", requires: "expenses.read" },
     { id: "quotes", label: "Quotes", href: "/team?tab=quotes", requires: "appointments.read" },
     { id: "inbox", label: "Inbox", href: "/team?tab=inbox", requires: "messages.send" },
@@ -286,7 +290,7 @@ export default async function TeamPage({
     { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "messages.send" },
     { id: "outbound", label: "Outbound", href: "/team?tab=outbound", requires: "messages.send" },
     { id: "partners", label: "Partners", href: "/team?tab=partners", requires: "owner" },
-    { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: "bookings.manage" },
+    { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: ["bookings.manage", "appointments.read"] },
     { id: "contacts", label: "Contacts", href: "/team?tab=contacts", requires: "bookings.manage" },
     { id: "owner", label: "Owner HQ", href: "/team?tab=owner", requires: "owner" },
     { id: "policy", label: "Policy Center", href: "/team?tab=policy", requires: "policy.read" },
@@ -307,20 +311,24 @@ export default async function TeamPage({
   };
   const resolvedTabs: TabNavItem[] = useClassicLayout ? tabs.map((item) => ({ ...item, href: withLayout(item.href) })) : tabs;
   const tabGroups: TabNavGroup[] = [
-    { id: "ops", label: "Ops", itemIds: ["myday", "expenses", "calendar", "chat"] },
-    { id: "sales", label: "Sales", itemIds: ["quotes", "pipeline", "sales-hq", "outbound", "partners", "contacts", "inbox", "calendar"] },
-    { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
+    { id: "calendar", label: "Calendar", itemIds: ["calendar"], variant: "single" },
+    { id: "inbox", label: "Inbox", itemIds: ["inbox"], variant: "single" },
+    { id: "contacts", label: "Contacts", itemIds: ["contacts"], variant: "single" },
+    { id: "quotes", label: "Quotes", itemIds: ["quotes"], variant: "single" },
+    { id: "expenses", label: "Expenses", itemIds: ["expenses"], variant: "single" },
+    { id: "sales", label: "Sales", itemIds: ["pipeline", "sales-hq", "outbound", "partners"] },
     { id: "marketing", label: "Marketing", itemIds: ["google-ads", "web-analytics", "seo"] },
-    { id: "control", label: "Control", itemIds: ["commissions", "policy", "automation", "access", "sales-log", "audit", "merge"] },
-    { id: "account", label: "Account", itemIds: ["settings"], variant: "dropdown" }
+    { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
+    { id: "admin", label: "Admin", itemIds: ["commissions", "policy", "automation", "access", "sales-log", "audit", "merge"] },
+    { id: "tools", label: "Tools", itemIds: ["chat", "settings"], variant: "dropdown" }
   ];
   const activeTab = resolvedTabs.find((item) => item.id === tab) ?? resolvedTabs[0] ?? null;
   if (activeTab && !isAllowed(activeTab.requires)) {
-    const fallback = hasCrew && !hasOffice && !hasOwner ? "myday" : "inbox";
+    const fallback = hasCrew && !hasOffice && !hasOwner ? "calendar" : "inbox";
     const fallbackTab =
       resolvedTabs.find((candidate) => candidate.id === fallback && isAllowed(candidate.requires)) ??
       resolvedTabs.find((candidate) => isAllowed(candidate.requires));
-    redirect((fallbackTab ? fallbackTab.href : "/team/login") as any);
+    redirect((fallbackTab ? fallbackTab.href : "/team/login") as Parameters<typeof redirect>[0]);
   }
 
   let calendarBadge: CalendarSyncBadge | null = null;
@@ -337,7 +345,7 @@ export default async function TeamPage({
           detail: `HTTP ${response.status}`
         };
       }
-    } catch (error) {
+    } catch {
       calendarBadge = {
         tone: "alert",
         headline: "Status request failed",
@@ -347,7 +355,7 @@ export default async function TeamPage({
   }
 
   let newLead: LeadContactSummary | null = null;
-  if (hasOwner || hasOffice || hasCrew) {
+  if (tab === "inbox" && (hasOwner || hasOffice)) {
     if (isNewLeadHidden) {
       newLead = null;
     } else {
@@ -442,14 +450,15 @@ export default async function TeamPage({
             contactId={contactIdParam}
             channel={inboxChannel}
             q={inboxQuery}
+            view={inboxView}
             offset={inboxOffset}
           />
         </React.Suspense>
       ) : null}
 
-      {tab === "calendar" && (hasOffice || hasOwner) ? (
+      {tab === "calendar" && (hasCrew || hasOffice || hasOwner) ? (
         <React.Suspense fallback={<TeamSkeletonCard title="Loading calendar" />}>
-          <CalendarSection searchParams={params as any} />
+          <CalendarSection searchParams={params} />
         </React.Suspense>
       ) : null}
 
@@ -675,12 +684,6 @@ export default async function TeamPage({
           ) : null}
         </section>
       ) : null}
-
-      {tab === "myday" && (hasCrew || hasOffice || hasOwner) ? (
-        <React.Suspense fallback={<TeamSkeletonCard title="Loading My Day" />}>
-          <MyDaySection mode={myDayMode} />
-        </React.Suspense>
-      ) : null}
     </>
   );
 
@@ -750,10 +753,11 @@ export default async function TeamPage({
 
   const allowedTabs = resolvedTabs.filter((item) => isAllowed(item.requires));
   const tabMap = new Map(allowedTabs.map((item) => [item.id, item]));
-  const quickIds = ["myday", "inbox", "contacts", "calendar", "chat"];
+  const quickIds = ["calendar", "inbox", "contacts", "quotes", "expenses"];
+  const utilityIds = ["chat", "settings"];
   const quickIdSet = new Set(quickIds);
   const groups: TeamNavGroup[] = tabGroups
-    .filter((group) => group.id !== "account")
+    .filter((group) => group.id !== "tools")
     .map((group) => ({
       id: group.id,
       label: group.label,
@@ -773,6 +777,10 @@ export default async function TeamPage({
     .map((id) => tabMap.get(id))
     .filter((item): item is TabNavItem => Boolean(item))
     .map((item) => ({ id: item.id, label: item.label, href: item.href }));
+  const utilityItems: ShellNavItem[] = utilityIds
+    .map((id) => tabMap.get(id))
+    .filter((item): item is TabNavItem => Boolean(item))
+    .map((item) => ({ id: item.id, label: item.label, href: item.href }));
 
   const classicHref = withLayout(`/team?tab=${encodeURIComponent(tab)}`);
   const companyProfile = getPublicCompanyProfile();
@@ -783,6 +791,7 @@ export default async function TeamPage({
       activeId={tab}
       title={activeTab?.label ?? "Team Console"}
       quickItems={quickItems}
+      utilityItems={utilityItems}
       groups={groups}
       access={{ hasCrew, hasOffice, hasOwner }}
       user={teamMember ? { name: teamMember.name, email: teamMember.email } : null}
@@ -828,11 +837,6 @@ interface CalendarSyncBadge {
   headline: string;
   detail?: string;
 }
-
-const defaultCalendarBadge: CalendarSyncBadge = {
-  tone: "idle",
-  headline: "Status unavailable"
-};
 
 const calendarBadgeToneClasses: Record<CalendarBadgeTone, string> = {
   ok: "border-emerald-200 bg-emerald-50 text-emerald-700",

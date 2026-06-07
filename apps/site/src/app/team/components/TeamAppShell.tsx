@@ -540,6 +540,7 @@ export function TeamAppShell(props: {
   activeId: string;
   title: string;
   quickItems: TeamNavItem[];
+  utilityItems?: TeamNavItem[];
   groups: TeamNavGroup[];
   access: AccessPills;
   user?: TeamUser | null;
@@ -555,6 +556,7 @@ export function TeamAppShell(props: {
   const [collapsedGroups, setCollapsedGroups] = React.useState<Record<string, boolean>>({});
   const [theme, setTheme] = React.useState<"light" | "dark">("light");
   const mobileNavItems = React.useMemo(() => props.quickItems.slice(0, 5), [props.quickItems]);
+  const utilityItems = props.utilityItems ?? [];
 
   React.useEffect(() => {
     const stored = globalThis.localStorage?.getItem(SIDEBAR_STORAGE_KEY);
@@ -824,6 +826,26 @@ export function TeamAppShell(props: {
                 {isPending ? <span className="hidden text-xs font-semibold text-[color:var(--team-text-soft)] sm:inline">Loading...</span> : null}
               </div>
               <div className="flex items-center gap-2 sm:gap-3">
+                {utilityItems.map((item) => {
+                  const active = item.id === props.activeId;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleNavigate(item.href)}
+                      className={cn(
+                        "inline-flex h-10 items-center justify-center gap-2 rounded-2xl border px-3 text-xs font-semibold shadow-sm transition focus:outline-none focus:ring-2 focus:ring-primary-200",
+                        active
+                          ? "border-primary-200 bg-primary-50 text-primary-800"
+                          : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text)] hover:border-primary-200 hover:text-primary-800"
+                      )}
+                      aria-current={active ? "page" : undefined}
+                    >
+                      <span className="[&>svg]:h-4 [&>svg]:w-4">{iconForTab(item.id)}</span>
+                      <span className="hidden sm:inline">{item.label}</span>
+                    </button>
+                  );
+                })}
                 <button
                   type="button"
                   onClick={handleToggleTheme}

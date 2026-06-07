@@ -17,7 +17,7 @@ const test = base.extend({});
 test.beforeEach(async ({}, testInfo) => {
   const status = await ensureDependencies();
   if (!status.ok) {
-    testInfo.skip(status.reason ?? "Required services unavailable");
+    testInfo.skip(true, status.reason ?? "Required services unavailable");
   }
 });
 

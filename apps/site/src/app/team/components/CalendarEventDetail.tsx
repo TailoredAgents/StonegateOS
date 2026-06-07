@@ -28,7 +28,10 @@ export function CalendarEventDetail({
     appointmentId && event.rescheduleToken
       ? `/schedule?appointmentId=${encodeURIComponent(appointmentId)}&token=${encodeURIComponent(event.rescheduleToken)}`
       : null;
-  const teamLink = appointmentId ? `/team?tab=myday&appointmentId=${encodeURIComponent(appointmentId)}` : null;
+  const eventDay = event.start ? event.start.slice(0, 10) : "";
+  const teamLink = appointmentId
+    ? `/team?tab=calendar${eventDay ? `&calView=day&cal=${encodeURIComponent(eventDay)}` : ""}`
+    : null;
   const notes = event.notes ?? [];
   const amountSummary = isDbAppointment ? formatCalendarEventAmounts(event) : null;
   const shellClass =

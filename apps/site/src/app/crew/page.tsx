@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function CrewRedirect() {
-  redirect("/team?tab=myday");
+  redirect("/team?tab=calendar");
 }

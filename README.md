@@ -15,17 +15,18 @@ StonegateOS is a monorepo for a local service business: a customer-facing websit
 ## Team Console Tabs (IDs)
 The Team Console is one page (`/team`) with tab IDs in the query string (`/team?tab=...`).
 
-- **Ops**: `myday`, `expenses`, `calendar`, `chat`
-- **Sales**: `quotes`, `pipeline`, `sales-hq`, `outbound`, `partners`, `contacts`, `inbox`, `calendar`
+- **Primary**: `calendar`, `inbox`, `contacts`, `quotes`, `expenses`
+- **Sales**: `pipeline`, `sales-hq`, `outbound`, `partners`
 - **Owner HQ**: `owner`
 - **Marketing**: `google-ads`, `web-analytics`, `seo`
-- **Control**: `commissions`, `policy`, `automation`, `access`, `sales-log`, `audit`, `merge`
-- **Account**: `settings`
+- **Admin**: `commissions`, `policy`, `automation`, `access`, `sales-log`, `audit`, `merge`
+- **Utilities**: `chat`, `settings`
 
 Legacy aliases:
 - `tab=marketing` redirects to `tab=google-ads`
 - `tab=quote-builder` and `tab=canvass` redirect to `tab=quotes` (with mode selection)
-- `tab=estimates` is a legacy alias and is remapped to `inbox` (owner) or `myday` (non-owner)
+- `tab=estimates` is a legacy alias and is remapped to `inbox` (owner) or `calendar` (non-owner)
+- `tab=myday` is a legacy alias and is remapped to `calendar`
 
 ## Prerequisites
 - Node.js 22.20.0 for local development (see `.nvmrc`). Render is pinned to Node 20 in `render.yaml`.

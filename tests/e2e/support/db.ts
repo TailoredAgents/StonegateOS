@@ -27,6 +27,14 @@ export type OutboxEventDetails = {
   createdAt: Date;
 };
 
+export type E2ESeedSummary = {
+  contactId: string;
+  propertyId: string;
+  leadId: string;
+  quoteId: string | null;
+  appointmentId: string | null;
+};
+
 type SqlClient = ReturnType<typeof postgres>;
 
 let cachedClient: SqlClient | null = null;
@@ -181,4 +189,31 @@ export async function getOutboxEventsByQuoteId(quoteId: string): Promise<OutboxE
     payload: row.payload,
     createdAt: new Date(row.createdAt)
   }));
+}
+
+export async function getLatestE2ESeedSummary(): Promise<E2ESeedSummary | null> {
+  const sql = getSql();
+  const rows = await sql<{ payload: Record<string, unknown> | null }[]>`
+    SELECT payload
+    FROM outbox_events
+    WHERE type = 'seed.initialized'
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+
+  const payload = rows[0]?.payload;
+  if (!payload) return null;
+
+  const contactId = typeof payload["contactId"] === "string" ? payload["contactId"] : null;
+  const propertyId = typeof payload["propertyId"] === "string" ? payload["propertyId"] : null;
+  const leadId = typeof payload["leadId"] === "string" ? payload["leadId"] : null;
+  if (!contactId || !propertyId || !leadId) return null;
+
+  return {
+    contactId,
+    propertyId,
+    leadId,
+    quoteId: typeof payload["quoteId"] === "string" ? payload["quoteId"] : null,
+    appointmentId: typeof payload["appointmentId"] === "string" ? payload["appointmentId"] : null
+  };
 }

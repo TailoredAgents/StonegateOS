@@ -119,10 +119,22 @@ function buildStorageStateFromCookies(cookies: CookieParseResult[], siteBase: st
     cookies: cookies.map((cookie) => ({
       name: cookie.name,
       value: cookie.value,
-      domain: cookie.attributes.domain ?? url.hostname,
-      path: cookie.attributes.path ?? "/",
+      domain:
+        typeof cookie.attributes.domain === "string"
+          ? cookie.attributes.domain
+          : url.hostname,
+      path:
+        typeof cookie.attributes.path === "string"
+          ? cookie.attributes.path
+          : "/",
       expires: cookie.attributes.expires
-        ? Math.floor(new Date(cookie.attributes.expires).getTime() / 1000)
+        ? Math.floor(
+            new Date(
+              typeof cookie.attributes.expires === "string"
+                ? cookie.attributes.expires
+                : Date.now(),
+            ).getTime() / 1000,
+          )
         : Math.floor(Date.now() / 1000) + 60 * 60 * 8,
       httpOnly: "httponly" in cookie.attributes,
       secure: "secure" in cookie.attributes,

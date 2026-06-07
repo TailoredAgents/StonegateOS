@@ -1,5 +1,5 @@
 import React from "react";
-import { redirect } from "next/navigation";
+import { serviceRates, zones } from "@myst-os/pricing/src/config/defaults";
 import { SubmitButton } from "@/components/SubmitButton";
 import { callAdminApi } from "../lib/api";
 import { TEAM_TIME_ZONE } from "../lib/timezone";
@@ -29,6 +29,7 @@ import { InboxContactRemindersClient } from "./InboxContactRemindersClient";
 import { ContactMediaAnalysisClient } from "./ContactMediaAnalysisClient";
 import { ContactSalesAgentMemoryClient } from "./ContactSalesAgentMemoryClient";
 import { ContactSalesAgentNextActionClient } from "./ContactSalesAgentNextActionClient";
+import { InboxCustomerWorkspaceClient } from "./InboxCustomerWorkspaceClient";
 
 type ThreadSummary = {
   id: string;
@@ -38,9 +39,16 @@ type ThreadSummary = {
   updatedAt?: string | null;
   channel: string;
   subject: string | null;
+  sourceFamily?: string | null;
   lastMessagePreview: string | null;
   lastMessageAt: string | null;
   lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
+  waitingSince?: string | null;
+  attentionReason?: string | null;
+  needsAttention?: boolean;
+  priorityScore?: number;
+  mediaCount?: number;
   assignedTo?: { id: string; name: string } | null;
   contact: {
     id: string;
@@ -198,7 +206,14 @@ type FailedMessage = {
   contact: { id: string; name: string } | null;
 };
 
+type TeamDirectoryMember = {
+  id: string;
+  name: string;
+  active?: boolean;
+};
+
 const THREAD_STATUSES = ["open", "pending", "closed"];
+type InboxView = "all" | "attention" | "google";
 const THREAD_STATES = [
   "new",
   "qualifying",
@@ -211,9 +226,37 @@ const THREAD_STATES = [
   "review"
 ];
 
+const INBOX_QUOTE_SERVICE_IDS = new Set([
+  "single-item",
+  "furniture",
+  "appliances",
+  "yard-waste",
+  "construction-debris",
+  "hot-tub",
+  "other"
+]);
+
+const INBOX_QUOTE_SERVICES = serviceRates
+  .filter((service) => INBOX_QUOTE_SERVICE_IDS.has(service.service))
+  .map((service) => ({
+    id: service.service,
+    label: service.label,
+    description: service.description ?? null,
+    allowCustomPrice: true
+  }));
+
+const INBOX_QUOTE_ZONES = zones.map((zone) => ({
+  id: zone.id,
+  name: zone.name
+}));
+
 function formatStatusLabel(value: string): string {
   if (!value) return "";
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function parseInboxView(value: string | null | undefined): InboxView {
+  return value === "attention" || value === "google" ? value : "all";
 }
 
 function normalizePhoneLink(phone: string | null | undefined): string | null {
@@ -297,14 +340,6 @@ function formatFailureDetail(detail: string | null): string {
   return detail.replace(/_/g, " ");
 }
 
-function splitName(fullName: string): { firstName: string; lastName: string } {
-  const normalized = fullName.trim().replace(/\s+/g, " ");
-  if (!normalized) return { firstName: "", lastName: "" };
-  const parts = normalized.split(" ");
-  if (parts.length === 1) return { firstName: parts[0] ?? "", lastName: "" };
-  return { firstName: parts[0] ?? "", lastName: parts.slice(1).join(" ") };
-}
-
 function isDmExpired(thread: ThreadSummary, nowMs: number): boolean {
   if (thread.channel !== "dm") return false;
   if (!thread.lastInboundAt) return false;
@@ -370,6 +405,7 @@ function getAllowedStates(currentState: string | null | undefined): string[] {
 
 function buildInboxHref(input: {
   status?: string | null;
+  view?: string | null;
   threadId?: string | null;
   contactId?: string | null;
   channel?: string | null;
@@ -379,6 +415,7 @@ function buildInboxHref(input: {
   const params = new URLSearchParams();
   params.set("tab", "inbox");
   if (input.status) params.set("status", input.status);
+  if (input.view && input.view !== "all") params.set("inbox_view", input.view);
   if (input.threadId) params.set("threadId", input.threadId);
   if (input.contactId) params.set("contactId", input.contactId);
   if (input.channel) params.set("channel", input.channel);
@@ -397,6 +434,7 @@ type InboxSectionProps = {
   contactId?: string;
   channel?: string;
   q?: string;
+  view?: string;
   offset?: string;
 };
 
@@ -404,13 +442,17 @@ function isSupportedChannel(value: string | null | undefined): value is "sms" | 
   return value === "sms" || value === "email" || value === "dm";
 }
 
-export async function InboxSection({ threadId, status, contactId, channel, q, offset }: InboxSectionProps): Promise<React.ReactElement> {
+export async function InboxSection({ threadId, status, contactId, channel, q, view, offset }: InboxSectionProps): Promise<React.ReactElement> {
   const searchQuery = (q ?? "").trim().replace(/\s+/g, " ");
+  const activeView = view ? parseInboxView(view) : searchQuery ? "all" : "attention";
   const activeStatus = status ?? (searchQuery ? "all" : "open");
   const requestedChannel = isSupportedChannel(channel) ? channel : "sms";
 
   const params = new URLSearchParams();
   params.set("limit", searchQuery ? "200" : "50");
+  if (activeView !== "all" && !searchQuery) {
+    params.set("view", activeView);
+  }
   if (searchQuery) {
     params.set("q", searchQuery);
   }
@@ -427,10 +469,11 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
     ? callAdminApi(`/api/admin/inbox/threads/${threadId}`).catch(() => null)
     : Promise.resolve(null);
 
-  const [threadsRes, providerRes, failedRes, threadDetailRes] = await Promise.all([
+  const [threadsRes, providerRes, failedRes, membersRes, threadDetailRes] = await Promise.all([
     callAdminApi(`/api/admin/inbox/threads?${params.toString()}`).catch(() => null),
     callAdminApi("/api/admin/providers/health").catch(() => null),
     callAdminApi("/api/admin/inbox/failed-sends?limit=10").catch(() => null),
+    callAdminApi("/api/admin/team/directory").catch(() => null),
     threadDetailPromise
   ]);
 
@@ -462,6 +505,14 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
     failedMessages = failedPayload.messages ?? [];
   }
 
+  let teamMembers: Array<{ id: string; name: string }> = [];
+  if (membersRes?.ok) {
+    const membersPayload = (await membersRes.json().catch(() => null)) as { members?: TeamDirectoryMember[] } | null;
+    teamMembers = (membersPayload?.members ?? [])
+      .filter((member) => member.active !== false)
+      .map((member) => ({ id: member.id, name: member.name }));
+  }
+
   let threadDetail: ThreadResponse | null = null;
   if (threadDetailRes) {
     if (threadDetailRes.ok) {
@@ -479,7 +530,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
   let timeline: TimelineResponse | null = null;
   if (activeContactId) {
     try {
-      const res = await callAdminApi(`/api/admin/inbox/timeline?contactId=${encodeURIComponent(activeContactId)}&limit=300`);
+      const res = await callAdminApi(`/api/admin/inbox/timeline?contactId=${encodeURIComponent(activeContactId)}&limit=50`);
       if (res.ok) {
         timeline = (await res.json().catch(() => null)) as TimelineResponse | null;
       }
@@ -491,10 +542,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
   const activeContact = timeline?.contact ?? activeThread?.contact ?? null;
   const timelineThreads = timeline?.threads ?? [];
   const timelineMessages = timeline?.messages?.length ? timeline.messages : activeThreadMessages;
-  const latestInboundAt = [...timelineMessages]
+  const latestInboundMessage = [...timelineMessages]
     .reverse()
-    .find((message) => message.direction === "inbound")
-    ?.createdAt ?? null;
+    .find((message) => message.direction === "inbound") ?? null;
+  const latestInboundAt = latestInboundMessage?.createdAt ?? null;
   const latestOutboundAt = [...timelineMessages]
     .reverse()
     .find((message) => message.direction === "outbound" && !isDraftMessage(message.metadata ?? null))
@@ -521,10 +572,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
       const res = await callAdminApi(`/api/admin/contacts?contactId=${encodeURIComponent(activeContactId)}&limit=1`);
       if (res.ok) {
         const data = (await res.json().catch(() => null)) as unknown;
-        const contactsPayload =
+        const contactsPayload: unknown =
           data && typeof data === "object" ? (data as Record<string, unknown>)["contacts"] : null;
         if (Array.isArray(contactsPayload) && contactsPayload.length > 0) {
-          const first = contactsPayload[0];
+          const first: unknown = contactsPayload[0];
           if (first && typeof first === "object") {
             const record = first as Record<string, unknown>;
             const pipelineRaw = record["pipeline"];
@@ -589,14 +640,14 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
       contactReminders = openTasks
         .map((task) => {
           if (!task || typeof task !== "object") return null;
-          const id = typeof task["id"] === "string" ? (task["id"] as string) : null;
-          const title = typeof task["title"] === "string" ? (task["title"] as string) : null;
-          const dueAt = typeof task["dueAt"] === "string" ? (task["dueAt"] as string) : null;
-          const assignedTo = typeof task["assignedTo"] === "string" ? (task["assignedTo"] as string) : null;
+          const id = typeof task["id"] === "string" ? task["id"] : null;
+          const title = typeof task["title"] === "string" ? task["title"] : null;
+          const dueAt = typeof task["dueAt"] === "string" ? task["dueAt"] : null;
+          const assignedTo = typeof task["assignedTo"] === "string" ? task["assignedTo"] : null;
           const status = task["status"] === "completed" ? "completed" : "open";
-          const createdAt = typeof task["createdAt"] === "string" ? (task["createdAt"] as string) : null;
-          const updatedAt = typeof task["updatedAt"] === "string" ? (task["updatedAt"] as string) : null;
-          const notes = typeof task["notes"] === "string" ? (task["notes"] as string) : null;
+          const createdAt = typeof task["createdAt"] === "string" ? task["createdAt"] : null;
+          const updatedAt = typeof task["updatedAt"] === "string" ? task["updatedAt"] : null;
+          const notes = typeof task["notes"] === "string" ? task["notes"] : null;
           if (!id || !title || !createdAt || !updatedAt) return null;
           if (status !== "open") return null;
           if (isSystemReminder(title, notes)) return null;
@@ -618,10 +669,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
       contactNotes = completedTasks
         .map((task) => {
           if (!task || typeof task !== "object") return null;
-          const id = typeof task["id"] === "string" ? (task["id"] as string) : null;
-          const body = typeof task["notes"] === "string" ? (task["notes"] as string) : null;
-          const createdAt = typeof task["createdAt"] === "string" ? (task["createdAt"] as string) : null;
-          const updatedAt = typeof task["updatedAt"] === "string" ? (task["updatedAt"] as string) : null;
+          const id = typeof task["id"] === "string" ? task["id"] : null;
+          const body = typeof task["notes"] === "string" ? task["notes"] : null;
+          const createdAt = typeof task["createdAt"] === "string" ? task["createdAt"] : null;
+          const updatedAt = typeof task["updatedAt"] === "string" ? task["updatedAt"] : null;
           if (!id || !body || !createdAt || !updatedAt) return null;
           const normalized = body.trim();
           if (!normalized) return null;
@@ -672,26 +723,16 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
       }
     : null;
   let nextActionSummary: NextActionSummaryResponse | null = null;
-  let mediaAnalysisSummary: MediaAnalysisSummaryResponse | null = null;
   if (activeContactId) {
     try {
-      const [nextActionRes, mediaAnalysisRes] = await Promise.all([
-        callAdminApi(
-          `/api/admin/contacts/${encodeURIComponent(activeContactId)}/sales-agent-next-action?includeQuotePrice=1`,
-        ),
-        callAdminApi(
-          `/api/admin/contacts/${encodeURIComponent(activeContactId)}/media-analysis?includeQuotePrice=1`,
-        ),
-      ]);
+      const nextActionRes = await callAdminApi(
+        `/api/admin/contacts/${encodeURIComponent(activeContactId)}/sales-agent-next-action?includeQuotePrice=1`,
+      );
       if (nextActionRes.ok) {
         nextActionSummary = (await nextActionRes.json().catch(() => null)) as NextActionSummaryResponse | null;
       }
-      if (mediaAnalysisRes.ok) {
-        mediaAnalysisSummary = (await mediaAnalysisRes.json().catch(() => null)) as MediaAnalysisSummaryResponse | null;
-      }
     } catch {
       nextActionSummary = null;
-      mediaAnalysisSummary = null;
     }
   }
 
@@ -796,7 +837,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
           : agentCloseLoopMode === "blocked"
             ? "Use the Agent card above to resolve the human-review hold before this draft moves forward."
             : "Use the Agent card above to send or refresh this draft.";
-  const agentMediaAnalysis = mediaAnalysisSummary?.analysis ?? null;
+  const agentMediaAnalysis = null as NonNullable<MediaAnalysisSummaryResponse["analysis"]> | null;
   const agentMediaUsesVision =
     typeof agentMediaAnalysis?.source === "string" && agentMediaAnalysis.source.toLowerCase().includes("vision");
   const agentMediaVisibleRange = formatMetaLabel(agentMediaAnalysis?.visibleVolumeRange ?? null);
@@ -866,6 +907,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
         const label = ch === "dm" ? "Messenger" : ch.toUpperCase();
         const href = buildInboxHref({
           status: activeStatus === "all" ? null : activeStatus,
+          view: activeView,
           contactId: activeContactId,
           channel: ch
         });
@@ -952,6 +994,38 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
       </details>
     </div>
   ) : null;
+  const ownerQuickActions = activeContactId ? (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <form action={startContactCallAction} className="inline">
+        <input type="hidden" name="contactId" value={activeContactId} />
+        <SubmitButton
+          className={teamButtonClass("secondary", "sm")}
+          disabled={!canCall}
+          pendingLabel="Calling..."
+        >
+          Call
+        </SubmitButton>
+      </form>
+      {selectedThreadId ? (
+        <form action={updateThreadAction} className="inline">
+          <input type="hidden" name="threadId" value={selectedThreadId} />
+          <input type="hidden" name="status" value="pending" />
+          <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Saving...">
+            Waiting
+          </SubmitButton>
+        </form>
+      ) : null}
+      {selectedThreadId ? (
+        <form action={updateThreadAction} className="inline">
+          <input type="hidden" name="threadId" value={selectedThreadId} />
+          <input type="hidden" name="status" value="closed" />
+          <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Saving...">
+            Done
+          </SubmitButton>
+        </form>
+      ) : null}
+    </div>
+  ) : null;
   const threadStatusControls = selectedThreadId ? (
     <form action={updateThreadAction} className="flex flex-wrap items-center gap-2 text-xs">
       <input type="hidden" name="threadId" value={selectedThreadId} />
@@ -991,6 +1065,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
     <a
       href={buildInboxHref({
         status: activeStatus === "all" ? null : activeStatus,
+        view: activeView,
         threadId: agentExternalDraft.threadId,
         contactId: activeContactId,
         channel: agentExternalDraft.channel,
@@ -1145,40 +1220,134 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
       </div>
     </div>
   ) : null;
-  const agentConversationStrip = selectedThreadId && activeContactId ? (
-    <div className="rounded-2xl border border-primary-200 bg-primary-50/60 p-4 text-sm text-slate-700">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-primary-800">AI workspace</span>
-            <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-primary-800">
-              {currentThreadAiDraft ? "Draft ready" : "Watching thread"}
-            </span>
-            {agentGateLabel ? (
-              <span className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold text-slate-700">
-                {agentGateLabel}
-              </span>
-            ) : null}
+  const queueLinks = [
+    {
+      label: "Needs Response",
+      detail: "You owe them a reply",
+      href: buildInboxHref({ status: "open", view: "attention", q: searchQuery || null }),
+      active: activeView === "attention",
+      count: threads.filter((thread) => thread.needsAttention).length
+    },
+    {
+      label: "Waiting",
+      detail: "Customer or follow-up pending",
+      href: buildInboxHref({ status: "pending", view: "all", q: searchQuery || null }),
+      active: activeView === "all" && activeStatus === "pending",
+      count: threads.filter((thread) => thread.status === "pending").length
+    },
+    {
+      label: "All",
+      detail: "Every customer thread",
+      href: buildInboxHref({ status: "all", view: "all", q: searchQuery || null }),
+      active: activeView === "all" && activeStatus === "all",
+      count: threads.length
+    }
+  ];
+  const inboxUtilityPanel = (
+    <div className="grid gap-3 lg:grid-cols-2">
+      <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_18px_36px_var(--team-card-shadow)]">
+        <summary className="cursor-pointer list-none text-sm font-semibold text-[color:var(--team-text)]">
+          Start a thread
+        </summary>
+        <form action={createThreadAction} className="mt-3 space-y-3">
+          <label className="flex flex-col gap-1 text-xs text-[color:var(--team-text-muted)]">
+            <span>Contact ID</span>
+            <input
+              name="contactId"
+              placeholder="Contact UUID"
+              className={TEAM_INPUT_COMPACT}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[color:var(--team-text-muted)]">
+            <span>Channel</span>
+            <select
+              name="channel"
+              defaultValue="sms"
+              className={TEAM_SELECT}
+            >
+              {["sms", "email", "dm", "call", "web"].map((value) => (
+                <option key={value} value={value}>
+                  {value.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-[color:var(--team-text-muted)]">
+            <span>Subject (optional)</span>
+            <input
+              name="subject"
+              placeholder="Short summary"
+              className={TEAM_INPUT_COMPACT}
+            />
+          </label>
+          <SubmitButton
+            className={teamButtonClass("primary", "sm")}
+            pendingLabel="Creating..."
+          >
+            Create thread
+          </SubmitButton>
+        </form>
+      </details>
+
+      <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_18px_36px_var(--team-card-shadow)]">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-[color:var(--team-text)]">
+          <span>Delivery issues</span>
+          <span className="text-xs font-medium text-[color:var(--team-text-soft)]">{failedMessages.length} failed</span>
+        </summary>
+        {failedMessages.length === 0 ? (
+          <div className="mt-3 rounded-2xl border border-dashed border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-3 text-xs text-[color:var(--team-text-soft)]">
+            No failed sends right now.
           </div>
-          <div className="mt-2 font-semibold text-slate-900">{agentPrimaryTitle}</div>
-          <div className="mt-1 text-sm text-slate-700">{truncateText(agentPrimaryDescription, 180)}</div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {agentPrimaryAction}
-          {agentSecondaryAction}
-        </div>
-      </div>
+        ) : (
+          <div className="mt-3 space-y-3">
+            {failedMessages.map((message) => (
+              <div key={message.id} className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-3 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-semibold text-[color:var(--team-text)]">
+                    {message.contact?.name ?? "Unknown contact"}
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    {message.channel}
+                  </span>
+                </div>
+                <p className="mt-1 text-[color:var(--team-text-muted)]">{message.body}</p>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[color:var(--team-text-soft)]">
+                  <span>{formatFailureDetail(message.failureDetail)}</span>
+                  <span>{formatTimestamp(message.failedAt ?? message.createdAt)}</span>
+                </div>
+                <div className="mt-3 flex items-center justify-between">
+                  <a
+                    href={buildInboxHref({ status: "all", threadId: message.threadId })}
+                    className="text-[11px] font-semibold text-primary-600 hover:text-primary-700"
+                  >
+                    View thread
+                  </a>
+                  <form action={retryFailedMessageAction}>
+                    <input type="hidden" name="messageId" value={message.id} />
+                    <SubmitButton
+                      className="rounded-full border border-slate-200 px-3 py-1 text-[11px] text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
+                      pendingLabel="Retrying..."
+                    >
+                      Retry send
+                    </SubmitButton>
+                  </form>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </details>
     </div>
-  ) : null;
+  );
 
   return (
     <section className="space-y-4">
       <header className="rounded-3xl border border-slate-200 bg-white/90 p-4 shadow-xl shadow-slate-200/60 backdrop-blur lg:p-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Unified Inbox</h2>
+            <h2 className="text-xl font-semibold text-slate-900">Inbox</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Work threads, send replies, and keep the next action visible without leaving the conversation.
+              Find the customer, handle the conversation, then move on.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -1203,6 +1372,10 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
             ) : null}
           </div>
         ) : null}
+      </header>
+
+      <details className={`${showConversation ? "hidden lg:block" : ""} rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 text-sm shadow-[0_18px_36px_var(--team-card-shadow)]`}>
+        <summary className="cursor-pointer list-none font-semibold text-[color:var(--team-text)]">Tools and diagnostics</summary>
         {providers.length > 0 ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
             {providers.map((provider) => {
@@ -1226,61 +1399,57 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
             })}
           </div>
         ) : null}
-      </header>
+        <div className="mt-3">{inboxUtilityPanel}</div>
+      </details>
 
-      <form
-        method="get"
-        className={`flex flex-wrap items-center gap-3 rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] px-4 py-3 text-sm text-[color:var(--team-text-muted)] shadow-[0_18px_36px_var(--team-card-shadow)] lg:px-5 ${
-          showConversation ? "hidden lg:flex" : ""
-        }`}
-      >
-        <input type="hidden" name="tab" value="inbox" />
-        <input
-          name="inbox_q"
-          type="search"
-          defaultValue={searchQuery}
-          placeholder="Search name, phone, or email…"
-          className="w-full flex-1 rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100 sm:min-w-[220px]"
-        />
-        <select
-          name="status"
-          defaultValue={activeStatus}
-          className="rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
-        >
-          {THREAD_STATUSES.map((value) => (
-            <option key={value} value={value}>
-              {formatStatusLabel(value)}
-            </option>
-          ))}
-          <option value="all">All</option>
-        </select>
-        <button
-          type="submit"
-          className={`${teamButtonClass("secondary")} w-full sm:w-auto`}
-        >
-          Search
-        </button>
-      </form>
-
-      <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)_320px] xl:grid-cols-[340px_minmax(0,1fr)_340px] 2xl:grid-cols-[360px_minmax(0,1fr)_360px]">
+      <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
         <div
           className={`space-y-4 rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-card)] p-4 shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur lg:sticky lg:top-4 lg:flex lg:max-h-[calc(100dvh-8rem)] lg:flex-col lg:overflow-hidden ${
             showConversation ? "hidden lg:block" : ""
           }`}
         >
-          <div className="flex items-center justify-between border-b border-[color:var(--team-border)] pb-3">
-            <div>
-              <h3 className="text-base font-semibold text-[color:var(--team-text)]">Threads</h3>
-              <p className="mt-1 text-xs text-[color:var(--team-text-soft)]">Choose the thread, then work from the center pane.</p>
+          <div className="space-y-3 border-b border-[color:var(--team-border)] pb-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-[color:var(--team-text)]">Customers</h3>
+                <p className="mt-1 text-xs text-[color:var(--team-text-soft)]">Search, pick, respond, move on.</p>
+              </div>
+              <span className="text-xs text-[color:var(--team-text-soft)]">
+                {threads.length}
+              </span>
             </div>
-            <span className="text-xs text-[color:var(--team-text-soft)]">
-              {threads.length} {activeStatus === "all" ? "threads" : activeStatus}
-            </span>
+            <form method="get" className="space-y-2">
+              <input type="hidden" name="tab" value="inbox" />
+              {activeView !== "all" ? <input type="hidden" name="inbox_view" value={activeView} /> : null}
+              <input type="hidden" name="status" value={activeStatus} />
+              <input
+                name="inbox_q"
+                type="search"
+                defaultValue={searchQuery}
+                placeholder="Search customers"
+                className="w-full rounded-xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] px-3 py-2 text-sm text-[color:var(--team-text)] shadow-sm placeholder:text-[color:var(--team-text-soft)] focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </form>
+            <div className="grid grid-cols-3 gap-2">
+              {queueLinks.map((item) => (
+                <a
+                  key={item.label}
+                  href={item.href}
+                  className={`rounded-xl border px-2 py-2 text-center text-xs font-semibold transition ${
+                    item.active
+                      ? "border-primary-300 bg-primary-50 text-primary-800"
+                      : "border-[color:var(--team-border)] bg-[color:var(--team-surface)] text-[color:var(--team-text-muted)] hover:border-primary-300 hover:text-primary-700"
+                  }`}
+                >
+                  <span className="block">{item.label}</span>
+                </a>
+              ))}
+            </div>
           </div>
 
           {threads.length === 0 ? (
             <div className={TEAM_EMPTY_STATE}>
-              No threads yet. Create a new conversation below.
+              No customers match this view.
             </div>
           ) : (
             <div className="min-h-0 space-y-2 overflow-y-auto pr-1">
@@ -1397,15 +1566,40 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                   const groupHref = group.contactId
                     ? buildInboxHref({
                         status: activeStatus === "all" ? null : activeStatus,
+                        view: activeView,
                         contactId: group.contactId,
                         channel: landingChannel,
                         q: searchQuery || null
                       })
                     : buildInboxHref({
                         status: activeStatus === "all" ? null : activeStatus,
+                        view: activeView,
                         threadId: group.threads[0]?.id ?? null,
                         q: searchQuery || null
                       });
+                  const groupNeedsResponse = sortedThreads.some((thread) => thread.needsAttention);
+                  const groupWaiting = sortedThreads.some((thread) => thread.status === "pending") || group.followupRunning;
+                  const groupClosed = sortedThreads.every((thread) => thread.status === "closed");
+                  const groupStatusLabel = group.outOfArea
+                    ? "Out of area"
+                    : group.expired
+                      ? "Expired"
+                      : groupNeedsResponse
+                        ? "Needs response"
+                        : groupWaiting
+                          ? "Waiting"
+                          : groupClosed
+                            ? "Done"
+                            : "Open";
+                  const groupStatusClass = group.outOfArea || group.expired
+                    ? "bg-rose-100 text-rose-700"
+                    : groupNeedsResponse
+                      ? "bg-primary-100 text-primary-800"
+                      : groupWaiting
+                        ? "bg-amber-100 text-amber-800"
+                        : groupClosed
+                          ? "bg-slate-100 text-slate-500"
+                          : "bg-emerald-100 text-emerald-700";
 
                   return (
                     <div
@@ -1420,36 +1614,9 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                         <a href={groupHref} className="min-w-0 flex-1">
                           <div className="truncate font-semibold text-slate-900">{group.name}</div>
                         </a>
-                        <div className="flex flex-wrap items-center justify-end gap-1">
-                          {group.outOfArea ? (
-                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
-                              Out of area
-                            </span>
-                          ) : null}
-                          {group.followupRunning && group.followupNextAt ? (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                              Follow-up {formatTimestamp(group.followupNextAt)}
-                            </span>
-                          ) : null}
-                          {group.facebookSales ? (
-                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-800">
-                              FB auto: {formatMetaLabel(group.facebookSales.stage)}
-                            </span>
-                          ) : null}
-                          {group.facebookSales?.lastHumanReviewReason ? (
-                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
-                              Needs review
-                            </span>
-                          ) : null}
-                          {group.expired ? (
-                            <span
-                              className="inline-flex items-center justify-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800"
-                              title="At least one Messenger thread has expired; please message directly in Messenger or wait for the customer to reply."
-                            >
-                              expired
-                            </span>
-                          ) : null}
-                        </div>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${groupStatusClass}`}>
+                          {groupStatusLabel}
+                        </span>
                       </div>
 
                       <p className="mt-1 line-clamp-2 text-xs text-slate-500">{group.lastPreview ?? "No messages yet"}</p>
@@ -1461,12 +1628,14 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                             const href = t.contact?.id
                               ? buildInboxHref({
                                   status: activeStatus === "all" ? null : activeStatus,
+                                  view: activeView,
                                   contactId: t.contact.id,
                                   channel: t.channel,
                                   q: searchQuery || null
                                 })
                               : buildInboxHref({
                                   status: activeStatus === "all" ? null : activeStatus,
+                                  view: activeView,
                                   threadId: t.id,
                                   q: searchQuery || null
                                 });
@@ -1486,7 +1655,6 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                               </a>
                             );
                           })}
-                          <span className="ml-1">{group.messageCount} msg</span>
                         </div>
                       </div>
                     </div>
@@ -1496,98 +1664,6 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
             </div>
           )}
 
-          <details className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-            <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">
-              Start a thread
-            </summary>
-            <form action={createThreadAction} className="mt-3 space-y-3">
-              <label className="flex flex-col gap-1 text-xs text-slate-600">
-                <span>Contact ID</span>
-                <input
-                  name="contactId"
-                  placeholder="Contact UUID"
-                  className={TEAM_INPUT_COMPACT}
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-slate-600">
-                <span>Channel</span>
-                <select
-                  name="channel"
-                  defaultValue="sms"
-                  className={TEAM_SELECT}
-                >
-                  {["sms", "email", "dm", "call", "web"].map((value) => (
-                    <option key={value} value={value}>
-                      {value.toUpperCase()}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-xs text-slate-600">
-                <span>Subject (optional)</span>
-                <input
-                  name="subject"
-                  placeholder="Short summary"
-                  className={TEAM_INPUT_COMPACT}
-                />
-              </label>
-              <SubmitButton
-                className={teamButtonClass("primary", "sm")}
-                pendingLabel="Creating..."
-              >
-                Create thread
-              </SubmitButton>
-            </form>
-          </details>
-
-          <details className="rounded-2xl border border-slate-200 bg-white/90 p-4">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-semibold text-slate-900">
-              <span>Delivery issues</span>
-              <span className="text-xs font-medium text-slate-500">{failedMessages.length} failed</span>
-            </summary>
-            {failedMessages.length === 0 ? (
-              <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/80 p-3 text-xs text-slate-500">
-                No failed sends right now.
-              </div>
-            ) : (
-              <div className="mt-3 space-y-3">
-                {failedMessages.map((message) => (
-                  <div key={message.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="font-semibold text-slate-900">
-                        {message.contact?.name ?? "Unknown contact"}
-                      </div>
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                        {message.channel}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-slate-500">{message.body}</p>
-                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
-                      <span>{formatFailureDetail(message.failureDetail)}</span>
-                      <span>{formatTimestamp(message.failedAt ?? message.createdAt)}</span>
-                    </div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <a
-                        href={buildInboxHref({ status: "all", threadId: message.threadId })}
-                        className="text-[11px] font-semibold text-primary-600 hover:text-primary-700"
-                      >
-                        View thread
-                      </a>
-                      <form action={retryFailedMessageAction}>
-                        <input type="hidden" name="messageId" value={message.id} />
-                        <SubmitButton
-                          className="rounded-full border border-slate-200 px-3 py-1 text-[11px] text-slate-600 transition hover:border-primary-300 hover:text-primary-700"
-                          pendingLabel="Retrying..."
-                        >
-                          Retry send
-                        </SubmitButton>
-                      </form>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </details>
         </div>
 
         <div
@@ -1600,79 +1676,93 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
               <div className="flex flex-col gap-4 border-b border-[color:var(--team-border)] pb-4">
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                   <div className="min-w-0">
-                  <a
-                    href={buildInboxHref({ status: activeStatus === "all" ? null : activeStatus })}
-                    className="mb-3 inline-flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-primary-700 lg:hidden"
-                  >
-                    <span aria-hidden>←</span> Threads
-                  </a>
-                  <h3 className="text-lg font-semibold text-slate-900">
-                    <span className="inline-flex flex-wrap items-center gap-2">
-                      <span>{activeContact?.name ?? "Unknown contact"}</span>
-                      {activeContactId ? (
-                        <ContactNameEditorClient contactId={activeContactId} contactName={activeContact?.name ?? ""} />
-                      ) : null}
-                    </span>
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    {(requestedChannel === "dm" ? "Messenger" : requestedChannel.toUpperCase())}{" "}
-                    {selectedThread
-                      ? `| ${formatStatusLabel((selectedThread as { status: string }).status)} | ${formatStateLabel(
-                          (selectedThread as { state?: string | null }).state ?? "new"
-                        )}`
-                      : "| No thread yet"}
-                  </p>
-                  {activeProperty?.outOfArea ? (
-                    <p className="mt-1 inline-flex rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
-                      Out of area
-                    </p>
-                  ) : null}
-                  {(selectedThread as { stateUpdatedAt?: string | null } | null)?.stateUpdatedAt ? (
-                    <p className="text-[11px] text-slate-400">
-                      State updated {formatTimestamp((selectedThread as { stateUpdatedAt: string }).stateUpdatedAt)}
-                    </p>
-                  ) : null}
-                  {activeFacebookSales ? (
-                    <details className="mt-2 rounded-2xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-blue-900">
-                      <summary className="cursor-pointer list-none font-semibold">
-                        Facebook Autopilot · {formatMetaLabel(activeFacebookSales.stage)}
-                      </summary>
-                      <div className="mt-2 space-y-1 text-blue-800">
-                        <p>Mode: {formatMetaLabel(activeFacebookSales.autonomyMode)}</p>
-                        <p>Last decision: {formatMetaLabel(activeFacebookSales.lastDecision ?? "none")}</p>
-                        <p>Reason: {activeFacebookSales.lastHumanReviewReason ?? activeFacebookSales.lastDecisionReason ?? "No reason saved"}</p>
-                        {activeFacebookSales.quoteLowCents && activeFacebookSales.quoteHighCents ? (
-                          <p>
-                            Quote range: ${(activeFacebookSales.quoteLowCents / 100).toFixed(0)}-${(activeFacebookSales.quoteHighCents / 100).toFixed(0)}
-                          </p>
+                    <a
+                      href={buildInboxHref({ status: activeStatus === "all" ? null : activeStatus, view: activeView })}
+                      className="mb-3 inline-flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-primary-700 lg:hidden"
+                    >
+                      <span aria-hidden>←</span> Customers
+                    </a>
+                    <h3 className="text-lg font-semibold text-slate-900">
+                      <span className="inline-flex flex-wrap items-center gap-2">
+                        <span>{activeContact?.name ?? "Unknown contact"}</span>
+                        {activeContactId ? (
+                          <ContactNameEditorClient contactId={activeContactId} contactName={activeContact?.name ?? ""} />
                         ) : null}
-                      </div>
-                    </details>
-                  ) : null}
-                </div>
-                <div className="hidden min-w-[280px] xl:block">
-                  <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] p-4">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--team-text-soft)]">Workspace</div>
-                    <div className="mt-3 space-y-3">
-                      {channelSwitchLinks}
-                      {contactActionControls}
-                      {threadStatusControls}
-                    </div>
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      {(requestedChannel === "dm" ? "Messenger" : requestedChannel.toUpperCase())}{" "}
+                      {selectedThread
+                        ? `| ${formatStatusLabel((selectedThread as { status: string }).status)} | ${formatStateLabel(
+                            (selectedThread as { state?: string | null }).state ?? "new"
+                          )}`
+                        : "| No thread yet"}
+                    </p>
+                    {activeProperty ? (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {activeProperty.addressLine1}, {activeProperty.city}
+                        {activeProperty.outOfArea ? (
+                          <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                            Out of area
+                          </span>
+                        ) : null}
+                      </p>
+                    ) : null}
                   </div>
-                </div>
-                <div className="flex flex-col gap-2 xl:hidden">
-                  {channelSwitchLinks}
-                  {contactActionControls}
-                  {threadStatusControls}
+                  <div className="flex flex-col gap-2 xl:items-end">
+                    {ownerQuickActions}
+                    {channelSwitchLinks}
+                  </div>
                 </div>
               </div>
 
               {activeContactId ? (
-                <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] p-4 lg:hidden">
+                <InboxCustomerWorkspaceClient
+                  contactId={activeContactId}
+                  activeChannel={requestedChannel}
+                  latestInboundBody={latestInboundMessage?.body ?? null}
+                  aiActionType={currentThreadAiDraftPlanner?.actionType ?? null}
+                  services={INBOX_QUOTE_SERVICES}
+                  zones={INBOX_QUOTE_ZONES}
+                  teamMembers={teamMembers}
+                />
+              ) : null}
+
+              {activeContactId ? (
+                <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] p-4">
                   <summary className="cursor-pointer list-none text-sm font-semibold text-[color:var(--team-text)]">
-                    Contact details
+                    Details
                   </summary>
                   <div className="mt-4 space-y-4">
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Thread</div>
+                        <div className="mt-3 space-y-3">
+                          {threadStatusControls}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">More actions</div>
+                        <div className="mt-3">{contactActionControls}</div>
+                      </div>
+                    </div>
+                    {activeFacebookSales ? (
+                      <details className="rounded-2xl border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-blue-900">
+                        <summary className="cursor-pointer list-none font-semibold">
+                          Facebook Autopilot · {formatMetaLabel(activeFacebookSales.stage)}
+                        </summary>
+                        <div className="mt-2 space-y-1 text-blue-800">
+                          <p>Mode: {formatMetaLabel(activeFacebookSales.autonomyMode)}</p>
+                          <p>Last decision: {formatMetaLabel(activeFacebookSales.lastDecision ?? "none")}</p>
+                          <p>Reason: {activeFacebookSales.lastHumanReviewReason ?? activeFacebookSales.lastDecisionReason ?? "No reason saved"}</p>
+                          {activeFacebookSales.quoteLowCents && activeFacebookSales.quoteHighCents ? (
+                            <p>
+                              Quote range: ${(activeFacebookSales.quoteLowCents / 100).toFixed(0)}-${(activeFacebookSales.quoteHighCents / 100).toFixed(0)}
+                            </p>
+                          ) : null}
+                        </div>
+                      </details>
+                    ) : null}
                     <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-[0_10px_24px_var(--team-card-shadow)]">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
@@ -1729,6 +1819,15 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                       ) : null}
                     </div>
 
+                    {agentWorkspaceCard ? (
+                      <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
+                        <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          AI workspace
+                        </summary>
+                        <div className="mt-3">{agentWorkspaceCard}</div>
+                      </details>
+                    ) : null}
+
                     <InboxContactRemindersClient contactId={activeContactId} initialReminders={contactReminders} />
                     <InboxContactNotesClient contactId={activeContactId} initialNotes={contactNotes} />
                     <ContactSalesAgentMemoryClient contactId={activeContactId} />
@@ -1757,7 +1856,11 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                     latestAiDraftAt={latestAiDraftAt}
                   />
                 ) : null}
-                {agentConversationStrip}
+                {timelineMessages.length >= 50 ? (
+                  <div className="rounded-2xl border border-dashed border-[color:var(--team-border)] bg-[color:var(--team-surface-muted)] px-4 py-3 text-xs text-[color:var(--team-text-soft)]">
+                    Showing the latest 50 messages for speed.
+                  </div>
+                ) : null}
                 {timelineMessages.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-[color:var(--team-surface-muted)] p-4 text-sm text-slate-500">
                     No messages yet. Send the first touch below.
@@ -1841,17 +1944,28 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                                 {message.channel === "dm" ? "Messenger" : message.channel.toUpperCase()}
                               </div>
                             </div>
-                            <form action={deleteMessageAction}>
-                              <input type="hidden" name="messageId" value={message.id} />
-                              <button
-                                type="submit"
-                                className="text-[12px] text-slate-500 transition hover:text-rose-600"
-                                title="Delete message"
-                                aria-label="Delete message"
+                            <details className="relative">
+                              <summary
+                                className="cursor-pointer list-none rounded-full px-2 py-1 text-[12px] font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                                title="Message actions"
+                                aria-label="Message actions"
                               >
-                                X
-                              </button>
-                            </form>
+                                More
+                              </summary>
+                              <div className="absolute right-0 z-20 mt-2 w-48 rounded-2xl border border-slate-200 bg-white p-3 text-xs text-slate-600 shadow-xl">
+                                <p className="font-semibold text-slate-900">Message actions</p>
+                                <p className="mt-1 text-[11px] text-slate-500">Deleting removes this message from the thread.</p>
+                                <form action={deleteMessageAction} className="mt-3">
+                                  <input type="hidden" name="messageId" value={message.id} />
+                                  <button
+                                    type="submit"
+                                    className="w-full rounded-full border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 transition hover:border-rose-300 hover:bg-rose-50"
+                                  >
+                                    Confirm delete
+                                  </button>
+                                </form>
+                              </div>
+                            </details>
                           </div>
                           {message.subject ? (
                             <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -2010,7 +2124,6 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
                 </form>
               </div>
             </div>
-            </div>
           ) : (
             <div className="p-5">
               <div className={TEAM_EMPTY_STATE}>Select a thread to view the conversation.</div>
@@ -2018,146 +2131,6 @@ export async function InboxSection({ threadId, status, contactId, channel, q, of
           )}
         </div>
 
-        <div className="hidden rounded-3xl border border-[color:var(--team-border)] bg-[color:var(--team-panel-alt)] shadow-[0_24px_56px_var(--team-card-shadow)] backdrop-blur lg:sticky lg:top-4 lg:block lg:max-h-[calc(100dvh-8rem)]">
-          <div className="flex max-h-[calc(100dvh-8rem)] flex-col gap-4 overflow-hidden p-5">
-            <div className="flex items-start justify-between gap-3 border-b border-[color:var(--team-border)] pb-4">
-              <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-[color:var(--team-text)]">Workspace</h3>
-                <p className="mt-1 text-xs text-[color:var(--team-text-soft)]">Context, actions, and AI without crowding the thread.</p>
-              </div>
-            </div>
-
-            {activeContactId ? (
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-                <div className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4 shadow-[0_10px_24px_var(--team-card-shadow)]">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="truncate text-sm font-semibold text-[color:var(--team-text)]">
-                          {activeContact?.name ?? "Unknown contact"}
-                        </div>
-                        <ContactNameEditorClient contactId={activeContactId} contactName={activeContact?.name ?? ""} />
-                      </div>
-                      <div className="mt-1 space-y-1 text-xs text-[color:var(--team-text-muted)]">
-                        {activeContact?.phone ? (
-                          <div>Phone: {activeContact.phone}</div>
-                        ) : (
-                          <div className="text-[color:var(--team-text-soft)]">Phone: not on file</div>
-                        )}
-                        {activeContact?.email ? (
-                          <div>Email: {activeContact.email}</div>
-                        ) : (
-                          <div className="text-[color:var(--team-text-soft)]">Email: not on file</div>
-                        )}
-                        {activeThreadSummary?.assignedTo?.name ? (
-                          <div>Assigned to: {activeThreadSummary.assignedTo.name}</div>
-                        ) : null}
-                        {activeContactSummary?.pipeline?.stage ? (
-                          <div>Stage: {activeContactSummary.pipeline.stage}</div>
-                        ) : null}
-                        {activeContactSummary?.stats ? (
-                          <div>
-                            Appointments: {activeContactSummary.stats.appointments} • Quotes: {activeContactSummary.stats.quotes}
-                          </div>
-                        ) : null}
-                        {activeContactSummary?.lastActivityAt ? (
-                          <div>Last activity: {formatTimestamp(activeContactSummary.lastActivityAt)}</div>
-                        ) : null}
-                      </div>
-                    </div>
-                    {activeProperty?.outOfArea ? (
-                      <span className="shrink-0 rounded-full bg-rose-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
-                        Out of area
-                      </span>
-                    ) : null}
-                  </div>
-
-                  {activeProperty ? (
-                    <div className="mt-3 border-t border-[color:var(--team-border)] pt-3 text-xs text-[color:var(--team-text-muted)]">
-                      <div className="font-semibold text-[color:var(--team-text-muted)]">Address</div>
-                      <div className="mt-1">
-                        {activeProperty.addressLine1}
-                        <div className="text-[color:var(--team-text-soft)]">
-                          {activeProperty.city}, {activeProperty.state} {activeProperty.postalCode}
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-
-                {agentWorkspaceCard ? (
-                  <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
-                    <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      AI workspace
-                    </summary>
-                    <div className="mt-3">{agentWorkspaceCard}</div>
-                  </details>
-                ) : null}
-
-                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
-                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Channels
-                  </summary>
-                  <div className="mt-3">{channelSwitchLinks}</div>
-                </details>
-
-                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
-                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Actions
-                  </summary>
-                  <div className="mt-3">{contactActionControls}</div>
-                </details>
-
-                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
-                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Thread status
-                  </summary>
-                  <div className="mt-3">{threadStatusControls}</div>
-                </details>
-
-                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
-                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Reminders
-                  </summary>
-                  <div className="mt-3">
-                    <InboxContactRemindersClient contactId={activeContactId} initialReminders={contactReminders} />
-                  </div>
-                </details>
-
-                <details open className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
-                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Notes
-                  </summary>
-                  <div className="mt-3">
-                    <InboxContactNotesClient contactId={activeContactId} initialNotes={contactNotes} />
-                  </div>
-                </details>
-
-                <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
-                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Memory
-                  </summary>
-                  <div className="mt-3">
-                    <ContactSalesAgentMemoryClient contactId={activeContactId} />
-                  </div>
-                </details>
-
-                <details className="rounded-2xl border border-[color:var(--team-border)] bg-[color:var(--team-surface)] p-4">
-                  <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Media analysis
-                  </summary>
-                  <div className="mt-3">
-                    <ContactMediaAnalysisClient contactId={activeContactId} />
-                  </div>
-                </details>
-              </div>
-            ) : (
-              <div className="p-5">
-                <div className={TEAM_EMPTY_STATE}>Select a thread to see details.</div>
-              </div>
-            )}
-          </div>
-        </div>
       </div>
     </section>
   );

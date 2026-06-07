@@ -13,8 +13,7 @@ type ContactsResponse = {
 };
 
 export async function QuoteBuilderSection({
-  initialContactId,
-  workflow
+  initialContactId
 }: {
   initialContactId?: string;
   workflow?: "canvass" | null;
@@ -67,7 +66,6 @@ export async function QuoteBuilderSection({
       zones={zoneOptions}
       defaultZoneId={zones[0]?.id ?? null}
       initialContactId={initialContactId}
-      workflow={workflow ?? null}
     />
   );
 }
