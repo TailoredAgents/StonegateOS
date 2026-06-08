@@ -27,6 +27,14 @@ type Quote = {
   refreshRequestedAt: string | null;
   acceptedAppointmentId: string | null;
   shareToken: string | null;
+  pdfDownloadCount: number;
+  lastPdfDownloadedAt: string | null;
+  changeRequestCount: number;
+  latestChangeRequest: {
+    reason: string | null;
+    message: string | null;
+    createdAt: string;
+  } | null;
   contact: { name: string; email: string | null };
   property: { addressLine1: string; city: string; state: string; postalCode: string };
 };
@@ -381,6 +389,14 @@ export function QuotesList({
                       <p className="mt-1">
                         {quote.viewedAt ? `${quote.viewCount} views, last ${fmtDate(quote.lastViewedAt)}` : "Not viewed"}
                       </p>
+                      <p className="mt-1">
+                        PDF: {quote.pdfDownloadCount > 0 ? `${quote.pdfDownloadCount} downloads, last ${fmtDate(quote.lastPdfDownloadedAt)}` : "Not downloaded"}
+                      </p>
+                      {quote.latestChangeRequest ? (
+                        <p className="mt-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-amber-800">
+                          Change: {quote.latestChangeRequest.reason ?? "Requested"} {fmtDate(quote.latestChangeRequest.createdAt)}
+                        </p>
+                      ) : null}
                       <p className="mt-1">Expires {fmtDate(quote.expiresAt)}</p>
                     </td>
                     <td className="px-4 py-4">
@@ -418,6 +434,12 @@ export function QuotesList({
                   <p className="rounded-xl border border-slate-200 bg-slate-50 p-3">Sent: {fmtDate(quote.sentAt)}</p>
                   <p className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                     Viewed: {quote.viewedAt ? `${quote.viewCount}x` : "No"}
+                  </p>
+                  <p className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    PDF: {quote.pdfDownloadCount > 0 ? `${quote.pdfDownloadCount}x, last ${fmtDate(quote.lastPdfDownloadedAt)}` : "No"}
+                  </p>
+                  <p className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    Changes: {quote.changeRequestCount > 0 ? `${quote.changeRequestCount} requested` : "None"}
                   </p>
                   <p className="rounded-xl border border-slate-200 bg-slate-50 p-3">Expires: {fmtDate(quote.expiresAt)}</p>
                   <p className="rounded-xl border border-slate-200 bg-slate-50 p-3">

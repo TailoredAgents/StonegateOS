@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { and, eq, gt, gte, lte, ne, sql } from "drizzle-orm";
 import {
   appointmentHolds,
+  appointmentNotes,
   appointments,
   contacts,
   getDb,
@@ -316,6 +317,7 @@ export async function bookAcceptedQuote(input: {
   quote: PublicQuoteSchedulingRow;
   holdId?: string | null;
   startAtIso: string;
+  customerNote?: string | null;
 }): Promise<{ appointmentId: string; startAt: string }> {
   if (input.quote.acceptedAppointmentId) {
     return { appointmentId: input.quote.acceptedAppointmentId, startAt: "" };
@@ -373,8 +375,20 @@ export async function bookAcceptedQuote(input: {
       .returning({ id: appointments.id });
     if (!appointment?.id) throw new Error("appointment_create_failed");
 
+    const customerNote = input.customerNote?.trim();
+    if (customerNote) {
+      await tx.insert(appointmentNotes).values({
+        appointmentId: appointment.id,
+        body: `Customer note from quote approval: ${customerNote}`,
+      });
+    }
+
     await tx.update(quotes).set({
       status: "accepted",
+      decisionAt: now,
+      decisionNotes: customerNote
+        ? `Scheduling note: ${customerNote}`
+        : "Approved and booked from quote page.",
       acceptedAppointmentId: appointment.id,
       updatedAt: now,
     }).where(eq(quotes.id, input.quote.id));

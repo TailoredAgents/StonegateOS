@@ -15,7 +15,7 @@ const FALLBACK_COMPANY: PublicCompanyProfile = {
   name: "Stonegate Junk Removal",
   phoneE164: "+14047772631",
   phoneDisplay: "(404) 777-2631",
-  email: "austin@stonegatejunkremoval.com",
+  email: "sales@stonegatejunkremoval.com",
   logoPath: "/images/brand/Stonegatelogo.png",
   serviceAreaSummary: "Serving North Metro Atlanta and nearby Georgia communities.",
   hoursSummary: "Mon-Sat 7:30 AM-7:30 PM ET. Sunday: on-call.",

@@ -4,12 +4,13 @@ import { z } from "zod";
 import { calculateQuoteBreakdown } from "@myst-os/pricing/src/engine/calculate";
 import { serviceRates } from "@myst-os/pricing/src/config/defaults";
 import type { ConcreteSurfaceInput, ServiceCategory } from "@myst-os/pricing/src/types";
-import { getDb, quotes, contacts, properties } from "@/db";
+import { getDb, quotes, contacts, properties, quoteChangeRequests, quotePdfDownloads } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../web/admin";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
+import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 
 const STATUS_FILTERS = ["pending", "sent", "accepted", "declined"] as const;
 type QuoteStatusFilter = (typeof STATUS_FILTERS)[number];
@@ -39,6 +40,7 @@ const CreateQuoteSchema = z.object({
   clientScope: z.string().max(4000).optional(),
   jobDurationMinutes: z.number().int().min(30).max(8 * 60).optional(),
   serviceOverrides: z.record(z.string().min(1), z.number().positive()).optional(),
+  makeShareable: z.boolean().optional(),
   concreteSurfaces: z
     .array(
       z.object({
@@ -57,6 +59,11 @@ const toOptionalPgNumeric = (value?: number | string | null): string | null =>
 function generateQuoteNumber(now = new Date()): string {
   const ymd = now.toISOString().slice(0, 10).replace(/-/g, "");
   return `Q-${ymd}-${nanoid(6).toUpperCase()}`;
+}
+
+function buildShareUrl(token: string): string | null {
+  const base = resolvePublicSiteBaseUrl({ devFallbackLocalhost: true });
+  return base ? new URL(`/quote/${token}`, base).toString() : null;
 }
 
 function displayStatus(row: {
@@ -106,6 +113,12 @@ function formatQuoteResponse(row: {
   propertyCity: string | null;
   propertyState: string | null;
   propertyPostalCode: string | null;
+  pdfDownloadCount?: number | null;
+  lastPdfDownloadedAt?: Date | null;
+  changeRequestCount?: number | null;
+  latestChangeRequestReason?: string | null;
+  latestChangeRequestMessage?: string | null;
+  latestChangeRequestAt?: Date | null;
 }) {
   const contactName = row.contactName?.trim();
   const addressLine1 = row.propertyAddressLine1?.trim();
@@ -138,6 +151,16 @@ function formatQuoteResponse(row: {
     refreshRequestedAt: row.refreshRequestedAt ? row.refreshRequestedAt.toISOString() : null,
     acceptedAppointmentId: row.acceptedAppointmentId,
     shareToken: row.shareToken,
+    pdfDownloadCount: Number(row.pdfDownloadCount ?? 0),
+    lastPdfDownloadedAt: row.lastPdfDownloadedAt ? row.lastPdfDownloadedAt.toISOString() : null,
+    changeRequestCount: Number(row.changeRequestCount ?? 0),
+    latestChangeRequest: row.latestChangeRequestAt
+      ? {
+          reason: row.latestChangeRequestReason,
+          message: row.latestChangeRequestMessage,
+          createdAt: row.latestChangeRequestAt.toISOString()
+        }
+      : null,
     contact: {
       name: contactName && contactName.length ? contactName : "Customer",
       email: row.contactEmail
@@ -191,6 +214,42 @@ export async function GET(request: NextRequest): Promise<Response> {
       refreshRequestedAt: quotes.refreshRequestedAt,
       acceptedAppointmentId: quotes.acceptedAppointmentId,
       shareToken: quotes.shareToken,
+      pdfDownloadCount: sql<number>`(
+        select count(*)::int
+        from ${quotePdfDownloads}
+        where ${quotePdfDownloads.quoteId} = ${quotes.id}
+      )`,
+      lastPdfDownloadedAt: sql<Date | null>`(
+        select max(${quotePdfDownloads.createdAt})
+        from ${quotePdfDownloads}
+        where ${quotePdfDownloads.quoteId} = ${quotes.id}
+      )`,
+      changeRequestCount: sql<number>`(
+        select count(*)::int
+        from ${quoteChangeRequests}
+        where ${quoteChangeRequests.quoteId} = ${quotes.id}
+      )`,
+      latestChangeRequestReason: sql<string | null>`(
+        select ${quoteChangeRequests.reason}
+        from ${quoteChangeRequests}
+        where ${quoteChangeRequests.quoteId} = ${quotes.id}
+        order by ${quoteChangeRequests.createdAt} desc
+        limit 1
+      )`,
+      latestChangeRequestMessage: sql<string | null>`(
+        select ${quoteChangeRequests.message}
+        from ${quoteChangeRequests}
+        where ${quoteChangeRequests.quoteId} = ${quotes.id}
+        order by ${quoteChangeRequests.createdAt} desc
+        limit 1
+      )`,
+      latestChangeRequestAt: sql<Date | null>`(
+        select ${quoteChangeRequests.createdAt}
+        from ${quoteChangeRequests}
+        where ${quoteChangeRequests.quoteId} = ${quotes.id}
+        order by ${quoteChangeRequests.createdAt} desc
+        limit 1
+      )`,
       contactName: contacts.firstName,
       contactEmail: contacts.email,
       propertyAddressLine1: properties.addressLine1,
@@ -296,11 +355,23 @@ export async function POST(request: NextRequest): Promise<Response> {
     : null;
   const jobDurationMinutes =
     body.jobDurationMinutes ?? DEFAULT_QUOTE_JOB_DURATION_MINUTES;
+  const shareToken = body.makeShareable ? nanoid(24) : null;
+  const shareUrl = shareToken ? buildShareUrl(shareToken) : null;
+
+  if (body.makeShareable && !shareUrl) {
+    return NextResponse.json(
+      {
+        error: "site_url_not_configured",
+        message: "Set NEXT_PUBLIC_SITE_URL or SITE_URL to generate customer-facing quote links."
+      },
+      { status: 500 }
+    );
+  }
 
   const quoteValues: typeof quotes.$inferInsert = {
     contactId: body.contactId,
     propertyId: body.propertyId,
-    status: "pending",
+    status: body.makeShareable ? "sent" : "pending",
     services: selectedServices,
     addOns: body.selectedAddOns ?? null,
     surfaceArea: toOptionalPgNumeric(body.surfaceArea),
@@ -318,7 +389,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     quoteNumber: generateQuoteNumber(),
     jobDurationMinutes,
     clientScope: body.clientScope ?? null,
-    expiresAt
+    expiresAt,
+    shareToken,
+    sentAt: body.makeShareable ? new Date() : null
   };
 
   const [inserted] = await db.insert(quotes).values(quoteValues).returning();
@@ -336,7 +409,9 @@ export async function POST(request: NextRequest): Promise<Response> {
       contactId: body.contactId,
       propertyId: body.propertyId,
       services: selectedServices,
-      total: breakdown.total
+      total: breakdown.total,
+      makeShareable: body.makeShareable === true,
+      shareToken
     }
   });
 
@@ -360,6 +435,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         acceptedAppointmentId: inserted.acceptedAppointmentId
       })
     },
-    breakdown
+    breakdown,
+    shareUrl
   });
 }

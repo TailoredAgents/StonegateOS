@@ -51,6 +51,14 @@ export type CustomerWorkspaceQuote = {
   createdAt: string | null;
   updatedAt: string | null;
   sentAt: string | null;
+  pdfDownloadCount: number;
+  lastPdfDownloadedAt: string | null;
+  changeRequestCount: number;
+  latestChangeRequest: {
+    reason: string | null;
+    message: string | null;
+    createdAt: string | null;
+  } | null;
   property: Pick<CustomerWorkspaceProperty, "addressLine1" | "city" | "state" | "postalCode"> | null;
 };
 

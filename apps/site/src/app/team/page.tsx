@@ -76,6 +76,7 @@ export default async function TeamPage({
     tab?: string;
     q?: string;
     inbox_q?: string;
+    inbox_status?: string;
     inbox_view?: string;
     inbox_offset?: string;
     offset?: string;
@@ -229,7 +230,12 @@ export default async function TeamPage({
   const gaCampaignIdParam = typeof params?.gaCampaignId === "string" ? params.gaCampaignId : undefined;
   const waRangeDaysParam = typeof params?.waRangeDays === "string" ? params.waRangeDays : undefined;
   const inboxThreadId = typeof params?.threadId === "string" ? params.threadId : undefined;
-  const inboxStatus = typeof params?.status === "string" ? params.status : undefined;
+  const inboxStatus =
+    typeof params?.inbox_status === "string"
+      ? params.inbox_status
+      : normalizedRequestedTab === "inbox" && typeof params?.status === "string"
+        ? params.status
+        : undefined;
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
   const inboxQuery = typeof params?.inbox_q === "string" ? params.inbox_q : undefined;
   const inboxView = typeof params?.inbox_view === "string" ? params.inbox_view : undefined;

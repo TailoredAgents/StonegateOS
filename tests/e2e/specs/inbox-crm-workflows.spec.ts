@@ -74,6 +74,10 @@ function workspaceFixture(seed: {
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             sentAt: null,
+            pdfDownloadCount: 0,
+            lastPdfDownloadedAt: null,
+            changeRequestCount: 0,
+            latestChangeRequest: null,
             property: {
               addressLine1: "123 E2E Lane",
               city: "Atlanta",

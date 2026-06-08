@@ -26,6 +26,14 @@ interface QuoteDto {
   refreshRequestedAt: string | null;
   acceptedAppointmentId: string | null;
   shareToken: string | null;
+  pdfDownloadCount: number;
+  lastPdfDownloadedAt: string | null;
+  changeRequestCount: number;
+  latestChangeRequest: {
+    reason: string | null;
+    message: string | null;
+    createdAt: string;
+  } | null;
   contact: { name: string; email: string | null };
   property: { addressLine1: string; city: string; state: string; postalCode: string };
 }

@@ -365,6 +365,13 @@
       "when": 1780444800000,
       "tag": "0052_facebook_sales_autopilot",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1780876800000,
+      "tag": "0053_quote_proposal_activity",
+      "breakpoints": true
     }
   ]
 }

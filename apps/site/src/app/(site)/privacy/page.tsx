@@ -83,10 +83,9 @@ export default function PrivacyPolicyPage() {
         <h2>Contact</h2>
         <p>
           If you have questions about this policy, contact us at{" "}
-          <a href="mailto:austin@stonegatejunkremoval.com">austin@stonegatejunkremoval.com</a>.
+          <a href="mailto:sales@stonegatejunkremoval.com">sales@stonegatejunkremoval.com</a>.
         </p>
       </div>
     </div>
   );
 }
-

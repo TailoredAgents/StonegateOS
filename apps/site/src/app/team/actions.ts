@@ -224,13 +224,53 @@ export async function createInboxQuoteAction(
   try {
     const contactId = readFormString(formData, "contactId");
     const contactName = readFormString(formData, "contactName");
-    const propertyId = readFormString(formData, "propertyId");
+    let propertyId = readFormString(formData, "propertyId");
     const zoneId = readFormString(formData, "zoneId");
     const servicesRaw = readFormString(formData, "services");
     const serviceOverridesRaw = readFormString(formData, "serviceOverrides");
 
     if (!contactId || !propertyId || !zoneId) {
       return { ok: false, error: "Missing quote details" };
+    }
+
+    if (propertyId === "__new") {
+      const addressLine1 = readFormString(formData, "newAddressLine1");
+      const addressLine2 = readFormString(formData, "newAddressLine2");
+      const city = readFormString(formData, "newCity");
+      const state = readFormString(formData, "newState");
+      const postalCode = readFormString(formData, "newPostalCode");
+
+      if (!addressLine1 || !city || !state || !postalCode) {
+        return { ok: false, error: "Enter the new property address before creating the quote." };
+      }
+
+      const propertyResponse = await callAdminApi(
+        `/api/admin/contacts/${encodeURIComponent(contactId)}/properties`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            addressLine1,
+            ...(addressLine2 ? { addressLine2 } : {}),
+            city,
+            state,
+            postalCode,
+          }),
+        },
+      );
+      const propertyData = (await propertyResponse.json().catch(() => null)) as {
+        property?: { id?: string };
+        error?: string;
+        message?: string;
+      } | null;
+
+      if (!propertyResponse.ok || !propertyData?.property?.id) {
+        return {
+          ok: false,
+          error: propertyData?.message ?? propertyData?.error ?? "Unable to add address for this quote",
+        };
+      }
+
+      propertyId = propertyData.property.id;
     }
 
     let services: string[] = [];
@@ -252,6 +292,7 @@ export async function createInboxQuoteAction(
       propertyId,
       zoneId,
       selectedServices: services,
+      makeShareable: true,
     };
 
     const depositRate = Number(readFormString(formData, "depositRate"));
@@ -321,9 +362,14 @@ export async function createInboxQuoteAction(
     const shareLink =
       data?.shareUrl ??
       (data?.quote?.shareToken ? `/quote/${data.quote.shareToken}` : null);
-    const draftText = shareLink
-      ? `Hi ${firstNameFromDisplayName(contactName)}, I put together your quote here: ${shareLink}. Take a look and reply with any questions.`
-      : `Hi ${firstNameFromDisplayName(contactName)}, I put together your quote. Take a look and reply with any questions.`;
+    if (!shareLink) {
+      return {
+        ok: false,
+        error: "Quote was created, but no share link was returned. Open Quotes to send or preview it before messaging the customer.",
+        recordId,
+      };
+    }
+    const draftText = `Hi ${firstNameFromDisplayName(contactName)}, I put together your quote here: ${shareLink}. Take a look and reply with any questions.`;
 
     revalidatePath("/team");
     return {

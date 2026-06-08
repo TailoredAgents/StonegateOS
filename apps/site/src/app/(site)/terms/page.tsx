@@ -53,10 +53,9 @@ export default function TermsPage() {
         <h2>Contact</h2>
         <p>
           Questions about these Terms? Email{" "}
-          <a href="mailto:austin@stonegatejunkremoval.com">austin@stonegatejunkremoval.com</a>.
+          <a href="mailto:sales@stonegatejunkremoval.com">sales@stonegatejunkremoval.com</a>.
         </p>
       </div>
     </div>
   );
 }
-

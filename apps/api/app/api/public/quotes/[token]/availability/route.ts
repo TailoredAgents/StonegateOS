@@ -22,7 +22,7 @@ export async function GET(
   if (quoteIsExpired(quote)) {
     return NextResponse.json({ error: "expired" }, { status: 410 });
   }
-  if (quote.status !== "accepted") {
+  if (quote.status !== "accepted" && quote.status !== "sent") {
     return NextResponse.json({ error: "quote_not_accepted" }, { status: 409 });
   }
   if (quote.acceptedAppointmentId) {

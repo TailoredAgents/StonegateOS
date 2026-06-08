@@ -302,12 +302,61 @@ export function InboxCustomerWorkspaceClient({
       {workspace?.quotes.length ? (
         <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recent quotes</div>
-          <div className="mt-2 flex flex-wrap gap-2 text-xs">
+          <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
             {workspace.quotes.slice(0, 4).map((quote) => (
-              <span key={quote.id} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-slate-600">
-                {quote.quoteNumber ?? quote.id.slice(0, 8)} | {quote.displayStatus ?? quote.status}
-                {typeof quote.total === "number" ? ` | ${moneyFormatter.format(quote.total)}` : ""}
-              </span>
+              <div key={quote.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-800">
+                    {quote.quoteNumber ?? quote.id.slice(0, 8)}
+                  </span>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                    {quote.displayStatus ?? quote.status}
+                  </span>
+                </div>
+                <div className="mt-1">
+                  {typeof quote.total === "number" ? moneyFormatter.format(quote.total) : "Total unavailable"}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1 text-[11px] text-slate-500">
+                  <span className="rounded-full bg-white px-2 py-0.5">
+                    PDF {quote.pdfDownloadCount > 0 ? `${quote.pdfDownloadCount}x` : "not downloaded"}
+                  </span>
+                  {quote.lastPdfDownloadedAt ? (
+                    <span className="rounded-full bg-white px-2 py-0.5">
+                      Last PDF {formatDateTime(quote.lastPdfDownloadedAt)}
+                    </span>
+                  ) : null}
+                  {quote.changeRequestCount > 0 ? (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
+                      {quote.changeRequestCount} change request{quote.changeRequestCount === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                </div>
+                {quote.latestChangeRequest ? (
+                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+                    {quote.latestChangeRequest.reason ?? "Change requested"}
+                    {quote.latestChangeRequest.createdAt ? ` | ${formatDateTime(quote.latestChangeRequest.createdAt)}` : ""}
+                  </div>
+                ) : null}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {quote.shareToken ? (
+                    <a
+                      href={`/quote/${quote.shareToken}?preview=1`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-semibold text-primary-700 hover:text-primary-900"
+                    >
+                      Preview quote
+                    </a>
+                  ) : (
+                    <a
+                      href="/team?tab=quotes#quote-management"
+                      className="font-semibold text-primary-700 hover:text-primary-900"
+                    >
+                      Open in Quotes
+                    </a>
+                  )}
+                </div>
+              </div>
             ))}
           </div>
         </div>
@@ -465,14 +514,25 @@ function QuoteDrawer({
   isPending: boolean;
   onSubmit: (formData: FormData) => void;
 }): React.ReactElement {
-  const [propertyId, setPropertyId] = useState(workspace.properties[0]?.id ?? "");
+  const [propertyId, setPropertyId] = useState(workspace.properties[0]?.id ?? "__new");
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [servicePrices, setServicePrices] = useState<Record<string, string>>({});
   const [clientScope, setClientScope] = useState("");
   const [notes, setNotes] = useState("");
+  const [newAddress, setNewAddress] = useState({
+    addressLine1: "",
+    addressLine2: "",
+    city: "",
+    state: "",
+    postalCode: "",
+  });
   const zoneId = zones[0]?.id ?? "";
 
+  const usingNewAddress = propertyId === "__new";
   const selectedProperty = workspace.properties.find((property) => property.id === propertyId) ?? null;
+  const hasAddress = usingNewAddress
+    ? Boolean(newAddress.addressLine1.trim() && newAddress.city.trim() && newAddress.state.trim() && newAddress.postalCode.trim())
+    : Boolean(propertyId);
   const serviceOverrides = useMemo(() => {
     const overrides: Record<string, number> = {};
     for (const serviceId of selectedServices) {
@@ -483,7 +543,7 @@ function QuoteDrawer({
     return overrides;
   }, [selectedServices, servicePrices]);
   const canSubmit =
-    Boolean(propertyId && zoneId && selectedServices.length) &&
+    Boolean(hasAddress && zoneId && selectedServices.length) &&
     selectedServices.every((serviceId) => {
       const value = Number(servicePrices[serviceId] ?? "");
       return Number.isFinite(value) && value > 0;
@@ -506,7 +566,7 @@ function QuoteDrawer({
       <Checklist
         items={[
           { label: "customer", done: true },
-          { label: "address", done: workspace.properties.length > 0 },
+          { label: "address", done: hasAddress },
           { label: "service", done: selectedServices.length > 0 },
           { label: "price", done: canSubmit },
           { label: "send method", done: Boolean(workspace.contact.phone || workspace.contact.email) },
@@ -519,11 +579,67 @@ function QuoteDrawer({
             workspace.properties.map((property) => (
               <option key={property.id} value={property.id}>{propertyLabel(property)}</option>
             ))
-          ) : (
-            <option value="">Add an address first</option>
-          )}
+          ) : null}
+          <option value="__new">Use a new address...</option>
         </select>
       </label>
+      {usingNewAddress ? (
+        <div className="rounded-xl border border-primary-200 bg-primary-50/60 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-primary-800">New quote address</div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-1 text-sm text-slate-700 sm:col-span-2">
+              <span>Street address</span>
+              <input
+                name="newAddressLine1"
+                required
+                value={newAddress.addressLine1}
+                onChange={(event) => setNewAddress((current) => ({ ...current, addressLine1: event.target.value }))}
+                className={TEAM_INPUT_COMPACT}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm text-slate-700 sm:col-span-2">
+              <span>Address line 2</span>
+              <input
+                name="newAddressLine2"
+                value={newAddress.addressLine2}
+                onChange={(event) => setNewAddress((current) => ({ ...current, addressLine2: event.target.value }))}
+                className={TEAM_INPUT_COMPACT}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm text-slate-700">
+              <span>City</span>
+              <input
+                name="newCity"
+                required
+                value={newAddress.city}
+                onChange={(event) => setNewAddress((current) => ({ ...current, city: event.target.value }))}
+                className={TEAM_INPUT_COMPACT}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm text-slate-700">
+              <span>State</span>
+              <input
+                name="newState"
+                required
+                maxLength={2}
+                value={newAddress.state}
+                onChange={(event) => setNewAddress((current) => ({ ...current, state: event.target.value.toUpperCase() }))}
+                className={TEAM_INPUT_COMPACT}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm text-slate-700">
+              <span>ZIP</span>
+              <input
+                name="newPostalCode"
+                required
+                value={newAddress.postalCode}
+                onChange={(event) => setNewAddress((current) => ({ ...current, postalCode: event.target.value }))}
+                className={TEAM_INPUT_COMPACT}
+              />
+            </label>
+          </div>
+        </div>
+      ) : null}
       <input type="hidden" name="propertyLabel" value={propertyLabel(selectedProperty)} />
       <div className="grid gap-2 sm:grid-cols-2">
         {services.map((service) => {

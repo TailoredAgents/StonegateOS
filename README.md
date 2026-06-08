@@ -140,7 +140,7 @@ The marketing site reads public branding from env at build time (no runtime DB f
 Note: This repo's marketing site is a starter template. For other businesses, it's expected you'll customize or replace the marketing site (BYO site) while keeping the CRM + automations as the reusable product.
 
 Placeholders currently in use:
-- Email: `austin@stonegatejunkremoval.com`
+- Email: `sales@stonegatejunkremoval.com`
 - Phone: `(404) 777-2631`
 - Domain: `https://stonegatejunkremoval.com`
 

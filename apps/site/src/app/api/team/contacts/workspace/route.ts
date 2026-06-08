@@ -133,6 +133,7 @@ function mapQuote(value: unknown, contact: CustomerWorkspaceContact): CustomerWo
   if (!item) return null;
   if (!id || !quoteBelongsToContact(item, contact)) return null;
   const property = record(item?.["property"]);
+  const latestChangeRequest = record(item?.["latestChangeRequest"]);
   return {
     id,
     status: text(item?.["status"]) ?? "unknown",
@@ -143,6 +144,16 @@ function mapQuote(value: unknown, contact: CustomerWorkspaceContact): CustomerWo
     createdAt: text(item?.["createdAt"]),
     updatedAt: text(item?.["updatedAt"]),
     sentAt: text(item?.["sentAt"]),
+    pdfDownloadCount: numberOrNull(item?.["pdfDownloadCount"]) ?? 0,
+    lastPdfDownloadedAt: text(item?.["lastPdfDownloadedAt"]),
+    changeRequestCount: numberOrNull(item?.["changeRequestCount"]) ?? 0,
+    latestChangeRequest: latestChangeRequest
+      ? {
+          reason: text(latestChangeRequest["reason"]),
+          message: text(latestChangeRequest["message"]),
+          createdAt: text(latestChangeRequest["createdAt"]),
+        }
+      : null,
     property:
       property &&
       text(property["addressLine1"]) &&

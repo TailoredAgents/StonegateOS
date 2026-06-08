@@ -2123,7 +2123,45 @@ export const quotes = pgTable(
   }),
 );
 
-export const quoteRelations = relations(quotes, ({ one }) => ({
+export const quotePdfDownloads = pgTable(
+  "quote_pdf_downloads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    quoteId: uuid("quote_id")
+      .notNull()
+      .references(() => quotes.id, { onDelete: "cascade" }),
+    userAgent: text("user_agent"),
+    ipAddress: text("ip_address"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    quoteIdx: index("quote_pdf_downloads_quote_idx").on(table.quoteId),
+    createdIdx: index("quote_pdf_downloads_created_idx").on(table.createdAt),
+  }),
+);
+
+export const quoteChangeRequests = pgTable(
+  "quote_change_requests",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    quoteId: uuid("quote_id")
+      .notNull()
+      .references(() => quotes.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    message: text("message"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    quoteIdx: index("quote_change_requests_quote_idx").on(table.quoteId),
+    createdIdx: index("quote_change_requests_created_idx").on(table.createdAt),
+  }),
+);
+
+export const quoteRelations = relations(quotes, ({ one, many }) => ({
   contact: one(contacts, {
     fields: [quotes.contactId],
     references: [contacts.id],
@@ -2132,7 +2170,29 @@ export const quoteRelations = relations(quotes, ({ one }) => ({
     fields: [quotes.propertyId],
     references: [properties.id],
   }),
+  pdfDownloads: many(quotePdfDownloads),
+  changeRequests: many(quoteChangeRequests),
 }));
+
+export const quotePdfDownloadRelations = relations(
+  quotePdfDownloads,
+  ({ one }) => ({
+    quote: one(quotes, {
+      fields: [quotePdfDownloads.quoteId],
+      references: [quotes.id],
+    }),
+  }),
+);
+
+export const quoteChangeRequestRelations = relations(
+  quoteChangeRequests,
+  ({ one }) => ({
+    quote: one(quotes, {
+      fields: [quoteChangeRequests.quoteId],
+      references: [quotes.id],
+    }),
+  }),
+);
 
 // Instant quotes (junk removal)
 export const instantQuotes = pgTable("instant_quotes", {

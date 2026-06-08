@@ -10,6 +10,7 @@ import {
 const BookSchema = z.object({
   startAt: z.string().datetime(),
   holdId: z.string().uuid(),
+  customerNote: z.string().max(1000).optional(),
 });
 
 function errorStatus(code: string): number {
@@ -39,7 +40,7 @@ export async function POST(
   if (quoteIsExpired(quote)) {
     return NextResponse.json({ error: "expired" }, { status: 410 });
   }
-  if (quote.status !== "accepted") {
+  if (quote.status !== "accepted" && quote.status !== "sent") {
     return NextResponse.json({ error: "quote_not_accepted" }, { status: 409 });
   }
 
@@ -48,6 +49,7 @@ export async function POST(
       quote,
       holdId: parsed.data.holdId,
       startAtIso: parsed.data.startAt,
+      customerNote: parsed.data.customerNote,
     });
     return NextResponse.json({ ok: true, ...booking });
   } catch (error) {

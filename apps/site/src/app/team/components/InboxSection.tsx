@@ -216,6 +216,7 @@ type TeamDirectoryMember = {
 
 const THREAD_STATUSES = ["open", "pending", "closed"];
 type InboxView = "all" | "attention" | "google";
+type InboxStatus = "open" | "pending" | "closed" | "all";
 const THREAD_STATES = [
   "new",
   "qualifying",
@@ -259,6 +260,10 @@ function formatStatusLabel(value: string): string {
 
 function parseInboxView(value: string | null | undefined): InboxView {
   return value === "attention" || value === "google" ? value : "all";
+}
+
+function parseInboxStatus(value: string | null | undefined): InboxStatus | null {
+  return value === "open" || value === "pending" || value === "closed" || value === "all" ? value : null;
 }
 
 function normalizePhoneLink(phone: string | null | undefined): string | null {
@@ -343,6 +348,15 @@ function readMessageActivityAt(message: MessageDetail): string | null {
 
 function formatFailureDetail(detail: string | null): string {
   if (!detail) return "Send failed";
+  if (detail === "email_not_configured") {
+    return "Email is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and SMTP_FROM on the API and outbox worker.";
+  }
+  if (detail === "sms_not_configured") {
+    return "SMS is not configured. Set the Twilio credentials on the API and outbox worker.";
+  }
+  if (detail === "missing_recipient") {
+    return "No recipient address is available for this channel.";
+  }
   return detail.replace(/_/g, " ");
 }
 
@@ -420,7 +434,7 @@ function buildInboxHref(input: {
 }): string {
   const params = new URLSearchParams();
   params.set("tab", "inbox");
-  if (input.status) params.set("status", input.status);
+  if (input.status) params.set("inbox_status", input.status);
   if (input.view && input.view !== "all") params.set("inbox_view", input.view);
   if (input.threadId) params.set("threadId", input.threadId);
   if (input.contactId) params.set("contactId", input.contactId);
@@ -451,7 +465,7 @@ function isSupportedChannel(value: string | null | undefined): value is "sms" | 
 export async function InboxSection({ threadId, status, contactId, channel, q, view, offset }: InboxSectionProps): Promise<React.ReactElement> {
   const searchQuery = (q ?? "").trim().replace(/\s+/g, " ");
   const activeView = view ? parseInboxView(view) : searchQuery ? "all" : "attention";
-  const activeStatus = status ?? (searchQuery ? "all" : "open");
+  const activeStatus = parseInboxStatus(status) ?? (searchQuery ? "all" : "open");
   const requestedChannel = isSupportedChannel(channel) ? channel : "sms";
 
   const params = new URLSearchParams();
@@ -1458,7 +1472,7 @@ export async function InboxSection({ threadId, status, contactId, channel, q, vi
             <form method="get" className="space-y-2">
               <input type="hidden" name="tab" value="inbox" />
               {activeView !== "all" ? <input type="hidden" name="inbox_view" value={activeView} /> : null}
-              <input type="hidden" name="status" value={activeStatus} />
+              <input type="hidden" name="inbox_status" value={activeStatus} />
               <input
                 name="inbox_q"
                 type="search"
