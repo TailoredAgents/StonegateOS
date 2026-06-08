@@ -66,18 +66,30 @@ function buildShareUrl(token: string): string | null {
   return base ? new URL(`/quote/${token}`, base).toString() : null;
 }
 
+function toDate(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function toIsoTimestamp(value: Date | string | null | undefined): string | null {
+  return toDate(value)?.toISOString() ?? null;
+}
+
 function displayStatus(row: {
   status: string;
-  expiresAt: Date | null;
-  viewedAt: Date | null;
-  refreshRequestedAt: Date | null;
+  expiresAt: Date | string | null;
+  viewedAt: Date | string | null;
+  refreshRequestedAt: Date | string | null;
   acceptedAppointmentId: string | null;
 }): string {
   if (row.acceptedAppointmentId) return "booked";
   if (row.refreshRequestedAt) return "refresh_requested";
   if (row.status === "declined") return "rejected";
   if (row.status === "accepted") return "accepted";
-  if (row.status === "sent" && row.expiresAt && row.expiresAt.getTime() < Date.now()) return "expired";
+  const expiresAt = toDate(row.expiresAt);
+  if (row.status === "sent" && expiresAt && expiresAt.getTime() < Date.now()) return "expired";
   if (row.status === "sent" && row.viewedAt) return "viewed";
   if (row.status === "sent") return "sent";
   return "draft";
@@ -95,16 +107,16 @@ function formatQuoteResponse(row: {
   jobDurationMinutes: number;
   clientScope: string | null;
   revision: number;
-  createdAt: Date;
-  updatedAt: Date;
-  sentAt: Date | null;
-  expiresAt: Date | null;
-  viewedAt: Date | null;
-  lastViewedAt: Date | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+  sentAt: Date | string | null;
+  expiresAt: Date | string | null;
+  viewedAt: Date | string | null;
+  lastViewedAt: Date | string | null;
   viewCount: number;
-  decisionAt: Date | null;
+  decisionAt: Date | string | null;
   decisionNotes: string | null;
-  refreshRequestedAt: Date | null;
+  refreshRequestedAt: Date | string | null;
   acceptedAppointmentId: string | null;
   shareToken: string | null;
   contactName: string | null;
@@ -114,17 +126,18 @@ function formatQuoteResponse(row: {
   propertyState: string | null;
   propertyPostalCode: string | null;
   pdfDownloadCount?: number | null;
-  lastPdfDownloadedAt?: Date | null;
+  lastPdfDownloadedAt?: Date | string | null;
   changeRequestCount?: number | null;
   latestChangeRequestReason?: string | null;
   latestChangeRequestMessage?: string | null;
-  latestChangeRequestAt?: Date | null;
+  latestChangeRequestAt?: Date | string | null;
 }) {
   const contactName = row.contactName?.trim();
   const addressLine1 = row.propertyAddressLine1?.trim();
   const city = row.propertyCity?.trim();
   const state = row.propertyState?.trim();
   const postalCode = row.propertyPostalCode?.trim();
+  const latestChangeRequestAt = toIsoTimestamp(row.latestChangeRequestAt);
 
   return {
     id: row.id,
@@ -139,26 +152,26 @@ function formatQuoteResponse(row: {
     clientScope: row.clientScope,
     revision: row.revision,
     displayStatus: displayStatus(row),
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-    sentAt: row.sentAt ? row.sentAt.toISOString() : null,
-    expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
-    viewedAt: row.viewedAt ? row.viewedAt.toISOString() : null,
-    lastViewedAt: row.lastViewedAt ? row.lastViewedAt.toISOString() : null,
+    createdAt: toIsoTimestamp(row.createdAt),
+    updatedAt: toIsoTimestamp(row.updatedAt),
+    sentAt: toIsoTimestamp(row.sentAt),
+    expiresAt: toIsoTimestamp(row.expiresAt),
+    viewedAt: toIsoTimestamp(row.viewedAt),
+    lastViewedAt: toIsoTimestamp(row.lastViewedAt),
     viewCount: row.viewCount,
-    decisionAt: row.decisionAt ? row.decisionAt.toISOString() : null,
+    decisionAt: toIsoTimestamp(row.decisionAt),
     decisionNotes: row.decisionNotes,
-    refreshRequestedAt: row.refreshRequestedAt ? row.refreshRequestedAt.toISOString() : null,
+    refreshRequestedAt: toIsoTimestamp(row.refreshRequestedAt),
     acceptedAppointmentId: row.acceptedAppointmentId,
     shareToken: row.shareToken,
     pdfDownloadCount: Number(row.pdfDownloadCount ?? 0),
-    lastPdfDownloadedAt: row.lastPdfDownloadedAt ? row.lastPdfDownloadedAt.toISOString() : null,
+    lastPdfDownloadedAt: toIsoTimestamp(row.lastPdfDownloadedAt),
     changeRequestCount: Number(row.changeRequestCount ?? 0),
-    latestChangeRequest: row.latestChangeRequestAt
+    latestChangeRequest: latestChangeRequestAt
       ? {
           reason: row.latestChangeRequestReason,
           message: row.latestChangeRequestMessage,
-          createdAt: row.latestChangeRequestAt.toISOString()
+          createdAt: latestChangeRequestAt
         }
       : null,
     contact: {
