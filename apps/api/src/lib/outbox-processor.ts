@@ -142,6 +142,8 @@ const AUTO_FIRST_TOUCH_SMS_ENABLED =
   process.env["SALES_AUTO_FIRST_TOUCH_SMS_ENABLED"] !== "0";
 const SALES_ESCALATION_CALL_ENABLED =
   process.env["SALES_ESCALATION_CALL_ENABLED"] !== "0";
+const SPEED_TO_LEAD_SLA_SMS_ENABLED =
+  process.env["SPEED_TO_LEAD_SLA_SMS_ENABLED"] === "1";
 
 const APPOINTMENT_STATUS_VALUES = [
   "requested",
@@ -1018,7 +1020,10 @@ async function ensureSalesFollowupsForLead(input: {
 
       if (!created?.id) continue;
 
-      if (!task.notes.includes("kind=follow_up")) {
+      const isFollowupTask = task.notes.includes("kind=follow_up");
+      const isSpeedToLeadTask = task.notes.includes("kind=speed_to_lead");
+
+      if (!isFollowupTask && !isSpeedToLeadTask) {
         await tx.insert(outboxEvents).values({
           type: "crm.reminder.sms",
           payload: { taskId: created.id },
@@ -1026,18 +1031,10 @@ async function ensureSalesFollowupsForLead(input: {
         });
       }
 
-      if (task.notes.includes("kind=speed_to_lead")) {
-        await tx.insert(outboxEvents).values({
-          type: "sales.queue.nudge.sms",
-          payload: { taskId: created.id },
-          nextAttemptAt: isWithinBusinessHours ? now : clockStart,
-        });
-      }
-
       if (
         SALES_ESCALATION_CALL_ENABLED &&
         hasPhone &&
-        task.notes.includes("kind=speed_to_lead")
+        isSpeedToLeadTask
       ) {
         const delayMs = 30_000;
         const instantAt = isWithinBusinessHours
@@ -1283,7 +1280,10 @@ async function ensureSalesFollowupsForContact(input: {
 
       if (!created?.id) continue;
 
-      if (!task.notes.includes("kind=follow_up")) {
+      const isFollowupTask = task.notes.includes("kind=follow_up");
+      const isSpeedToLeadTask = task.notes.includes("kind=speed_to_lead");
+
+      if (!isFollowupTask && !isSpeedToLeadTask) {
         await tx.insert(outboxEvents).values({
           type: "crm.reminder.sms",
           payload: { taskId: created.id },
@@ -1291,18 +1291,10 @@ async function ensureSalesFollowupsForContact(input: {
         });
       }
 
-      if (task.notes.includes("kind=speed_to_lead")) {
-        await tx.insert(outboxEvents).values({
-          type: "sales.queue.nudge.sms",
-          payload: { taskId: created.id },
-          nextAttemptAt: isWithinBusinessHours ? now : clockStart,
-        });
-      }
-
       if (
         SALES_ESCALATION_CALL_ENABLED &&
         hasPhone &&
-        task.notes.includes("kind=speed_to_lead")
+        isSpeedToLeadTask
       ) {
         if (!allowInstantCallEscalation) continue;
         const delayMs = 30_000;
@@ -3912,6 +3904,13 @@ async function handleOutboxEvent(
       if (!notes.includes("kind=speed_to_lead")) {
         return { status: "processed" };
       }
+      if (!SPEED_TO_LEAD_SLA_SMS_ENABLED) {
+        console.info("[outbox] sales.queue_nudge.speed_to_lead_disabled", {
+          id: event.id,
+          taskId: row.id,
+        });
+        return { status: "processed" };
+      }
 
       const now = new Date();
       const windowStart = nextSalesWindowStart(now);
@@ -4046,6 +4045,15 @@ async function handleOutboxEvent(
           taskId: row.id,
         });
         return { status: "processed" };
+      }
+      if (notes.includes("kind=speed_to_lead")) {
+        if (!SPEED_TO_LEAD_SLA_SMS_ENABLED) {
+          console.info("[outbox] crm.reminder.speed_to_lead_disabled", {
+            id: event.id,
+            taskId: row.id,
+          });
+          return { status: "processed" };
+        }
       }
 
       if (row.status !== "open" || !row.dueAt) {

@@ -93,6 +93,7 @@ Sales automation toggles:
 
 - `SALES_ESCALATION_CALL_ENABLED` (`0` disables)
 - `SALES_AUTO_FIRST_TOUCH_SMS_ENABLED` (`0` disables)
+- `SPEED_TO_LEAD_SLA_SMS_ENABLED` (`1` allows speed-to-lead SLA SMS notifications to send; default off)
 
 ---
 
