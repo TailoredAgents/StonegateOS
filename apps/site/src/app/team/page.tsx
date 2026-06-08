@@ -45,6 +45,9 @@ export const metadata = {
   robots: { index: false, follow: false }
 };
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 type LeadContactSummary = {
   id: string;
   name: string;
@@ -239,7 +242,7 @@ export default async function TeamPage({
   const inboxChannel = typeof params?.channel === "string" ? params.channel : undefined;
   const inboxQuery = typeof params?.inbox_q === "string" ? params.inbox_q : undefined;
   const inboxView = typeof params?.inbox_view === "string" ? params.inbox_view : undefined;
-  const inboxOffset = typeof params?.inbox_offset === "string" ? params.inbox_offset : undefined;
+  const inboxOffset = undefined;
   const memberIdParam = typeof params?.memberId === "string" ? params.memberId : undefined;
   const quoteModeParam = forcedQuoteMode ?? requestedQuoteMode;
   const settingsSetup = params?.setup === "1";

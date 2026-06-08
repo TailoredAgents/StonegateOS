@@ -25,6 +25,8 @@ services:
         value: production
       - key: NODE_VERSION
         value: "20"
+      - key: AWS_EC2_METADATA_DISABLED
+        value: "true"
       - key: NEXT_PUBLIC_SITE_URL
         sync: false
       - key: NEXT_PUBLIC_COMPANY_NAME
@@ -114,6 +116,8 @@ services:
         value: production
       - key: NODE_VERSION
         value: "20"
+      - key: AWS_EC2_METADATA_DISABLED
+        value: "true"
       - key: DATABASE_URL
         fromDatabase:
           name: stonegate-db
@@ -251,6 +255,8 @@ services:
         value: production
       - key: NODE_VERSION
         value: "20"
+      - key: AWS_EC2_METADATA_DISABLED
+        value: "true"
       - key: DATABASE_URL
         fromDatabase:
           name: stonegate-db
@@ -356,6 +362,8 @@ services:
         value: production
       - key: NODE_VERSION
         value: "20"
+      - key: AWS_EC2_METADATA_DISABLED
+        value: "true"
       - key: DATABASE_URL
         fromDatabase:
           name: stonegate-db
