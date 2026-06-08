@@ -181,13 +181,20 @@ export async function GET(request: NextRequest): Promise<Response> {
   const priorityScoreSql = sql<number>`case
     when coalesce(${contacts.doNotContact}, false) then -100
     when ${conversationThreads.status} = 'closed' then -80
-    when ${dueFollowupFilter} then 120
     when ${googleSourceFilter} and (${inboundNeedsReplyFilter} or ${newUnrepliedLeadFilter}) then 110
-    when ${inboundNeedsReplyFilter} then 95
+    when ${inboundNeedsReplyFilter} then 105
+    when ${newUnrepliedLeadFilter} then 95
+    when ${dueFollowupFilter} then 60
     when ${googleSourceFilter} then 70
     when ${mediaCountForThread} > 0 then 35
     when ${facebookSourceFilter} then 15
     else 25
+  end`;
+  const attentionSortBucketSql = sql<number>`case
+    when ${inboundNeedsReplyFilter} then 0
+    when ${newUnrepliedLeadFilter} then 1
+    when ${dueFollowupFilter} then 2
+    else 3
   end`;
 
   const filters = [];
@@ -351,8 +358,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   const sortedRowsQuery =
     view === "attention" && !searchTerm
       ? filteredRowsQuery.orderBy(
-          sql`${priorityScoreSql} desc`,
+          sql`${attentionSortBucketSql} asc`,
           sql`${activityLatest.lastActivityAt} desc nulls last`,
+          sql`${priorityScoreSql} desc`,
           desc(conversationThreads.updatedAt)
         )
       : filteredRowsQuery.orderBy(sql`${activityLatest.lastActivityAt} desc nulls last`, desc(conversationThreads.updatedAt));
