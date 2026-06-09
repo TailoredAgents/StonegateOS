@@ -105,6 +105,51 @@ type CommissionSummaryPayload = {
   };
 };
 
+type BookingSourceKey =
+  | "facebook"
+  | "google"
+  | "referral"
+  | "team_member"
+  | "other"
+  | "unknown";
+
+type BookingSourceSummaryBucket = {
+  source: BookingSourceKey;
+  label: string;
+  count: number;
+  estimatedRevenueCents: number;
+};
+
+type BookingSourceSummaryJob = {
+  id: string;
+  contactId: string;
+  source: BookingSourceKey;
+  sourceLabel: string;
+  attributionReason: string;
+  status: string;
+  appointmentType: string;
+  createdAt: string;
+  startAt: string | null;
+  contactName: string;
+  address: string | null;
+  estimatedRevenueCents: number;
+};
+
+type BookingSourceSummaryPayload = {
+  ok: true;
+  rangeDays: number;
+  since: string;
+  through: string;
+  countedStatuses: string[];
+  excludedAppointmentTypes: string[];
+  totalBookedJobs: number;
+  sources: BookingSourceSummaryBucket[];
+  facebook: BookingSourceSummaryBucket;
+  google: BookingSourceSummaryBucket;
+  highlightedJobs: BookingSourceSummaryJob[];
+  recentJobs: BookingSourceSummaryJob[];
+};
+
 type OwnerView = "overview" | "revenue" | "expenses" | "payroll" | "pl" | "assistant";
 
 const OWNER_VIEWS: Array<{ id: OwnerView; label: string; description: string }> = [
@@ -200,6 +245,17 @@ function formatJobAddress(job: RevenueWeekJob): string | null {
     .filter((part) => part.length > 0)
     .join(", ");
   return value.length > 0 ? value : null;
+}
+
+function fmtCompactDateTime(iso: string, timezone = "America/New_York"): string {
+  const d = new Date(iso);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
 }
 
 function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
@@ -321,6 +377,19 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
     }
   } catch {
     commissionError = "Commissions unavailable.";
+  }
+
+  let bookingSourceSummary: BookingSourceSummaryPayload | null = null;
+  let bookingSourceError: string | null = null;
+  try {
+    const res = await callAdminApi("/api/admin/appointments/source-summary?rangeDays=7");
+    if (res.ok) {
+      bookingSourceSummary = (await res.json()) as BookingSourceSummaryPayload;
+    } else {
+      bookingSourceError = `Booking source summary unavailable (HTTP ${res.status})`;
+    }
+  } catch {
+    bookingSourceError = "Booking source summary unavailable.";
   }
 
   const weekJobInsights = revenue?.ok
@@ -508,6 +577,121 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
                 Collected minus logged expenses and payroll
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <div className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]`}>
+        <div className={TEAM_CARD_PADDED}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">Booked jobs by source</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                Last 7 days, counting confirmed and completed jobs. Quote-only visits are excluded.
+              </p>
+            </div>
+            <a href="/team?tab=owner&ownerView=revenue" className={teamButtonClass("secondary", "sm")}>
+              Revenue
+            </a>
+          </div>
+
+          {bookingSourceError ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              {bookingSourceError}
+            </div>
+          ) : null}
+
+          {bookingSourceSummary?.ok ? (
+            <>
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">Facebook</div>
+                  <div className="mt-2 text-3xl font-semibold text-blue-950">{bookingSourceSummary.facebook.count}</div>
+                  <div className="mt-1 text-xs text-blue-800">
+                    {fmtMoney(bookingSourceSummary.facebook.estimatedRevenueCents, "USD")} quoted/collected
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Google</div>
+                  <div className="mt-2 text-3xl font-semibold text-emerald-950">{bookingSourceSummary.google.count}</div>
+                  <div className="mt-1 text-xs text-emerald-800">
+                    {fmtMoney(bookingSourceSummary.google.estimatedRevenueCents, "USD")} quoted/collected
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">All booked</div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">{bookingSourceSummary.totalBookedJobs}</div>
+                  <div className="mt-1 text-xs text-slate-600">
+                    Since {fmtCompactDateTime(bookingSourceSummary.since)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {bookingSourceSummary.sources
+                  .filter((source) => !["facebook", "google"].includes(source.source))
+                  .filter((source) => source.count > 0)
+                  .map((source) => (
+                    <div key={source.source} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-slate-800">{source.label}</span>
+                        <span className="text-slate-500">{source.count}</span>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </>
+          ) : bookingSourceError ? null : (
+            <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+              Booking source data is loading.
+            </div>
+          )}
+        </div>
+
+        <div className={TEAM_CARD_PADDED}>
+          <h3 className="text-lg font-semibold text-slate-900">Recent source-attributed jobs</h3>
+          <p className="mt-1 text-sm text-slate-600">Facebook and Google bookings from the same 7-day window.</p>
+          <div className="mt-4 space-y-2">
+            {bookingSourceError ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                Source-attributed jobs are unavailable right now.
+              </div>
+            ) : bookingSourceSummary?.highlightedJobs.length ? (
+              bookingSourceSummary.highlightedJobs.slice(0, 6).map((job) => (
+                <a
+                  key={job.id}
+                  href={`/team?tab=calendar&contactId=${encodeURIComponent(job.contactId)}`}
+                  className="block rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm transition hover:border-primary-200 hover:bg-white"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold text-slate-900">{job.contactName}</div>
+                      <div className="mt-1 text-xs text-slate-600">
+                        Booked {fmtCompactDateTime(job.createdAt)}
+                      </div>
+                      {job.address ? <div className="mt-1 truncate text-[11px] text-slate-500">{job.address}</div> : null}
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+                        job.source === "facebook"
+                          ? "bg-blue-100 text-blue-800"
+                          : "bg-emerald-100 text-emerald-800"
+                      }`}
+                    >
+                      {job.sourceLabel}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                    <span>Via {job.attributionReason}</span>
+                    <span>{fmtMoney(job.estimatedRevenueCents, "USD")}</span>
+                  </div>
+                </a>
+              ))
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                No Facebook or Google bookings in this window.
+              </div>
+            )}
           </div>
         </div>
       </div>
