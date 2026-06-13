@@ -35,6 +35,14 @@ export type E2ESeedSummary = {
   appointmentId: string | null;
 };
 
+export type E2EContactSummary = {
+  contactId: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  phoneE164: string;
+};
+
 type SqlClient = ReturnType<typeof postgres>;
 
 let cachedClient: SqlClient | null = null;
@@ -216,4 +224,24 @@ export async function getLatestE2ESeedSummary(): Promise<E2ESeedSummary | null> 
     quoteId: typeof payload["quoteId"] === "string" ? payload["quoteId"] : null,
     appointmentId: typeof payload["appointmentId"] === "string" ? payload["appointmentId"] : null
   };
+}
+
+export async function createE2EPhoneOnlyContact(label = "Direct Caller"): Promise<E2EContactSummary> {
+  const sql = getSql();
+  const suffix = String(Date.now()).slice(-7);
+  const phone = `404${suffix}`;
+  const phoneE164 = `+1${phone}`;
+  const firstName = "E2E";
+  const lastName = `${label} ${suffix}`;
+
+  const rows = await sql<{ id: string }[]>`
+    INSERT INTO contacts (first_name, last_name, phone, phone_e164, source, preferred_contact_method)
+    VALUES (${firstName}, ${lastName}, ${phone}, ${phoneE164}, 'inbound_call', 'phone')
+    RETURNING id
+  `;
+
+  const contactId = rows[0]?.id;
+  if (!contactId) throw new Error("Unable to create E2E phone-only contact.");
+
+  return { contactId, firstName, lastName, phone, phoneE164 };
 }

@@ -2,7 +2,7 @@ services:
   - type: web
     name: stonegate-site
     env: node
-    plan: starter
+    plan: standard
     region: virginia
     buildCommand: |
       export PNPM_HOME="$HOME/.local/share/pnpm"
@@ -85,7 +85,7 @@ services:
   - type: web
     name: stonegate-api
     env: node
-    plan: starter
+    plan: standard
     region: virginia
     buildCommand: |
       export PNPM_HOME="$HOME/.local/share/pnpm"
@@ -235,7 +235,7 @@ services:
   - type: worker
     name: stonegate-outbox-worker
     env: node
-    plan: starter
+    plan: standard
     region: virginia
     buildCommand: |
       export PNPM_HOME="$HOME/.local/share/pnpm"

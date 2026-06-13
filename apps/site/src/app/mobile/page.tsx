@@ -14,6 +14,7 @@ import {
   markMobileThreadHandledAction,
   mobileLogoutAction,
   openMobileAppointmentThreadAction,
+  openMobileContactThreadAction,
   runMobilePayoutAction,
   rescheduleMobileAppointmentAction,
   sendMobileTeamInviteAction,
@@ -1204,6 +1205,7 @@ export default async function MobileHomePage({
   const ownerSummary = activeScreen === "owner" && session.isOwner ? await loadMobileOwnerSummary() : null;
   const accessData = activeScreen === "access" && session.isOwner ? await loadMobileAccess() : null;
   const canOpenMessageThreads = hasMobilePermission(session.teamMember.permissions, "messages.read");
+  const canStartMessageThreads = hasMobilePermission(session.teamMember.permissions, "messages.send");
   const calendarWeekProjectedLabel = formatProjectedRange(calendarWeekEvents);
   const selectedThread = activeScreen === "inbox" && threadId ? await loadMobileThread(threadId) : null;
   const selectedContact = selectedThread?.thread?.contact?.id
@@ -2038,6 +2040,20 @@ export default async function MobileHomePage({
                       </p>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-2">
+                      {canStartMessageThreads && (contactDetail.phoneE164 ?? contactDetail.phone) ? (
+                        <form action={openMobileContactThreadAction}>
+                          <input type="hidden" name="contactId" value={contactDetail.id} />
+                          <input type="hidden" name="channel" value="sms" />
+                          <input type="hidden" name="returnTo" value={`/mobile?screen=contacts&contactId=${encodeURIComponent(contactDetail.id)}`} />
+                          <button
+                            type="submit"
+                            className="inline-flex items-center gap-1.5 rounded-md border border-cyan-300/40 bg-cyan-300/10 px-3 py-2 text-sm font-semibold text-cyan-100"
+                          >
+                            <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                            Message
+                          </button>
+                        </form>
+                      ) : null}
                       {(contactDetail.phoneE164 ?? contactDetail.phone) ? (
                         <form action={startMobileContactCallAction}>
                           <input type="hidden" name="contactId" value={contactDetail.id} />

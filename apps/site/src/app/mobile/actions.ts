@@ -220,6 +220,41 @@ export async function openMobileAppointmentThreadAction(formData: FormData) {
   redirect(mobileReturnWithParam(returnTo, "error", "thread_not_found"));
 }
 
+export async function openMobileContactThreadAction(formData: FormData) {
+  await requireMobilePermission("messages.send");
+
+  const contactIdRaw = formData.get("contactId");
+  const channelRaw = formData.get("channel");
+  const returnTo = mobileReturnTo(formData.get("returnTo"));
+  const contactId = typeof contactIdRaw === "string" ? contactIdRaw.trim() : "";
+  const requestedChannel = typeof channelRaw === "string" ? channelRaw.trim() : "sms";
+  const channel = requestedChannel === "email" ? "email" : "sms";
+
+  if (!contactId) {
+    redirect(mobileReturnWithParam(returnTo, "error", "contact_required"));
+  }
+
+  const response = await callAdminApi("/api/admin/inbox/threads/ensure", {
+    method: "POST",
+    body: JSON.stringify({ contactId, channel })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "thread_create_failed");
+    redirect(mobileReturnWithParam(returnTo, "error", message));
+  }
+
+  const payload = (await response.json().catch(() => null)) as MobileEnsureThreadResponse | null;
+  const threadId = typeof payload?.threadId === "string" ? payload.threadId.trim() : "";
+
+  if (!threadId) {
+    redirect(mobileReturnWithParam(returnTo, "error", "thread_create_failed"));
+  }
+
+  revalidatePath("/mobile");
+  redirect(`/mobile?threadId=${encodeURIComponent(threadId)}` as Route);
+}
+
 export async function startMobileContactCallAction(formData: FormData) {
   const session = await requireAnyMobilePermission(["messages.read", "messages.send", "bookings.manage", "appointments.read"]);
   const contactIdRaw = formData.get("contactId");
