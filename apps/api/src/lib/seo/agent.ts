@@ -255,6 +255,25 @@ function includesBannedGeo(text: string): boolean {
   return banned.some((word) => lower.includes(word));
 }
 
+const FORBIDDEN_PUBLIC_SERVICE_PATTERN =
+  /\b(yard|lawn|brush|branch|branches|leaf|leaves|green[-\s]?waste|storm debris|overgrowth|vines?|weeds?|saplings?|land clearing|landscaping|outdoor items|patio items)\b/i;
+
+function includesForbiddenPublicServiceTerms(text: string): boolean {
+  return FORBIDDEN_PUBLIC_SERVICE_PATTERN.test(text);
+}
+
+function topicHasForbiddenPublicServiceTerms(topic: SeoTopic): boolean {
+  return includesForbiddenPublicServiceTerms(
+    [topic.key, topic.titleHint, topic.primaryKeyword, ...topic.relatedServiceSlugs].join(" "),
+  );
+}
+
+function briefHasForbiddenPublicServiceTerms(brief: PostBrief): boolean {
+  return includesForbiddenPublicServiceTerms(
+    [brief.title, brief.metaDescription, brief.excerpt, ...brief.outline].join(" "),
+  );
+}
+
 function hasDollarAmounts(text: string): boolean {
   return /\$\s*\d/.test(text);
 }
@@ -328,7 +347,6 @@ function buildInternalLinks(topic: SeoTopic): Array<{ label: string; url: string
   const serviceLabels: Record<string, string> = {
     furniture: "Furniture removal",
     appliances: "Appliance removal",
-    "yard-waste": "Yard waste removal",
     "construction-debris": "Construction debris removal",
     "hot-tub": "Hot tub removal",
     "single-item": "Rubbish removal"
@@ -680,6 +698,10 @@ export async function maybeAutopublishBlogPost(
       }
 
       const { topic, nextCursor } = await pickNextTopic(tx as any);
+      if (topicHasForbiddenPublicServiceTerms(topic)) {
+        await persistCursor(tx as any, nextCursor);
+        return { ok: true, skipped: true, reason: "forbidden_topic" } satisfies SeoPublishResult;
+      }
       const companyProfile = await getCompanyProfilePolicy(tx as any);
       const briefRes = await generateBrief(topic, config.apiKey, config.brainModel);
       if (!briefRes.ok) {
@@ -688,6 +710,10 @@ export async function maybeAutopublishBlogPost(
       }
       const brief = briefRes.brief;
       brainModelUsed = briefRes.modelUsed;
+      if (briefHasForbiddenPublicServiceTerms(brief)) {
+        await persistCursor(tx as any, nextCursor);
+        return { ok: true, skipped: true, reason: "forbidden_brief" } satisfies SeoPublishResult;
+      }
 
       const slug = await ensureUniqueSlug(tx as any, topic.key);
 
@@ -700,6 +726,7 @@ export async function maybeAutopublishBlogPost(
         if (!drafted) continue;
         if (hasDollarAmounts(drafted)) continue;
         if (includesBannedGeo(drafted)) continue;
+        if (includesForbiddenPublicServiceTerms(drafted)) continue;
         markdown = drafted;
         break;
       }

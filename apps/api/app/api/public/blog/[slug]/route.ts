@@ -3,6 +3,13 @@ import { NextResponse } from "next/server";
 import { and, eq, isNotNull, lte } from "drizzle-orm";
 import { blogPosts, getDb } from "@/db";
 
+const FORBIDDEN_PUBLIC_SERVICE_PATTERN =
+  /\b(yard|lawn|brush|branch|branches|leaf|leaves|green[-\s]?waste|storm debris|overgrowth|vines?|weeds?|saplings?|land clearing|landscaping|outdoor items|patio items)\b/i;
+
+function hasForbiddenPublicServiceTerms(input: Array<string | null>): boolean {
+  return FORBIDDEN_PUBLIC_SERVICE_PATTERN.test(input.filter(Boolean).join(" "));
+}
+
 export async function GET(
   _request: NextRequest,
   context: { params: Promise<{ slug: string }> }
@@ -35,6 +42,18 @@ export async function GET(
   if (!post || !post.publishedAt) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
+  if (
+    hasForbiddenPublicServiceTerms([
+      post.slug,
+      post.title,
+      post.excerpt,
+      post.metaTitle,
+      post.metaDescription,
+      post.contentMarkdown
+    ])
+  ) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
 
   return NextResponse.json({
     ok: true,
@@ -51,4 +70,3 @@ export async function GET(
     }
   });
 }
-

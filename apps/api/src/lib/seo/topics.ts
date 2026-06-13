@@ -3,7 +3,7 @@ export type SeoTopic = {
   titleHint: string;
   primaryKeyword: string;
   relatedServiceSlugs: Array<
-    "furniture" | "appliances" | "yard-waste" | "construction-debris" | "hot-tub" | "single-item"
+    "furniture" | "appliances" | "construction-debris" | "hot-tub" | "single-item"
   >;
 };
 
@@ -27,12 +27,6 @@ export const SEO_TOPICS: SeoTopic[] = [
     relatedServiceSlugs: ["furniture", "appliances", "single-item"]
   },
   {
-    key: "yard-waste-pickup-guide",
-    titleHint: "Yard Waste Pickup Guide: What We Can Haul and How to Bundle It",
-    primaryKeyword: "yard waste pickup",
-    relatedServiceSlugs: ["yard-waste", "single-item"]
-  },
-  {
     key: "appliance-removal-guide",
     titleHint: "Appliance Removal 101: The Easy Way to Get Rid of Old Appliances",
     primaryKeyword: "appliance removal",
@@ -54,7 +48,7 @@ export const SEO_TOPICS: SeoTopic[] = [
     key: "moving-cleanout-tips",
     titleHint: "Moving Soon? Cleanout Tips to Reduce Stress and Save Space",
     primaryKeyword: "moving cleanout",
-    relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
+    relatedServiceSlugs: ["furniture", "appliances", "single-item"]
   },
   {
     key: "donate-or-haul",
@@ -90,7 +84,7 @@ export const SEO_TOPICS: SeoTopic[] = [
     key: "spring-cleaning-junk-removal",
     titleHint: "Spring Cleaning: A Cleanout Plan That Works",
     primaryKeyword: "spring cleaning junk removal",
-    relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
+    relatedServiceSlugs: ["furniture", "appliances", "single-item"]
   },
   {
     key: "office-junk-removal",
@@ -108,7 +102,7 @@ export const SEO_TOPICS: SeoTopic[] = [
     key: "junk-removal-marietta-ga",
     titleHint: "Junk Removal in Marietta, GA: What to Expect and How to Get Scheduled",
     primaryKeyword: "junk removal marietta ga",
-    relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
+    relatedServiceSlugs: ["furniture", "appliances", "single-item"]
   },
   {
     key: "junk-removal-roswell-ga",
@@ -120,13 +114,13 @@ export const SEO_TOPICS: SeoTopic[] = [
     key: "junk-removal-woodstock-ga",
     titleHint: "Junk Removal in Woodstock, GA: Quick Answers and Pickup Prep Tips",
     primaryKeyword: "junk removal woodstock ga",
-    relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
+    relatedServiceSlugs: ["furniture", "appliances", "single-item"]
   },
   {
     key: "junk-removal-canton-ga",
     titleHint: "Junk Removal in Canton, GA: Same-Week Pickup and What We Take",
     primaryKeyword: "junk removal canton ga",
-    relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
+    relatedServiceSlugs: ["furniture", "appliances", "single-item"]
   },
   {
     key: "junk-removal-acworth-ga",
@@ -144,6 +138,6 @@ export const SEO_TOPICS: SeoTopic[] = [
     key: "junk-removal-alpharetta-ga",
     titleHint: "Junk Removal in Alpharetta, GA: Quick Scheduling and Pickup Prep",
     primaryKeyword: "junk removal alpharetta ga",
-    relatedServiceSlugs: ["furniture", "appliances", "yard-waste"]
+    relatedServiceSlugs: ["furniture", "appliances", "single-item"]
   }
 ];

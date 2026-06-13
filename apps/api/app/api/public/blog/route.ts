@@ -10,6 +10,13 @@ function clampInt(value: string | null, { min, max, fallback }: { min: number; m
   return Math.max(min, Math.min(max, rounded));
 }
 
+const FORBIDDEN_PUBLIC_SERVICE_PATTERN =
+  /\b(yard|lawn|brush|branch|branches|leaf|leaves|green[-\s]?waste|storm debris|overgrowth|vines?|weeds?|saplings?|land clearing|landscaping|outdoor items|patio items)\b/i;
+
+function hasForbiddenPublicServiceTerms(input: Array<string | null>): boolean {
+  return FORBIDDEN_PUBLIC_SERVICE_PATTERN.test(input.filter(Boolean).join(" "));
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   const limit = clampInt(request.nextUrl.searchParams.get("limit"), { min: 1, max: 100, fallback: 20 });
   const offset = clampInt(request.nextUrl.searchParams.get("offset"), { min: 0, max: 100000, fallback: 0 });
@@ -23,6 +30,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       title: blogPosts.title,
       excerpt: blogPosts.excerpt,
       metaDescription: blogPosts.metaDescription,
+      contentMarkdown: blogPosts.contentMarkdown,
       publishedAt: blogPosts.publishedAt,
       updatedAt: blogPosts.updatedAt
     })
@@ -34,6 +42,16 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const posts = rows
     .filter((row) => row.publishedAt)
+    .filter(
+      (row) =>
+        !hasForbiddenPublicServiceTerms([
+          row.slug,
+          row.title,
+          row.excerpt,
+          row.metaDescription,
+          row.contentMarkdown
+        ])
+    )
     .map((row) => ({
       slug: row.slug,
       title: row.title,
@@ -44,4 +62,3 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   return NextResponse.json({ ok: true, posts });
 }
-

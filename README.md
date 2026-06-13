@@ -125,7 +125,6 @@ The site ships with a junk removal catalog:
 - Rubbish (common household waste) (`apps/site/content/services/single-item.mdx`)
 - Furniture Removal (`apps/site/content/services/furniture.mdx`)
 - Appliance Removal (`apps/site/content/services/appliances.mdx`)
-- Yard Waste & Debris (`apps/site/content/services/yard-waste.mdx`)
 - Construction Debris (`apps/site/content/services/construction-debris.mdx`)
 - Hot Tub Removal (`apps/site/content/services/hot-tub.mdx`)
 

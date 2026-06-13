@@ -56,7 +56,6 @@ export function ChatBot() {
   const pathname = usePathname();
   const shouldHide =
     pathname === "/book" ||
-    pathname === "/bookbrush" ||
     pathname === "/bookdemo" ||
     pathname.startsWith("/book/") ||
     pathname.startsWith("/quote");

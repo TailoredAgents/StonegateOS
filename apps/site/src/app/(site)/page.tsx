@@ -54,10 +54,10 @@ const resultTiles: ResultTile[] = [
     afterImage: "/images/services/Junkremoval.jpg",
   },
   {
-    title: "Yard & Debris Removal",
+    title: "Garage & Cleanout Pickup",
     description:
-      "Storm brush and light construction debris responsibly disposed.",
-    afterImage: "/images/services/Yarddebris.jpg",
+      "Stored items, boxes, and household junk cleared in one scheduled visit.",
+    afterImage: "/images/gallery/showcase/garage_after_aligned_16x9_1080p.jpg",
   },
 ];
 

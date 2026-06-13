@@ -28,12 +28,16 @@ async function fetchPost(slug: string) {
   const base = API_BASE_URL.replace(/\/$/, "");
   if (!base) return null;
 
-  const res = await fetch(`${base}/api/public/blog/${encodeURIComponent(slug)}`, {
-    next: { revalidate: 60 }
-  });
-  if (!res.ok) return null;
-  const data = (await res.json().catch(() => ({}))) as BlogPostResponse;
-  return data.post ?? null;
+  try {
+    const res = await fetch(`${base}/api/public/blog/${encodeURIComponent(slug)}`, {
+      next: { revalidate: 60 }
+    });
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => ({}))) as BlogPostResponse;
+    return data.post ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function fmtDate(value: string) {

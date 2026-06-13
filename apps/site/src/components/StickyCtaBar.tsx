@@ -27,7 +27,6 @@ export function StickyCtaBar({ className }: StickyCtaBarProps) {
   const pathname = usePathname();
   if (
     pathname === "/book" ||
-    pathname === "/bookbrush" ||
     pathname === "/bookdemo" ||
     pathname.startsWith("/book/") ||
     pathname.startsWith("/quote")

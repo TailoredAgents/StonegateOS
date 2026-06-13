@@ -24,12 +24,16 @@ async function fetchPosts() {
   const base = API_BASE_URL.replace(/\/$/, "");
   if (!base) return [];
 
-  const res = await fetch(`${base}/api/public/blog?limit=50`, {
-    next: { revalidate: 60 }
-  });
-  if (!res.ok) return [];
-  const data = (await res.json().catch(() => ({}))) as BlogListResponse;
-  return Array.isArray(data.posts) ? data.posts : [];
+  try {
+    const res = await fetch(`${base}/api/public/blog?limit=50`, {
+      next: { revalidate: 60 }
+    });
+    if (!res.ok) return [];
+    const data = (await res.json().catch(() => ({}))) as BlogListResponse;
+    return Array.isArray(data.posts) ? data.posts : [];
+  } catch {
+    return [];
+  }
 }
 
 export const metadata: Metadata = {

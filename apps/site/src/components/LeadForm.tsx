@@ -63,25 +63,14 @@ type PerceivedSize =
   | "three_quarter_trailer"
   | "big_cleanout"
   | "not_sure";
-type LeadFormVariant = "junk" | "brush" | "demo";
+type LeadFormVariant = "junk" | "demo";
 type JunkType =
   | "furniture"
   | "appliances"
   | "general_junk"
-  | "yard_waste"
   | "construction_debris"
   | "hot_tub_playset"
   | "business_commercial";
-type BrushScope =
-  | "light_brush"
-  | "overgrowth"
-  | "weeds_vines"
-  | "small_saplings"
-  | "downed_branches"
-  | "storm_debris";
-type BrushPrimary = BrushScope | "other";
-type BrushDifficulty = "easy" | "moderate" | "hard" | "not_sure";
-type BrushAccess = "open" | "standard_gate" | "tight_gate" | "not_sure";
 
 type DemoType =
   | "deck"
@@ -129,7 +118,6 @@ const JUNK_OPTIONS: Array<{ id: JunkType; label: string }> = [
   { id: "furniture", label: "Furniture" },
   { id: "appliances", label: "Appliances" },
   { id: "general_junk", label: "Mixed household items" },
-  { id: "yard_waste", label: "Yard debris / outdoor items" },
   { id: "construction_debris", label: "Construction / renovation debris" },
   { id: "hot_tub_playset", label: "Hot tub / playset" },
   { id: "business_commercial", label: "Office / business items" },
@@ -139,7 +127,6 @@ const JUNK_PRIMARY_TYPE_IDS: readonly JunkType[] = [
   "furniture",
   "appliances",
   "general_junk",
-  "yard_waste",
   "construction_debris",
 ] as const;
 
@@ -229,134 +216,6 @@ const JUNK_SIZE_OPTIONS_NO_PRICE: Array<{
   },
 ];
 
-const BRUSH_PRIMARY_OPTIONS: Array<{
-  id: BrushScope;
-  label: string;
-  hint: string;
-}> = [
-  {
-    id: "overgrowth",
-    label: "Overgrowth / thick brush",
-    hint: "Thick brush, tangled growth, etc.",
-  },
-  {
-    id: "weeds_vines",
-    label: "Weeds / vines",
-    hint: "Vines, weeds, kudzu, etc.",
-  },
-  {
-    id: "light_brush",
-    label: "Light brush",
-    hint: "Light brush or small patches",
-  },
-  {
-    id: "downed_branches",
-    label: "Downed branches",
-    hint: "Branches, limbs, storm cleanup",
-  },
-  {
-    id: "storm_debris",
-    label: "Storm debris",
-    hint: "Mixed yard debris after a storm",
-  },
-  {
-    id: "small_saplings",
-    label: "Small saplings",
-    hint: "Small trees / saplings (may need estimate)",
-  },
-];
-
-const BRUSH_SIZE_OPTIONS: Array<{
-  id: PerceivedSize;
-  label: string;
-  hint: string;
-}> = [
-  {
-    id: "single_item",
-    label: "Small patch",
-    hint: "One small area (around a shed, corner, etc.)",
-  },
-  {
-    id: "min_pickup",
-    label: "Fence line / side yard",
-    hint: "A strip of brush or narrow area",
-  },
-  {
-    id: "half_trailer",
-    label: "Backyard section",
-    hint: "One section of a yard or a larger patch",
-  },
-  {
-    id: "three_quarter_trailer",
-    label: "Most of a yard",
-    hint: "Multiple sections or a bigger area",
-  },
-  {
-    id: "big_cleanout",
-    label: "Full lot / heavy clearing",
-    hint: "Large area or very thick brush",
-  },
-  {
-    id: "not_sure",
-    label: "Not sure",
-    hint: "No problem. Photos help us tighten the estimate.",
-  },
-];
-
-const BRUSH_DIFFICULTY_OPTIONS: Array<{
-  id: BrushDifficulty;
-  label: string;
-  hint: string;
-}> = [
-  {
-    id: "easy",
-    label: "Easy",
-    hint: "Open access, mostly flat, light/medium brush",
-  },
-  {
-    id: "moderate",
-    label: "Moderate",
-    hint: "Some thick spots, light slope, normal access",
-  },
-  {
-    id: "hard",
-    label: "Hard",
-    hint: "Very thick, steep, tight access, or lots of saplings",
-  },
-  {
-    id: "not_sure",
-    label: "Not sure",
-    hint: "No problem — photos help us confirm",
-  },
-];
-
-const BRUSH_ACCESS_OPTIONS: Array<{
-  id: BrushAccess;
-  label: string;
-  hint: string;
-}> = [
-  {
-    id: "open",
-    label: "Open access (6ft+)",
-    hint: "Equipment can reach the area",
-  },
-  {
-    id: "standard_gate",
-    label: "Standard gate (4ft)",
-    hint: "Typical backyard gate",
-  },
-  {
-    id: "tight_gate",
-    label: "Tight gate (3ft)",
-    hint: "Narrow access (may be hand-clearing)",
-  },
-  {
-    id: "not_sure",
-    label: "Not sure",
-    hint: "No problem — photos help us confirm",
-  },
-];
-
 const DEMO_TYPE_OPTIONS: Array<{ id: DemoType; label: string; hint: string }> =
   [
     { id: "deck", label: "Deck / porch", hint: "Tear-out + cleanup" },
@@ -397,16 +256,16 @@ const DEMO_SIZE_OPTIONS: Record<
   ],
   fence: [
     { id: "fence_0_50", label: "0–50 ft", hint: "Small section" },
-    { id: "fence_50_150", label: "50–150 ft", hint: "Most yards" },
+    { id: "fence_50_150", label: "50–150 ft", hint: "Most properties" },
     {
       id: "fence_150_300",
       label: "150–300 ft",
-      hint: "Large yard / multiple sides",
+      hint: "Large property / multiple sides",
     },
     {
       id: "fence_300_plus",
       label: "300+ ft",
-      hint: "Very large / multiple yards",
+      hint: "Very large / multiple sections",
     },
   ],
   shed: [
@@ -486,8 +345,6 @@ const TIMEFRAME_OPTIONS: Array<{ id: Timeframe; label: string }> = [
 
 const GOOGLE_ADS_LEAD_SEND_TO =
   process.env["NEXT_PUBLIC_GOOGLE_ADS_LEAD_SEND_TO"] ?? "";
-const GOOGLE_ADS_BRUSH_LEAD_SEND_TO =
-  process.env["NEXT_PUBLIC_GOOGLE_ADS_BRUSH_LEAD_SEND_TO"] ?? "";
 const GOOGLE_ADS_DEMO_LEAD_SEND_TO =
   process.env["NEXT_PUBLIC_GOOGLE_ADS_DEMO_LEAD_SEND_TO"] ?? "";
 const GOOGLE_ADS_CONTACT_SEND_TO =
@@ -531,7 +388,6 @@ export function LeadForm({
   requireName?: boolean;
 }) {
   const utm = useUTM();
-  const isBrush = variant === "brush";
   const isDemo = variant === "demo";
   const [step, setStep] = React.useState<1 | 2>(1);
   const [types, setTypes] = React.useState<JunkType[]>([]);
@@ -539,24 +395,13 @@ export function LeadForm({
   const [otherSelected, setOtherSelected] = React.useState(false);
   const [otherDetails, setOtherDetails] = React.useState("");
   const [perceivedSize, setPerceivedSize] =
-    React.useState<PerceivedSize | null>(() =>
-      variant === "brush" ? "min_pickup" : null,
-    );
-  const [brushPrimary, setBrushPrimary] =
-    React.useState<BrushPrimary>("overgrowth");
-  const [brushOtherDetails, setBrushOtherDetails] = React.useState("");
-  const [brushDifficulty, setBrushDifficulty] =
-    React.useState<BrushDifficulty>("not_sure");
-  const [brushAccess, setBrushAccess] = React.useState<BrushAccess>("not_sure");
-  const [brushHaulAway, setBrushHaulAway] = React.useState(true);
+    React.useState<PerceivedSize | null>(null);
   const [demoType, setDemoType] = React.useState<DemoType>("deck");
   const [demoSize, setDemoSize] = React.useState<DemoSize | null>(null);
   const [demoHaulAway, setDemoHaulAway] = React.useState(true);
   const [demoOtherDetails, setDemoOtherDetails] = React.useState("");
   const [notes, setNotes] = React.useState("");
   const [showPhotoUploader, setShowPhotoUploader] = React.useState(false);
-  const [showBrushPlanningDetails, setShowBrushPlanningDetails] =
-    React.useState(false);
   const [showNotes, setShowNotes] = React.useState(false);
   const [zip, setZip] = React.useState("");
   const [photos, setPhotos] = React.useState<string[]>([]);
@@ -748,11 +593,9 @@ export function LeadForm({
 
   const trackGoogleLeadConversion = React.useCallback(
     (quoteId: string | null) => {
-      const sendTo = isBrush
-        ? GOOGLE_ADS_BRUSH_LEAD_SEND_TO
-        : isDemo
-          ? GOOGLE_ADS_DEMO_LEAD_SEND_TO
-          : GOOGLE_ADS_LEAD_SEND_TO;
+      const sendTo = isDemo
+        ? GOOGLE_ADS_DEMO_LEAD_SEND_TO
+        : GOOGLE_ADS_LEAD_SEND_TO;
       if (!sendTo) return;
       if (!quoteId) return;
       if (trackedLeadQuoteIdRef.current === quoteId) return;
@@ -763,7 +606,7 @@ export function LeadForm({
         transaction_id: quoteId,
       });
     },
-    [isBrush, isDemo],
+    [isDemo],
   );
 
   const applyEnhancedConversionsUserData = React.useCallback(
@@ -995,7 +838,7 @@ export function LeadForm({
       setError(
         nameRequired && missingName
           ? "Please enter your first name to continue."
-          : isDemo || isBrush
+          : isDemo
             ? "Please enter your mobile number to see your estimate."
             : "Please enter your mobile number to see your price.",
       );
@@ -1016,14 +859,14 @@ export function LeadForm({
     }
     try {
       const resolvedTypes: JunkType[] =
-        !isBrush && !isDemo
+        !isDemo
           ? types.length
             ? types
             : otherSelected
               ? ["general_junk"]
               : []
           : [];
-      if (!isBrush && !isDemo && !resolvedTypes.length) {
+      if (!isDemo && !resolvedTypes.length) {
         setStep(1);
         setQuoteState({ status: "idle" });
         setError("Pick at least one type of junk.");
@@ -1037,14 +880,8 @@ export function LeadForm({
       }
 
       const otherLine =
-        !isBrush && !isDemo && otherSelected && otherDetails.trim().length > 0
+        !isDemo && otherSelected && otherDetails.trim().length > 0
           ? `Other: ${otherDetails.trim()}`
-          : "";
-      const brushOtherLine =
-        isBrush &&
-        brushPrimary === "other" &&
-        brushOtherDetails.trim().length > 0
-          ? `Other: ${brushOtherDetails.trim()}`
           : "";
       const demoOtherLine =
         isDemo && demoType === "other" && demoOtherDetails.trim().length > 0
@@ -1053,41 +890,18 @@ export function LeadForm({
       const combinedNotes = [
         notes.trim(),
         otherLine,
-        brushOtherLine,
         demoOtherLine,
       ]
         .filter((v) => v.length > 0)
         .join("\n");
-      const quoteEndpoint = isBrush
-        ? `${apiBase}/api/brush-quote`
-        : isDemo
-          ? `${apiBase}/api/demo-quote`
-          : `${apiBase}/api/junk-quote`;
+      const quoteEndpoint = isDemo
+        ? `${apiBase}/api/demo-quote`
+        : `${apiBase}/api/junk-quote`;
       const res = await fetch(quoteEndpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
-          isBrush
-            ? {
-                source: "public_site",
-                contact: { name: safeName, phone: phone.trim(), timeframe },
-                job: {
-                  primary: brushPrimary,
-                  perceivedSize: perceivedSize ?? "not_sure",
-                  difficulty: brushDifficulty,
-                  access: brushAccess,
-                  haulAway: brushHaulAway,
-                  notes: combinedNotes || undefined,
-                  zip: zip.trim(),
-                  photoUrls: photos,
-                  otherDetails:
-                    brushPrimary === "other"
-                      ? brushOtherDetails.trim() || undefined
-                      : undefined,
-                },
-                utm,
-              }
-            : isDemo
+          isDemo
               ? {
                   source: "public_site",
                   contact: { name: safeName, phone: phone.trim(), timeframe },
@@ -1168,7 +982,7 @@ export function LeadForm({
       const apiDiscountPercent = data.quote.discountPercent ?? 0;
       const apiDiscountAmount = data.quote.discountAmount ?? 0;
       const isLegacyFixedJunkDiscount =
-        !isBrush && !isDemo && apiDiscountPercent <= 0 && apiDiscountAmount > 0;
+        !isDemo && apiDiscountPercent <= 0 && apiDiscountAmount > 0;
       const displayDiscountPercent = isLegacyFixedJunkDiscount
         ? JUNK_DISPLAY_DISCOUNT_PERCENT
         : apiDiscountPercent;
@@ -1226,16 +1040,8 @@ export function LeadForm({
         trackMetaEvent(
           "Lead",
           {
-            content_name: isBrush
-              ? "Brush quote"
-              : isDemo
-                ? "Demo quote"
-                : "Junk quote",
-            content_category: isBrush
-              ? "brush"
-              : isDemo
-                ? "demo"
-                : "junk_removal",
+            content_name: isDemo ? "Demo quote" : "Junk quote",
+            content_category: isDemo ? "demo" : "junk_removal",
             value: Number.isFinite(leadValue) ? leadValue : undefined,
             currency: "USD",
           },
@@ -1750,13 +1556,6 @@ export function LeadForm({
       setBookingStatus("success");
       setBookingMessage(() => {
         const delivery = `We\u2019ll text${email.trim().length ? " (and email)" : ""} you a confirmation.`;
-        if (
-          isBrush &&
-          quoteState.status === "ready" &&
-          quoteState.needsInPersonEstimate
-        ) {
-          return `Time requested for ${formatSlotLabel(bookedAt)} (pending confirmation). ${delivery}`;
-        }
         return `You're booked for ${formatSlotLabel(bookedAt)}. ${delivery}`;
       });
       setHoldStatus("idle");
@@ -1783,16 +1582,8 @@ export function LeadForm({
       if (!trackedScheduleRef.current) {
         trackedScheduleRef.current = true;
         trackMetaEvent("Schedule", {
-          content_name: isBrush
-            ? "Book clearing"
-            : isDemo
-              ? "Book demo estimate"
-              : "Book pickup",
-          content_category: isBrush
-            ? "brush"
-            : isDemo
-              ? "demo"
-              : "junk_removal",
+          content_name: isDemo ? "Book demo estimate" : "Book pickup",
+          content_category: isDemo ? "demo" : "junk_removal",
         });
         applyEnhancedConversionsUserData({
           name,
@@ -1904,7 +1695,7 @@ export function LeadForm({
   }, []);
 
   const isBookAnalyticsPath = React.useCallback((path: string) => {
-    return path === "/book" || path === "/bookbrush" || path === "/bookdemo";
+    return path === "/book" || path === "/bookdemo";
   }, []);
 
   const displayedJunkSizeOptions =
@@ -1913,16 +1704,8 @@ export function LeadForm({
       : JUNK_SIZE_OPTIONS;
 
   const validateJobDetails = React.useCallback(() => {
-    if (!isBrush && !isDemo && !types.length && !otherSelected) {
+    if (!isDemo && !types.length && !otherSelected) {
       setError("Pick at least one type of junk.");
-      return false;
-    }
-    if (
-      isBrush &&
-      brushPrimary === "other" &&
-      brushOtherDetails.trim().length < 3
-    ) {
-      setError("Please describe what you need cleared.");
       return false;
     }
     if (isDemo) {
@@ -1935,21 +1718,14 @@ export function LeadForm({
         return false;
       }
     } else if (!perceivedSize) {
-      setError(
-        isBrush
-          ? "Pick an approximate job size."
-          : "Pick an approximate amount.",
-      );
+      setError("Pick an approximate amount.");
       return false;
     }
     return true;
   }, [
-    brushOtherDetails,
-    brushPrimary,
     demoOtherDetails,
     demoSize,
     demoType,
-    isBrush,
     isDemo,
     otherSelected,
     perceivedSize,
@@ -1989,14 +1765,10 @@ export function LeadForm({
             ? "Who should we text?"
             : "What needs to go?"
           : step === 1
-            ? isBrush
-              ? "Show us what you need cleared"
-              : isDemo
+            ? isDemo
                 ? "Show us what you want demolished"
                 : "Show us what you need gone"
-            : isBrush
-              ? "Where should we text your estimate?"
-              : isDemo
+            : isDemo
                 ? "Where should we text your demo estimate?"
                 : requireName
                   ? "Save your estimate"
@@ -2008,9 +1780,7 @@ export function LeadForm({
             ? "Enter your name, mobile number, and ZIP so we can save your estimate and follow up if you have questions."
             : "Answer a few quick job questions. You can add photos if you want a tighter estimate."
           : step === 1
-            ? isBrush
-              ? "Answer a few quick questions to see a ballpark range before booking."
-              : isDemo
+            ? isDemo
                 ? "Answer a few quick questions to see a ballpark range before booking."
                 : "Answer a few quick questions to see a ballpark range before booking."
             : isDemo
@@ -2112,20 +1882,7 @@ export function LeadForm({
             if (!validateJobDetails()) {
               return;
             }
-            const baseMeta = isBrush
-              ? {
-                  primary: brushPrimary,
-                  otherSelected: brushPrimary === "other",
-                  otherHasDetails: brushOtherDetails.trim().length > 0,
-                  perceivedSize,
-                  difficulty: brushDifficulty,
-                  access: brushAccess,
-                  haulAway: brushHaulAway,
-                  hasPhotos: photos.length > 0,
-                  photoCount: photos.length,
-                  photoSkipped,
-                }
-              : isDemo
+            const baseMeta = isDemo
                 ? {
                     demoType,
                     demoSize,
@@ -2231,101 +1988,7 @@ export function LeadForm({
           </div>
         ) : step === 1 || contactFirst ? (
           <div className="space-y-4">
-            {isBrush ? (
-              <div>
-                <label className="text-sm font-semibold text-neutral-800">
-                  What are we clearing?
-                </label>
-                <p className="text-xs text-neutral-500">Pick the best match</p>
-                <div
-                  className="mt-2 grid gap-2 sm:grid-cols-2"
-                  role="radiogroup"
-                  aria-label="What are we clearing?"
-                >
-                  {BRUSH_PRIMARY_OPTIONS.map((opt) => {
-                    const selected = brushPrimary === opt.id;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        onClick={() => setBrushPrimary(opt.id)}
-                        className={cn(
-                          "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
-                          selected
-                            ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                            : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                            selected
-                              ? "border-primary-700 bg-white text-black"
-                              : "border-neutral-300 bg-white text-transparent",
-                          )}
-                          aria-hidden="true"
-                        >
-                          <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                        </span>
-                        <div className="space-y-0.5">
-                          <div className="font-semibold text-neutral-900">
-                            {opt.label}
-                          </div>
-                          <div className="text-xs text-neutral-500">
-                            {opt.hint}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={brushPrimary === "other"}
-                    onClick={() => setBrushPrimary("other")}
-                    className={cn(
-                      "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition sm:col-span-2",
-                      brushPrimary === "other"
-                        ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                        : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                        brushPrimary === "other"
-                          ? "border-primary-700 bg-white text-black"
-                          : "border-neutral-300 bg-white text-transparent",
-                      )}
-                      aria-hidden="true"
-                    >
-                      <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                    </span>
-                    <div className="space-y-0.5">
-                      <div className="font-semibold text-neutral-900">
-                        Other
-                      </div>
-                      <div className="text-xs text-neutral-500">
-                        Tell us what you need cleared
-                      </div>
-                    </div>
-                  </button>
-                </div>
-                {brushPrimary === "other" ? (
-                  <textarea
-                    rows={2}
-                    value={brushOtherDetails}
-                    onChange={(e) => setBrushOtherDetails(e.target.value)}
-                    className="mt-2 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                    placeholder="Example: kudzu, poison ivy, bamboo, etc."
-                    autoComplete="off"
-                  />
-                ) : null}
-              </div>
-            ) : isDemo ? (
+            {isDemo ? (
               <div className="space-y-4">
                 <div>
                   <label className="text-sm font-semibold text-neutral-800">
@@ -2643,7 +2306,7 @@ export function LeadForm({
                     value={otherDetails}
                     onChange={(e) => setOtherDetails(e.target.value)}
                     className="mt-2 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                    placeholder="Example: pallets, yard equipment, glass table, etc."
+                    placeholder="Example: pallets, exercise equipment, glass table, etc."
                     autoComplete="off"
                   />
                 ) : null}
@@ -2657,14 +2320,10 @@ export function LeadForm({
                     htmlFor="lead-photos"
                     className="text-sm font-semibold text-neutral-800"
                   >
-                    {isBrush
-                      ? "Add photos or a short video for the most accurate estimate"
-                      : "Add photos or a short video for the most accurate quote"}
+                    Add photos or a short video for the most accurate quote
                   </label>
                   <p className="text-xs text-neutral-500">
-                    {isBrush
-                      ? "Optional — photos tighten the range and reduce follow-up questions."
-                      : "Optional — photos help us price it faster and more accurately."}
+                    Optional — photos help us price it faster and more accurately.
                   </p>
                 </div>
                 <button
@@ -2736,29 +2395,18 @@ export function LeadForm({
             {!isDemo ? (
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-neutral-800">
-                  {isBrush
-                    ? "How big is the area?"
-                    : "How much junk are we hauling away?"}
+                  How much junk are we hauling away?
                 </label>
-                {!isBrush ? (
-                  <p className="text-xs text-neutral-500">
-                    Final price is confirmed on site before we start loading —
-                    no surprises.
-                  </p>
-                ) : null}
+                <p className="text-xs text-neutral-500">
+                  Final price is confirmed on site before we start loading —
+                  no surprises.
+                </p>
                 <div
                   className="grid gap-2 sm:grid-cols-2"
                   role="radiogroup"
-                  aria-label={
-                    isBrush
-                      ? "How big is the area?"
-                      : "How much junk are we hauling away?"
-                  }
+                  aria-label="How much junk are we hauling away?"
                 >
-                  {(isBrush
-                    ? BRUSH_SIZE_OPTIONS
-                    : displayedJunkSizeOptions
-                  ).map((opt) => {
+                  {displayedJunkSizeOptions.map((opt) => {
                     const selected = perceivedSize === opt.id;
                     return (
                       <button
@@ -2802,181 +2450,6 @@ export function LeadForm({
               </div>
             ) : null}
 
-            {isBrush ? (
-              <div className="space-y-2">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <label className="text-sm font-semibold text-neutral-800">
-                      Access and difficulty details
-                    </label>
-                    <p className="text-xs text-neutral-500">
-                      Optional — add these now for tighter scheduling and
-                      pricing.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowBrushPlanningDetails((prev) => !prev)}
-                    className="text-xs font-semibold text-primary-700 underline"
-                  >
-                    {showBrushPlanningDetails ? "Hide" : "Add details"}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {isBrush && showBrushPlanningDetails ? (
-              <>
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-neutral-800">
-                    Can equipment access the area?
-                  </label>
-                  <div
-                    className="grid gap-2 sm:grid-cols-2"
-                    role="radiogroup"
-                    aria-label="Can equipment access the area?"
-                  >
-                    {BRUSH_ACCESS_OPTIONS.map((opt) => {
-                      const selected = brushAccess === opt.id;
-                      return (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          onClick={() => setBrushAccess(opt.id)}
-                          className={cn(
-                            "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
-                            selected
-                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected
-                                ? "border-primary-700 bg-white text-black"
-                                : "border-neutral-300 bg-white text-transparent",
-                            )}
-                            aria-hidden="true"
-                          >
-                            <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                          </span>
-                          <div className="space-y-0.5">
-                            <div className="font-semibold text-neutral-900">
-                              {opt.label}
-                            </div>
-                            <div className="text-xs text-neutral-500">
-                              {opt.hint}
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-neutral-800">
-                    How difficult is the clearing?
-                  </label>
-                  <div
-                    className="grid gap-2 sm:grid-cols-2"
-                    role="radiogroup"
-                    aria-label="How difficult is the clearing?"
-                  >
-                    {BRUSH_DIFFICULTY_OPTIONS.map((opt) => {
-                      const selected = brushDifficulty === opt.id;
-                      return (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          onClick={() => setBrushDifficulty(opt.id)}
-                          className={cn(
-                            "group relative flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition",
-                            selected
-                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected
-                                ? "border-primary-700 bg-white text-black"
-                                : "border-neutral-300 bg-white text-transparent",
-                            )}
-                            aria-hidden="true"
-                          >
-                            <Check className="h-3.5 w-3.5" strokeWidth={3} />
-                          </span>
-                          <div className="space-y-0.5">
-                            <div className="font-semibold text-neutral-900">
-                              {opt.label}
-                            </div>
-                            <div className="text-xs text-neutral-500">
-                              {opt.hint}
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold text-neutral-800">
-                    Haul away the debris?
-                  </label>
-                  <div
-                    className="grid gap-2 sm:grid-cols-2"
-                    role="radiogroup"
-                    aria-label="Haul away the debris?"
-                  >
-                    {[
-                      { id: "yes", label: "Yes, haul it away", value: true },
-                      { id: "no", label: "No, leave it on site", value: false },
-                    ].map((opt) => {
-                      const selected = brushHaulAway === opt.value;
-                      return (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          onClick={() => setBrushHaulAway(opt.value)}
-                          className={cn(
-                            "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition",
-                            selected
-                              ? "border-primary-600 bg-primary-50 shadow-sm ring-1 ring-primary-100"
-                              : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-primary-50/40",
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-semibold transition",
-                              selected
-                                ? "border-primary-700 bg-white text-black"
-                                : "border-neutral-300 bg-white text-transparent",
-                            )}
-                            aria-hidden="true"
-                          >
-                            <Check className="h-3 w-3" strokeWidth={3} />
-                          </span>
-                          <span className="font-semibold text-neutral-900">
-                            {opt.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </>
-            ) : null}
-
             <div className="space-y-2">
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-0.5">
@@ -2984,9 +2457,7 @@ export function LeadForm({
                     Anything else we should know?
                   </label>
                   <p className="text-xs text-neutral-500">
-                    {isBrush
-                      ? "Optional: slope, gates, access notes, what to keep/remove, etc."
-                      : "Optional: gate codes, stairs, heavy items, etc."}
+                    Optional: gate codes, stairs, heavy items, etc.
                   </p>
                 </div>
                 <button
@@ -3003,11 +2474,7 @@ export function LeadForm({
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700"
-                  placeholder={
-                    isBrush
-                      ? "Slope, gates, access notes, what to keep/remove, etc."
-                      : "Gate codes, stairs, heavy items, etc."
-                  }
+                  placeholder="Gate codes, stairs, heavy items, etc."
                 />
               ) : null}
             </div>
@@ -3046,7 +2513,7 @@ export function LeadForm({
                   ? "Calculating your estimate..."
                   : contactFirst
                     ? "Get my estimate"
-                    : isBrush || isDemo
+                    : isDemo
                       ? "Continue to my estimate"
                       : "Continue to estimate"}
               </Button>
@@ -3063,9 +2530,7 @@ export function LeadForm({
                 quoteCardRef={quoteCardRef}
                 discountLabel={discountLabel}
                 discountedRange={discountedRange}
-                baseRange={baseRange}
-                isBrush={isBrush}
-                isDemo={isDemo}
+                baseRange={baseRange}                isDemo={isDemo}
                 junkWeightLabel={junkWeightLabel}
                 junkEstimateDisclaimer={junkEstimateDisclaimer}
                 quoteMediaAnalysis={quoteMediaAnalysis}
@@ -3219,8 +2684,8 @@ export function LeadForm({
             >
               {quoteState.status === "loading"
                 ? "Calculating your estimate..."
-                : isBrush || isDemo
-                  ? "Get my estimate"
+                : isDemo
+                      ? "Get my estimate"
                   : "Get my instant estimate"}
             </Button>
 
@@ -3239,7 +2704,7 @@ export function LeadForm({
                         {discountLabel}
                       </span>
                     ) : null}
-                    {!isBrush && !isDemo && junkWeightLabel ? (
+                    {!isDemo && junkWeightLabel ? (
                       <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-[11px] font-semibold text-neutral-700">
                         {junkWeightLabel}
                       </span>
@@ -3262,7 +2727,7 @@ export function LeadForm({
                 <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm leading-relaxed text-neutral-700">
                   {quoteState.reason}
                 </div>
-                {!isBrush && !isDemo && junkEstimateDisclaimer ? (
+                {!isDemo && junkEstimateDisclaimer ? (
                   <div className="flex gap-2 rounded-md border border-primary-100 bg-primary-50/70 px-3 py-2 text-xs leading-relaxed text-primary-950">
                     <ShieldCheck
                       className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
@@ -3280,7 +2745,7 @@ export function LeadForm({
                     </div>
                   </div>
                 ) : null}
-                {!isBrush && !isDemo && quoteMediaAnalysis ? (
+                {!isDemo && quoteMediaAnalysis ? (
                   <div className="space-y-2 rounded-md border border-primary-100 bg-white/70 px-3 py-2 text-xs text-neutral-700">
                     {quoteVisibleRangeLabel ? (
                       <div>
@@ -3328,28 +2793,18 @@ export function LeadForm({
                       </div>
                     ) : null}
                   </div>
-                ) : !isBrush ? (
+                ) : !isDemo ? (
                   <div className="rounded-md bg-neutral-50 px-3 py-2 text-xs leading-relaxed text-neutral-600">
                     Disposal add-ons apply only when needed, such as mattresses
                     at +$40 each and paint cans at +$10 each.
                   </div>
                 ) : null}
                 <div className="text-sm font-medium text-neutral-700">
-                  {isBrush && quoteState.needsInPersonEstimate
-                    ? "This is a ballpark range. We\u2019ll call/text to confirm details and finalize before we arrive."
-                    : isDemo
-                      ? "This is a range. We’ll confirm details on-site before we start."
-                      : "You can still book now. The crew will review the job in person and confirm the set price before loading begins."}
+                  {isDemo ? "This is a range. We’ll confirm details on-site before we start." : "You can still book now. The crew will review the job in person and confirm the set price before loading begins."}
                 </div>
                 <div className="space-y-3 rounded-lg border border-neutral-200 bg-white p-3 text-sm">
                   <div className="text-sm font-semibold text-primary-900">
-                    {isBrush && quoteState.needsInPersonEstimate
-                      ? "Request a time (pending confirmation)"
-                      : isBrush
-                        ? "Book this clearing"
-                        : isDemo
-                          ? "Book a demo estimate"
-                          : "Book this pickup"}
+                    {isDemo ? "Book a demo estimate" : "Book this pickup"}
                   </div>
                   <div className="grid gap-2 md:grid-cols-2">
                     <input
@@ -3654,17 +3109,7 @@ export function LeadForm({
                         availabilityStatus === "loading"
                       }
                     >
-                      {bookingStatus === "loading"
-                        ? "Booking..."
-                        : isBrush &&
-                            quoteState.status === "ready" &&
-                            quoteState.needsInPersonEstimate
-                          ? "Request this time"
-                          : isBrush
-                            ? "Book this clearing"
-                            : isDemo
-                              ? "Book a demo estimate"
-                              : "Book this pickup"}
+                      {bookingStatus === "loading" ? "Booking..." : isDemo ? "Book a demo estimate" : "Book this pickup"}
                     </Button>
                     <Button
                       asChild
@@ -3725,7 +3170,6 @@ function QuoteResult({
   discountLabel,
   discountedRange,
   baseRange,
-  isBrush,
   isDemo,
   junkWeightLabel,
   junkEstimateDisclaimer,
@@ -3776,7 +3220,6 @@ function QuoteResult({
   discountLabel: string | null;
   discountedRange: string | null;
   baseRange: string | null;
-  isBrush: boolean;
   isDemo: boolean;
   junkWeightLabel: string | null;
   junkEstimateDisclaimer: string | null;
@@ -3849,7 +3292,7 @@ function QuoteResult({
               {discountLabel}
             </span>
           ) : null}
-          {!isBrush && !isDemo && junkWeightLabel ? (
+          {!isDemo && junkWeightLabel ? (
             <span className="rounded-full border border-neutral-200 bg-neutral-50 px-2.5 py-1 text-[11px] font-semibold text-neutral-700">
               {junkWeightLabel}
             </span>
@@ -3876,7 +3319,7 @@ function QuoteResult({
       <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm leading-relaxed text-neutral-700">
         {quoteState.reason}
       </div>
-      {!isBrush && !isDemo && junkEstimateDisclaimer ? (
+      {!isDemo && junkEstimateDisclaimer ? (
         <div className="flex gap-2 rounded-md border border-primary-100 bg-primary-50/70 px-3 py-2 text-xs leading-relaxed text-primary-950">
           <ShieldCheck
             className="mt-0.5 h-4 w-4 shrink-0 text-primary-700"
@@ -3893,7 +3336,7 @@ function QuoteResult({
           </div>
         </div>
       ) : null}
-      {!isBrush && !isDemo && quoteMediaAnalysis ? (
+      {!isDemo && quoteMediaAnalysis ? (
         <div className="space-y-2 rounded-md border border-primary-100 bg-white/70 px-3 py-2 text-xs text-neutral-700">
           {quoteVisibleRangeLabel ? (
             <div>
@@ -3938,18 +3381,16 @@ function QuoteResult({
             <div>Want a tighter number? Add one more photo before booking.</div>
           ) : null}
         </div>
-      ) : !isBrush ? (
+      ) : !isDemo ? (
         <div className="rounded-md bg-neutral-50 px-3 py-2 text-xs leading-relaxed text-neutral-600">
           Disposal add-ons apply only when needed, such as mattresses at +$40
           each and paint cans at +$10 each.
         </div>
       ) : null}
       <div className="text-sm font-medium text-neutral-700">
-        {isBrush && quoteState.needsInPersonEstimate
-          ? "This is a ballpark range. We'll call/text to confirm details and finalize before we arrive."
-          : isDemo
-            ? "This is a range. We'll confirm details on-site before we start."
-            : "Your estimate is saved. Choose the next step below."}
+        {isDemo
+          ? "This is a range. We'll confirm details on-site before we start."
+          : "Your estimate is saved. Choose the next step below."}
       </div>
 
       {!showBookingDetails ? (
@@ -4000,13 +3441,7 @@ function QuoteResult({
         <div className="space-y-3 rounded-lg border border-white/80 bg-white/80 p-3 text-sm">
           <div className="flex items-center justify-between gap-3">
             <div className="text-xs font-semibold text-neutral-700">
-              {isBrush && quoteState.needsInPersonEstimate
-                ? "Request a time (pending confirmation)"
-                : isBrush
-                  ? "Book this clearing"
-                  : isDemo
-                    ? "Book a demo estimate"
-                    : "Book this pickup"}
+              {isDemo ? "Book a demo estimate" : "Book this pickup"}
             </div>
             <button
               type="button"
@@ -4302,15 +3737,7 @@ function QuoteResult({
                 availabilityStatus === "loading"
               }
             >
-              {bookingStatus === "loading"
-                ? "Booking..."
-                : isBrush && quoteState.needsInPersonEstimate
-                  ? "Request this time"
-                  : isBrush
-                    ? "Book this clearing"
-                    : isDemo
-                      ? "Book a demo estimate"
-                      : "Book this pickup"}
+              {bookingStatus === "loading" ? "Booking..." : isDemo ? "Book a demo estimate" : "Book this pickup"}
             </Button>
             <Button asChild variant="secondary" className="justify-center">
               <a

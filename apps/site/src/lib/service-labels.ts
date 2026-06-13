@@ -17,7 +17,6 @@ const LABEL_ALIASES: Record<string, string> = {
 
 const SERVICE_ID_ALIASES: Record<string, string> = {
   single_item: "single-item",
-  yard_waste: "yard-waste",
   construction_debris: "construction-debris",
   hot_tub: "hot-tub",
   rubbish: "single-item",
@@ -71,4 +70,3 @@ export function summarizeServiceLabels(services: string[]): string {
   if (!first) return "Junk removal";
   return rest.length ? `${first} +${rest.length}` : first;
 }
-
