@@ -16,6 +16,7 @@ import { getAutonomousBookingDurationMinutes, isAfterHoursAutonomyActive } from 
 import { buildMediaJobAnalysisWithVision, getMediaJobAnalysis, upsertMediaJobAnalysis } from "@/lib/media-job-analysis";
 import { loadOmniLeadContext, type OmniLeadContext } from "@/lib/omni-lead-context";
 import { getSalesAutopilotPolicy, normalizePostalCode, type SalesAutopilotPolicy } from "@/lib/policy";
+import { normalizePhoneE164 } from "@/lib/team-auth";
 
 type AutonomyMode = SalesAutopilotPolicy["facebookCloser"]["mode"];
 type FacebookCoaching = SalesAutopilotPolicy["facebookCoaching"];
@@ -61,6 +62,32 @@ type EvaluatedMessage = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isEnabledEnv(value: string | undefined): boolean {
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+export function isSalesAutonomyTestOverrideActive(input: {
+  row: Pick<EvaluatedMessage, "channel" | "fromAddress" | "toAddress">;
+  context?: Pick<OmniLeadContext, "contact"> | null;
+}): boolean {
+  if (!isEnabledEnv(process.env["SALES_AUTONOMY_TEST_FORCE_AFTER_HOURS"])) return false;
+  const targetPhone = normalizePhoneE164(process.env["SALES_AUTONOMY_TEST_PHONE_E164"]);
+  if (!targetPhone) return false;
+  const candidates = [
+    input.row.channel === "sms" ? input.row.fromAddress : null,
+    input.context?.contact.phoneE164 ?? null,
+    input.context?.contact.phone ?? null,
+  ];
+  return candidates.some((candidate) => normalizePhoneE164(candidate) === targetPhone);
+}
+
+function forcedAfterHoursConversationAt(at: Date): Date {
+  const zone = process.env["APPOINTMENT_TIMEZONE"] ?? process.env["GOOGLE_CALENDAR_TIMEZONE"] ?? "America/New_York";
+  const local = DateTime.fromJSDate(at, { zone: "utc" }).setZone(zone);
+  const base = local.isValid ? local : DateTime.now().setZone(zone);
+  return base.set({ hour: 20, minute: 0, second: 0, millisecond: 0 }).toUTC().toJSDate();
 }
 
 const RISK_PATTERNS: Array<[RegExp, string]> = [
@@ -150,7 +177,7 @@ function hasUsableProperty(context: OmniLeadContext): boolean {
   return true;
 }
 
-function detectRisk(context: OmniLeadContext): string | null {
+export function detectFacebookSalesRisk(context: Pick<OmniLeadContext, "latestLead" | "instantQuote" | "recentMessages">): string | null {
   const text = [
     context.latestLead?.notes,
     context.instantQuote?.notes,
@@ -464,7 +491,7 @@ async function createOutboundDmDraft(input: {
   return message.id;
 }
 
-function buildQuoteMessage(range: { lowCents: number; highCents: number }, summary: string | null, coaching: FacebookCoaching): string {
+export function buildQuoteMessage(range: { lowCents: number; highCents: number }, summary: string | null, coaching: FacebookCoaching): string {
   const scope = summary ? ` From the photos, ${summary.replace(/\s+/g, " ").slice(0, 180)}` : "";
   if (coaching.enabled && coaching.tone === "concise") {
     return `Looks like ${money(range.lowCents)}-${money(range.highCents)} based on what I can tell.${scope} Want to schedule a free in-person quote?`;
@@ -495,7 +522,7 @@ function buildPhotoAsk(coaching: FacebookCoaching): string {
   return "Can you send a couple photos of what needs to go? Once I can see it, I can give you a tighter range and times.";
 }
 
-function latestInboundText(context: OmniLeadContext): string {
+function latestInboundText(context: Pick<OmniLeadContext, "latestLead" | "instantQuote" | "recentMessages">): string {
   return [
     context.latestLead?.notes,
     context.instantQuote?.notes,
@@ -547,7 +574,7 @@ function estimateJunkQuoteRangeFromText(input: {
   }
 }
 
-function getTextQuoteReadiness(context: OmniLeadContext): {
+export function getTextQuoteReadiness(context: Pick<OmniLeadContext, "latestLead" | "instantQuote" | "recentMessages" | "derived">): {
   quoteRange: { lowCents: number; highCents: number; confidence: "low" | "medium" | "high" } | null;
   missingQuestion: string | null;
   snapshot: Record<string, unknown>;
@@ -713,17 +740,21 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
   const policy = await getSalesAutopilotPolicy(db);
   const closer = policy.facebookCloser;
   const coaching = policy.facebookCoaching;
-  const inAutonomyWindow = isAfterHoursAutonomyActive({ at: row.createdAt });
-  const mode: AutonomyMode = closer.mode === "auto" && !inAutonomyWindow ? "assist" : closer.mode;
+  const naturalAutonomyWindow = isAfterHoursAutonomyActive({ at: row.createdAt });
   const context = await loadOmniLeadContext(db, { contactId: row.contactId, includeQuotePrice: true, messageLimit: 60 });
   if (!context) return { status: "skipped" };
+  const testAutonomyOverride = isSalesAutonomyTestOverrideActive({ row, context });
+  const inAutonomyWindow = naturalAutonomyWindow || testAutonomyOverride;
+  const mode: AutonomyMode = closer.mode === "auto" && !inAutonomyWindow ? "assist" : closer.mode;
 
   const latestInboundAt = latestMeaningfulInboundAt(context, row.channel) ?? row.receivedAt ?? row.createdAt;
+  const autonomousConversationAt =
+    testAutonomyOverride && !naturalAutonomyWindow ? forcedAfterHoursConversationAt(latestInboundAt) : latestInboundAt;
   const responseWindowMs = closer.messengerResponseWindowHours * 60 * 60 * 1000;
   const outsideMessengerWindow = row.channel === "dm" && Date.now() - latestInboundAt.getTime() > responseWindowMs;
   const leadAutomation = context.automation.find((entry) => entry.channel === row.channel);
   const hasBookedAppointment = Boolean(context.nextAppointment && context.nextAppointment.status !== "canceled");
-  const riskReason = detectRisk(context);
+  const riskReason = detectFacebookSalesRisk(context);
   const latestBody = row.body ?? "";
   const mediaCount = context.recentMessages.reduce((sum, msg) => sum + (msg.mediaUrls?.length ?? 0), 0);
   const snapshot: Record<string, unknown> = {
@@ -734,6 +765,8 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
     mediaCount,
     mode,
     inAutonomyWindow,
+    naturalAutonomyWindow,
+    testAutonomyOverride,
     channel: row.channel,
     ownerCoaching: coaching.enabled
       ? {
@@ -888,7 +921,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
 
   let slotsForSession = offeredSlots;
   if (action === "offer_times" && hasUsableProperty(context)) {
-    slotsForSession = await fetchBookingAssist({ property: context.properties[0]!, autonomousConversationAt: latestInboundAt });
+    slotsForSession = await fetchBookingAssist({ property: context.properties[0]!, autonomousConversationAt });
     if (slotsForSession.length === 0) {
       stage = "needs_human_review";
       action = "human_review";
@@ -969,7 +1002,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
           result = { newerInboundMessageId: newerInbound.id };
           await createHumanReviewTask(db, row.contactId, "newer_inbound_message");
         } else {
-          const booked = await bookSlot({ contactId: row.contactId, propertyId: row.propertyId, slot: confirmedSlot, range: quoteRange, conversationAt: latestInboundAt });
+          const booked = await bookSlot({ contactId: row.contactId, propertyId: row.propertyId, slot: confirmedSlot, range: quoteRange, conversationAt: autonomousConversationAt });
           if (booked.ok) {
             executedAction = "appointment_booked";
             result = booked;
