@@ -2048,8 +2048,8 @@ export const commissionSettings = pgTable("commission_settings", {
   payoutHour: integer("payout_hour").default(12).notNull(),
   payoutMinute: integer("payout_minute").default(0).notNull(),
   salesRateBps: integer("sales_rate_bps").default(0).notNull(),
-  marketingRateBps: integer("marketing_rate_bps").default(1500).notNull(),
-  crewPoolRateBps: integer("crew_pool_rate_bps").default(2250).notNull(),
+  marketingRateBps: integer("marketing_rate_bps").default(1750).notNull(),
+  crewPoolRateBps: integer("crew_pool_rate_bps").default(2000).notNull(),
   marketingMemberId: uuid("marketing_member_id").references(
     () => teamMembers.id,
     { onDelete: "set null" },

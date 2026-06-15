@@ -119,8 +119,8 @@ export function CrewPayoutSelector({
           </div>
           <div className="mt-2 text-[11px] text-emerald-700">
             {showSplitPercentages
-              ? "Labor payout uses the fixed 22.5% pool and this saved split."
-              : "Labor payout uses the fixed 22.5% pool. Split percentages stay in Payroll only."}
+              ? "Labor payout uses the fixed 20% pool and this saved split."
+              : "Labor payout uses the fixed 20% pool. Split percentages stay in Payroll only."}
           </div>
         </div>
       ) : (

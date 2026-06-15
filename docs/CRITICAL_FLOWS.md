@@ -43,8 +43,8 @@ These are the workflows we treat as production-critical. Any change that touches
 
 2. Commissions
    - Commissions calculate from final amount paid.
-   - Sales commission is retired; management is 15% split 7.5% Jeffrey / 7.5% Austin.
-   - Labor is fixed at 22.5%; all crew combinations split labor evenly.
+   - Sales commission is retired; management is 17.5% split 10% Jeffrey / 7.5% Austin.
+   - Labor is fixed at 20%; all crew combinations split labor evenly.
    - Weekly payout run can be generated and exported.
 
 3. Partner portal (if enabled)

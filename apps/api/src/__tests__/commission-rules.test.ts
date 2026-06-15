@@ -43,7 +43,7 @@ describe("commission rules", () => {
     ).toBe(false);
   });
 
-  it("pays Austin and Jeffrey an even split of the 22.5% labor pool", () => {
+  it("pays Austin and Jeffrey an even split of the 20% labor pool", () => {
     const resolved = resolveLockedCrewPayout([
       "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
       "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
@@ -54,21 +54,21 @@ describe("commission rules", () => {
       throw new Error("Expected Austin + Jeffrey locked payout rule");
     }
 
-    const poolCents = Math.round(240000 * (2250 / 10000));
+    const poolCents = Math.round(240000 * (2000 / 10000));
     const allocations = allocateCrewPoolCents(poolCents, resolved.splits);
     const amountByMemberId = new Map(
       allocations.map((entry) => [entry.memberId, entry.cents]),
     );
 
     expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
-      27000,
+      24000,
     );
     expect(amountByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3")).toBe(
-      27000,
+      24000,
     );
   });
 
-  it("pays Austin, Jeffrey, and Devon an even split at 7.5% each", () => {
+  it("pays Austin, Jeffrey, and Devon an even split of the 20% labor pool", () => {
     const resolved = resolveLockedCrewPayout([
       "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
       "b45988bb-7417-48c5-af6d-fcdf71088282",
@@ -80,19 +80,19 @@ describe("commission rules", () => {
       throw new Error("Expected Austin + Devon + Jeffrey payout rule");
     }
 
-    const allocations = allocateCrewPoolCents(22500, resolved.splits);
+    const allocations = allocateCrewPoolCents(20000, resolved.splits);
     const amountByMemberId = new Map(
       allocations.map((entry) => [entry.memberId, entry.cents]),
     );
 
     expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
-      7500,
+      6667,
     );
     expect(amountByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3")).toBe(
-      7500,
+      6667,
     );
     expect(amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282")).toBe(
-      7500,
+      6666,
     );
   });
 

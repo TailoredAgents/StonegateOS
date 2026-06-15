@@ -28,16 +28,16 @@ export type CommissionSettingsRow = {
 
 const SETTINGS_KEY = "default";
 const DEFAULT_SALES_RATE_BPS = 0;
-const DEFAULT_MANAGEMENT_RATE_BPS = 1500;
-const DEFAULT_CREW_POOL_RATE_BPS = 2250;
+const DEFAULT_MANAGEMENT_RATE_BPS = 1750;
+const DEFAULT_CREW_POOL_RATE_BPS = 2000;
 const TEAM_MEMBER_IDS = {
   austin: "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
   devon: "b45988bb-7417-48c5-af6d-fcdf71088282",
   jeffrey: "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
 } as const;
 const MANAGEMENT_SPLITS = [
-  { memberId: TEAM_MEMBER_IDS.jeffrey, splitBps: 5000 },
-  { memberId: TEAM_MEMBER_IDS.austin, splitBps: 5000 },
+  { memberId: TEAM_MEMBER_IDS.jeffrey, splitBps: 10000 },
+  { memberId: TEAM_MEMBER_IDS.austin, splitBps: 7500 },
 ] as const;
 
 function asWeekday(value: number): 1 | 2 | 3 | 4 | 5 | 6 | 7 {

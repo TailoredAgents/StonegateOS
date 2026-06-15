@@ -209,7 +209,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         <p className={TEAM_SECTION_SUBTITLE}>
           Weekly payouts use the current Monday-Sunday week and final amount
           paid. Sales commission is retired for new calculations, management
-          pays Jeffrey and Austin 7.5% each, and labor stays at 22.5% of the job
+          pays Jeffrey 10% and Austin 7.5%, and labor stays at 20% of the job
           total regardless of the crew.
         </p>
       </header>
@@ -609,10 +609,10 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 Management
               </div>
               <div className="mt-1 text-base font-semibold text-slate-900">
-                15% total
+                17.5% total
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                Split 7.5% to Jeffrey and 7.5% to Austin.
+                Split 10% to Jeffrey and 7.5% to Austin.
               </div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -631,13 +631,13 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 Locked labor splits
               </div>
               <div className="mt-1 text-sm text-slate-700">
-                All crew combinations split the 22.5% labor pool evenly.
+                All crew combinations split the 20% labor pool evenly.
               </div>
               <div className="mt-1 text-sm text-slate-700">
-                Jeffrey + Austin + Devon: 7.5% each
+                Jeffrey + Austin + Devon: 6.67% each, adjusted by cents
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                Two-person crews receive 11.25% each.
+                Two-person crews receive 10% each.
               </div>
             </div>
           </div>
@@ -653,7 +653,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
           Labor override days
         </h3>
         <p className="mt-1 text-sm text-slate-600">
-          Retired. Labor now stays at 22.5% for every completed job, so saved
+          Retired. Labor now stays at 20% for every completed job, so saved
           override days are ignored by new commission calculations.
         </p>
 
