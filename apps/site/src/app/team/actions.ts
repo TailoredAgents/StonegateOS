@@ -133,6 +133,70 @@ export async function updateApptStatus(formData: FormData) {
   revalidatePath("/team");
 }
 
+export async function updateAppointmentEtaStatusAction(formData: FormData) {
+  const id = formData.get("appointmentId");
+  const status = formData.get("etaStatus");
+  if (typeof id !== "string" || typeof status !== "string") return;
+
+  const response = await callAdminApi(`/api/appointments/${id}/eta-status`, {
+    method: "POST",
+    body: JSON.stringify({ status, source: "crm" }),
+  });
+
+  const jar = await cookies();
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to save ETA status");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+  } else {
+    jar.set({ name: "myst-flash", value: "ETA status saved", path: "/" });
+  }
+  revalidatePath("/team");
+}
+
+export async function sendEtaDraftAction(formData: FormData) {
+  const draftId = formData.get("draftId");
+  if (typeof draftId !== "string" || draftId.trim().length === 0) return;
+
+  const response = await callAdminApi(
+    `/api/admin/eta/drafts/${encodeURIComponent(draftId.trim())}/send`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+
+  const jar = await cookies();
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to send ETA draft");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+  } else {
+    jar.set({ name: "myst-flash", value: "ETA update queued", path: "/" });
+  }
+  revalidatePath("/team");
+}
+
+export async function dismissEtaDraftAction(formData: FormData) {
+  const draftId = formData.get("draftId");
+  if (typeof draftId !== "string" || draftId.trim().length === 0) return;
+
+  const response = await callAdminApi(
+    `/api/admin/eta/drafts/${encodeURIComponent(draftId.trim())}/dismiss`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+  );
+
+  const jar = await cookies();
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "Unable to dismiss ETA draft");
+    jar.set({ name: "myst-flash-error", value: message, path: "/" });
+  } else {
+    jar.set({ name: "myst-flash", value: "ETA draft dismissed", path: "/" });
+  }
+  revalidatePath("/team");
+}
+
 export async function addApptNote(formData: FormData) {
   const id = formData.get("appointmentId");
   const body = formData.get("body");

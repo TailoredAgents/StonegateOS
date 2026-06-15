@@ -2,8 +2,9 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { DateTime } from "luxon";
 import { nanoid } from "nanoid";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, lte, ne, sql } from "drizzle-orm";
 import {
+  appointmentHolds,
   appointmentNotes,
   appointments,
   contacts,
@@ -20,7 +21,9 @@ import {
 } from "@/lib/appointment-booking-details";
 import { requirePermission } from "@/lib/permissions";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
-import { getBusinessHoursPolicy } from "@/lib/policy";
+import { getBusinessHoursPolicy, getBookingRulesPolicy } from "@/lib/policy";
+import { getAutonomousBookingDurationMinutes, validateAutonomousBookingStart } from "@/lib/after-hours-autonomy";
+import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import {
   isValidSoldByOverrideCode,
   normalizeSoldByMemberId,
@@ -54,11 +57,16 @@ type BookRequest = {
   assignedAssociateMemberId?: string | null;
   marketingMemberId?: string | null;
   source?: string;
+  autonomousConversationAt?: string | null;
 };
 
 const PLACEHOLDER_CITY = "Unknown";
 const PLACEHOLDER_STATE = "NA";
 const PLACEHOLDER_POSTAL_CODE = "00000";
+
+function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
 
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -125,10 +133,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     appointmentTypeRaw.toLowerCase() === "in_person_quote"
       ? "in_person_quote"
       : "job";
-  const durationMinutes =
-    typeof payload.durationMinutes === "number" && payload.durationMinutes > 0
-      ? payload.durationMinutes
-      : 60;
+  const durationMinutes = getAutonomousBookingDurationMinutes();
   const travelBufferMinutes =
     typeof payload.travelBufferMinutes === "number" &&
     payload.travelBufferMinutes >= 0
@@ -167,6 +172,11 @@ export async function POST(request: NextRequest): Promise<Response> {
     typeof payload.source === "string" && payload.source.trim().length > 0
       ? payload.source.trim()
       : "manual_booking";
+  const autonomousConversationAt =
+    typeof payload.autonomousConversationAt === "string" && payload.autonomousConversationAt.trim().length > 0
+      ? payload.autonomousConversationAt.trim()
+      : null;
+  const requiresAutonomousBookingRules = /(?:auto|autopilot)/i.test(source);
 
   if (!contactId || !startAtIso) {
     return NextResponse.json(
@@ -198,7 +208,10 @@ export async function POST(request: NextRequest): Promise<Response> {
       : [];
 
   const db = getDb();
-  const businessHours = await getBusinessHoursPolicy(db);
+  const [businessHours, bookingRules] = await Promise.all([
+    getBusinessHoursPolicy(db),
+    getBookingRulesPolicy(db),
+  ]);
   const timezone =
     businessHours.timezone ||
     process.env["APPOINTMENT_TIMEZONE"] ||
@@ -285,6 +298,86 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       if (!resolvedPropertyId) {
         throw new Error("property_create_failed");
+      }
+
+      const [propertyForRules] = await tx
+        .select({ city: properties.city })
+        .from(properties)
+        .where(eq(properties.id, resolvedPropertyId))
+        .limit(1);
+      const ruleResult = validateAutonomousBookingStart({
+        startAt,
+        city: propertyForRules?.city ?? null,
+        timezone,
+        durationMinutes,
+        conversationAt: requiresAutonomousBookingRules ? (autonomousConversationAt ?? now) : null,
+      });
+      if (!ruleResult.ok) {
+        throw new Error(ruleResult.code);
+      }
+
+      if (bookingRules.maxJobsPerDay > 0) {
+        const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(timezone);
+        const dayStartUtc = startLocal.startOf("day").toUTC().toJSDate();
+        const dayEndUtc = startLocal.endOf("day").toUTC().toJSDate();
+        const [dayCount] = await tx
+          .select({ count: sql<number>`count(*)` })
+          .from(appointments)
+          .where(
+            and(
+              gte(appointments.startAt, dayStartUtc),
+              lte(appointments.startAt, dayEndUtc),
+              ne(appointments.status, "canceled"),
+            ),
+          );
+        const [holdCount] = await tx
+          .select({ count: sql<number>`count(*)` })
+          .from(appointmentHolds)
+          .where(
+            and(
+              gte(appointmentHolds.startAt, dayStartUtc),
+              lte(appointmentHolds.startAt, dayEndUtc),
+              eq(appointmentHolds.status, "active"),
+              gt(appointmentHolds.expiresAt, now),
+            ),
+          );
+        if (Number(dayCount?.count ?? 0) + Number(holdCount?.count ?? 0) >= bookingRules.maxJobsPerDay) {
+          throw new Error("day_full");
+        }
+      }
+
+      const capacity = getAppointmentCapacity();
+      const slotEnd = new Date(startAt.getTime() + (durationMinutes + travelBufferMinutes) * 60_000);
+      const blockStart = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
+      const blockEnd = new Date(slotEnd.getTime() + 24 * 60 * 60 * 1000);
+      const [appointmentBlocks, holdBlocks] = await Promise.all([
+        tx
+          .select({
+            startAt: appointments.startAt,
+            durationMinutes: appointments.durationMinutes,
+            travelBufferMinutes: appointments.travelBufferMinutes,
+          })
+          .from(appointments)
+          .where(and(gte(appointments.startAt, blockStart), lte(appointments.startAt, blockEnd), ne(appointments.status, "canceled"))),
+        tx
+          .select({
+            startAt: appointmentHolds.startAt,
+            durationMinutes: appointmentHolds.durationMinutes,
+            travelBufferMinutes: appointmentHolds.travelBufferMinutes,
+          })
+          .from(appointmentHolds)
+          .where(and(gte(appointmentHolds.startAt, blockStart), lte(appointmentHolds.startAt, blockEnd), eq(appointmentHolds.status, "active"), gt(appointmentHolds.expiresAt, now))),
+      ]);
+      const overlapCount = [...appointmentBlocks, ...holdBlocks].reduce((count, block) => {
+        const blockStartAt = block.startAt;
+        if (!(blockStartAt instanceof Date)) return count;
+        const blockEndAt = new Date(
+          blockStartAt.getTime() + ((block.durationMinutes ?? durationMinutes) + (block.travelBufferMinutes ?? travelBufferMinutes)) * 60_000,
+        );
+        return overlaps(startAt, slotEnd, blockStartAt, blockEndAt) ? count + 1 : count;
+      }, 0);
+      if (overlapCount >= capacity) {
+        throw new Error("slot_full");
       }
 
       const token = nanoid(24);

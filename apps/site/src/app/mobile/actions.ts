@@ -220,6 +220,36 @@ export async function openMobileAppointmentThreadAction(formData: FormData) {
   redirect(mobileReturnWithParam(returnTo, "error", "thread_not_found"));
 }
 
+export async function updateMobileAppointmentEtaStatusAction(formData: FormData) {
+  await requireMobilePermission("appointments.update");
+
+  const appointmentIdRaw = formData.get("appointmentId");
+  const statusRaw = formData.get("etaStatus");
+  const dateRaw = formData.get("date");
+  const screenRaw = formData.get("screen");
+  const appointmentId = typeof appointmentIdRaw === "string" ? appointmentIdRaw.trim() : "";
+  const etaStatus = typeof statusRaw === "string" ? statusRaw.trim() : "";
+  const dayKey = typeof dateRaw === "string" ? dateRaw.trim() : "";
+  const screen = typeof screenRaw === "string" ? screenRaw.trim() : "myday";
+
+  if (!appointmentId || !etaStatus) {
+    redirect(mobileScheduleRedirect(screen, dayKey, "eta_status_required"));
+  }
+
+  const response = await callAdminApi(`/api/appointments/${encodeURIComponent(appointmentId)}/eta-status`, {
+    method: "POST",
+    body: JSON.stringify({ status: etaStatus, source: "mobile" })
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "eta_status_failed");
+    redirect(mobileScheduleRedirect(screen, dayKey, message));
+  }
+
+  revalidatePath("/mobile");
+  redirect(`${mobileScheduleRedirect(screen, dayKey)}&eta=1` as Route);
+}
+
 export async function openMobileContactThreadAction(formData: FormData) {
   await requireMobilePermission("messages.send");
 

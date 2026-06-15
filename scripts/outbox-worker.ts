@@ -69,6 +69,14 @@ async function runFacebookDmNameBackfillOnce() {
   }
 }
 
+async function runTraccarSyncOnce() {
+  const { syncTraccarPositions } = await import("../apps/api/src/lib/eta-agent");
+  const result = await syncTraccarPositions();
+  if (result.configured && (result.stored > 0 || !result.ok)) {
+    console.log(JSON.stringify({ ok: result.ok, traccar: result }, null, 2));
+  }
+}
+
 async function main() {
   registerAliases();
   const limit = Number(process.env["OUTBOX_BATCH_SIZE"] ?? 10);
@@ -83,10 +91,14 @@ async function main() {
   const facebookDmNameBackfillIntervalMs = Number(
     process.env["FACEBOOK_DM_NAME_BACKFILL_INTERVAL_MS"] ?? 2 * 60 * 60 * 1000
   );
+  const traccarSyncIntervalMs = Number(
+    process.env["TRACCAR_SYNC_INTERVAL_MS"] ?? 60 * 1000
+  );
   let nextSeoAt = Date.now();
   let nextGoogleAdsAt = Date.now();
   let nextSalesDraftPrepAt = Date.now();
   let nextFacebookDmNameBackfillAt = Date.now();
+  let nextTraccarSyncAt = Date.now();
 
   if (pollIntervalMs > 0) {
     // Continuous polling loop
@@ -137,6 +149,18 @@ async function main() {
             ? facebookDmNameBackfillIntervalMs
             : 2 * 60 * 60 * 1000);
       }
+      if (Date.now() >= nextTraccarSyncAt) {
+        try {
+          await runTraccarSyncOnce();
+        } catch (error) {
+          console.warn("[traccar] sync.loop_failed", String(error));
+        }
+        nextTraccarSyncAt =
+          Date.now() +
+          (Number.isFinite(traccarSyncIntervalMs) && traccarSyncIntervalMs > 15_000
+            ? traccarSyncIntervalMs
+            : 60 * 1000);
+      }
       if (stats.total === 0) {
         await sleep(pollIntervalMs);
       }
@@ -147,6 +171,7 @@ async function main() {
     await runGoogleAdsQueueOnce();
     await runSalesDraftPrepOnce();
     await runFacebookDmNameBackfillOnce();
+    await runTraccarSyncOnce();
   }
 }
 

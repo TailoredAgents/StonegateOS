@@ -6,6 +6,10 @@ import { getDb, appointmentNotes, appointments, contacts, crmTasks, properties, 
 import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "@/lib/calendar";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
+import {
+  getEtaSummariesForAppointments,
+  type EtaAppointmentSummary,
+} from "@/lib/eta-agent";
 import { isAdminRequest } from "../../../web/admin";
 
 type CalendarEvent = {
@@ -24,6 +28,20 @@ type CalendarEvent = {
   finalTotalCents?: number | null;
   bookingDetails?: AppointmentBookingDetails | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
+  eta?: {
+    status: string | null;
+    eventType: string | null;
+    eventSource: string | null;
+    eventAt: string | null;
+    locationFreshness: string;
+    pendingDraft: {
+      id: string;
+      reason: string;
+      body: string;
+      confidence: string;
+      createdAt: string;
+    } | null;
+  };
 };
 
 type CalendarFeedResponse = {
@@ -84,6 +102,10 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
   );
   const appointmentIds = dbRows.map((row) => row.id).filter((id): id is string => typeof id === "string" && id.length > 0);
   const notesByAppointmentId = new Map<string, Array<{ id: string; body: string; createdAt: string }>>();
+  const etaSummaryMap =
+    appointmentIds.length > 0
+      ? await getEtaSummariesForAppointments(appointmentIds)
+      : new Map<string, EtaAppointmentSummary>();
   if (appointmentIds.length) {
     const noteRows = await db
       .select({
@@ -173,6 +195,14 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
         quotedTotalCents: row.quotedTotalCents ?? null,
         finalTotalCents: row.finalTotalCents ?? null,
         bookingDetails: parseAppointmentBookingDetails(row.bookingDetails),
+        eta: etaSummaryMap.get(row.id) ?? {
+          status: null,
+          eventType: null,
+          eventSource: null,
+          eventAt: null,
+          locationFreshness: "missing",
+          pendingDraft: null
+        },
         notes
       };
     });

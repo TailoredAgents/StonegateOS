@@ -1,7 +1,13 @@
-import { eq } from "drizzle-orm";
 import { getDb, providerHealth } from "@/db";
 
-export type ProviderName = "sms" | "email" | "calendar" | "meta_ads" | "google_ads" | "google_ads_analyst";
+export type ProviderName =
+  | "sms"
+  | "email"
+  | "calendar"
+  | "meta_ads"
+  | "google_ads"
+  | "google_ads_analyst"
+  | "traccar";
 
 export async function recordProviderSuccess(provider: ProviderName): Promise<void> {
   const db = getDb();

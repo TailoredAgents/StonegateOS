@@ -12,9 +12,10 @@ import {
 } from "@/db";
 import type { DatabaseClient } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
+import { getAutonomousBookingDurationMinutes, isAfterHoursAutonomyActive } from "@/lib/after-hours-autonomy";
 import { buildMediaJobAnalysisWithVision, getMediaJobAnalysis, upsertMediaJobAnalysis } from "@/lib/media-job-analysis";
 import { loadOmniLeadContext, type OmniLeadContext } from "@/lib/omni-lead-context";
-import { getSalesAutopilotPolicy, type SalesAutopilotPolicy } from "@/lib/policy";
+import { getSalesAutopilotPolicy, normalizePostalCode, type SalesAutopilotPolicy } from "@/lib/policy";
 
 type AutonomyMode = SalesAutopilotPolicy["facebookCloser"]["mode"];
 type FacebookCoaching = SalesAutopilotPolicy["facebookCoaching"];
@@ -29,6 +30,7 @@ type Stage =
   | "booked";
 type ProposedAction =
   | "no_op"
+  | "request_quote_details"
   | "request_photos"
   | "request_address"
   | "send_quote_range"
@@ -56,6 +58,10 @@ type EvaluatedMessage = {
   toAddress: string | null;
   fromAddress: string | null;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 const RISK_PATTERNS: Array<[RegExp, string]> = [
   [/\b(demo|demolition|tear\s?down|knock\s?down)\b/i, "demolition"],
@@ -124,10 +130,10 @@ function money(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(cents / 100);
 }
 
-function latestMeaningfulInboundAt(context: OmniLeadContext): Date | null {
+function latestMeaningfulInboundAt(context: OmniLeadContext, channel: string): Date | null {
   for (let i = context.recentMessages.length - 1; i >= 0; i -= 1) {
     const msg = context.recentMessages[i];
-    if (msg?.channel === "dm" && msg.direction === "inbound" && msg.body.trim().length > 0) {
+    if (msg?.channel === channel && msg.direction === "inbound" && msg.body.trim().length > 0) {
       const parsed = new Date(msg.receivedAt ?? msg.createdAt);
       return Number.isNaN(parsed.getTime()) ? null : parsed;
     }
@@ -166,6 +172,12 @@ function customerAskedForQuote(body: string): boolean {
   return /\b(price|pricing|quote|estimate|cost|how much|\$)\b/i.test(body);
 }
 
+function customerAcceptedQuoteOrScheduling(body: string): boolean {
+  return /\b(yes|yeah|yep|ok|okay|sounds good|looks good|that works|works for me|i like|book|schedule|set it up|let's do|lets do|go ahead)\b/i.test(
+    body,
+  );
+}
+
 function confidenceMeetsPolicy(confidence: "low" | "medium" | "high", min: "medium" | "high"): boolean {
   if (min === "high") return confidence === "high";
   return confidence === "medium" || confidence === "high";
@@ -185,7 +197,14 @@ function findCoachingKeyword(body: string, keywords: string[]): string | null {
 }
 
 function isOutboundAutomationAction(action: ProposedAction): boolean {
-  return action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times" || action === "book_job";
+  return (
+    action === "request_quote_details" ||
+    action === "request_photos" ||
+    action === "request_address" ||
+    action === "send_quote_range" ||
+    action === "offer_times" ||
+    action === "book_job"
+  );
 }
 
 export function applyFacebookCoachingGuards(input: {
@@ -373,20 +392,29 @@ async function createOutboundDmDraft(input: {
   body: string;
   mode: AutonomyMode;
   send: boolean;
+  channel?: "dm" | "sms";
 }): Promise<string | null> {
+  const channel = input.channel ?? (input.row.channel === "sms" ? "sms" : "dm");
   const now = new Date();
   const [existingRecentOutbound] = await input.db
-    .select({ id: conversationMessages.id })
+    .select({ id: conversationMessages.id, metadata: conversationMessages.metadata })
     .from(conversationMessages)
     .where(
       and(
         eq(conversationMessages.threadId, input.row.threadId),
         eq(conversationMessages.direction, "outbound"),
+        eq(conversationMessages.channel, channel),
         gt(conversationMessages.createdAt, input.row.createdAt),
       ),
     )
     .limit(1);
-  if (existingRecentOutbound?.id) return null;
+  if (existingRecentOutbound?.id) {
+    const existingMeta = isRecord(existingRecentOutbound.metadata)
+      ? (existingRecentOutbound.metadata as Record<string, unknown>)
+      : null;
+    if (existingMeta?.["draft"] !== true) return null;
+    await input.db.delete(conversationMessages).where(eq(conversationMessages.id, existingRecentOutbound.id));
+  }
 
   let [participant] = await input.db
     .select({ id: conversationParticipants.id })
@@ -411,7 +439,7 @@ async function createOutboundDmDraft(input: {
       threadId: input.row.threadId,
       participantId: participant?.id ?? null,
       direction: "outbound",
-      channel: "dm",
+      channel,
       body: input.body,
       toAddress: input.row.fromAddress,
       deliveryStatus: input.send ? "queued" : "queued",
@@ -439,12 +467,12 @@ async function createOutboundDmDraft(input: {
 function buildQuoteMessage(range: { lowCents: number; highCents: number }, summary: string | null, coaching: FacebookCoaching): string {
   const scope = summary ? ` From the photos, ${summary.replace(/\s+/g, " ").slice(0, 180)}` : "";
   if (coaching.enabled && coaching.tone === "concise") {
-    return `Looks like ${money(range.lowCents)}-${money(range.highCents)} based on what I can see.${scope} Want a couple available times?`;
+    return `Looks like ${money(range.lowCents)}-${money(range.highCents)} based on what I can tell.${scope} Want to schedule a free in-person quote?`;
   }
   if (coaching.enabled && coaching.tone === "professional") {
-    return `Based on the information available, the job is likely around ${money(range.lowCents)}-${money(range.highCents)}.${scope} Final pricing can change if volume, weight, access, or materials differ in person. Would you like available appointment options?`;
+    return `Based on the information available, the job is likely around ${money(range.lowCents)}-${money(range.highCents)}.${scope} Final pricing can change if volume, weight, access, or materials differ in person. Would you like to schedule a free in-person quote?`;
   }
-  return `Based on what I can see, you're likely around ${money(range.lowCents)}-${money(range.highCents)}.${scope} Final price only changes if volume, weight, access, or materials differ in person. Want me to send a couple available times?`;
+  return `Based on what I can tell, you're likely around ${money(range.lowCents)}-${money(range.highCents)}.${scope} Final price only changes if volume, weight, access, or materials differ in person. Want to schedule a free in-person quote?`;
 }
 
 function buildAddressAsk(coaching: FacebookCoaching): string {
@@ -467,9 +495,112 @@ function buildPhotoAsk(coaching: FacebookCoaching): string {
   return "Can you send a couple photos of what needs to go? Once I can see it, I can give you a tighter range and times.";
 }
 
+function latestInboundText(context: OmniLeadContext): string {
+  return [
+    context.latestLead?.notes,
+    context.instantQuote?.notes,
+    ...context.recentMessages.filter((msg) => msg.direction === "inbound").map((msg) => msg.body),
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n")
+    .toLowerCase();
+}
+
+function detectTextJobTypes(text: string): string[] {
+  const types = new Set<string>();
+  if (/\b(couch|sofa|dresser|table|chair|desk|bed|mattress|furniture)\b/i.test(text)) types.add("furniture");
+  if (/\b(fridge|refrigerator|washer|dryer|stove|oven|dishwasher|appliance)\b/i.test(text)) types.add("appliances");
+  if (/\b(construction|renovation|remodel|drywall|lumber|debris|tile|cabinet)\b/i.test(text)) types.add("construction_debris");
+  if (/\b(hot tub|playset|swing set)\b/i.test(text)) types.add("hot_tub_playset");
+  if (/\b(office|business|commercial|warehouse)\b/i.test(text)) types.add("business_commercial");
+  if (types.size === 0 && /\b(junk|trash|stuff|items|garage|basement|cleanout|pickup|haul)\b/i.test(text)) types.add("general_junk");
+  return [...types];
+}
+
+function detectTextPerceivedSize(text: string): string | null {
+  if (/\b(single|one item|1 item|one couch|one sofa|one mattress|one appliance)\b/i.test(text)) return "single_item";
+  if (/\b(small|few items|couple items|quarter|1\/4|¼|min pickup|minimum)\b/i.test(text)) return "min_pickup";
+  if (/\b(half|1\/2|½|medium|one room|1 room)\b/i.test(text)) return "half_trailer";
+  if (/\b(three quarter|3\/4|¾|large|two rooms|2 rooms|several bulky)\b/i.test(text)) return "three_quarter_trailer";
+  if (/\b(full|huge|big cleanout|whole garage|full garage|basement|multiple rooms|estate)\b/i.test(text)) return "big_cleanout";
+  return null;
+}
+
+function estimateJunkQuoteRangeFromText(input: {
+  perceivedSize?: string | null;
+  confidence?: "low" | "medium" | "high";
+}): { lowCents: number; highCents: number; confidence: "low" | "medium" | "high" } | null {
+  const confidence = input.confidence ?? "medium";
+  switch ((input.perceivedSize ?? "").toLowerCase()) {
+    case "single_item":
+      return { lowCents: 17500, highCents: 17500, confidence };
+    case "min_pickup":
+      return { lowCents: 19500, highCents: 31000, confidence };
+    case "half_trailer":
+      return { lowCents: 32000, highCents: 47000, confidence };
+    case "three_quarter_trailer":
+      return { lowCents: 48000, highCents: 62000, confidence };
+    case "big_cleanout":
+      return { lowCents: 63000, highCents: 85000, confidence: "low" };
+    default:
+      return null;
+  }
+}
+
+function getTextQuoteReadiness(context: OmniLeadContext): {
+  quoteRange: { lowCents: number; highCents: number; confidence: "low" | "medium" | "high" } | null;
+  missingQuestion: string | null;
+  snapshot: Record<string, unknown>;
+} {
+  const text = latestInboundText(context);
+  const jobTypes = context.instantQuote?.jobTypes?.length ? context.instantQuote.jobTypes : detectTextJobTypes(text);
+  const perceivedSize = context.instantQuote?.perceivedSize && context.instantQuote.perceivedSize !== "not_sure"
+    ? context.instantQuote.perceivedSize
+    : detectTextPerceivedSize(text);
+  const zip =
+    normalizePostalCode(context.instantQuote?.zip ?? null) ??
+    normalizePostalCode(context.derived.knownZip ?? null) ??
+    normalizePostalCode((text.match(/\b\d{5}\b/) ?? [])[0] ?? null);
+
+  if (!zip && !context.derived.knownCity) {
+    return {
+      quoteRange: null,
+      missingQuestion: "What ZIP code is the pickup in?",
+      snapshot: { jobTypes, perceivedSize, zip: null },
+    };
+  }
+  if (jobTypes.length === 0) {
+    return {
+      quoteRange: null,
+      missingQuestion: "What all needs to go?",
+      snapshot: { jobTypes, perceivedSize, zip },
+    };
+  }
+  if (!perceivedSize) {
+    return {
+      quoteRange: null,
+      missingQuestion: "About how much is it: single item, small pickup, half trailer, 3/4 trailer, or full trailer?",
+      snapshot: { jobTypes, perceivedSize: null, zip },
+    };
+  }
+  return {
+    quoteRange: estimateJunkQuoteRangeFromText({ perceivedSize, confidence: context.recentMessages.some((msg) => (msg.mediaUrls?.length ?? 0) > 0) ? "medium" : "low" }),
+    missingQuestion: null,
+    snapshot: { jobTypes, perceivedSize, zip },
+  };
+}
+
+function buildQuoteDetailsAsk(question: string, coaching: FacebookCoaching): string {
+  if (coaching.enabled && coaching.tone === "professional") {
+    return `I can get you a ballpark. ${question}`;
+  }
+  return question;
+}
+
 async function fetchBookingAssist(input: {
   property: OmniLeadContext["properties"][number];
   durationMinutes?: number;
+  autonomousConversationAt?: Date | null;
 }): Promise<OfferedSlot[]> {
   const apiBase = process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"];
   const adminKey = process.env["ADMIN_API_KEY"];
@@ -482,8 +613,9 @@ async function fetchBookingAssist(input: {
       city: input.property.city,
       state: input.property.state,
       postalCode: input.property.postalCode,
-      durationMinutes: input.durationMinutes ?? 120,
+      durationMinutes: input.durationMinutes ?? getAutonomousBookingDurationMinutes(),
       windowDays: 7,
+      autonomousConversationAt: input.autonomousConversationAt?.toISOString(),
     }),
   });
   if (!response.ok) return [];
@@ -525,6 +657,7 @@ async function bookSlot(input: {
   propertyId: string;
   slot: OfferedSlot;
   range: { lowCents: number; highCents: number };
+  conversationAt: Date;
 }): Promise<{ ok: true; appointmentId: string; startAt: string } | { ok: false; error: string }> {
   const apiBase = process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"];
   const adminKey = process.env["ADMIN_API_KEY"];
@@ -535,14 +668,16 @@ async function bookSlot(input: {
     body: JSON.stringify({
       contactId: input.contactId,
       propertyId: input.propertyId,
-      appointmentType: "job",
+      appointmentType: "in_person_quote",
       startAt: input.slot.startAt,
-      durationMinutes: 120,
+      durationMinutes: getAutonomousBookingDurationMinutes(),
       travelBufferMinutes: 30,
-      source: "facebook_autopilot",
+      source: "sales_autopilot",
+      autonomousConversationAt: input.conversationAt.toISOString(),
       services: ["junk_removal"],
+      quotedTotalCents: null,
       bookingDetails: buildBookingDetails(input.range),
-      notes: `Autonomous Facebook booking. Quoted range ${money(input.range.lowCents)}-${money(input.range.highCents)}.`,
+      notes: `Autonomous sales booking for free in-person quote. Quoted range ${money(input.range.lowCents)}-${money(input.range.highCents)}.`,
     }),
   });
   const data = (await response.json().catch(() => null)) as { appointmentId?: string; startAt?: string; error?: string } | null;
@@ -568,35 +703,38 @@ async function createHumanReviewTask(db: DatabaseClient, contactId: string | nul
 export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ status: "processed" | "skipped" | "retry"; error?: string | null }> {
   const db = getDb();
   const row = await getEvaluatedMessage(db, messageId);
-  if (!row || row.direction !== "inbound" || row.channel !== "dm") return { status: "skipped" };
+  if (!row || row.direction !== "inbound" || (row.channel !== "dm" && row.channel !== "sms")) return { status: "skipped" };
   const metadataSource = row.metadata?.["source"];
   const source =
     (typeof metadataSource === "string" ? metadataSource : row.provider ?? "").toLowerCase();
-  if (!source.includes("facebook")) return { status: "skipped" };
+  if (row.channel === "dm" && !source.includes("facebook")) return { status: "skipped" };
   if (!row.contactId) return { status: "skipped" };
 
   const policy = await getSalesAutopilotPolicy(db);
   const closer = policy.facebookCloser;
   const coaching = policy.facebookCoaching;
-  const mode = closer.mode;
+  const inAutonomyWindow = isAfterHoursAutonomyActive({ at: row.createdAt });
+  const mode: AutonomyMode = closer.mode === "auto" && !inAutonomyWindow ? "assist" : closer.mode;
   const context = await loadOmniLeadContext(db, { contactId: row.contactId, includeQuotePrice: true, messageLimit: 60 });
   if (!context) return { status: "skipped" };
 
-  const latestInboundAt = latestMeaningfulInboundAt(context) ?? row.receivedAt ?? row.createdAt;
+  const latestInboundAt = latestMeaningfulInboundAt(context, row.channel) ?? row.receivedAt ?? row.createdAt;
   const responseWindowMs = closer.messengerResponseWindowHours * 60 * 60 * 1000;
-  const outsideMessengerWindow = Date.now() - latestInboundAt.getTime() > responseWindowMs;
-  const leadAutomation = context.automation.find((entry) => entry.channel === "dm");
+  const outsideMessengerWindow = row.channel === "dm" && Date.now() - latestInboundAt.getTime() > responseWindowMs;
+  const leadAutomation = context.automation.find((entry) => entry.channel === row.channel);
   const hasBookedAppointment = Boolean(context.nextAppointment && context.nextAppointment.status !== "canceled");
   const riskReason = detectRisk(context);
   const latestBody = row.body ?? "";
   const mediaCount = context.recentMessages.reduce((sum, msg) => sum + (msg.mediaUrls?.length ?? 0), 0);
-  const snapshot = {
+  const snapshot: Record<string, unknown> = {
     contactId: row.contactId,
     threadId: row.threadId,
     leadId: row.leadId,
     body: latestBody.slice(0, 500),
     mediaCount,
     mode,
+    inAutonomyWindow,
+    channel: row.channel,
     ownerCoaching: coaching.enabled
       ? {
           tone: coaching.tone,
@@ -639,6 +777,13 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
   }
   if (quoteRange) confidence = quoteRange.confidence;
 
+  const textQuote = getTextQuoteReadiness(context);
+  if (!quoteRange && textQuote.quoteRange) {
+    quoteRange = textQuote.quoteRange;
+    confidence = textQuote.quoteRange.confidence;
+  }
+  snapshot["textQuote"] = textQuote.snapshot;
+
   const [existingSession] = await db
     .select()
     .from(facebookSalesAutopilotSessions)
@@ -654,7 +799,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
 
   if (mode === "off" || closer.emergencyStop) {
     action = "no_op";
-    reason = mode === "off" ? "facebook_closer_off" : "facebook_closer_emergency_stop";
+    reason = mode === "off" ? "sales_closer_off" : "sales_closer_emergency_stop";
   } else if (leadAutomation?.dnc || leadAutomation?.humanTakeover || leadAutomation?.paused) {
     stage = "needs_human_review";
     action = "human_review";
@@ -683,7 +828,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
     action = "human_review";
     humanReviewReason = "confirmation_without_quote";
     reason = "confirmation_without_quote";
-  } else if (customerAskedForTimes(latestBody) && quoteRange) {
+  } else if ((customerAskedForTimes(latestBody) || (rangeFromSession && customerAcceptedQuoteOrScheduling(latestBody))) && quoteRange) {
     if (!hasUsableProperty(context)) {
       stage = "missing_info";
       action = "request_address";
@@ -699,8 +844,8 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
     reason = "quote_range_available";
   } else if (!quoteRange) {
     stage = "missing_info";
-    action = "request_photos";
-    reason = "photos_or_more_job_detail_required";
+    action = textQuote.missingQuestion ? "request_quote_details" : "request_photos";
+    reason = textQuote.missingQuestion ? "quote_details_required" : "photos_or_more_job_detail_required";
   }
 
   if (quoteRange && quoteRange.highCents > closer.maxAutoBookTotalCents && action === "book_job") {
@@ -743,7 +888,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
 
   let slotsForSession = offeredSlots;
   if (action === "offer_times" && hasUsableProperty(context)) {
-    slotsForSession = await fetchBookingAssist({ property: context.properties[0]! });
+    slotsForSession = await fetchBookingAssist({ property: context.properties[0]!, autonomousConversationAt: latestInboundAt });
     if (slotsForSession.length === 0) {
       stage = "needs_human_review";
       action = "human_review";
@@ -771,10 +916,15 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
   let error: string | null = null;
 
   try {
-    if (mode === "assist" && (action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times")) {
+    if (
+      mode === "assist" &&
+      (action === "request_quote_details" || action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times")
+    ) {
       const body =
         action === "request_address"
           ? buildAddressAsk(coaching)
+          : action === "request_quote_details" && textQuote.missingQuestion
+            ? buildQuoteDetailsAsk(textQuote.missingQuestion, coaching)
           : action === "request_photos"
             ? buildPhotoAsk(coaching)
             : action === "send_quote_range" && quoteRange
@@ -782,14 +932,16 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
               : action === "offer_times"
                 ? buildSlotsMessage(slotsForSession, coaching)
                 : "";
-      const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: false }) : null;
+      const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: false, channel: row.channel as "dm" | "sms" }) : null;
       executedAction = messageId ? "draft_created" : "draft_reused_or_skipped";
       result = { messageId };
     } else if (mode === "auto") {
-      if (action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times") {
+      if (action === "request_quote_details" || action === "request_photos" || action === "request_address" || action === "send_quote_range" || action === "offer_times") {
         const body =
           action === "request_address"
             ? buildAddressAsk(coaching)
+            : action === "request_quote_details" && textQuote.missingQuestion
+              ? buildQuoteDetailsAsk(textQuote.missingQuestion, coaching)
             : action === "request_photos"
               ? buildPhotoAsk(coaching)
               : action === "send_quote_range" && quoteRange
@@ -797,7 +949,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
                 : action === "offer_times"
                   ? buildSlotsMessage(slotsForSession, coaching)
                   : "";
-        const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: true }) : null;
+        const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: true, channel: row.channel as "dm" | "sms" }) : null;
         executedAction = messageId ? "message_queued" : "message_reused_or_skipped";
         result = { messageId };
       } else if (action === "book_job" && confirmedSlot && quoteRange && row.contactId && row.propertyId) {
@@ -817,7 +969,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
           result = { newerInboundMessageId: newerInbound.id };
           await createHumanReviewTask(db, row.contactId, "newer_inbound_message");
         } else {
-          const booked = await bookSlot({ contactId: row.contactId, propertyId: row.propertyId, slot: confirmedSlot, range: quoteRange });
+          const booked = await bookSlot({ contactId: row.contactId, propertyId: row.propertyId, slot: confirmedSlot, range: quoteRange, conversationAt: latestInboundAt });
           if (booked.ok) {
             executedAction = "appointment_booked";
             result = booked;
@@ -825,9 +977,10 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
             await createOutboundDmDraft({
               db,
               row,
-              body: `You're booked for ${confirmedSlot.label.replace(/^Option \d+:\s*/, "")}. We'll text confirmation details too.`,
+              body: `You're booked for ${confirmedSlot.label.replace(/^Option \d+:\s*/, "")}. We'll confirm the final price in person before loading.`,
               mode,
               send: true,
+              channel: row.channel as "dm" | "sms",
             });
           } else {
             executedAction = "booking_failed";

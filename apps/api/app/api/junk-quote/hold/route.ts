@@ -7,13 +7,13 @@ import { appointmentHolds, appointments, getDb, instantQuotes, leads } from "@/d
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
 import {
-  getBusinessHourWindowsForDate,
   getBusinessHoursPolicy,
   getBookingRulesPolicy,
   getItemPoliciesPolicy,
   getStandardJobPolicy,
   normalizePostalCode
 } from "@/lib/policy";
+import { getAutonomousBookingDurationMinutes, validateAutonomousBookingStart } from "@/lib/after-hours-autonomy";
 import { buildStandardJobMessage, evaluateStandardJob } from "@/lib/standard-job";
 import { APPOINTMENT_TIME_ZONE, DEFAULT_TRAVEL_BUFFER_MIN } from "../../web/scheduling";
 
@@ -21,7 +21,6 @@ const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
 
 const WINDOW_DAYS = 14;
-const SLOT_INTERVAL_MIN = 60;
 const HOLD_WINDOW_MINUTES = 15;
 
 function resolveOrigin(requestOrigin: string | null): string {
@@ -127,10 +126,8 @@ function deriveDurationMinutes(quote: { aiResult: unknown; perceivedSize: string
   })();
 
   const units = maxUnits ?? fallbackUnits;
-  if (units <= 2) return 120;
-  if (units <= 4) return 180;
-  const loads = Math.max(2, Math.ceil(units / 4));
-  return loads * 240;
+  void units;
+  return getAutonomousBookingDurationMinutes();
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -227,18 +224,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     if (startLocal > nowLocal.plus({ days: bookingWindowDays }).endOf("day")) {
       return corsJson({ ok: false, error: "outside_booking_window" }, requestOrigin, { status: 400 });
     }
-    const windows = getBusinessHourWindowsForDate(startLocal, businessHours);
-    if (!windows.length) {
-      return corsJson({ ok: false, error: "unavailable_day" }, requestOrigin, { status: 400 });
-    }
-    const endLocal = startLocal.plus({ minutes: durationMinutes });
-    const window = windows.find((entry) => startLocal >= entry.start && endLocal <= entry.end);
-    if (!window) {
-      return corsJson({ ok: false, error: "outside_business_hours" }, requestOrigin, { status: 400 });
-    }
-    const slotOffset = Math.round(startLocal.diff(window.start, "minutes").minutes);
-    if (!Number.isFinite(slotOffset) || slotOffset % SLOT_INTERVAL_MIN !== 0) {
-      return corsJson({ ok: false, error: "invalid_start_time" }, requestOrigin, { status: 400 });
+    const ruleResult = validateAutonomousBookingStart({
+      startAt,
+      city: body.city,
+      timezone: schedulingZone,
+      durationMinutes,
+    });
+    if (!ruleResult.ok) {
+      return corsJson({ ok: false, error: ruleResult.code, message: ruleResult.message }, requestOrigin, { status: 400 });
     }
 
     const [leadRow] = await db

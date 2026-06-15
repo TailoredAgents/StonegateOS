@@ -1209,6 +1209,190 @@ export const providerHealth = pgTable("provider_health", {
     .$onUpdate(() => new Date()),
 });
 
+export const crewTrackingDevices = pgTable(
+  "crew_tracking_devices",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    crewLabel: text("crew_label"),
+    provider: text("provider").default("traccar").notNull(),
+    providerDeviceId: text("provider_device_id").notNull(),
+    displayName: text("display_name"),
+    active: boolean("active").default(true).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    providerDeviceIdx: uniqueIndex("crew_tracking_devices_provider_device_key").on(
+      table.provider,
+      table.providerDeviceId,
+    ),
+    memberIdx: index("crew_tracking_devices_member_idx").on(table.teamMemberId),
+    activeIdx: index("crew_tracking_devices_active_idx").on(table.active),
+  }),
+);
+
+export const crewLocationPings = pgTable(
+  "crew_location_pings",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    trackingDeviceId: uuid("tracking_device_id")
+      .notNull()
+      .references(() => crewTrackingDevices.id, { onDelete: "cascade" }),
+    provider: text("provider").default("traccar").notNull(),
+    providerPositionId: text("provider_position_id"),
+    lat: doublePrecision("lat").notNull(),
+    lng: doublePrecision("lng").notNull(),
+    accuracyMeters: doublePrecision("accuracy_meters"),
+    speedKph: doublePrecision("speed_kph"),
+    fixAt: timestamp("fix_at", { withTimezone: true }).notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    freshness: text("freshness").default("fresh").notNull(),
+    raw: jsonb("raw").$type<Record<string, unknown> | null>(),
+  },
+  (table) => ({
+    deviceFixIdx: index("crew_location_pings_device_fix_idx").on(
+      table.trackingDeviceId,
+      table.fixAt,
+    ),
+    freshnessIdx: index("crew_location_pings_freshness_idx").on(table.freshness),
+  }),
+);
+
+export const crewRouteStates = pgTable(
+  "crew_route_states",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    crewLabel: text("crew_label"),
+    serviceDate: text("service_date").notNull(),
+    currentAppointmentId: uuid("current_appointment_id").references(
+      () => appointments.id,
+      { onDelete: "set null" },
+    ),
+    nextAppointmentId: uuid("next_appointment_id").references(
+      () => appointments.id,
+      { onDelete: "set null" },
+    ),
+    status: text("status").default("unknown").notNull(),
+    dumpStatus: text("dump_status").default("not_needed").notNull(),
+    locationFreshness: text("location_freshness").default("missing").notNull(),
+    lastLocationPingId: uuid("last_location_ping_id").references(
+      () => crewLocationPings.id,
+      { onDelete: "set null" },
+    ),
+    statusNote: text("status_note"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    memberDateIdx: index("crew_route_states_member_date_idx").on(
+      table.teamMemberId,
+      table.serviceDate,
+    ),
+    crewDateIdx: index("crew_route_states_crew_date_idx").on(
+      table.crewLabel,
+      table.serviceDate,
+    ),
+    currentIdx: index("crew_route_states_current_idx").on(
+      table.currentAppointmentId,
+    ),
+  }),
+);
+
+export const appointmentEtaEvents = pgTable(
+  "appointment_eta_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    teamMemberId: uuid("team_member_id").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    crewLabel: text("crew_label"),
+    eventType: text("event_type").notNull(),
+    source: text("source").default("crm").notNull(),
+    note: text("note"),
+    meta: jsonb("meta").$type<Record<string, unknown> | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    apptCreatedIdx: index("appointment_eta_events_appt_created_idx").on(
+      table.appointmentId,
+      table.createdAt,
+    ),
+    typeIdx: index("appointment_eta_events_type_idx").on(table.eventType),
+  }),
+);
+
+export const etaMessageDrafts = pgTable(
+  "eta_message_drafts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    threadId: uuid("thread_id").references(() => conversationThreads.id, {
+      onDelete: "set null",
+    }),
+    channel: text("channel").default("sms").notNull(),
+    status: text("status").default("draft").notNull(),
+    reason: text("reason").notNull(),
+    body: text("body").notNull(),
+    etaStartAt: timestamp("eta_start_at", { withTimezone: true }),
+    etaEndAt: timestamp("eta_end_at", { withTimezone: true }),
+    confidence: text("confidence").default("low").notNull(),
+    locationFreshness: text("location_freshness").default("missing").notNull(),
+    createdBy: uuid("created_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    sentBy: uuid("sent_by").references(() => teamMembers.id, {
+      onDelete: "set null",
+    }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    statusCreatedIdx: index("eta_message_drafts_status_created_idx").on(
+      table.status,
+      table.createdAt,
+    ),
+    apptIdx: index("eta_message_drafts_appt_idx").on(
+      table.appointmentId,
+      table.createdAt,
+    ),
+  }),
+);
+
 export const metaAdsInsightsDaily = pgTable(
   "meta_ads_insights_daily",
   {

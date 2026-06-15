@@ -6,6 +6,7 @@ import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { forwardGeocode } from "@/lib/geocode";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { getAutonomousBookingDurationMinutes, validateAutonomousBookingStart } from "@/lib/after-hours-autonomy";
 
 type SuggestRequest = {
   durationMinutes?: number;
@@ -20,6 +21,7 @@ type SuggestRequest = {
   city?: string;
   state?: string;
   postalCode?: string;
+  autonomousConversationAt?: string;
 };
 
 type Suggestion = {
@@ -33,10 +35,10 @@ type SuggestResponse = {
   suggestions: Suggestion[];
 };
 
-const DEFAULT_DURATION_MIN = 60;
 const DEFAULT_WINDOW_DAYS = 5;
 const DEFAULT_START_HOUR = 8;
 const DEFAULT_END_HOUR = 18;
+const SLOT_INTERVAL_MIN = 30;
 
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
@@ -48,10 +50,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const payload = (await request.json().catch(() => ({}))) as SuggestRequest;
-  const durationMinutes =
-    typeof payload.durationMinutes === "number" && payload.durationMinutes > 0
-      ? payload.durationMinutes
-      : DEFAULT_DURATION_MIN;
+  const durationMinutes = getAutonomousBookingDurationMinutes();
   const windowDays =
     typeof payload.windowDays === "number" && payload.windowDays > 0 && payload.windowDays <= 30
       ? payload.windowDays
@@ -76,6 +75,10 @@ export async function POST(request: NextRequest): Promise<Response> {
   const city = typeof payload.city === "string" ? payload.city : null;
   const state = typeof payload.state === "string" ? payload.state : null;
   const postalCode = typeof payload.postalCode === "string" ? payload.postalCode : null;
+  const autonomousConversationAt =
+    typeof payload.autonomousConversationAt === "string" && payload.autonomousConversationAt.trim().length > 0
+      ? payload.autonomousConversationAt.trim()
+      : null;
 
   let resolvedLat = targetLat;
   let resolvedLng = targetLng;
@@ -152,11 +155,22 @@ export async function POST(request: NextRequest): Promise<Response> {
       resolvedLat !== null && resolvedLng !== null
         ? dayBlocks.filter((b) => distanceKm(b, resolvedLat, resolvedLng) <= radiusKm).length
         : null;
-    for (let hour = startHour; hour + durationMinutes / 60 <= endHour; hour += 2) {
-      const slotStart = new Date(base);
-      slotStart.setHours(hour, 0, 0, 0);
+    const firstSlot = new Date(base);
+    firstSlot.setHours(startHour, 0, 0, 0);
+    const lastCursor = new Date(base);
+    lastCursor.setHours(endHour, 0, 0, 0);
+    for (let cursorMs = firstSlot.getTime(); cursorMs < lastCursor.getTime(); cursorMs += SLOT_INTERVAL_MIN * 60_000) {
+      const slotStart = new Date(cursorMs);
       if (slotStart < now) continue;
       const slotEnd = new Date(slotStart.getTime() + durationMinutes * 60_000);
+      const ruleResult = validateAutonomousBookingStart({
+        startAt: slotStart,
+        city,
+        timezone: process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York",
+        durationMinutes,
+        conversationAt: autonomousConversationAt,
+      });
+      if (!ruleResult.ok) continue;
       if (conflictsWith(blocks, slotStart, slotEnd, capacity)) continue;
       suggestions.push({
         startAt: slotStart.toISOString(),

@@ -3,7 +3,9 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { getDb, conversationMessages, messageDeliveryEvents } from "@/db";
 import { recordInboundMessage } from "@/lib/inbox";
+import { handleCrewEtaSms } from "@/lib/eta-agent";
 import { recordProviderFailure, recordProviderSuccess } from "@/lib/provider-health";
+import { findActiveTeamMemberByPhone, normalizePhoneE164 } from "@/lib/team-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -130,6 +132,19 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     return twimlOk();
+  }
+
+  const fromE164 = normalizePhoneE164(from);
+  if (fromE164) {
+    const teamMember = await findActiveTeamMemberByPhone(fromE164);
+    if (teamMember) {
+      await handleCrewEtaSms({
+        teamMember,
+        body,
+        fromAddress: fromE164,
+      });
+      return twimlOk();
+    }
   }
 
   const mediaUrls: string[] = [];

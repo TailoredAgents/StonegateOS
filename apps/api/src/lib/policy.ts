@@ -189,11 +189,11 @@ const WEEKDAY_KEYS: WeekdayKey[] = [
 export const DEFAULT_BUSINESS_HOURS_POLICY: BusinessHoursPolicy = {
   timezone: DEFAULT_POLICY_TIMEZONE,
   weekly: {
-    monday: [{ start: "08:00", end: "18:00" }],
-    tuesday: [{ start: "08:00", end: "18:00" }],
-    wednesday: [{ start: "08:00", end: "18:00" }],
-    thursday: [{ start: "08:00", end: "18:00" }],
-    friday: [{ start: "08:00", end: "18:00" }],
+    monday: [{ start: "08:00", end: "17:30" }],
+    tuesday: [{ start: "08:00", end: "17:30" }],
+    wednesday: [{ start: "08:00", end: "17:30" }],
+    thursday: [{ start: "08:00", end: "17:30" }],
+    friday: [{ start: "08:00", end: "17:30" }],
     saturday: [{ start: "09:00", end: "14:00" }],
     sunday: []
   }

@@ -20,6 +20,7 @@ import {
   sendMobileTeamInviteAction,
   startMobileContactCallAction,
   sendMobileQuoteAction,
+  updateMobileAppointmentEtaStatusAction,
   updateMobileAppointmentStatusAction,
   updateMobileContactAction,
   updateMobileTeamMemberAction,
@@ -187,7 +188,23 @@ type CalendarEvent = {
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
   bookingDetails?: AppointmentBookingDetails | null;
+  eta?: EtaSummary;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
+};
+
+type EtaSummary = {
+  status: string | null;
+  eventType: string | null;
+  eventSource: string | null;
+  eventAt: string | null;
+  locationFreshness: string;
+  pendingDraft: {
+    id: string;
+    reason: string;
+    body: string;
+    confidence: string;
+    createdAt: string;
+  } | null;
 };
 
 type CalendarFeedResponse = {
@@ -623,6 +640,74 @@ function isQuoteOnlyAppointmentType(value: string | null | undefined): boolean {
   return normalized === "in_person_quote" || normalized === "in_person_estimate";
 }
 
+const mobileEtaActions = [
+  ["heading_there", "Heading"],
+  ["on_site", "On site"],
+  ["need_dump", "Need dump"],
+  ["dump_complete", "Dump done"],
+  ["finished", "Finished"]
+] as const;
+
+function formatEtaStatusLabel(value: string | null | undefined): string {
+  if (!value) return "No ETA status";
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function MobileEtaControls({
+  event,
+  appointmentId,
+  calendarDay,
+  screen
+}: {
+  event: CalendarEvent;
+  appointmentId: string;
+  calendarDay: string;
+  screen: "myday" | "calendar";
+}) {
+  if (!appointmentId || event.source !== "db" || isQuoteOnlyAppointmentType(event.appointmentType) || isCanceledEvent(event)) {
+    return null;
+  }
+  return (
+    <div className="rounded-md border border-cyan-300/20 bg-cyan-300/10 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-200">ETA</p>
+          <p className="mt-1 truncate text-sm text-cyan-50">
+            {formatEtaStatusLabel(event.eta?.status)}
+            <span className="text-cyan-200/60"> · </span>
+            GPS {event.eta?.locationFreshness ?? "missing"}
+          </p>
+        </div>
+        {event.eta?.pendingDraft ? (
+          <span className="shrink-0 rounded-full border border-cyan-300/30 px-2 py-1 text-[11px] font-semibold text-cyan-100">
+            Draft
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+        {mobileEtaActions.map(([value, label]) => (
+          <form key={value} action={updateMobileAppointmentEtaStatusAction}>
+            <input type="hidden" name="appointmentId" value={appointmentId} />
+            <input type="hidden" name="date" value={calendarDay} />
+            <input type="hidden" name="screen" value={screen} />
+            <button
+              type="submit"
+              name="etaStatus"
+              value={value}
+              className="w-full rounded-md border border-cyan-300/20 bg-slate-950 px-2 py-2 text-xs font-semibold text-cyan-100"
+            >
+              {label}
+            </button>
+          </form>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function detectAddressFromMessages(messages: MessageDetail[] | undefined): DetectedAddress | null {
   if (!Array.isArray(messages)) return null;
   const statePattern = "AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY";
@@ -908,6 +993,12 @@ function MobileWeekAgenda({
                             {eventPricing}
                           </div>
                         ) : null}
+                        <MobileEtaControls
+                          event={event}
+                          appointmentId={appointmentId}
+                          calendarDay={dayKey}
+                          screen="calendar"
+                        />
 
                         {canUpdate ? (
                           <div className="grid grid-cols-2 gap-2">
@@ -1949,6 +2040,14 @@ export default async function MobileHomePage({
                               {eventPricing}
                             </div>
                           ) : null}
+                          <div className="mt-3">
+                            <MobileEtaControls
+                              event={event}
+                              appointmentId={appointmentId}
+                              calendarDay={calendarDay}
+                              screen="myday"
+                            />
+                          </div>
                           {canUpdate ? (
                             <details className="mt-3 rounded-md border border-white/10 bg-slate-950 p-3">
                               <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">Add note</summary>

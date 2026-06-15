@@ -4,8 +4,11 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
   rescheduleAppointmentAction,
+  dismissEtaDraftAction,
   scheduleQuoteFollowupAction,
+  sendEtaDraftAction,
   startContactCallAction,
+  updateAppointmentEtaStatusAction,
   updateAppointmentBookingDetailsAction,
   updateAppointmentSoldByAction,
 } from "../actions";
@@ -266,6 +269,7 @@ interface AppointmentDto {
   };
   pipelineStage: string | null;
   quoteStatus: string | null;
+  eta?: EtaSummaryDto;
   property: {
     id: string | null;
     addressLine1: string;
@@ -284,6 +288,34 @@ interface AppointmentDto {
     updatedAt: string;
   } | null;
 }
+
+type EtaSummaryDto = {
+  status: string | null;
+  eventType: string | null;
+  eventSource: string | null;
+  eventAt: string | null;
+  locationFreshness: string;
+  pendingDraft: {
+    id: string;
+    reason: string;
+    body: string;
+    confidence: string;
+    createdAt: string;
+  } | null;
+};
+
+type EtaDraftDto = {
+  id: string;
+  appointmentId: string;
+  customerName: string;
+  appointmentStartAt: string | null;
+  address: string | null;
+  reason: string;
+  body: string;
+  confidence: string;
+  locationFreshness: string;
+  createdAt: string;
+};
 
 type TeamMemberDto = {
   id: string;
@@ -326,6 +358,114 @@ function SummaryTile({
         {value}
       </div>
     </div>
+  );
+}
+
+const ETA_ACTIONS = [
+  ["heading_there", "Heading"],
+  ["on_site", "On site"],
+  ["need_dump", "Need dump"],
+  ["dump_complete", "Dump done"],
+  ["finished", "Finished"],
+] as const;
+
+function formatEtaStatus(value: string | null | undefined): string {
+  if (!value) return "No ETA status";
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function EtaControls({ appointment }: { appointment: AppointmentDto }): ReactElement {
+  const eta = appointment.eta ?? null;
+  return (
+    <div className="mt-4 rounded-2xl border border-cyan-200 bg-cyan-50/70 px-3 py-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-cyan-800">
+            ETA agent
+          </div>
+          <div className="mt-1 text-sm text-slate-700">
+            {formatEtaStatus(eta?.status)}
+            <span className="text-slate-400"> · </span>
+            GPS {eta?.locationFreshness ?? "missing"}
+            {eta?.pendingDraft ? (
+              <>
+                <span className="text-slate-400"> · </span>
+                Draft ready
+              </>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {ETA_ACTIONS.map(([value, label]) => (
+            <form key={value} action={updateAppointmentEtaStatusAction}>
+              <input type="hidden" name="appointmentId" value={appointment.id} />
+              <input type="hidden" name="etaStatus" value={value} />
+              <SubmitButton
+                className="inline-flex min-h-9 items-center justify-center rounded-xl border border-cyan-200 bg-white px-3 py-1.5 text-xs font-semibold text-cyan-900 shadow-sm"
+                pendingLabel="Saving..."
+              >
+                {label}
+              </SubmitButton>
+            </form>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EtaDraftReviewPanel({ drafts }: { drafts: EtaDraftDto[] }): ReactElement | null {
+  if (!drafts.length) return null;
+  return (
+    <section className={TEAM_CARD_PADDED}>
+      <div className="flex flex-col gap-2 border-b border-slate-200 pb-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">ETA drafts</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Review customer updates before they send.
+          </p>
+        </div>
+        <span className="inline-flex items-center justify-center rounded-full bg-cyan-100 px-3 py-1 text-xs font-semibold text-cyan-800">
+          {drafts.length} pending
+        </span>
+      </div>
+      <div className="mt-4 space-y-3">
+        {drafts.map((draft) => (
+          <div key={draft.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-slate-900">
+                  {draft.customerName}
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {draft.address ?? "Address not set"} · {formatEtaStatus(draft.reason)} · {draft.confidence} confidence
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <form action={sendEtaDraftAction}>
+                  <input type="hidden" name="draftId" value={draft.id} />
+                  <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Sending...">
+                    Send
+                  </SubmitButton>
+                </form>
+                <form action={dismissEtaDraftAction}>
+                  <input type="hidden" name="draftId" value={draft.id} />
+                  <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Dismissing...">
+                    Dismiss
+                  </SubmitButton>
+                </form>
+              </div>
+            </div>
+            <p className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
+              {draft.body}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -721,6 +861,8 @@ function AppointmentCard({
           />
         )}
       </div>
+
+      {!isCompleted && !item.isQuoteOnly ? <EtaControls appointment={a} /> : null}
 
       {!isCompleted ? (
         <div className="mt-4 space-y-3">
@@ -1268,14 +1410,16 @@ export async function MyDaySection({
   let completedTodayAppointments: AppointmentDto[] = [];
   let loadMessages: string[] = [];
   let teamMembers: TeamMemberDto[] = [];
+  let etaDrafts: EtaDraftDto[] = [];
 
   try {
-    const [confirmedRes, completedTodayRes, membersRes] = await Promise.all([
+    const [confirmedRes, completedTodayRes, membersRes, etaDraftsRes] = await Promise.all([
       callAdminApi("/api/appointments?status=confirmed"),
       callAdminApi(
         `/api/appointments?status=completed&startAtFrom=${encodeURIComponent(todayRange.startIso)}&startAtTo=${encodeURIComponent(todayRange.endIso)}`,
       ),
       callAdminApi("/api/admin/team/directory"),
+      callAdminApi("/api/admin/eta/drafts?status=draft&limit=8"),
     ]);
 
     if (!confirmedRes.ok) {
@@ -1317,6 +1461,13 @@ export async function MyDaySection({
         members?: TeamMemberDto[];
       };
       teamMembers = payload.members ?? [];
+    }
+
+    if (etaDraftsRes.ok) {
+      const payload = (await etaDraftsRes.json()) as {
+        drafts?: EtaDraftDto[];
+      };
+      etaDrafts = payload.drafts ?? [];
     }
   } catch (error) {
     loadMessages = [`Appointments request error: ${(error as Error).message}`];
@@ -1415,6 +1566,8 @@ export async function MyDaySection({
       {!hasAnySections ? (
         <p className={TEAM_EMPTY_STATE}>No confirmed visits.</p>
       ) : null}
+
+      <EtaDraftReviewPanel drafts={etaDrafts} />
 
       {upNext ? (
         <AppointmentSection

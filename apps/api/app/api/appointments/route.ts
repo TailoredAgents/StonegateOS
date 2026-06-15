@@ -29,6 +29,10 @@ import {
   extractQuoteFollowUpAppointmentId,
   extractQuoteFollowUpComment,
 } from "@/lib/quote-followups";
+import {
+  getEtaSummariesForAppointments,
+  type EtaAppointmentSummary,
+} from "@/lib/eta-agent";
 import { isAdminRequest } from "../web/admin";
 
 const STATUS_OPTIONS = [
@@ -216,6 +220,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     string,
     { id: string; title: string; status: string; createdAt: string }[]
   >();
+  const etaSummaryMap =
+    appointmentIds.length > 0
+      ? await getEtaSummariesForAppointments(appointmentIds)
+      : new Map<string, EtaAppointmentSummary>();
 
   if (contactIds.length > 0) {
     const taskRows = await db
@@ -438,6 +446,14 @@ export async function GET(request: NextRequest): Promise<Response> {
       rescheduleToken: row.rescheduleToken,
       crew: row.crew ?? null,
       owner: row.owner ?? null,
+      eta: etaSummaryMap.get(row.id) ?? {
+        status: null,
+        eventType: null,
+        eventSource: null,
+        eventAt: null,
+        locationFreshness: "missing",
+        pendingDraft: null,
+      },
       notes: row.contactId ? (notesMap.get(row.contactId) ?? []) : [],
       attachments: attachmentsMap.get(row.id) ?? [],
       tasks: tasksMap.get(row.id) ?? [],

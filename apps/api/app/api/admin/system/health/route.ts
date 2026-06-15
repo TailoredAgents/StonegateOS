@@ -6,7 +6,7 @@ import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 import { isGoogleCalendarEnabled } from "@/lib/calendar";
 import { isAdminRequest } from "../../../web/admin";
 
-const PROVIDERS = ["sms", "email", "calendar", "meta_ads", "google_ads"] as const;
+const PROVIDERS = ["sms", "email", "calendar", "meta_ads", "google_ads", "traccar"] as const;
 
 type ProviderStatus = "healthy" | "degraded" | "unknown";
 
