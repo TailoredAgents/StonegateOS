@@ -46,6 +46,19 @@ type OutboxOutcome = {
 
 const INBOUND_COALESCE_MS = 25_000;
 
+const DECLINED_OR_HAZARD_ITEM_PATTERNS: Array<[RegExp, string]> = [
+  [/\b(old\s+)?paint(s)?\b/i, "paint"],
+  [/\b(hazmat|hazardous|chemical|chemicals)\b/i, "hazardous_material"],
+  [/\b(oil|gasoline|fuel|solvent|pesticide)\b/i, "regulated_liquid"],
+  [/\b(asbestos|biohazard|medical waste)\b/i, "hazardous_material"],
+];
+
+const CUSTOMER_DEFERRAL_PATTERNS: Array<[RegExp, string]> = [
+  [/\b(let me think|think about it|thinking about it|need to think|sleep on it)\b/i, "customer_needs_time"],
+  [/\b(i'?ll get back|i will get back|i'?ll let you know|i will let you know)\b/i, "customer_will_follow_up"],
+  [/\b(not ready|maybe later|hold off|wait for now|no rush)\b/i, "customer_not_ready"],
+];
+
 type MessageContext = {
   direction: string;
   channel: string;
@@ -71,6 +84,33 @@ type ThreadContext = {
   propertyCity: string | null;
   propertyState: string | null;
 };
+
+export function evaluateSalesAutopilotAutosendSafety(input: {
+  inboundBody?: string | null;
+  draftBody?: string | null;
+  transcriptBodies?: Array<string | null | undefined> | null;
+}): { allowed: true } | { allowed: false; reason: string; keyword: string } {
+  const inboundBody = input.inboundBody ?? "";
+  const draftBody = input.draftBody ?? "";
+  const transcript = (input.transcriptBodies ?? [])
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join("\n");
+  const combined = [inboundBody, draftBody, transcript].join("\n");
+
+  for (const [pattern, keyword] of DECLINED_OR_HAZARD_ITEM_PATTERNS) {
+    if (pattern.test(combined)) {
+      return { allowed: false, reason: "declined_or_hazard_item", keyword };
+    }
+  }
+
+  for (const [pattern, keyword] of CUSTOMER_DEFERRAL_PATTERNS) {
+    if (pattern.test(inboundBody)) {
+      return { allowed: false, reason: "customer_deferral", keyword };
+    }
+  }
+
+  return { allowed: true };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -843,12 +883,18 @@ Do not write the customer message. Output ONLY JSON matching the schema.
     return { status: "retry", error: "openai_empty_response" };
   }
 
+  const autosendSafety = evaluateSalesAutopilotAutosendSafety({
+    inboundBody: inbound.body,
+    draftBody: bestBody,
+    transcriptBodies: messages.map((message) => message.body),
+  });
+
   const now = new Date();
   const draftId = await db.transaction(async (tx) => {
     const participantId = await ensureAutopilotParticipant(tx, threadId, now, policy.agentDisplayName);
     const dmAutosendAllowed =
       replyChannel === "dm" && typeof inbound.body === "string" ? shouldAllowDmAutosend(messages, inbound.body) : true;
-    const noAutosend = !autoSendEligible || (replyChannel === "dm" && !dmAutosendAllowed);
+    const noAutosend = !autoSendEligible || (replyChannel === "dm" && !dmAutosendAllowed) || !autosendSafety.allowed;
 
     await tx
       .delete(conversationMessages)
@@ -879,6 +925,8 @@ Do not write the customer message. Output ONLY JSON matching the schema.
           salesAutopilot: true,
           salesAutopilotForMessageId: messageId,
           salesAutopilotNoAutosend: noAutosend ? true : undefined,
+          salesAutopilotNoAutosendReason: !autosendSafety.allowed ? autosendSafety.reason : undefined,
+          salesAutopilotNoAutosendKeyword: !autosendSafety.allowed ? autosendSafety.keyword : undefined,
           aiModel: draftResult.modelUsed,
           missingInfo,
           alternatives,
@@ -1118,6 +1166,44 @@ export async function handleSalesAutopilotAutosend(input: { draftMessageId: stri
       });
       return { status: "processed" };
     }
+  }
+
+  const inboundIdForSafety =
+    (typeof input.inboundMessageId === "string" ? input.inboundMessageId : null) ??
+    (typeof meta?.["salesAutopilotForMessageId"] === "string" ? (meta["salesAutopilotForMessageId"] as string) : null);
+  let inboundBodyForSafety: string | null = null;
+  if (inboundIdForSafety) {
+    const [inboundForSafety] = await db
+      .select({ body: conversationMessages.body })
+      .from(conversationMessages)
+      .where(eq(conversationMessages.id, inboundIdForSafety))
+      .limit(1);
+    inboundBodyForSafety = inboundForSafety?.body ?? null;
+  }
+  const autosendSafety = evaluateSalesAutopilotAutosendSafety({
+    inboundBody: inboundBodyForSafety,
+    draftBody: row.body,
+  });
+  if (!autosendSafety.allowed) {
+    await db
+      .update(conversationMessages)
+      .set({
+        metadata: {
+          ...meta,
+          salesAutopilotNoAutosend: true,
+          salesAutopilotNoAutosendReason: autosendSafety.reason,
+          salesAutopilotNoAutosendKeyword: autosendSafety.keyword,
+        },
+      })
+      .where(eq(conversationMessages.id, row.id));
+    await recordAuditEvent({
+      actor: { type: "ai", label: "sales-autopilot" },
+      action: "sales.autopilot.autosend_skipped",
+      entityType: "conversation_message",
+      entityId: row.id,
+      meta: { reason: autosendSafety.reason, keyword: autosendSafety.keyword, inboundMessageId: inboundIdForSafety },
+    });
+    return { status: "processed" };
   }
 
   const [pipeline] = await db

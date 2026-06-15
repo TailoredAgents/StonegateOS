@@ -11,6 +11,7 @@ import {
   validateAutonomousBookingStart,
 } from "@/lib/after-hours-autonomy";
 import { DEFAULT_SALES_AUTOPILOT_POLICY } from "@/lib/policy";
+import { evaluateSalesAutopilotAutosendSafety } from "@/lib/sales-autopilot";
 
 const timezone = "America/New_York";
 
@@ -130,6 +131,24 @@ describe("autonomous sales agent examination", () => {
       action: "human_review",
       stage: "needs_human_review",
     });
+  });
+
+  it("prevents generic sales autopilot autosend for declined or hazardous items", () => {
+    expect(
+      evaluateSalesAutopilotAutosendSafety({
+        inboundBody: "Do you take old paint?",
+        draftBody: "Yep, we can take the old paint. With the 25% off, that's still locked in.",
+      }),
+    ).toEqual({ allowed: false, reason: "declined_or_hazard_item", keyword: "paint" });
+  });
+
+  it("prevents generic sales autopilot autosend when the customer asks for time", () => {
+    expect(
+      evaluateSalesAutopilotAutosendSafety({
+        inboundBody: "Let me think about it",
+        draftBody: "Just checking back to see if you had a chance to figure out a time.",
+      }),
+    ).toEqual({ allowed: false, reason: "customer_deferral", keyword: "customer_needs_time" });
   });
 
   it("books only from an explicit offered slot confirmation", () => {
