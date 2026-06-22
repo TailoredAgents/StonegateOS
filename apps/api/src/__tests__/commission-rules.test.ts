@@ -59,7 +59,6 @@ describe("commission rules", () => {
     const amountByMemberId = new Map(
       allocations.map((entry) => [entry.memberId, entry.cents]),
     );
-
     expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
       24000,
     );
@@ -68,7 +67,7 @@ describe("commission rules", () => {
     );
   });
 
-  it("pays Austin, Jeffrey, and Devon an even split of the 20% labor pool", () => {
+  it("adjusts Austin, Jeffrey, and Devon labor so Austin and Jeffrey total 15%", () => {
     const resolved = resolveLockedCrewPayout([
       "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
       "b45988bb-7417-48c5-af6d-fcdf71088282",
@@ -80,20 +79,38 @@ describe("commission rules", () => {
       throw new Error("Expected Austin + Devon + Jeffrey payout rule");
     }
 
+    expect(resolved.ruleKey).toBe("austin-devon-jeffrey-adjusted");
     const allocations = allocateCrewPoolCents(20000, resolved.splits);
     const amountByMemberId = new Map(
       allocations.map((entry) => [entry.memberId, entry.cents]),
     );
+    const managementByMemberId = new Map([
+      ["239ca36d-e618-4c5c-a283-b6e5d4ccb704", 6250],
+      ["5ac5217e-3905-4ea3-bdeb-65456982f5e3", 11250],
+    ]);
 
     expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
-      6667,
+      8750,
     );
     expect(amountByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3")).toBe(
-      6667,
+      3750,
     );
     expect(amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282")).toBe(
-      6666,
+      7500,
     );
+    expect(
+      (amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704") ?? 0) +
+        (managementByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704") ??
+          0),
+    ).toBe(15000);
+    expect(
+      (amountByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3") ?? 0) +
+        (managementByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3") ??
+          0),
+    ).toBe(15000);
+    expect(
+      amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282"),
+    ).toBe(7500);
   });
 
   it("falls back to an even split for other crew combinations", () => {

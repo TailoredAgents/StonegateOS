@@ -111,7 +111,8 @@ export function CrewPayoutSelector({
                     {formatLockedCrewSplitPercent(
                       splitByMemberId.get(member.id) ?? 0,
                       resolvedTotalSplitBps,
-                    )}
+                    )}{" "}
+                    of labor pool
                   </div>
                 ) : null}
               </div>

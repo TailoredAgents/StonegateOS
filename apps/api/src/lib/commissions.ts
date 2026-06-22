@@ -36,8 +36,8 @@ const TEAM_MEMBER_IDS = {
   jeffrey: "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
 } as const;
 const MANAGEMENT_SPLITS = [
-  { memberId: TEAM_MEMBER_IDS.jeffrey, splitBps: 10000 },
-  { memberId: TEAM_MEMBER_IDS.austin, splitBps: 7500 },
+  { memberId: TEAM_MEMBER_IDS.jeffrey, splitBps: 11250 },
+  { memberId: TEAM_MEMBER_IDS.austin, splitBps: 6250 },
 ] as const;
 
 function asWeekday(value: number): 1 | 2 | 3 | 4 | 5 | 6 | 7 {

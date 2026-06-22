@@ -4,10 +4,10 @@ Effective for new commission calculations going forward:
 
 - Sales commission is retired. Keep seller attribution for reporting and job history, but do not generate new sales commission payouts.
 - Management is 17.5% of the final amount paid.
-- Jeffrey receives 10% and Austin receives 7.5%.
+- Jeffrey receives 11.25% and Austin receives 6.25%.
 - Labor is always 20% of the final amount paid, regardless of who works the job.
-- All labor crews split the 20% labor pool evenly across selected crew members.
-- When Jeffrey, Austin, and Devon work together, each receives roughly 6.67% of the final amount paid, adjusted by cents.
+- Most labor crews split the 20% labor pool evenly across selected crew members.
+- When Jeffrey, Austin, and Devon work together, labor is split so Jeffrey receives 15% total, Austin receives 15% total, and Devon receives 7.5% total.
 - Two-person labor crews receive 10% each.
 - Labor override days and demo-specific 30% labor behavior are retired and ignored by new commission calculations.
 

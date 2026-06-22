@@ -618,4 +618,4 @@ Desktop protection tests:
 - `[x]` Hid the Open Tasks card from mobile My Day until a 24-hour inbox cleanup workflow exists.
 - `[x]` Added mobile job/quote completion controls in My Day and Calendar.
 - `[x]` Consolidated duplicate Jeffrey records in production data and updated commission/crew constants to the single Jeffrey account.
-- `[x]` Commission policy updated: sales commission retired, management set to 17.5% split 10% Jeffrey / 7.5% Austin, and labor fixed at 20% split evenly across selected crew members.
+- `[x]` Commission policy updated: sales commission retired, management set to 17.5% split 11.25% Jeffrey / 6.25% Austin, labor fixed at 20%, and Jeffrey + Austin + Devon jobs adjusted to 15% / 15% / 7.5% total.
