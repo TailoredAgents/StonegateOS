@@ -2859,6 +2859,16 @@ export default async function MobileHomePage({
                   <p className="mt-2 text-2xl font-semibold">{formatUsdCents(ownerSummary.collectedLast30DaysCents)}</p>
                   <p className="mt-1 text-xs text-slate-400">{ownerSummary.collectedLast30DaysCount} completed jobs</p>
                 </div>
+                <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">Year Collected</p>
+                  <p className="mt-2 text-2xl font-semibold">{formatUsdCents(ownerSummary.collectedYearCents)}</p>
+                  <p className="mt-1 text-xs text-slate-400">{ownerSummary.collectedYearCount} completed jobs</p>
+                </div>
+                <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-200">Lifetime</p>
+                  <p className="mt-2 text-2xl font-semibold">{formatUsdCents(ownerSummary.collectedLifetimeCents)}</p>
+                  <p className="mt-1 text-xs text-emerald-100">{ownerSummary.collectedLifetimeCount} completed jobs</p>
+                </div>
               </div>
 
               <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">

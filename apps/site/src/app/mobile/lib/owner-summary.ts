@@ -28,6 +28,7 @@ type RevenueSummaryResponse = {
     monthToDate?: { totalCents?: number; count?: number };
     last30Days?: { totalCents?: number; count?: number };
     yearToDate?: { totalCents?: number; count?: number };
+    allTime?: { totalCents?: number; count?: number };
   };
 };
 
@@ -63,6 +64,10 @@ export type MobileOwnerSummary = {
   collectedMonthCount: number;
   collectedLast30DaysCents: number;
   collectedLast30DaysCount: number;
+  collectedYearCents: number;
+  collectedYearCount: number;
+  collectedLifetimeCents: number;
+  collectedLifetimeCount: number;
   projectedTodayCents: number;
   bookedJobsToday: number;
   openInboxLeads: number;
@@ -206,6 +211,10 @@ export async function loadMobileOwnerSummary(): Promise<MobileOwnerSummary> {
     collectedMonthCount: typeof revenue?.windows?.monthToDate?.count === "number" ? revenue.windows.monthToDate.count : 0,
     collectedLast30DaysCents: normalizeCents(revenue?.windows?.last30Days?.totalCents),
     collectedLast30DaysCount: typeof revenue?.windows?.last30Days?.count === "number" ? revenue.windows.last30Days.count : 0,
+    collectedYearCents: normalizeCents(revenue?.windows?.yearToDate?.totalCents),
+    collectedYearCount: typeof revenue?.windows?.yearToDate?.count === "number" ? revenue.windows.yearToDate.count : 0,
+    collectedLifetimeCents: normalizeCents(revenue?.windows?.allTime?.totalCents),
+    collectedLifetimeCount: typeof revenue?.windows?.allTime?.count === "number" ? revenue.windows.allTime.count : 0,
     projectedTodayCents,
     bookedJobsToday: bookedEvents.length,
     openInboxLeads: inbox?.threads?.length ?? 0,

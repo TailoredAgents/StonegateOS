@@ -52,6 +52,7 @@ type RevenuePayload = {
     last30Days: RevenueWindow;
     monthToDate: RevenueWindow;
     yearToDate: RevenueWindow;
+    allTime: RevenueWindow;
   };
 };
 
@@ -927,6 +928,22 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
                 <div className="text-right font-semibold text-slate-900">
                   {fmtMoney(
                     revenue.windows.yearToDate.totalCents,
+                    revenue.currency,
+                  )}
+                </div>
+              </li>
+              <li className="flex items-center justify-between rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <div>
+                  <div className="font-semibold text-emerald-950">
+                    Lifetime revenue
+                  </div>
+                  <div className="text-xs text-emerald-800">
+                    {revenue.windows.allTime.count} completed jobs
+                  </div>
+                </div>
+                <div className="text-right font-semibold text-emerald-950">
+                  {fmtMoney(
+                    revenue.windows.allTime.totalCents,
                     revenue.currency,
                   )}
                 </div>

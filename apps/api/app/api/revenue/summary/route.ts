@@ -63,6 +63,35 @@ async function computeWindow(
   };
 }
 
+async function computeAllTimeWindow(
+  db: ReturnType<typeof getDb>,
+): Promise<WindowSummary> {
+  const [row] = await db
+    .select({
+      totalCents: sql<number>`
+        coalesce(
+          sum(${appointments.finalTotalCents}),
+          0
+        )::int
+      `.as("total_cents"),
+      count: sql<number>`
+        count(*) filter (where ${appointments.finalTotalCents} is not null)::int
+      `.as("count"),
+    })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.status, "completed"),
+        isNotNull(appointments.finalTotalCents),
+      ),
+    );
+
+  return {
+    totalCents: row?.totalCents ?? 0,
+    count: row?.count ?? 0,
+  };
+}
+
 async function computeWeekToDateJobs(
   db: ReturnType<typeof getDb>,
   start: Date,
@@ -159,6 +188,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     last30Days,
     monthToDate,
     yearToDate,
+    allTime,
   ] = await Promise.all([
     computeWindow(db, weekStart, now),
     computeWindow(db, previousWeekStart, previousWeekEnd),
@@ -167,6 +197,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     computeWindow(db, last30Start, now),
     computeWindow(db, monthStart, now),
     computeWindow(db, yearStart, now),
+    computeAllTimeWindow(db),
   ]);
 
   return NextResponse.json({
@@ -192,6 +223,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       last30Days,
       monthToDate,
       yearToDate,
+      allTime,
     },
   });
 }
