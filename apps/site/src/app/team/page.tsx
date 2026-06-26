@@ -20,6 +20,7 @@ import { MarketingSection } from "./components/MarketingSection";
 import { WebAnalyticsSection } from "./components/WebAnalyticsSection";
 import { PolicyCenterSection } from "./components/PolicyCenterSection";
 import { AutomationSection } from "./components/AutomationSection";
+import { SimulatedChatSection } from "./components/SimulatedChatSection";
 import { AccessSection } from "./components/AccessSection";
 import { AuditLogSection } from "./components/AuditLogSection";
 import { SalesActivityLogSection } from "./components/SalesActivityLogSection";
@@ -297,6 +298,7 @@ export default async function TeamPage({
     { id: "chat", label: "Agent", href: "/team?tab=chat", requires: "messages.send" },
     { id: "pipeline", label: "Pipeline", href: "/team?tab=pipeline", requires: "bookings.manage" },
     { id: "sales-hq", label: "Sales HQ", href: "/team?tab=sales-hq", requires: "messages.send" },
+    { id: "simulated-chat", label: "Simulated chat", href: "/team?tab=simulated-chat", requires: "messages.send" },
     { id: "outbound", label: "Outbound", href: "/team?tab=outbound", requires: "messages.send" },
     { id: "partners", label: "Partners", href: "/team?tab=partners", requires: "owner" },
     { id: "calendar", label: "Calendar", href: "/team?tab=calendar", requires: ["bookings.manage", "appointments.read"] },
@@ -325,7 +327,7 @@ export default async function TeamPage({
     { id: "contacts", label: "Contacts", itemIds: ["contacts"], variant: "single" },
     { id: "quotes", label: "Quotes", itemIds: ["quotes"], variant: "single" },
     { id: "expenses", label: "Expenses", itemIds: ["expenses"], variant: "single" },
-    { id: "sales", label: "Sales", itemIds: ["pipeline", "sales-hq", "outbound", "partners"] },
+    { id: "sales", label: "Sales", itemIds: ["pipeline", "sales-hq", "simulated-chat", "outbound", "partners"] },
     { id: "marketing", label: "Marketing", itemIds: ["google-ads", "web-analytics", "seo"] },
     { id: "owner", label: "Owner HQ", itemIds: ["owner"], variant: "single" },
     { id: "admin", label: "Admin", itemIds: ["commissions", "policy", "automation", "access", "sales-log", "audit", "merge"] },
@@ -486,6 +488,12 @@ export default async function TeamPage({
       {tab === "sales-hq" && (hasOffice || hasOwner) ? (
         <React.Suspense fallback={<TeamSkeletonCard title="Loading Sales HQ" />}>
           <SalesScorecardSection />
+        </React.Suspense>
+      ) : null}
+
+      {tab === "simulated-chat" && (hasOffice || hasOwner) ? (
+        <React.Suspense fallback={<TeamSkeletonCard title="Loading simulated chat" />}>
+          <SimulatedChatSection />
         </React.Suspense>
       ) : null}
 

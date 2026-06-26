@@ -42,6 +42,29 @@ type ProposedAction =
 
 type OfferedSlot = { label: string; startAt: string; endAt?: string | null };
 
+export type SimulatedSalesChatMessage = {
+  role: "customer" | "agent";
+  body: string;
+  mediaUrls?: string[] | null;
+  createdAt?: string | null;
+};
+
+export type SimulatedSalesChatResult = {
+  reply: string | null;
+  stage: Stage;
+  proposedAction: ProposedAction;
+  executedAction: "simulated_message" | "simulated_booking" | "simulated_human_review" | "none";
+  reason: string;
+  humanReviewReason: string | null;
+  confidence: "low" | "medium" | "high";
+  quoteRange: { lowCents: number; highCents: number; confidence: "low" | "medium" | "high" } | null;
+  offeredSlots: OfferedSlot[];
+  confirmedSlot: OfferedSlot | null;
+  mode: AutonomyMode;
+  channel: "dm" | "sms";
+  debug: Record<string, unknown>;
+};
+
 type EvaluatedMessage = {
   id: string;
   threadId: string;
@@ -437,7 +460,7 @@ async function createOutboundDmDraft(input: {
     .limit(1);
   if (existingRecentOutbound?.id) {
     const existingMeta = isRecord(existingRecentOutbound.metadata)
-      ? (existingRecentOutbound.metadata as Record<string, unknown>)
+      ? existingRecentOutbound.metadata
       : null;
     if (existingMeta?.["draft"] !== true) return null;
     await input.db.delete(conversationMessages).where(eq(conversationMessages.id, existingRecentOutbound.id));
@@ -668,6 +691,211 @@ function buildSlotsMessage(slots: OfferedSlot[], coaching: FacebookCoaching): st
     return `I have availability for ${slots.map((slot) => slot.label.replace(/^Option \d+:\s*/, "")).join(" or ")}. Which option works best for you?`;
   }
   return `I can do ${slots.map((slot) => slot.label.replace(/^Option \d+:\s*/, "")).join(" or ")}. Which one works best?`;
+}
+
+function buildSimulatedSlots(): OfferedSlot[] {
+  const zone = process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
+  const slots: OfferedSlot[] = [];
+  let cursor = DateTime.now().setZone(zone).plus({ days: 1 }).startOf("day");
+  const slotHours = [10, 13, 16];
+
+  while (slots.length < 3) {
+    if (cursor.weekday !== 7) {
+      const hour = slotHours[slots.length % slotHours.length] ?? 10;
+      const start = cursor.set({ hour, minute: 0, second: 0, millisecond: 0 });
+      slots.push({
+        label: `Option ${slots.length + 1}: ${start.toFormat("ccc, LLL d 'at' h:mm a")}`,
+        startAt: start.toUTC().toISO() ?? start.toISO() ?? new Date().toISOString(),
+        endAt: start.plus({ minutes: getAutonomousBookingDurationMinutes() }).toUTC().toISO(),
+      });
+    }
+    cursor = cursor.plus({ days: 1 });
+  }
+
+  return slots;
+}
+
+function buildHumanReviewReply(reason: string): string {
+  const label = reason.replace(/owner_coaching_review_keyword:/, "").replace(/_/g, " ");
+  return `I want to make sure we handle that correctly, so I am going to have someone from our team review this and follow up. Reason: ${label}.`;
+}
+
+export function simulateFacebookSalesChatTurn(input: {
+  channel?: "dm" | "sms" | null;
+  messages: SimulatedSalesChatMessage[];
+  policy: SalesAutopilotPolicy;
+  previousQuoteRange?: { lowCents: number; highCents: number; confidence?: "low" | "medium" | "high" } | null;
+  previousOfferedSlots?: OfferedSlot[] | null;
+}): SimulatedSalesChatResult {
+  const channel = input.channel === "sms" ? "sms" : "dm";
+  const closer = input.policy.facebookCloser;
+  const coaching = input.policy.facebookCoaching;
+  const mode = closer.mode;
+  const nowIso = new Date().toISOString();
+  const normalizedMessages = input.messages
+    .map((message) => ({
+      ...message,
+      body: typeof message.body === "string" ? message.body.trim() : "",
+      mediaUrls: Array.isArray(message.mediaUrls) ? message.mediaUrls.filter(Boolean) : [],
+    }))
+    .filter((message) => message.body.length > 0 || (message.mediaUrls?.length ?? 0) > 0);
+  const latestCustomerMessage = [...normalizedMessages].reverse().find((message) => message.role === "customer");
+  const latestBody = latestCustomerMessage?.body ?? "";
+  const recentMessages = normalizedMessages.map((message, index) => ({
+    id: `simulated-message-${index + 1}`,
+    threadId: "simulated-thread",
+    direction: message.role === "customer" ? "inbound" : "outbound",
+    channel,
+    subject: null,
+    body: message.body,
+    participantName: message.role === "customer" ? "Simulated Customer" : "Stonegate Assistant",
+    mediaUrls: message.mediaUrls ?? [],
+    createdAt: message.createdAt ?? nowIso,
+    sentAt: message.role === "agent" ? (message.createdAt ?? nowIso) : null,
+    receivedAt: message.role === "customer" ? (message.createdAt ?? nowIso) : null,
+  }));
+  const context: Pick<OmniLeadContext, "latestLead" | "instantQuote" | "derived" | "recentMessages"> = {
+    latestLead: null,
+    instantQuote: null,
+    derived: {
+      knownZip: null,
+      knownCity: null,
+      objections: [],
+      channelPreference: channel,
+      dmEntrySource: channel === "dm" ? "organic_messenger" : null,
+      customerIntent: null,
+      pricingContext: null,
+      lastPromisedNextStep: null,
+      lastHumanSummary: null,
+      bookingReadiness: "low",
+      quoteConfidence: "low",
+      missingFields: [],
+      exceptionSignals: [],
+    },
+    recentMessages,
+  };
+  const mediaCount = recentMessages.reduce((sum, message) => sum + (message.mediaUrls?.length ?? 0), 0);
+  const riskReason = detectFacebookSalesRisk(context);
+  const textQuote = getTextQuoteReadiness(context);
+  const previousQuoteRange =
+    input.previousQuoteRange && Number.isFinite(input.previousQuoteRange.lowCents) && Number.isFinite(input.previousQuoteRange.highCents)
+      ? {
+          lowCents: Math.round(input.previousQuoteRange.lowCents),
+          highCents: Math.round(input.previousQuoteRange.highCents),
+          confidence: input.previousQuoteRange.confidence ?? "medium",
+        }
+      : null;
+  const quoteRange = textQuote.quoteRange ?? previousQuoteRange;
+  const confidence = quoteRange?.confidence ?? "medium";
+  const previousOfferedSlots = Array.isArray(input.previousOfferedSlots) ? input.previousOfferedSlots : [];
+  const confirmedSlot = detectClearBookingConfirmation(latestBody, previousOfferedSlots);
+
+  let stage: Stage = "new_inquiry";
+  let action: ProposedAction = "no_op";
+  let reason = "no_action_needed";
+  let humanReviewReason: string | null = null;
+
+  if (mode === "off" || closer.emergencyStop) {
+    action = "no_op";
+    reason = mode === "off" ? "sales_closer_off" : "sales_closer_emergency_stop";
+  } else if (riskReason) {
+    stage = "needs_human_review";
+    action = "human_review";
+    humanReviewReason = riskReason;
+    reason = riskReason;
+  } else if (confirmedSlot && quoteRange) {
+    stage = "confirmed_booking";
+    action = "book_job";
+    reason = "customer_confirmed_offered_slot";
+  } else if (confirmedSlot && !quoteRange) {
+    stage = "needs_human_review";
+    action = "human_review";
+    humanReviewReason = "confirmation_without_quote";
+    reason = "confirmation_without_quote";
+  } else if ((customerAskedForTimes(latestBody) || (previousQuoteRange && customerAcceptedQuoteOrScheduling(latestBody))) && quoteRange) {
+    stage = "quote_ready";
+    action = "offer_times";
+    reason = "customer_asked_for_times_after_quote";
+  } else if (quoteRange && customerAskedForQuote(latestBody)) {
+    stage = "quote_ready";
+    action = "send_quote_range";
+    reason = "quote_range_available";
+  } else if (!quoteRange) {
+    stage = "missing_info";
+    action = textQuote.missingQuestion ? "request_quote_details" : "request_photos";
+    reason = textQuote.missingQuestion ? "quote_details_required" : "photos_or_more_job_detail_required";
+  }
+
+  if (quoteRange && quoteRange.highCents > closer.maxAutoBookTotalCents && action === "book_job") {
+    stage = "needs_human_review";
+    action = "human_review";
+    humanReviewReason = "quote_above_auto_book_limit";
+    reason = "quote_above_auto_book_limit";
+  }
+  if (quoteRange && quoteRange.highCents > closer.requirePhotosAboveCents && mediaCount === 0 && (action === "send_quote_range" || action === "offer_times" || action === "book_job")) {
+    stage = "missing_info";
+    action = "request_photos";
+    humanReviewReason = null;
+    reason = "photos_required_above_threshold";
+  }
+  if (quoteRange && !confidenceMeetsPolicy(quoteRange.confidence, closer.minConfidence) && (action === "book_job" || action === "offer_times")) {
+    stage = "needs_human_review";
+    action = "human_review";
+    humanReviewReason = "quote_confidence_too_low";
+    reason = "quote_confidence_too_low";
+  }
+
+  const coachingOverride = applyFacebookCoachingGuards({ body: latestBody, action, stage, mediaCount, coaching });
+  if (coachingOverride) {
+    stage = coachingOverride.stage;
+    action = coachingOverride.action;
+    reason = coachingOverride.reason ?? reason;
+    humanReviewReason = coachingOverride.humanReviewReason;
+  }
+
+  let offeredSlots: OfferedSlot[] = [];
+  let reply: string | null = null;
+  let executedAction: SimulatedSalesChatResult["executedAction"] = "none";
+
+  if (action === "request_address" || action === "request_quote_details" || action === "request_photos") {
+    reply = action === "request_address" ? buildAddressAsk(coaching) : action === "request_quote_details" && textQuote.missingQuestion ? buildQuoteDetailsAsk(textQuote.missingQuestion, coaching) : buildPhotoAsk(coaching);
+    executedAction = "simulated_message";
+  } else if (action === "send_quote_range" && quoteRange) {
+    reply = buildQuoteMessage(quoteRange, null, coaching);
+    executedAction = "simulated_message";
+  } else if (action === "offer_times") {
+    offeredSlots = buildSimulatedSlots();
+    reply = buildSlotsMessage(offeredSlots, coaching);
+    executedAction = "simulated_message";
+  } else if (action === "book_job" && confirmedSlot && quoteRange) {
+    reply = `Simulation only: this would book ${confirmedSlot.label.replace(/^Option \d+:\s*/, "")} and send a confirmation. No real appointment was created.`;
+    executedAction = "simulated_booking";
+  } else if (action === "human_review") {
+    reply = buildHumanReviewReply(humanReviewReason ?? reason);
+    executedAction = "simulated_human_review";
+  }
+
+  return {
+    reply,
+    stage,
+    proposedAction: action,
+    executedAction,
+    reason,
+    humanReviewReason,
+    confidence,
+    quoteRange,
+    offeredSlots,
+    confirmedSlot,
+    mode,
+    channel,
+    debug: {
+      mediaCount,
+      textQuote: textQuote.snapshot,
+      simulationOnly: true,
+      realMessageQueued: false,
+      realBookingCreated: false,
+    },
+  };
 }
 
 function buildBookingDetails(range: { lowCents: number; highCents: number }) {
@@ -965,7 +1193,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
               : action === "offer_times"
                 ? buildSlotsMessage(slotsForSession, coaching)
                 : "";
-      const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: false, channel: row.channel as "dm" | "sms" }) : null;
+      const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: false, channel: row.channel }) : null;
       executedAction = messageId ? "draft_created" : "draft_reused_or_skipped";
       result = { messageId };
     } else if (mode === "auto") {
@@ -982,7 +1210,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
                 : action === "offer_times"
                   ? buildSlotsMessage(slotsForSession, coaching)
                   : "";
-        const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: true, channel: row.channel as "dm" | "sms" }) : null;
+        const messageId = body ? await createOutboundDmDraft({ db, row, body, mode, send: true, channel: row.channel }) : null;
         executedAction = messageId ? "message_queued" : "message_reused_or_skipped";
         result = { messageId };
       } else if (action === "book_job" && confirmedSlot && quoteRange && row.contactId && row.propertyId) {
@@ -1013,7 +1241,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
               body: `You're booked for ${confirmedSlot.label.replace(/^Option \d+:\s*/, "")}. We'll confirm the final price in person before loading.`,
               mode,
               send: true,
-              channel: row.channel as "dm" | "sms",
+              channel: row.channel,
             });
           } else {
             executedAction = "booking_failed";

@@ -2,6 +2,7 @@ import {
   applyFacebookCoachingGuards,
   detectClearBookingConfirmation,
   estimateJunkQuoteRangeFromVolume,
+  simulateFacebookSalesChatTurn,
 } from "@/lib/facebook-sales-autopilot";
 import { DEFAULT_SALES_AUTOPILOT_POLICY } from "@/lib/policy";
 
@@ -68,5 +69,25 @@ describe("facebook sales autopilot helpers", () => {
       reason: "owner_coaching_photos_required",
       humanReviewReason: null,
     });
+  });
+
+  it("simulates a quote reply without sending or booking", () => {
+    const result = simulateFacebookSalesChatTurn({
+      channel: "dm",
+      messages: [{ role: "customer", body: "How much for a half trailer of garage junk in 30144?" }],
+      policy: {
+        ...DEFAULT_SALES_AUTOPILOT_POLICY,
+        facebookCloser: {
+          ...DEFAULT_SALES_AUTOPILOT_POLICY.facebookCloser,
+          requirePhotosAboveCents: 999999,
+        },
+      },
+    });
+
+    expect(result.proposedAction).toBe("send_quote_range");
+    expect(result.executedAction).toBe("simulated_message");
+    expect(result.reply).toContain("$320-$470");
+    expect(result.debug.realMessageQueued).toBe(false);
+    expect(result.debug.realBookingCreated).toBe(false);
   });
 });
