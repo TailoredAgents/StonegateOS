@@ -83,6 +83,15 @@ function parseDayWindow(dayKey: string): { startAtFrom: string; startAtTo: strin
   };
 }
 
+function parseMobileMoneyToCents(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/[^0-9.]/g, "");
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.round(parsed * 100);
+}
+
 function mobileScheduleRedirect(screen: string, dayKey: string, error?: string): Route {
   const normalizedScreen = screen === "calendar" ? "calendar" : "myday";
   const params = new URLSearchParams();
@@ -504,6 +513,41 @@ export async function mobileLogoutAction() {
   }
   jar.delete(TEAM_SESSION_COOKIE);
   redirect("/mobile/login");
+}
+
+export async function createMobileExpenseAction(formData: FormData) {
+  await requireMobilePermission("expenses.write");
+
+  const amountCents = parseMobileMoneyToCents(formData.get("amount"));
+  const categoryRaw = formData.get("category");
+  const category = typeof categoryRaw === "string" ? categoryRaw.trim() : "";
+  const allowedCategories = new Set(["Dump", "Gas", "Food", "Equipment", "Vehicle", "Insurance", "Software"]);
+  const redirectPath = "/mobile?screen=expenses" as Route;
+
+  if (amountCents === null) {
+    redirect(`${redirectPath}&error=amount_required` as Route);
+  }
+  if (!allowedCategories.has(category)) {
+    redirect(`${redirectPath}&error=category_required` as Route);
+  }
+
+  const body = new FormData();
+  body.set("amountCents", String(amountCents));
+  body.set("source", "mobile");
+  body.set("category", category);
+
+  const response = await callAdminApi("/api/admin/expenses", {
+    method: "POST",
+    body
+  });
+
+  if (!response.ok) {
+    const message = await readErrorMessage(response, "expense_save_failed");
+    redirect(`${redirectPath}&error=${encodeURIComponent(message)}` as Route);
+  }
+
+  revalidatePath("/mobile");
+  redirect(`${redirectPath}&expense=1` as Route);
 }
 
 export async function createMobileTeamMemberAction(formData: FormData) {

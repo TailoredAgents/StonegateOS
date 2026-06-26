@@ -72,6 +72,9 @@ export function buildAllowedMobileScreens(member: MobileTeamMember): string[] {
   ) {
     screens.add("quotes");
   }
+  if (hasMobilePermission(permissions, "expenses.read") || hasMobilePermission(permissions, "expenses.write")) {
+    screens.add("expenses");
+  }
   if (isOwner) {
     screens.add("owner");
     screens.add("access");

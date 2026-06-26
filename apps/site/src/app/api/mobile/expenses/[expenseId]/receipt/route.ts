@@ -1,8 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi, resolveTeamMemberFromSessionCookie } from "@/app/team/lib/api";
-import { ADMIN_SESSION_COOKIE } from "@/lib/admin-session";
-import { CREW_SESSION_COOKIE } from "@/lib/crew-session";
+import { callAdminApi } from "@/app/team/lib/api";
+import { hasMobilePermission, resolveMobileSessionFromCookies } from "../../../../../mobile/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -19,54 +18,39 @@ function sanitizeFilename(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "receipt";
 }
 
-function permissionMatches(granted: string, required: string): boolean {
-  if (granted === "*") return true;
-  if (required === "read") return granted === "read";
-  if (granted === "read") return required === "read" || required.endsWith(".read");
-  if (granted.endsWith(".*")) {
-    const prefix = granted.slice(0, -2);
-    return required.startsWith(prefix);
-  }
-  return granted === required;
-}
-
-function hasPermission(permissions: string[], required: string): boolean {
-  return permissions.some((permission) => permissionMatches(permission, required));
-}
-
-async function canReadExpenses(request: NextRequest): Promise<boolean> {
-  const jar = request.cookies;
-  if (jar.get(ADMIN_SESSION_COOKIE)?.value || jar.get(CREW_SESSION_COOKIE)?.value) return true;
-
-  const teamMember = await resolveTeamMemberFromSessionCookie();
-  if (teamMember?.roleSlug === "owner") return true;
-  return hasPermission(teamMember?.permissions ?? [], "expenses.read");
-}
-
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   context: { params: Promise<{ expenseId: string }> }
 ): Promise<Response> {
-  if (!(await canReadExpenses(request))) {
+  const session = await resolveMobileSessionFromCookies();
+
+  if (!session) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
+  if (!hasMobilePermission(session.teamMember.permissions, "expenses.read")) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+
   const { expenseId } = await context.params;
-  if (!expenseId) {
+  const normalizedExpenseId = expenseId.trim();
+  if (!normalizedExpenseId) {
     return NextResponse.json({ error: "missing_id" }, { status: 400 });
   }
 
-  const apiResponse = await callAdminApi(`/api/admin/expenses/${encodeURIComponent(expenseId)}/receipt`);
+  const apiResponse = await callAdminApi(`/api/admin/expenses/${encodeURIComponent(normalizedExpenseId)}/receipt`, {
+    method: "GET"
+  });
   if (!apiResponse.ok) {
     return NextResponse.json({ error: "not_found" }, { status: apiResponse.status });
   }
 
-  const payload = (await apiResponse.json()) as {
+  const payload = (await apiResponse.json().catch(() => null)) as {
     ok?: boolean;
     filename?: string;
     contentType?: string;
     dataUrl?: string;
-  };
+  } | null;
 
   if (!payload?.dataUrl) {
     return NextResponse.json({ error: "no_receipt" }, { status: 404 });

@@ -1,10 +1,11 @@
 import Link from "next/link";
 import type { Route } from "next";
 import { redirect } from "next/navigation";
-import { Inbox, CalendarDays, ContactRound, FileText, Home, MessageSquare, Settings, ShieldCheck, UserCog } from "lucide-react";
+import { Inbox, CalendarDays, ContactRound, FileText, Home, MessageSquare, ReceiptText, Settings, ShieldCheck, UserCog } from "lucide-react";
 import { hasMobilePermission, resolveMobileSessionFromCookies } from "./lib/session";
 import { callAdminApi } from "../team/lib/api";
 import {
+  createMobileExpenseAction,
   addMobileContactNoteAction,
   addMobileAppointmentNoteAction,
   bookMobileAppointmentAction,
@@ -42,6 +43,7 @@ const navItems: Array<{ id: string; label: string; href: Route; icon: typeof Inb
   { id: "contacts", label: "People", href: "/mobile?screen=contacts", icon: ContactRound },
   { id: "calendar", label: "Cal", href: "/mobile?screen=calendar", icon: CalendarDays },
   { id: "quotes", label: "Quotes", href: "/mobile?screen=quotes", icon: FileText },
+  { id: "expenses", label: "Spend", href: "/mobile?screen=expenses", icon: ReceiptText },
   { id: "owner", label: "Owner", href: "/mobile?screen=owner", icon: ShieldCheck },
   { id: "access", label: "Access", href: "/mobile?screen=access", icon: UserCog },
   { id: "settings", label: "More", href: "/mobile?screen=settings", icon: Settings }
@@ -243,6 +245,23 @@ type QuoteSummary = {
 
 type QuotesResponse = {
   quotes?: QuoteSummary[];
+};
+
+type MobileExpense = {
+  id: string;
+  amountCents: number;
+  currency: string;
+  category: string | null;
+  vendor: string | null;
+  memo: string | null;
+  method: string | null;
+  source: string;
+  paidAt: string;
+  receipt: { filename: string; contentType: string } | null;
+};
+
+type MobileExpensesResponse = {
+  expenses?: MobileExpense[];
 };
 
 type OwnerHealthStatus = MobileOwnerSummary["health"]["providers"][number]["status"];
@@ -1175,6 +1194,13 @@ async function loadMobileQuotes(status: string): Promise<QuoteSummary[]> {
   return Array.isArray(payload?.quotes) ? payload.quotes : [];
 }
 
+async function loadMobileExpenses(): Promise<MobileExpense[]> {
+  const response = await callAdminApi("/api/admin/expenses?limit=12", { method: "GET" });
+  if (!response.ok) return [];
+  const payload = (await response.json().catch(() => null)) as MobileExpensesResponse | null;
+  return Array.isArray(payload?.expenses) ? payload.expenses : [];
+}
+
 async function loadMobileAccess(): Promise<{ roles: RoleSummary[]; members: TeamMemberSummary[] }> {
   const [rolesResponse, membersResponse] = await Promise.all([
     callAdminApi("/api/admin/roles", { method: "GET" }),
@@ -1233,6 +1259,7 @@ export default async function MobileHomePage({
     upload?: string;
     quote?: string;
     quoteStatus?: string;
+    expense?: string;
     payout?: string;
     account?: string;
     invite?: string;
@@ -1275,6 +1302,7 @@ export default async function MobileHomePage({
   const quoteSaved = params.quote === "1";
   const quoteSent = params.quote === "sent";
   const quoteUpdated = params.quote === "updated";
+  const expenseSaved = params.expense === "1";
   const payoutAction = typeof params.payout === "string" ? params.payout : "";
   const accountCreated = params.account === "created";
   const accountUpdated = params.account === "updated";
@@ -1311,10 +1339,12 @@ export default async function MobileHomePage({
   const teamMembers = activeScreen === "myday" ? await loadMobileTeamMembers() : [];
   const allQuotes = activeScreen === "quotes" ? await loadMobileQuotes("all") : [];
   const quotes = quoteStatus === "all" ? allQuotes : allQuotes.filter((quote) => quote.status === quoteStatus);
+  const expenses = activeScreen === "expenses" ? await loadMobileExpenses() : [];
   const ownerSummary = activeScreen === "owner" && session.isOwner ? await loadMobileOwnerSummary() : null;
   const accessData = activeScreen === "access" && session.isOwner ? await loadMobileAccess() : null;
   const canOpenMessageThreads = hasMobilePermission(session.teamMember.permissions, "messages.read");
   const canStartMessageThreads = hasMobilePermission(session.teamMember.permissions, "messages.send");
+  const canWriteExpenses = hasMobilePermission(session.teamMember.permissions, "expenses.write");
   const calendarWeekProjectedLabel = formatProjectedRange(calendarWeekEvents);
   const selectedThread = activeScreen === "inbox" && threadId ? await loadMobileThread(threadId) : null;
   const selectedContact = selectedThread?.thread?.contact?.id
@@ -3240,6 +3270,104 @@ export default async function MobileHomePage({
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            </div>
+          ) : activeScreen === "expenses" ? (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">Spend</p>
+                <h2 className="mt-1 text-lg font-semibold">Add expense</h2>
+                <p className="mt-1 text-sm text-slate-300">Enter the amount, choose the type, and save it before the day moves on.</p>
+              </div>
+
+              {expenseSaved ? (
+                <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm font-semibold text-emerald-100">
+                  Expense saved.
+                </div>
+              ) : null}
+
+              <form action={createMobileExpenseAction} className="space-y-3 rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                <label className="block">
+                  <span className="text-xs font-semibold text-slate-300">Amount</span>
+                  <input
+                    name="amount"
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    required
+                    className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-4 py-4 text-2xl font-semibold text-white outline-none focus:border-cyan-300"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs font-semibold text-slate-300">Category</span>
+                  <select
+                    name="category"
+                    defaultValue=""
+                    className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-base text-white outline-none focus:border-cyan-300"
+                    required
+                  >
+                    <option value="">Pick one</option>
+                    <option value="Dump">Dump</option>
+                    <option value="Gas">Gas</option>
+                    <option value="Food">Food</option>
+                    <option value="Equipment">Equipment</option>
+                    <option value="Vehicle">Vehicle</option>
+                    <option value="Insurance">Insurance</option>
+                    <option value="Software">Software</option>
+                  </select>
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={!canWriteExpenses}
+                  className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Save expense
+                </button>
+                {!canWriteExpenses ? <p className="text-xs text-rose-100">Your account can view expenses but cannot add them.</p> : null}
+              </form>
+
+              <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-base font-semibold">Recent expenses</h2>
+                  <span className="rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold text-slate-300">{expenses.length}</span>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {expenses.length > 0 ? (
+                    expenses.map((expense) => (
+                      <div key={expense.id} className="rounded-md border border-white/10 bg-slate-900 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-white">{formatUsdCents(expense.amountCents)}</p>
+                            <p className="mt-1 truncate text-xs text-slate-400">
+                              {formatMobileDateTime(expense.paidAt)}
+                              {expense.category ? ` - ${expense.category}` : ""}
+                            </p>
+                            {expense.vendor || expense.memo ? (
+                              <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-300">
+                                {[expense.vendor, expense.memo].filter(Boolean).join(" - ")}
+                              </p>
+                            ) : null}
+                          </div>
+                          {expense.receipt ? (
+                            <a
+                              href={`/api/mobile/expenses/${encodeURIComponent(expense.id)}/receipt`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="shrink-0 rounded-md border border-white/10 px-2 py-1 text-xs font-semibold text-cyan-100"
+                            >
+                              Receipt
+                            </a>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="rounded-md border border-dashed border-white/15 bg-slate-900 p-3 text-sm text-slate-300">
+                      No expenses logged yet.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

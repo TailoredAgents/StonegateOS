@@ -1,10 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { callAdminApi } from "@/app/team/lib/api";
+import { callAdminApi, resolveTeamMemberFromSessionCookie } from "@/app/team/lib/api";
 import { getSafeRedirectUrl } from "@/app/api/team/redirects";
-
-const ADMIN_COOKIE = "myst-admin-session";
-const CREW_COOKIE = "myst-crew-session";
+import { ADMIN_SESSION_COOKIE } from "@/lib/admin-session";
+import { CREW_SESSION_COOKIE } from "@/lib/crew-session";
 
 export const dynamic = "force-dynamic";
 
@@ -26,13 +25,34 @@ function isoFromDateInput(dateValue: string): string | null {
   return d.toISOString();
 }
 
-export async function POST(request: NextRequest): Promise<Response> {
+function permissionMatches(granted: string, required: string): boolean {
+  if (granted === "*") return true;
+  if (required === "read") return granted === "read";
+  if (granted === "read") return required === "read" || required.endsWith(".read");
+  if (granted.endsWith(".*")) {
+    const prefix = granted.slice(0, -2);
+    return required.startsWith(prefix);
+  }
+  return granted === required;
+}
+
+function hasPermission(permissions: string[], required: string): boolean {
+  return permissions.some((permission) => permissionMatches(permission, required));
+}
+
+async function canWriteExpenses(request: NextRequest): Promise<boolean> {
   const jar = request.cookies;
-  const hasOwner = Boolean(jar.get(ADMIN_COOKIE)?.value);
-  const hasCrew = Boolean(jar.get(CREW_COOKIE)?.value);
+  if (jar.get(ADMIN_SESSION_COOKIE)?.value || jar.get(CREW_SESSION_COOKIE)?.value) return true;
+
+  const teamMember = await resolveTeamMemberFromSessionCookie();
+  if (teamMember?.roleSlug === "owner") return true;
+  return hasPermission(teamMember?.permissions ?? [], "expenses.write");
+}
+
+export async function POST(request: NextRequest): Promise<Response> {
   const redirectTo = getSafeRedirectUrl(request, "/team?tab=expenses");
 
-  if (!hasOwner && !hasCrew) {
+  if (!(await canWriteExpenses(request))) {
     const response = NextResponse.redirect(redirectTo, 303);
     response.cookies.set({
       name: "myst-flash-error",

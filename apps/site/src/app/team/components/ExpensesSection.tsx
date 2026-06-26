@@ -116,7 +116,7 @@ export async function ExpensesSection(): Promise<React.ReactElement> {
               <input
                 name="category"
                 list="expense-categories"
-                placeholder="Fuel, dump fees, repairs, marketing..."
+                placeholder="Gas, dump, equipment..."
                 className="rounded-xl border border-slate-200 bg-white px-3 py-2"
               />
             </label>
@@ -161,16 +161,13 @@ export async function ExpensesSection(): Promise<React.ReactElement> {
             </label>
 
             <datalist id="expense-categories">
-              <option value="Fuel" />
-              <option value="Dump fees" />
-              <option value="Repairs & maintenance" />
-              <option value="Supplies" />
-              <option value="Subscriptions" />
-              <option value="Marketing" />
-              <option value="Truck rental" />
+              <option value="Dump" />
+              <option value="Gas" />
+              <option value="Food" />
+              <option value="Equipment" />
+              <option value="Vehicle" />
               <option value="Insurance" />
-              <option value="Payroll" />
-              <option value="Other" />
+              <option value="Software" />
             </datalist>
 
             <div className="sm:col-span-2">
