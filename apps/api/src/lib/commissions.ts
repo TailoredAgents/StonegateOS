@@ -319,6 +319,10 @@ export async function recalculateAppointmentCommissions(
 
   try {
     await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext('appointment_commissions'), hashtext(${appointmentId}))`,
+      );
+
       let row:
         | {
             id: string;
@@ -487,14 +491,30 @@ export async function recalculateAppointmentCommissions(
       }
 
       if (commissionRows.length > 0) {
+        const now = new Date();
         try {
-          await tx.insert(appointmentCommissions).values(
-            commissionRows.map((rowInsert) => ({
-              ...rowInsert,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            })),
-          );
+          await tx
+            .insert(appointmentCommissions)
+            .values(
+              commissionRows.map((rowInsert) => ({
+                ...rowInsert,
+                createdAt: now,
+                updatedAt: now,
+              })),
+            )
+            .onConflictDoUpdate({
+              target: [
+                appointmentCommissions.appointmentId,
+                appointmentCommissions.role,
+                appointmentCommissions.memberId,
+              ],
+              set: {
+                baseCents: sql`excluded.base_cents`,
+                amountCents: sql`excluded.amount_cents`,
+                meta: sql`excluded.meta`,
+                updatedAt: now,
+              },
+            });
         } catch (error) {
           const code = extractPgCode(error);
           if (code !== "42P01" && code !== "42703") {
