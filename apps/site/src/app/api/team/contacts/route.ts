@@ -20,6 +20,35 @@ function buildContactsRedirect(
   return url;
 }
 
+export async function GET(request: NextRequest): Promise<Response> {
+  const auth = await requireTeamRole(request, {
+    roles: ["owner", "office", "crew"],
+    returnJson: true,
+  });
+  if (!auth.ok) return auth.response;
+
+  const params = new URLSearchParams();
+  const q = request.nextUrl.searchParams.get("q")?.trim() ?? "";
+  const contactId = request.nextUrl.searchParams.get("contactId")?.trim() ?? "";
+  const limit = request.nextUrl.searchParams.get("limit")?.trim() ?? "12";
+  if (q) params.set("q", q);
+  if (contactId) params.set("contactId", contactId);
+  params.set("limit", limit);
+
+  const apiResponse = await callAdminApi(
+    `/api/admin/contacts?${params.toString()}`,
+    { method: "GET" },
+  );
+  const text = await apiResponse.text();
+  return new NextResponse(text, {
+    status: apiResponse.status,
+    headers: {
+      "Content-Type":
+        apiResponse.headers.get("Content-Type") ?? "application/json",
+    },
+  });
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   const redirectTo = getSafeRedirectUrl(request, "/team?tab=contacts");
   const auth = await requireTeamRole(request, {
@@ -124,10 +153,10 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   if (hasAddress) {
     payload["property"] = {
-      addressLine1: (addressLine1 as string).trim(),
-      city: (city as string).trim(),
-      state: (state as string).trim(),
-      postalCode: (postalCode as string).trim(),
+      addressLine1: addressLine1.trim(),
+      city: city.trim(),
+      state: state.trim(),
+      postalCode: postalCode.trim(),
     };
   }
 

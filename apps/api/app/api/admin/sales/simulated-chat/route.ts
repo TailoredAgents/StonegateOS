@@ -5,6 +5,7 @@ import {
   simulateFacebookSalesChatTurn,
   type SimulatedSalesChatMessage,
 } from "@/lib/facebook-sales-autopilot";
+import { loadOmniLeadContext } from "@/lib/omni-lead-context";
 import {
   getSalesAutopilotPolicy,
   type SalesAutopilotPolicy,
@@ -108,6 +109,19 @@ function coerceSimulationMode(
   return null;
 }
 
+function coerceContactId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      trimmed,
+    )
+  ) {
+    return trimmed;
+  }
+  return null;
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -128,7 +142,22 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  const policy = await getSalesAutopilotPolicy(getDb());
+  const db = getDb();
+  const policy = await getSalesAutopilotPolicy(db);
+  const contactId = coerceContactId(payload["contactId"]);
+  const contactContext = contactId
+    ? await loadOmniLeadContext(db, {
+        contactId,
+        includeQuotePrice: true,
+        messageLimit: 60,
+      })
+    : null;
+  if (contactId && !contactContext) {
+    return NextResponse.json(
+      { error: "contact_context_not_found" },
+      { status: 404 },
+    );
+  }
   const simulationMode = coerceSimulationMode(payload["simulationMode"]);
   const simulationPolicy = simulationMode
     ? {
@@ -145,6 +174,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     channel: payload["channel"] === "sms" ? "sms" : "dm",
     messages,
     policy: simulationPolicy,
+    context: contactContext
+      ? {
+          latestLead: contactContext.latestLead,
+          instantQuote: contactContext.instantQuote,
+          derived: contactContext.derived,
+          recentMessages: contactContext.recentMessages,
+        }
+      : null,
     previousQuoteRange: coerceQuoteRange(payload["previousQuoteRange"]),
     previousOfferedSlots: coerceOfferedSlots(payload["previousOfferedSlots"]),
   });

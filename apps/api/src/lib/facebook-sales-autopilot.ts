@@ -724,6 +724,7 @@ export function simulateFacebookSalesChatTurn(input: {
   channel?: "dm" | "sms" | null;
   messages: SimulatedSalesChatMessage[];
   policy: SalesAutopilotPolicy;
+  context?: Pick<OmniLeadContext, "latestLead" | "instantQuote" | "derived" | "recentMessages"> | null;
   previousQuoteRange?: { lowCents: number; highCents: number; confidence?: "low" | "medium" | "high" } | null;
   previousOfferedSlots?: OfferedSlot[] | null;
 }): SimulatedSalesChatResult {
@@ -741,7 +742,7 @@ export function simulateFacebookSalesChatTurn(input: {
     .filter((message) => message.body.length > 0 || (message.mediaUrls?.length ?? 0) > 0);
   const latestCustomerMessage = [...normalizedMessages].reverse().find((message) => message.role === "customer");
   const latestBody = latestCustomerMessage?.body ?? "";
-  const recentMessages = normalizedMessages.map((message, index) => ({
+  const simulatedMessages = normalizedMessages.map((message, index) => ({
     id: `simulated-message-${index + 1}`,
     threadId: "simulated-thread",
     direction: message.role === "customer" ? "inbound" : "outbound",
@@ -754,29 +755,41 @@ export function simulateFacebookSalesChatTurn(input: {
     sentAt: message.role === "agent" ? (message.createdAt ?? nowIso) : null,
     receivedAt: message.role === "customer" ? (message.createdAt ?? nowIso) : null,
   }));
+  const recentMessages = [
+    ...(input.context?.recentMessages ?? []),
+    ...simulatedMessages,
+  ].slice(-80);
   const context: Pick<OmniLeadContext, "latestLead" | "instantQuote" | "derived" | "recentMessages"> = {
-    latestLead: null,
-    instantQuote: null,
-    derived: {
-      knownZip: null,
-      knownCity: null,
-      objections: [],
-      channelPreference: channel,
-      dmEntrySource: channel === "dm" ? "organic_messenger" : null,
-      customerIntent: null,
-      pricingContext: null,
-      lastPromisedNextStep: null,
-      lastHumanSummary: null,
-      bookingReadiness: "low",
-      quoteConfidence: "low",
-      missingFields: [],
-      exceptionSignals: [],
-    },
+    latestLead: input.context?.latestLead ?? null,
+    instantQuote: input.context?.instantQuote ?? null,
+    derived: input.context?.derived ?? {
+        knownZip: null,
+        knownCity: null,
+        objections: [],
+        channelPreference: channel,
+        dmEntrySource: channel === "dm" ? "organic_messenger" : null,
+        customerIntent: null,
+        pricingContext: null,
+        lastPromisedNextStep: null,
+        lastHumanSummary: null,
+        bookingReadiness: "low",
+        quoteConfidence: "low",
+        missingFields: [],
+        exceptionSignals: [],
+      },
     recentMessages,
   };
   const mediaCount = recentMessages.reduce((sum, message) => sum + (message.mediaUrls?.length ?? 0), 0);
   const riskReason = detectFacebookSalesRisk(context);
   const textQuote = getTextQuoteReadiness(context);
+  const contextQuoteRange =
+    input.context?.instantQuote?.priceLow && input.context.instantQuote.priceHigh
+      ? {
+          lowCents: Math.round(input.context.instantQuote.priceLow * 100),
+          highCents: Math.round(input.context.instantQuote.priceHigh * 100),
+          confidence: "medium" as const,
+        }
+      : null;
   const previousQuoteRange =
     input.previousQuoteRange && Number.isFinite(input.previousQuoteRange.lowCents) && Number.isFinite(input.previousQuoteRange.highCents)
       ? {
@@ -785,7 +798,7 @@ export function simulateFacebookSalesChatTurn(input: {
           confidence: input.previousQuoteRange.confidence ?? "medium",
         }
       : null;
-  const quoteRange = textQuote.quoteRange ?? previousQuoteRange;
+  const quoteRange = contextQuoteRange ?? textQuote.quoteRange ?? previousQuoteRange;
   const confidence = quoteRange?.confidence ?? "medium";
   const previousOfferedSlots = Array.isArray(input.previousOfferedSlots) ? input.previousOfferedSlots : [];
   const confirmedSlot = detectClearBookingConfirmation(latestBody, previousOfferedSlots);
@@ -891,6 +904,7 @@ export function simulateFacebookSalesChatTurn(input: {
     debug: {
       mediaCount,
       textQuote: textQuote.snapshot,
+      realContactContext: Boolean(input.context),
       simulationOnly: true,
       realMessageQueued: false,
       realBookingCreated: false,
