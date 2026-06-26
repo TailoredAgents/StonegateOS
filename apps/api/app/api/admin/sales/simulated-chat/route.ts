@@ -5,7 +5,10 @@ import {
   simulateFacebookSalesChatTurn,
   type SimulatedSalesChatMessage,
 } from "@/lib/facebook-sales-autopilot";
-import { getSalesAutopilotPolicy } from "@/lib/policy";
+import {
+  getSalesAutopilotPolicy,
+  type SalesAutopilotPolicy,
+} from "@/lib/policy";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
@@ -91,6 +94,20 @@ function coerceOfferedSlots(value: unknown) {
     .slice(-6);
 }
 
+function coerceSimulationMode(
+  value: unknown,
+): SalesAutopilotPolicy["facebookCloser"]["mode"] | null {
+  if (
+    value === "off" ||
+    value === "shadow" ||
+    value === "assist" ||
+    value === "auto"
+  ) {
+    return value;
+  }
+  return null;
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -112,10 +129,22 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const policy = await getSalesAutopilotPolicy(getDb());
+  const simulationMode = coerceSimulationMode(payload["simulationMode"]);
+  const simulationPolicy = simulationMode
+    ? {
+        ...policy,
+        facebookCloser: {
+          ...policy.facebookCloser,
+          mode: simulationMode,
+          emergencyStop:
+            simulationMode === "off" ? policy.facebookCloser.emergencyStop : false,
+        },
+      }
+    : policy;
   const result = simulateFacebookSalesChatTurn({
     channel: payload["channel"] === "sms" ? "sms" : "dm",
     messages,
-    policy,
+    policy: simulationPolicy,
     previousQuoteRange: coerceQuoteRange(payload["previousQuoteRange"]),
     previousOfferedSlots: coerceOfferedSlots(payload["previousOfferedSlots"]),
   });

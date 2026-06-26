@@ -4,6 +4,7 @@ import React from "react";
 
 type ChatRole = "customer" | "agent";
 type ChatChannel = "dm" | "sms";
+type SimulationMode = "shadow" | "assist" | "auto" | "off";
 
 type ChatMessage = {
   id: string;
@@ -96,6 +97,8 @@ function buildRunTitle(
 
 export function SimulatedChatSection(): React.ReactElement {
   const [channel, setChannel] = React.useState<ChatChannel>("dm");
+  const [simulationMode, setSimulationMode] =
+    React.useState<SimulationMode>("shadow");
   const [input, setInput] = React.useState("");
   const [includePhotos, setIncludePhotos] = React.useState(false);
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
@@ -153,6 +156,7 @@ export function SimulatedChatSection(): React.ReactElement {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           channel,
+          simulationMode,
           messages: nextMessages.map((message) => ({
             role: message.role,
             body: message.body,
@@ -174,17 +178,17 @@ export function SimulatedChatSection(): React.ReactElement {
 
       const result = payload.result;
       setLastResult(result);
-      if (result.reply) {
-        setMessages([
-          ...nextMessages,
-          {
-            id: createId(),
-            role: "agent",
-            body: result.reply,
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-      }
+      setMessages([
+        ...nextMessages,
+        {
+          id: createId(),
+          role: "agent",
+          body:
+            result.reply ??
+            `Simulation note: no customer reply would be sent. Reason: ${formatLabel(result.reason)}.`,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Simulation failed");
     } finally {
@@ -265,6 +269,28 @@ export function SimulatedChatSection(): React.ReactElement {
               >
                 <option value="dm">Facebook DM</option>
                 <option value="sms">SMS</option>
+              </select>
+            </label>
+            <label className="flex min-w-[180px] flex-col gap-1 text-xs font-medium text-[color:var(--team-text-muted)]">
+              Simulation mode
+              <select
+                value={simulationMode}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setSimulationMode(
+                    value === "assist" ||
+                      value === "auto" ||
+                      value === "off"
+                      ? value
+                      : "shadow",
+                  );
+                }}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              >
+                <option value="shadow">Shadow test</option>
+                <option value="assist">Assist test</option>
+                <option value="auto">Auto test</option>
+                <option value="off">Off</option>
               </select>
             </label>
             <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
