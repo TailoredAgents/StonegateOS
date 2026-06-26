@@ -106,6 +106,58 @@ type CommissionSummaryPayload = {
   };
 };
 
+type PayrollSummaryMember = {
+  memberId: string | null;
+  memberName: string;
+  currentPayrollCents: number;
+  currentReimbursementCents: number;
+  currentTotalPayoutCents: number;
+  currentSalesCents: number;
+  currentManagementCents: number;
+  currentCrewCents: number;
+  currentOtherAdjustmentsCents: number;
+  monthPayrollCents: number;
+  monthReimbursementCents: number;
+  monthTotalPayoutCents: number;
+  yearPayrollCents: number;
+  yearReimbursementCents: number;
+  yearTotalPayoutCents: number;
+};
+
+type PayrollSummaryMonth = {
+  month: string;
+  label: string;
+  payrollCents: number;
+  reimbursementCents: number;
+  totalPayoutCents: number;
+};
+
+type PayrollSummaryPayload = {
+  ok: true;
+  timezone: string;
+  year: number;
+  month: number;
+  monthLabel: string;
+  currentPeriod: {
+    periodStart: string;
+    periodEnd: string;
+    scheduledPayoutAt: string;
+  };
+  totals: {
+    currentPayrollCents: number;
+    currentReimbursementCents: number;
+    currentTotalPayoutCents: number;
+    monthPayrollCents: number;
+    monthReimbursementCents: number;
+    monthTotalPayoutCents: number;
+    yearPayrollCents: number;
+    yearReimbursementCents: number;
+    yearTotalPayoutCents: number;
+  };
+  members: PayrollSummaryMember[];
+  monthly: PayrollSummaryMonth[];
+};
+
 type BookingSourceKey =
   | "facebook"
   | "google"
@@ -151,15 +203,45 @@ type BookingSourceSummaryPayload = {
   recentJobs: BookingSourceSummaryJob[];
 };
 
-type OwnerView = "overview" | "revenue" | "expenses" | "payroll" | "pl" | "assistant";
+type OwnerView =
+  | "overview"
+  | "revenue"
+  | "expenses"
+  | "payroll"
+  | "pl"
+  | "assistant";
 
-const OWNER_VIEWS: Array<{ id: OwnerView; label: string; description: string }> = [
-  { id: "overview", label: "Overview", description: "Cash flow, alerts, and next actions" },
-  { id: "revenue", label: "Revenue", description: "Completed jobs and collected totals" },
-  { id: "expenses", label: "Expenses", description: "Spend totals and recent receipts" },
-  { id: "payroll", label: "Payroll", description: "Commissions, tips, and payout timing" },
+const OWNER_VIEWS: Array<{
+  id: OwnerView;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: "overview",
+    label: "Overview",
+    description: "Cash flow, alerts, and next actions",
+  },
+  {
+    id: "revenue",
+    label: "Revenue",
+    description: "Completed jobs and collected totals",
+  },
+  {
+    id: "expenses",
+    label: "Expenses",
+    description: "Spend totals and recent receipts",
+  },
+  {
+    id: "payroll",
+    label: "Payroll",
+    description: "Commissions, tips, and payout timing",
+  },
   { id: "pl", label: "P&L", description: "Profit and margin snapshots" },
-  { id: "assistant", label: "Assistant", description: "Ask live owner questions" },
+  {
+    id: "assistant",
+    label: "Assistant",
+    description: "Ask live owner questions",
+  },
 ];
 
 function isOwnerView(value: string | null | undefined): value is OwnerView {
@@ -248,7 +330,10 @@ function formatJobAddress(job: RevenueWeekJob): string | null {
   return value.length > 0 ? value : null;
 }
 
-function fmtCompactDateTime(iso: string, timezone = "America/New_York"): string {
+function fmtCompactDateTime(
+  iso: string,
+  timezone = "America/New_York",
+): string {
   const d = new Date(iso);
   return new Intl.DateTimeFormat("en-US", {
     timeZone: timezone,
@@ -321,7 +406,11 @@ function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
   };
 }
 
-export async function OwnerSection({ ownerView }: { ownerView?: string }): Promise<React.ReactElement> {
+export async function OwnerSection({
+  ownerView,
+}: {
+  ownerView?: string;
+}): Promise<React.ReactElement> {
   const activeOwnerView = normalizeOwnerView(ownerView);
   let revenue: RevenuePayload | null = null;
   let revenueError: string | null = null;
@@ -366,24 +455,39 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
 
   let commissionSummary: CommissionSummaryPayload | null = null;
   let commissionError: string | null = null;
+  let payrollSummary: PayrollSummaryPayload | null = null;
+  let payrollError: string | null = null;
   try {
-    const res = await callAdminApi("/api/admin/commissions/summary");
-    if (res.ok) {
-      commissionSummary = (await res.json()) as CommissionSummaryPayload;
-    } else if (res.status === 503) {
+    const [summaryRes, payrollRes] = await Promise.all([
+      callAdminApi("/api/admin/commissions/summary"),
+      callAdminApi("/api/admin/commissions/payroll-summary"),
+    ]);
+
+    if (summaryRes.ok) {
+      commissionSummary = (await summaryRes.json()) as CommissionSummaryPayload;
+    } else if (summaryRes.status === 503) {
       commissionError =
         "Commissions are still initializing. Try again in a minute.";
     } else {
-      commissionError = `Commissions unavailable (HTTP ${res.status})`;
+      commissionError = `Commissions unavailable (HTTP ${summaryRes.status})`;
+    }
+
+    if (payrollRes.ok) {
+      payrollSummary = (await payrollRes.json()) as PayrollSummaryPayload;
+    } else {
+      payrollError = `Payroll history unavailable (HTTP ${payrollRes.status})`;
     }
   } catch {
     commissionError = "Commissions unavailable.";
+    payrollError = "Payroll history unavailable.";
   }
 
   let bookingSourceSummary: BookingSourceSummaryPayload | null = null;
   let bookingSourceError: string | null = null;
   try {
-    const res = await callAdminApi("/api/admin/appointments/source-summary?rangeDays=7");
+    const res = await callAdminApi(
+      "/api/admin/appointments/source-summary?rangeDays=7",
+    );
     if (res.ok) {
       bookingSourceSummary = (await res.json()) as BookingSourceSummaryPayload;
     } else {
@@ -421,17 +525,25 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h2 className={TEAM_SECTION_TITLE}>Owner HQ</h2>
-            <p className={TEAM_SECTION_SUBTITLE}>Revenue, expenses, payroll, profit, and owner tools.</p>
+            <p className={TEAM_SECTION_SUBTITLE}>
+              Revenue, expenses, payroll, profit, and owner tools.
+            </p>
           </div>
           <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Current view</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Current view
+            </div>
             <div className="mt-1 font-semibold text-slate-900">
-              {OWNER_VIEWS.find((view) => view.id === activeOwnerView)?.label ?? "Overview"}
+              {OWNER_VIEWS.find((view) => view.id === activeOwnerView)?.label ??
+                "Overview"}
             </div>
           </div>
         </div>
 
-        <nav className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6" aria-label="Owner HQ sections">
+        <nav
+          className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6"
+          aria-label="Owner HQ sections"
+        >
           {OWNER_VIEWS.map((view) => {
             const isActive = view.id === activeOwnerView;
             return (
@@ -444,8 +556,12 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
                     : "border-slate-200 bg-white text-slate-700 hover:border-primary-200 hover:bg-slate-50"
                 }`}
               >
-                <span className="block text-sm font-semibold">{view.label}</span>
-                <span className={`mt-1 block text-xs ${isActive ? "text-primary-700" : "text-slate-500"}`}>
+                <span className="block text-sm font-semibold">
+                  {view.label}
+                </span>
+                <span
+                  className={`mt-1 block text-xs ${isActive ? "text-primary-700" : "text-slate-500"}`}
+                >
                   {view.description}
                 </span>
               </a>
@@ -454,7 +570,9 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
         </nav>
       </header>
 
-      <div className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 xl:grid-cols-[1.1fr,1.9fr]`}>
+      <div
+        className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 xl:grid-cols-[1.1fr,1.9fr]`}
+      >
         <div className={TEAM_CARD_PADDED}>
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -582,16 +700,24 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
         </div>
       </div>
 
-      <div className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]`}>
+      <div
+        className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]`}
+      >
         <div className={TEAM_CARD_PADDED}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h3 className="text-lg font-semibold text-slate-900">Booked jobs by source</h3>
+              <h3 className="text-lg font-semibold text-slate-900">
+                Booked jobs by source
+              </h3>
               <p className="mt-1 text-sm text-slate-600">
-                Last 7 days, counting confirmed and completed jobs. Quote-only visits are excluded.
+                Last 7 days, counting confirmed and completed jobs. Quote-only
+                visits are excluded.
               </p>
             </div>
-            <a href="/team?tab=owner&ownerView=revenue" className={teamButtonClass("secondary", "sm")}>
+            <a
+              href="/team?tab=owner&ownerView=revenue"
+              className={teamButtonClass("secondary", "sm")}
+            >
               Revenue
             </a>
           </div>
@@ -606,22 +732,42 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
             <>
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
                 <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">Facebook</div>
-                  <div className="mt-2 text-3xl font-semibold text-blue-950">{bookingSourceSummary.facebook.count}</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                    Facebook
+                  </div>
+                  <div className="mt-2 text-3xl font-semibold text-blue-950">
+                    {bookingSourceSummary.facebook.count}
+                  </div>
                   <div className="mt-1 text-xs text-blue-800">
-                    {fmtMoney(bookingSourceSummary.facebook.estimatedRevenueCents, "USD")} quoted/collected
+                    {fmtMoney(
+                      bookingSourceSummary.facebook.estimatedRevenueCents,
+                      "USD",
+                    )}{" "}
+                    quoted/collected
                   </div>
                 </div>
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Google</div>
-                  <div className="mt-2 text-3xl font-semibold text-emerald-950">{bookingSourceSummary.google.count}</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                    Google
+                  </div>
+                  <div className="mt-2 text-3xl font-semibold text-emerald-950">
+                    {bookingSourceSummary.google.count}
+                  </div>
                   <div className="mt-1 text-xs text-emerald-800">
-                    {fmtMoney(bookingSourceSummary.google.estimatedRevenueCents, "USD")} quoted/collected
+                    {fmtMoney(
+                      bookingSourceSummary.google.estimatedRevenueCents,
+                      "USD",
+                    )}{" "}
+                    quoted/collected
                   </div>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">All booked</div>
-                  <div className="mt-2 text-3xl font-semibold text-slate-900">{bookingSourceSummary.totalBookedJobs}</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    All booked
+                  </div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    {bookingSourceSummary.totalBookedJobs}
+                  </div>
                   <div className="mt-1 text-xs text-slate-600">
                     Since {fmtCompactDateTime(bookingSourceSummary.since)}
                   </div>
@@ -630,12 +776,19 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
 
               <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {bookingSourceSummary.sources
-                  .filter((source) => !["facebook", "google"].includes(source.source))
+                  .filter(
+                    (source) => !["facebook", "google"].includes(source.source),
+                  )
                   .filter((source) => source.count > 0)
                   .map((source) => (
-                    <div key={source.source} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                    <div
+                      key={source.source}
+                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                    >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-slate-800">{source.label}</span>
+                        <span className="font-semibold text-slate-800">
+                          {source.label}
+                        </span>
                         <span className="text-slate-500">{source.count}</span>
                       </div>
                     </div>
@@ -650,8 +803,12 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
         </div>
 
         <div className={TEAM_CARD_PADDED}>
-          <h3 className="text-lg font-semibold text-slate-900">Recent source-attributed jobs</h3>
-          <p className="mt-1 text-sm text-slate-600">Facebook and Google bookings from the same 7-day window.</p>
+          <h3 className="text-lg font-semibold text-slate-900">
+            Recent source-attributed jobs
+          </h3>
+          <p className="mt-1 text-sm text-slate-600">
+            Facebook and Google bookings from the same 7-day window.
+          </p>
           <div className="mt-4 space-y-2">
             {bookingSourceError ? (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -666,11 +823,17 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="truncate font-semibold text-slate-900">{job.contactName}</div>
+                      <div className="truncate font-semibold text-slate-900">
+                        {job.contactName}
+                      </div>
                       <div className="mt-1 text-xs text-slate-600">
                         Booked {fmtCompactDateTime(job.createdAt)}
                       </div>
-                      {job.address ? <div className="mt-1 truncate text-[11px] text-slate-500">{job.address}</div> : null}
+                      {job.address ? (
+                        <div className="mt-1 truncate text-[11px] text-slate-500">
+                          {job.address}
+                        </div>
+                      ) : null}
                     </div>
                     <span
                       className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${
@@ -697,36 +860,76 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
         </div>
       </div>
 
-      <div className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 lg:grid-cols-4`}>
-        <a href="/team?tab=owner&ownerView=revenue" className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Revenue review</div>
-          <div className="mt-2 text-2xl font-semibold text-slate-900">{fmtMoney(weekRevenue, "USD")}</div>
+      <div
+        className={`${activeOwnerView === "overview" ? "grid" : "hidden"} gap-4 lg:grid-cols-4`}
+      >
+        <a
+          href="/team?tab=owner&ownerView=revenue"
+          className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
+        >
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Revenue review
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">
+            {fmtMoney(weekRevenue, "USD")}
+          </div>
           <div className="mt-1 text-sm text-slate-600">
-            {revenue?.ok ? `${revenue.windows.weekToDate.count} completed jobs this week` : "Revenue data unavailable"}
+            {revenue?.ok
+              ? `${revenue.windows.weekToDate.count} completed jobs this week`
+              : "Revenue data unavailable"}
           </div>
         </a>
-        <a href="/team?tab=owner&ownerView=expenses" className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Expense review</div>
-          <div className="mt-2 text-2xl font-semibold text-slate-900">{fmtMoney(weekExpenses, "USD")}</div>
+        <a
+          href="/team?tab=owner&ownerView=expenses"
+          className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
+        >
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Expense review
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">
+            {fmtMoney(weekExpenses, "USD")}
+          </div>
           <div className="mt-1 text-sm text-slate-600">
-            {expensesSummary?.ok ? `${expensesSummary.windows.weekToDate.count} expenses this week` : "Expense data unavailable"}
+            {expensesSummary?.ok
+              ? `${expensesSummary.windows.weekToDate.count} expenses this week`
+              : "Expense data unavailable"}
           </div>
         </a>
-        <a href="/team?tab=owner&ownerView=payroll" className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payroll review</div>
-          <div className="mt-2 text-2xl font-semibold text-amber-800">{fmtMoney(weekPayroll, "USD")}</div>
-          <div className="mt-1 text-sm text-slate-600">Current payout before card tips</div>
+        <a
+          href="/team?tab=owner&ownerView=payroll"
+          className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
+        >
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            Payroll review
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-amber-800">
+            {fmtMoney(weekPayroll, "USD")}
+          </div>
+          <div className="mt-1 text-sm text-slate-600">
+            Current payout before card tips
+          </div>
         </a>
-        <a href="/team?tab=owner&ownerView=pl" className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">P&amp;L snapshot</div>
-          <div className={`mt-2 text-2xl font-semibold ${weekNetAfterPayroll >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+        <a
+          href="/team?tab=owner&ownerView=pl"
+          className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
+        >
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+            P&amp;L snapshot
+          </div>
+          <div
+            className={`mt-2 text-2xl font-semibold ${weekNetAfterPayroll >= 0 ? "text-emerald-700" : "text-rose-700"}`}
+          >
             {fmtMoney(weekNetAfterPayroll, "USD")}
           </div>
-          <div className="mt-1 text-sm text-slate-600">Week net after expenses and payroll</div>
+          <div className="mt-1 text-sm text-slate-600">
+            Week net after expenses and payroll
+          </div>
         </a>
       </div>
 
-      <div className={`${TEAM_CARD_PADDED} ${activeOwnerView === "revenue" ? "" : "hidden"}`}>
+      <div
+        className={`${TEAM_CARD_PADDED} ${activeOwnerView === "revenue" ? "" : "hidden"}`}
+      >
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold text-slate-900">Revenue</h3>
@@ -955,8 +1158,12 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
         </div>
       </div>
 
-      <div className={`${activeOwnerView === "expenses" || activeOwnerView === "payroll" ? "grid" : "hidden"} gap-4`}>
-        <div className={`${TEAM_CARD_PADDED} ${activeOwnerView === "expenses" ? "" : "hidden"}`}>
+      <div
+        className={`${activeOwnerView === "expenses" || activeOwnerView === "payroll" ? "grid" : "hidden"} gap-4`}
+      >
+        <div
+          className={`${TEAM_CARD_PADDED} ${activeOwnerView === "expenses" ? "" : "hidden"}`}
+        >
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">Expenses</h3>
@@ -1062,15 +1269,15 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
           ) : null}
         </div>
 
-        <div className={`${TEAM_CARD_PADDED} ${activeOwnerView === "payroll" ? "" : "hidden"}`}>
+        <div
+          className={`${TEAM_CARD_PADDED} ${activeOwnerView === "payroll" ? "" : "hidden"}`}
+        >
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h3 className="text-lg font-semibold text-slate-900">
-                Commissions
-              </h3>
+              <h3 className="text-lg font-semibold text-slate-900">Payroll</h3>
               <p className="mt-1 text-sm text-slate-600">
-                Weekly payout totals (settings + payouts live in Control →
-                Commissions).
+                Monthly and yearly pay by team member. Reimbursements are shown
+                separately from payroll.
               </p>
             </div>
             <a
@@ -1083,6 +1290,164 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
 
           {commissionError ? (
             <p className="mt-3 text-sm text-amber-700">{commissionError}</p>
+          ) : null}
+          {payrollError ? (
+            <p className="mt-3 text-sm text-amber-700">{payrollError}</p>
+          ) : null}
+
+          {payrollSummary?.ok ? (
+            <div className="mt-4 space-y-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                    Current projected
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-amber-950">
+                    {fmtMoney(payrollSummary.totals.currentPayrollCents, "USD")}
+                  </div>
+                  <div className="mt-1 text-xs text-amber-800">
+                    Pays{" "}
+                    {fmtWhen(
+                      payrollSummary.currentPeriod.scheduledPayoutAt,
+                      payrollSummary.timezone,
+                    )}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    {payrollSummary.monthLabel}
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">
+                    {fmtMoney(payrollSummary.totals.monthPayrollCents, "USD")}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-600">
+                    Reimbursements{" "}
+                    {fmtMoney(
+                      payrollSummary.totals.monthReimbursementCents,
+                      "USD",
+                    )}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    {payrollSummary.year} YTD
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">
+                    {fmtMoney(payrollSummary.totals.yearPayrollCents, "USD")}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-600">
+                    Reimbursements{" "}
+                    {fmtMoney(
+                      payrollSummary.totals.yearReimbursementCents,
+                      "USD",
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+                  <h4 className="text-sm font-semibold text-slate-900">
+                    Pay by person
+                  </h4>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Current is projected from completed jobs in the open payroll
+                    period. Month and YTD use locked or paid payroll history.
+                  </p>
+                </div>
+                {payrollSummary.members.length ? (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-slate-200 text-sm">
+                      <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-4 py-3">Team member</th>
+                          <th className="px-4 py-3 text-right">Current</th>
+                          <th className="px-4 py-3 text-right">Month</th>
+                          <th className="px-4 py-3 text-right">YTD</th>
+                          <th className="px-4 py-3 text-right">
+                            YTD reimburse
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {payrollSummary.members.map((member) => (
+                          <tr key={member.memberId ?? member.memberName}>
+                            <td className="px-4 py-3 font-semibold text-slate-900">
+                              {member.memberName}
+                            </td>
+                            <td className="px-4 py-3 text-right text-slate-700">
+                              <div className="font-semibold text-slate-900">
+                                {fmtMoney(member.currentPayrollCents, "USD")}
+                              </div>
+                              {member.currentReimbursementCents ? (
+                                <div className="text-xs text-slate-500">
+                                  +{" "}
+                                  {fmtMoney(
+                                    member.currentReimbursementCents,
+                                    "USD",
+                                  )}{" "}
+                                  reimburse
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                              {fmtMoney(member.monthPayrollCents, "USD")}
+                            </td>
+                            <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                              {fmtMoney(member.yearPayrollCents, "USD")}
+                            </td>
+                            <td className="px-4 py-3 text-right text-slate-700">
+                              {fmtMoney(member.yearReimbursementCents, "USD")}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="px-4 py-4 text-sm text-slate-600">
+                    No payroll history yet.
+                  </p>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-900">
+                      Monthly payroll history
+                    </h4>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Locked and paid payroll by scheduled payout month.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                    {payrollSummary.year}
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {payrollSummary.monthly.map((month) => (
+                    <div
+                      key={month.month}
+                      className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-3 text-sm">
+                        <span className="font-semibold text-slate-900">
+                          {month.label}
+                        </span>
+                        <span className="font-semibold text-slate-900">
+                          {fmtMoney(month.payrollCents, "USD")}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        Reimbursements{" "}
+                        {fmtMoney(month.reimbursementCents, "USD")}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           ) : null}
 
           {commissionSummary?.ok ? (
@@ -1151,7 +1516,9 @@ export async function OwnerSection({ ownerView }: { ownerView?: string }): Promi
         </div>
       </div>
 
-      <div className={`${TEAM_CARD_PADDED} ${activeOwnerView === "pl" ? "" : "hidden"}`}>
+      <div
+        className={`${TEAM_CARD_PADDED} ${activeOwnerView === "pl" ? "" : "hidden"}`}
+      >
         <h3 className="text-lg font-semibold text-slate-900">P&amp;L</h3>
         <p className="mt-1 text-sm text-slate-600">
           Revenue (completed jobs) minus expenses (including commission payouts
