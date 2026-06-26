@@ -365,6 +365,12 @@ function formatUsdDollars(value: number | null | undefined): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
 
+function buildMapsDirectionsHref(address: string | null | undefined): string | null {
+  const query = typeof address === "string" ? address.trim() : "";
+  if (!query) return null;
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(query)}`;
+}
+
 function quoteServiceAmount(quote: QuoteSummary, serviceId: string): string {
   const line = quote.lineItems?.find((item) => item.id === `service-${serviceId}`);
   if (!line || typeof line.amount !== "number" || !Number.isFinite(line.amount)) return "";
@@ -951,6 +957,7 @@ function MobileWeekAgenda({
                   const appointmentId = event.appointmentId ?? (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : "");
                   const canUpdate = Boolean(appointmentId && event.source === "db");
                   const eventPricing = formatEventPricing(event);
+                  const mapsHref = buildMapsDirectionsHref(event.address);
                   const tone = eventTone(event);
                   return (
                     <details key={event.id} className={`group overflow-hidden rounded-md border ${tone.card}`}>
@@ -975,7 +982,18 @@ function MobileWeekAgenda({
                       </summary>
 
                       <div className="space-y-3 border-t border-white/10 px-3 pb-3 pt-2">
-                        {event.address ? <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-5 text-slate-300">{event.address}</p> : null}
+                        {mapsHref && event.address ? (
+                          <a
+                            href={mapsHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold leading-5 text-cyan-100 underline-offset-4 hover:underline"
+                          >
+                            {event.address}
+                          </a>
+                        ) : event.address ? (
+                          <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-5 text-slate-300">{event.address}</p>
+                        ) : null}
                         {event.notes?.length ? (
                           <div className="space-y-2 rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-6 text-slate-300">
                             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Notes</p>
@@ -1996,7 +2014,7 @@ export default async function MobileHomePage({
                       const canUpdate = Boolean(appointmentId && event.source === "db");
                       const eventAmountLabel = formatEventAmountBadge(event);
                       const eventPricing = formatEventPricing(event);
-                      const mapsHref = event.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.address)}` : null;
+                      const mapsHref = buildMapsDirectionsHref(event.address);
                       const tone = eventTone(event);
                       return (
                         <div key={event.id} className={`rounded-md border p-3 ${tone.card}`}>
@@ -2006,7 +2024,18 @@ export default async function MobileHomePage({
                                 {formatTime(event.start)} - {formatTime(event.end)}
                               </p>
                               <p className="mt-1 truncate text-sm font-semibold text-white">{event.contactName ?? event.title}</p>
-                              {event.address ? <p className="mt-1 text-sm leading-5 text-slate-300">{event.address}</p> : null}
+                              {mapsHref && event.address ? (
+                                <a
+                                  href={mapsHref}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-1 block text-sm font-semibold leading-5 text-cyan-100 underline-offset-4 hover:underline"
+                                >
+                                  {event.address}
+                                </a>
+                              ) : event.address ? (
+                                <p className="mt-1 text-sm leading-5 text-slate-300">{event.address}</p>
+                              ) : null}
                             </div>
                             <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone.badge}`}>
                               {eventKindLabel(event)}
@@ -2980,20 +3009,30 @@ export default async function MobileHomePage({
                 </div>
                 <div className="mt-3 space-y-2">
                   {ownerSummary.nextAppointments.length > 0 ? (
-                    ownerSummary.nextAppointments.map((appointment) => (
-                      <div key={appointment.id} className="rounded-md border border-white/10 bg-slate-900 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold">{appointment.contactName ?? appointment.title}</p>
-                            <p className="mt-1 text-xs text-slate-400">
-                              {appointment.time}
-                              {appointment.address ? ` • ${appointment.address}` : ""}
-                            </p>
+                    ownerSummary.nextAppointments.map((appointment) => {
+                      const mapsHref = buildMapsDirectionsHref(appointment.address);
+                      return (
+                        <div key={appointment.id} className="rounded-md border border-white/10 bg-slate-900 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold">{appointment.contactName ?? appointment.title}</p>
+                              <p className="mt-1 text-xs text-slate-400">{appointment.time}</p>
+                              {mapsHref && appointment.address ? (
+                                <a
+                                  href={mapsHref}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-1 block text-xs font-semibold leading-5 text-cyan-100 underline-offset-4 hover:underline"
+                                >
+                                  {appointment.address}
+                                </a>
+                              ) : null}
+                            </div>
+                            <span className="shrink-0 text-sm font-semibold text-cyan-100">{formatUsdCents(appointment.projectedCents)}</span>
                           </div>
-                          <span className="shrink-0 text-sm font-semibold text-cyan-100">{formatUsdCents(appointment.projectedCents)}</span>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <p className="rounded-md border border-dashed border-white/15 bg-slate-900 p-3 text-sm text-slate-300">
                       No booked work today.
