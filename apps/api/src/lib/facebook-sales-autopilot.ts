@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq, gt, lt } from "drizzle-orm";
 import {
   conversationMessages,
   conversationParticipants,
@@ -41,6 +41,14 @@ type ProposedAction =
   | "human_review";
 
 type OfferedSlot = { label: string; startAt: string; endAt?: string | null };
+
+const FIRST_REPLY_DELAY_MIN_MS = 5_000;
+const FIRST_REPLY_DELAY_MAX_MS = 20_000;
+const FOLLOWUP_REPLY_DELAY_MIN_MS = 3_000;
+const FOLLOWUP_REPLY_DELAY_MAX_MS = 10_000;
+const TYPING_MS_PER_CHAR = 35;
+const MIN_TYPING_MS = 1_200;
+const MAX_TYPING_MS = 12_000;
 
 export type SimulatedSalesChatMessage = {
   role: "customer" | "agent";
@@ -180,6 +188,47 @@ function money(cents: number): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(cents / 100);
 }
 
+function randomIntInclusive(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function estimateTypingDelayMs(body: string): number {
+  return Math.min(
+    MAX_TYPING_MS,
+    Math.max(MIN_TYPING_MS, Math.round(body.trim().length * TYPING_MS_PER_CHAR)),
+  );
+}
+
+async function getSalesAutopilotReplyTiming(input: {
+  db: DatabaseClient;
+  row: EvaluatedMessage;
+  channel: "dm" | "sms";
+  body: string;
+}): Promise<{ thinkDelayMs: number; typingDelayMs: number; totalDelayMs: number }> {
+  const [priorOutbound] = await input.db
+    .select({ id: conversationMessages.id })
+    .from(conversationMessages)
+    .where(
+      and(
+        eq(conversationMessages.threadId, input.row.threadId),
+        eq(conversationMessages.direction, "outbound"),
+        eq(conversationMessages.channel, input.channel),
+        lt(conversationMessages.createdAt, input.row.createdAt),
+      ),
+    )
+    .limit(1);
+
+  const thinkDelayMs = priorOutbound
+    ? randomIntInclusive(FOLLOWUP_REPLY_DELAY_MIN_MS, FOLLOWUP_REPLY_DELAY_MAX_MS)
+    : randomIntInclusive(FIRST_REPLY_DELAY_MIN_MS, FIRST_REPLY_DELAY_MAX_MS);
+  const typingDelayMs = estimateTypingDelayMs(input.body);
+  return {
+    thinkDelayMs,
+    typingDelayMs,
+    totalDelayMs: thinkDelayMs + typingDelayMs,
+  };
+}
+
 function latestMeaningfulInboundAt(context: OmniLeadContext, channel: string): Date | null {
   for (let i = context.recentMessages.length - 1; i >= 0; i -= 1) {
     const msg = context.recentMessages[i];
@@ -220,6 +269,10 @@ function customerAskedForTimes(body: string): boolean {
 
 function customerAskedForQuote(body: string): boolean {
   return /\b(price|pricing|quote|estimate|cost|how much|\$)\b/i.test(body);
+}
+
+function customerAskedAboutTrailer(body: string): boolean {
+  return /\b(how big|what size|size)\b.*\b(trailer|truck)\b|\b(trailer|truck)\b.*\b(how big|what size|size)\b/i.test(body);
 }
 
 function customerAcceptedQuoteOrScheduling(body: string): boolean {
@@ -446,6 +499,14 @@ async function createOutboundDmDraft(input: {
 }): Promise<string | null> {
   const channel = input.channel ?? (input.row.channel === "sms" ? "sms" : "dm");
   const now = new Date();
+  const responseTiming = input.send
+    ? await getSalesAutopilotReplyTiming({
+        db: input.db,
+        row: input.row,
+        channel,
+        body: input.body,
+      })
+    : null;
   const [existingRecentOutbound] = await input.db
     .select({ id: conversationMessages.id, metadata: conversationMessages.metadata })
     .from(conversationMessages)
@@ -497,7 +558,15 @@ async function createOutboundDmDraft(input: {
         ...(input.row.metadata ?? {}),
         ...(input.send ? {} : { draft: true }),
         facebookSalesAutopilot: true,
+        salesAutopilot: true,
         facebookSalesAutopilotMode: input.mode,
+        ...(responseTiming
+          ? {
+              salesAutopilotThinkDelayMs: responseTiming.thinkDelayMs,
+              humanisticDelayMs: responseTiming.typingDelayMs,
+              salesAutopilotTotalDelayMs: responseTiming.totalDelayMs,
+            }
+          : {}),
       },
       createdAt: now,
     })
@@ -508,6 +577,14 @@ async function createOutboundDmDraft(input: {
     await input.db.insert(outboxEvents).values({
       type: "message.send",
       payload: { messageId: message.id },
+      nextAttemptAt: responseTiming
+        ? new Date(
+            now.getTime() +
+              (channel === "dm"
+                ? responseTiming.thinkDelayMs
+                : responseTiming.totalDelayMs),
+          )
+        : undefined,
       createdAt: now,
     });
   }
@@ -523,6 +600,11 @@ export function buildQuoteMessage(range: { lowCents: number; highCents: number }
     return `Based on the information available, the job is likely around ${money(range.lowCents)}-${money(range.highCents)}.${scope} Final pricing can change if volume, weight, access, or materials differ in person. Would you like to schedule a free in-person quote?`;
   }
   return `Based on what I can tell, you're likely around ${money(range.lowCents)}-${money(range.highCents)}.${scope} Final price only changes if volume, weight, access, or materials differ in person. Want to schedule a free in-person quote?`;
+}
+
+function addTrailerAnswerIfAsked(body: string, latestBody: string): string {
+  if (!customerAskedAboutTrailer(latestBody)) return body;
+  return `Our trailer is set up for full junk removal loads, so you do not need to guess the exact trailer size. I can estimate it from the items and access. ${body}`;
 }
 
 function buildAddressAsk(coaching: FacebookCoaching): string {
@@ -568,6 +650,9 @@ function detectTextJobTypes(text: string): string[] {
 }
 
 function detectTextPerceivedSize(text: string): string | null {
+  if (/\b(couch|sofa)\b/i.test(text) && /\b(chair|chairs)\b/i.test(text)) return "min_pickup";
+  if (/\b(couch|sofa)\b/i.test(text) && /\b(2|two|3|three|4|four)\b/i.test(text)) return "min_pickup";
+  if (/\b(mattress|dresser|table|desk|chair|chairs)\b/i.test(text) && /\b(2|two|3|three|4|four|few)\b/i.test(text)) return "min_pickup";
   if (/\b(single|one item|1 item|one couch|one sofa|one mattress|one appliance)\b/i.test(text)) return "single_item";
   if (/\b(small|few items|couple items|quarter|1\/4|¼|min pickup|minimum)\b/i.test(text)) return "min_pickup";
   if (/\b(half|1\/2|½|medium|one room|1 room)\b/i.test(text)) return "half_trailer";
@@ -612,13 +697,6 @@ export function getTextQuoteReadiness(context: Pick<OmniLeadContext, "latestLead
     normalizePostalCode(context.derived.knownZip ?? null) ??
     normalizePostalCode((text.match(/\b\d{5}\b/) ?? [])[0] ?? null);
 
-  if (!zip && !context.derived.knownCity) {
-    return {
-      quoteRange: null,
-      missingQuestion: "What ZIP code is the pickup in?",
-      snapshot: { jobTypes, perceivedSize, zip: null },
-    };
-  }
   if (jobTypes.length === 0) {
     return {
       quoteRange: null,
@@ -629,7 +707,7 @@ export function getTextQuoteReadiness(context: Pick<OmniLeadContext, "latestLead
   if (!perceivedSize) {
     return {
       quoteRange: null,
-      missingQuestion: "About how much is it: single item, small pickup, half trailer, 3/4 trailer, or full trailer?",
+      missingQuestion: "No worries. About how many big items or bags are there, and are they easy to get to?",
       snapshot: { jobTypes, perceivedSize: null, zip },
     };
   }
@@ -829,7 +907,7 @@ export function simulateFacebookSalesChatTurn(input: {
     stage = "quote_ready";
     action = "offer_times";
     reason = "customer_asked_for_times_after_quote";
-  } else if (quoteRange && customerAskedForQuote(latestBody)) {
+  } else if (quoteRange && (customerAskedForQuote(latestBody) || customerAskedAboutTrailer(latestBody))) {
     stage = "quote_ready";
     action = "send_quote_range";
     reason = "quote_range_available";
@@ -874,7 +952,7 @@ export function simulateFacebookSalesChatTurn(input: {
     reply = action === "request_address" ? buildAddressAsk(coaching) : action === "request_quote_details" && textQuote.missingQuestion ? buildQuoteDetailsAsk(textQuote.missingQuestion, coaching) : buildPhotoAsk(coaching);
     executedAction = "simulated_message";
   } else if (action === "send_quote_range" && quoteRange) {
-    reply = buildQuoteMessage(quoteRange, null, coaching);
+    reply = addTrailerAnswerIfAsked(buildQuoteMessage(quoteRange, null, coaching), latestBody);
     executedAction = "simulated_message";
   } else if (action === "offer_times") {
     offeredSlots = buildSimulatedSlots();
@@ -1113,7 +1191,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
       action = "offer_times";
       reason = "customer_asked_for_times_after_quote";
     }
-  } else if (quoteRange && customerAskedForQuote(latestBody)) {
+  } else if (quoteRange && (customerAskedForQuote(latestBody) || customerAskedAboutTrailer(latestBody))) {
     stage = "quote_ready";
     action = "send_quote_range";
     reason = "quote_range_available";
@@ -1203,7 +1281,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
           : action === "request_photos"
             ? buildPhotoAsk(coaching)
             : action === "send_quote_range" && quoteRange
-              ? buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null, coaching)
+              ? addTrailerAnswerIfAsked(buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null, coaching), latestBody)
               : action === "offer_times"
                 ? buildSlotsMessage(slotsForSession, coaching)
                 : "";
@@ -1220,7 +1298,7 @@ export async function handleFacebookSalesEvaluate(messageId: string): Promise<{ 
             : action === "request_photos"
               ? buildPhotoAsk(coaching)
               : action === "send_quote_range" && quoteRange
-                ? buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null, coaching)
+                ? addTrailerAnswerIfAsked(buildQuoteMessage(quoteRange, context.mediaAnalysis?.summary ?? null, coaching), latestBody)
                 : action === "offer_times"
                   ? buildSlotsMessage(slotsForSession, coaching)
                   : "";

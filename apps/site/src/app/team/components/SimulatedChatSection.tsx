@@ -61,9 +61,46 @@ type SavedRun = {
 };
 
 const STORAGE_KEY = "stonegate.simulated-chat.runs.v1";
+const FIRST_REPLY_DELAY_MIN_MS = 5_000;
+const FIRST_REPLY_DELAY_MAX_MS = 20_000;
+const FOLLOWUP_REPLY_DELAY_MIN_MS = 3_000;
+const FOLLOWUP_REPLY_DELAY_MAX_MS = 10_000;
+const TYPING_MS_PER_CHAR = 35;
+const MIN_TYPING_MS = 1_200;
+const MAX_TYPING_MS = 12_000;
 
 function createId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function randomIntInclusive(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function estimateTypingDelayMs(body: string): number {
+  return Math.min(
+    MAX_TYPING_MS,
+    Math.max(MIN_TYPING_MS, Math.round(body.trim().length * TYPING_MS_PER_CHAR)),
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function getSimulatedReplyTiming(body: string, firstReply: boolean): {
+  thinkDelayMs: number;
+  typingDelayMs: number;
+} {
+  const thinkDelayMs = firstReply
+    ? randomIntInclusive(FIRST_REPLY_DELAY_MIN_MS, FIRST_REPLY_DELAY_MAX_MS)
+    : randomIntInclusive(FOLLOWUP_REPLY_DELAY_MIN_MS, FOLLOWUP_REPLY_DELAY_MAX_MS);
+  return {
+    thinkDelayMs,
+    typingDelayMs: estimateTypingDelayMs(body),
+  };
 }
 
 function formatMoneyRange(range: SimulationResult["quoteRange"]): string {
@@ -128,6 +165,7 @@ export function SimulatedChatSection(): React.ReactElement {
   );
   const [savedRuns, setSavedRuns] = React.useState<SavedRun[]>([]);
   const [isSending, setIsSending] = React.useState(false);
+  const [isAgentTyping, setIsAgentTyping] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -238,21 +276,33 @@ export function SimulatedChatSection(): React.ReactElement {
       }
 
       const result = payload.result;
+      const agentBody =
+        result.reply ??
+        `Simulation note: no customer reply would be sent. Reason: ${formatLabel(result.reason)}.`;
       setLastResult(result);
+      if (result.reply) {
+        const firstReply = !nextMessages.some(
+          (message) => message.role === "agent",
+        );
+        const timing = getSimulatedReplyTiming(agentBody, firstReply);
+        await sleep(timing.thinkDelayMs);
+        setIsAgentTyping(true);
+        await sleep(timing.typingDelayMs);
+        setIsAgentTyping(false);
+      }
       setMessages([
         ...nextMessages,
         {
           id: createId(),
           role: "agent",
-          body:
-            result.reply ??
-            `Simulation note: no customer reply would be sent. Reason: ${formatLabel(result.reason)}.`,
+          body: agentBody,
           createdAt: new Date().toISOString(),
         },
       ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Simulation failed");
     } finally {
+      setIsAgentTyping(false);
       setIsSending(false);
     }
   }
@@ -279,6 +329,7 @@ export function SimulatedChatSection(): React.ReactElement {
     setError(null);
     setInput("");
     setIncludePhotos(false);
+    setIsAgentTyping(false);
   }
 
   return (
@@ -310,7 +361,7 @@ export function SimulatedChatSection(): React.ReactElement {
             <button
               type="button"
               onClick={saveCurrentRun}
-              disabled={messages.length === 0}
+              disabled={messages.length === 0 || isSending}
               className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:border-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Save run
@@ -318,7 +369,8 @@ export function SimulatedChatSection(): React.ReactElement {
             <button
               type="button"
               onClick={startNewSimulation}
-              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+              disabled={isSending}
+              className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               New simulation
             </button>
@@ -482,6 +534,20 @@ export function SimulatedChatSection(): React.ReactElement {
                   </div>
                 );
               })}
+              {isAgentTyping ? (
+                <div className="flex justify-end">
+                  <div className="max-w-[82%] rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white shadow-sm">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
+                      Agent
+                    </div>
+                    <div className="mt-2 flex items-center gap-1" aria-label="Agent is typing">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-white/80" />
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-white/80 [animation-delay:150ms]" />
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-white/80 [animation-delay:300ms]" />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <form
@@ -523,7 +589,7 @@ export function SimulatedChatSection(): React.ReactElement {
                     disabled={!input.trim() || isSending}
                     className="min-h-[44px] rounded-xl bg-primary-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {isSending ? "Sending..." : "Send"}
+                    {isAgentTyping ? "Typing..." : isSending ? "Thinking..." : "Send"}
                   </button>
                 </div>
               </div>

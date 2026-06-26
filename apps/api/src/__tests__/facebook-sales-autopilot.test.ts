@@ -90,4 +90,43 @@ describe("facebook sales autopilot helpers", () => {
     expect(result.debug.realMessageQueued).toBe(false);
     expect(result.debug.realBookingCreated).toBe(false);
   });
+
+  it("asks what needs to go before asking for location", () => {
+    const result = simulateFacebookSalesChatTurn({
+      channel: "dm",
+      messages: [{ role: "customer", body: "Hello, id like a quote" }],
+      policy: DEFAULT_SALES_AUTOPILOT_POLICY,
+    });
+
+    expect(result.proposedAction).toBe("request_quote_details");
+    expect(result.reply).toContain("What all needs to go");
+  });
+
+  it("answers trailer clarification instead of repeating the size prompt", () => {
+    const result = simulateFacebookSalesChatTurn({
+      channel: "dm",
+      messages: [
+        { role: "customer", body: "Hello, id like a quote" },
+        { role: "agent", body: "What all needs to go?" },
+        { role: "customer", body: "its in 30114" },
+        { role: "agent", body: "What all needs to go?" },
+        { role: "customer", body: "We have a couch and 3 chairs" },
+        { role: "agent", body: "Based on what I can tell, you're likely around $195-$310. Want to schedule a free in-person quote?" },
+        { role: "customer", body: "Well im not sure, how big is your trailer?" },
+      ],
+      previousQuoteRange: { lowCents: 19500, highCents: 31000, confidence: "low" },
+      policy: {
+        ...DEFAULT_SALES_AUTOPILOT_POLICY,
+        facebookCloser: {
+          ...DEFAULT_SALES_AUTOPILOT_POLICY.facebookCloser,
+          requirePhotosAboveCents: 999999,
+        },
+      },
+    });
+
+    expect(result.proposedAction).toBe("send_quote_range");
+    expect(result.reply).toContain("trailer");
+    expect(result.reply).not.toContain("single item");
+    expect(result.reply).not.toContain("half trailer");
+  });
 });
