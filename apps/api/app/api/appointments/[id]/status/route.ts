@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { DateTime } from "luxon";
 import {
   getDb,
   appointmentCrewMembers,
@@ -33,6 +34,7 @@ const StatusSchema = z.object({
   finalTotalCents: z.number().int().nonnegative().optional(),
   cardTipCents: z.number().int().nonnegative().optional(),
   finalTotalSameAsQuoted: z.boolean().optional(),
+  completedAt: z.string().min(1).optional(),
   crewMembers: z
     .array(
       z.object({
@@ -42,6 +44,17 @@ const StatusSchema = z.object({
     )
     .optional(),
 });
+
+function parseLocalOrIsoDateTime(value: string, timezone: string): Date | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const hasTimezone = /[zZ]$/.test(trimmed) || /[+-]\d{2}:\d{2}$/.test(trimmed);
+  const dt = hasTimezone
+    ? DateTime.fromISO(trimmed, { setZone: true })
+    : DateTime.fromISO(trimmed, { zone: timezone });
+  if (!dt.isValid) return null;
+  return dt.toUTC().toJSDate();
+}
 
 function isQuoteOnlyAppointmentType(
   value: string | null | undefined,
@@ -109,6 +122,8 @@ export async function POST(
   }
 
   const db = getDb();
+  const actor = getAuditActorFromRequest(request);
+  const actorRole = actor.role?.trim().toLowerCase() ?? null;
   const status = parsed.data.status;
   const crew = parsed.data.crew;
   const owner = parsed.data.owner;
@@ -116,6 +131,32 @@ export async function POST(
   const finalTotalCentsInput = parsed.data.finalTotalCents;
   const cardTipCentsInput = parsed.data.cardTipCents;
   const finalTotalSameAsQuoted = parsed.data.finalTotalSameAsQuoted === true;
+  let completedAtOverride: Date | undefined;
+  if (parsed.data.completedAt !== undefined) {
+    if (actorRole !== "owner") {
+      return NextResponse.json(
+        { error: "completed_at_owner_required" },
+        { status: 403 },
+      );
+    }
+    if (status !== "completed") {
+      return NextResponse.json(
+        { error: "completed_at_only_for_completed_status" },
+        { status: 400 },
+      );
+    }
+    completedAtOverride =
+      parseLocalOrIsoDateTime(
+        parsed.data.completedAt,
+        process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York",
+      ) ?? undefined;
+    if (!completedAtOverride) {
+      return NextResponse.json(
+        { error: "invalid_completed_at" },
+        { status: 400 },
+      );
+    }
+  }
   let crewMembers = parsed.data.crewMembers;
   if (crewMembers !== undefined && crewMembers.length > 0) {
     const resolvedCrewPayout = resolveLockedCrewPayout(
@@ -194,8 +235,10 @@ export async function POST(
 
   const completedAtToSet = leavingCompleted
     ? null
-    : becameCompleted
-      ? new Date()
+    : completedAtOverride !== undefined
+      ? completedAtOverride
+      : becameCompleted
+        ? new Date()
       : undefined;
 
   let marketingToSet: string | null | undefined = undefined;
@@ -218,6 +261,7 @@ export async function POST(
       finalTotalCentsToSet !== undefined ||
       marketingMemberId !== undefined ||
       marketingToSet !== undefined ||
+      completedAtToSet !== undefined ||
       crewMembers !== undefined);
 
   const updated = await db.transaction(async (tx) => {
@@ -353,7 +397,7 @@ export async function POST(
   }
 
   await recordAuditEvent({
-    actor: getAuditActorFromRequest(request),
+    actor,
     action: "appointment.status.updated",
     entityType: "appointment",
     entityId: updated.id,
@@ -365,6 +409,9 @@ export async function POST(
         : {}),
       ...(cardTipCentsInput !== undefined
         ? { cardTipCents: cardTipCentsInput }
+        : {}),
+      ...(completedAtOverride !== undefined
+        ? { completedAt: completedAtOverride.toISOString() }
         : {}),
       ...(marketingMemberId !== undefined ? { marketingMemberId } : {}),
       ...(crewMembers !== undefined

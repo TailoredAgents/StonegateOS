@@ -810,6 +810,107 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
   redirect(`${redirectPath}&appointment=1` as Route);
 }
 
+export async function convertMobileQuoteToJobAction(formData: FormData) {
+  const session = await requireMobilePermission("appointments.update");
+
+  const appointmentIdRaw = formData.get("appointmentId");
+  const startAtRaw = formData.get("startAt");
+  const soldByMemberIdRaw = formData.get("soldByMemberId");
+  const soldByOverrideCodeRaw = formData.get("soldByOverrideCode");
+  const completionModeRaw = formData.get("completionMode");
+  const dateRaw = formData.get("date");
+  const screenRaw = formData.get("screen");
+  const appointmentId = typeof appointmentIdRaw === "string" ? appointmentIdRaw.trim() : "";
+  const startAt = typeof startAtRaw === "string" ? startAtRaw.trim() : "";
+  const soldByMemberId = typeof soldByMemberIdRaw === "string" ? soldByMemberIdRaw.trim() : "";
+  const soldByOverrideCode = typeof soldByOverrideCodeRaw === "string" ? soldByOverrideCodeRaw.trim() : "";
+  const completionMode = typeof completionModeRaw === "string" ? completionModeRaw.trim() : "";
+  const date = typeof dateRaw === "string" ? dateRaw.trim() : "";
+  const screen = typeof screenRaw === "string" && screenRaw.trim() === "myday" ? "myday" : "calendar";
+  const redirectPath = (date ? `/mobile?screen=${screen}&date=${encodeURIComponent(date)}` : `/mobile?screen=${screen}`) as Route;
+  const shouldComplete = completionMode === "complete";
+
+  if (!appointmentId) {
+    redirect(`${redirectPath}&error=appointment_required` as Route);
+  }
+  if (!startAt) {
+    redirect(`${redirectPath}&error=start_time_required` as Route);
+  }
+  if (!soldByMemberId) {
+    redirect(`${redirectPath}&error=seller_required` as Route);
+  }
+
+  const bookingDetailsResult = parseAppointmentBookingFormData(formData);
+  if (!bookingDetailsResult.ok) {
+    redirect(`${redirectPath}&error=${encodeURIComponent(bookingDetailsResult.error)}` as Route);
+  }
+
+  let completionPayload: Record<string, unknown> | null = null;
+  if (shouldComplete) {
+    const finalTotalCents = parseUsdToCents(formData.get("finalTotal"));
+    if (finalTotalCents === null) {
+      redirect(`${redirectPath}&error=amount_required` as Route);
+    }
+
+    const crewMembers = formData
+      .getAll("crewMemberId")
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((memberId) => ({ memberId: memberId.trim(), splitBps: 10000 }));
+    if (crewMembers.length === 0) {
+      redirect(`${redirectPath}&error=crew_required` as Route);
+    }
+
+    const cardTipRaw = formData.get("cardTip");
+    const cardTipCents = parseUsdToCents(cardTipRaw);
+    if (typeof cardTipRaw === "string" && cardTipRaw.trim() && cardTipCents === null) {
+      redirect(`${redirectPath}&error=invalid_card_tip` as Route);
+    }
+
+    completionPayload = {
+      status: "completed",
+      finalTotalCents,
+      crewMembers
+    };
+    if (session.isOwner) {
+      completionPayload["completedAt"] = startAt;
+    }
+    if (cardTipCents !== null) {
+      completionPayload["cardTipCents"] = cardTipCents;
+    }
+  }
+
+  const convertResponse = await callAdminApi(`/api/appointments/${encodeURIComponent(appointmentId)}/convert`, {
+    method: "POST",
+    body: JSON.stringify({
+      startAt,
+      soldByMemberId,
+      ...(soldByOverrideCode ? { soldByOverrideCode } : {}),
+      quotedTotalCents: bookingDetailsResult.quotedTotalCents,
+      bookingDetails: bookingDetailsResult.bookingDetails
+    })
+  });
+
+  if (!convertResponse.ok) {
+    const message = await readErrorMessage(convertResponse, "quote_convert_failed");
+    redirect(`${redirectPath}&error=${encodeURIComponent(message)}` as Route);
+  }
+
+  if (completionPayload) {
+    const statusResponse = await callAdminApi(`/api/appointments/${encodeURIComponent(appointmentId)}/status`, {
+      method: "POST",
+      body: JSON.stringify(completionPayload)
+    });
+
+    if (!statusResponse.ok) {
+      const message = await readErrorMessage(statusResponse, "job_complete_failed");
+      redirect(`${redirectPath}&error=${encodeURIComponent(message)}` as Route);
+    }
+  }
+
+  revalidatePath("/mobile");
+  redirect(`${redirectPath}&converted=${shouldComplete ? "completed" : "1"}` as Route);
+}
+
 export async function addMobileAppointmentAttachmentAction(formData: FormData) {
   await requireMobilePermission("appointments.update");
 

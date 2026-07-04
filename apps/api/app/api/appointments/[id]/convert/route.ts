@@ -160,6 +160,10 @@ export async function POST(
     );
   }
 
+  const actor = getAuditActorFromRequest(request);
+  const actorRole = actor.role?.trim().toLowerCase() ?? null;
+  const isOwnerActor = actorRole === "owner";
+
   if (
     soldByChangeRequiresOverride({
       nextSoldByMemberId: parsed.data.soldByMemberId,
@@ -182,9 +186,9 @@ export async function POST(
   }
 
   if (
-    existing.status === "completed" ||
     existing.status === "canceled" ||
-    existing.status === "no_show"
+    existing.status === "no_show" ||
+    (existing.status === "completed" && !isOwnerActor)
   ) {
     return NextResponse.json(
       { error: "appointment_is_not_convertible" },
@@ -193,7 +197,6 @@ export async function POST(
   }
 
   const now = new Date();
-  const actor = getAuditActorFromRequest(request);
 
   const updated = await db.transaction(async (tx) => {
     const [appointment] = await tx

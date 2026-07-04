@@ -10,6 +10,7 @@ import {
   addMobileAppointmentNoteAction,
   bookMobileAppointmentAction,
   closeMobileThreadAction,
+  convertMobileQuoteToJobAction,
   createMobileQuoteAction,
   createMobileTeamMemberAction,
   markMobileThreadHandledAction,
@@ -372,6 +373,15 @@ function formatTimeInputValue(value: string | null | undefined): string {
   } catch {
     return "";
   }
+}
+
+function formatDateTimeInputValue(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const day = formatDayKey(date);
+  const time = formatTimeInputValue(value);
+  return day && time ? `${day}T${time}` : "";
 }
 
 function formatUsdCents(value: number | null | undefined): string {
@@ -759,18 +769,30 @@ function MobileCompleteAppointmentForm({
   appointmentId,
   calendarDay,
   screen,
-  teamMembers
+  teamMembers,
+  currentTeamMemberId,
+  currentTeamMemberName,
+  isOwner
 }: {
   event: CalendarEvent;
   appointmentId: string;
   calendarDay: string;
   screen: "myday" | "calendar";
   teamMembers: TeamMemberSummary[];
+  currentTeamMemberId: string;
+  currentTeamMemberName: string;
+  isOwner: boolean;
 }) {
   const status = (event.status ?? "").trim().toLowerCase();
-  if (!appointmentId || status === "completed") return null;
-
   const isQuoteOnly = isQuoteOnlyAppointmentType(event.appointmentType);
+  const canConvertCompletedQuote = isQuoteOnly && status === "completed" && isOwner;
+  if (
+    !appointmentId ||
+    isCanceledEvent(event) ||
+    status === "no_show" ||
+    (status === "completed" && !canConvertCompletedQuote)
+  ) return null;
+
   const amountDefault =
     normalizeCents(event.finalTotalCents) !== null
       ? (normalizeCents(event.finalTotalCents)! / 100).toFixed(2)
@@ -781,20 +803,131 @@ function MobileCompleteAppointmentForm({
 
   if (isQuoteOnly) {
     return (
-      <form action={updateMobileAppointmentStatusAction}>
-        <input type="hidden" name="appointmentId" value={appointmentId} />
-        <input type="hidden" name="date" value={calendarDay} />
-        <input type="hidden" name="screen" value={screen} />
-        <input type="hidden" name="appointmentType" value={event.appointmentType ?? ""} />
-        <button
-          type="submit"
-          name="status"
-          value="completed"
-          className="w-full rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-100"
-        >
-          Quote done
-        </button>
-      </form>
+      <div className="space-y-3">
+        {status !== "completed" ? (
+          <form action={updateMobileAppointmentStatusAction}>
+            <input type="hidden" name="appointmentId" value={appointmentId} />
+            <input type="hidden" name="date" value={calendarDay} />
+            <input type="hidden" name="screen" value={screen} />
+            <input type="hidden" name="appointmentType" value={event.appointmentType ?? ""} />
+            <button
+              type="submit"
+              name="status"
+              value="completed"
+              className="w-full rounded-md border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-sm font-semibold text-emerald-100"
+            >
+              Quote done
+            </button>
+          </form>
+        ) : null}
+        <details className="rounded-md border border-cyan-300/30 bg-cyan-300/10 p-3">
+          <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
+            Convert to job
+          </summary>
+          <form action={convertMobileQuoteToJobAction} className="mt-3 space-y-3">
+            <input type="hidden" name="appointmentId" value={appointmentId} />
+            <input type="hidden" name="date" value={calendarDay} />
+            <input type="hidden" name="screen" value={screen} />
+            <label className="block">
+              <span className="text-xs font-semibold text-slate-300">Job start</span>
+              <input
+                name="startAt"
+                type="datetime-local"
+                required
+                defaultValue={formatDateTimeInputValue(event.start)}
+                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-semibold text-slate-300">Sold by</span>
+              <select
+                name="soldByMemberId"
+                required
+                defaultValue={currentTeamMemberId}
+                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+              >
+                <option value={currentTeamMemberId}>{currentTeamMemberName}</option>
+                {teamMembers
+                  .filter((member) => member.id !== currentTeamMemberId)
+                  .map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-xs font-semibold text-slate-300">Seller override code</span>
+              <input
+                name="soldByOverrideCode"
+                type="password"
+                autoComplete="off"
+                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                placeholder="Only if changing seller"
+              />
+            </label>
+            <MobileAppointmentPricingFields sourceTeamMemberId={currentTeamMemberId} fixedAppointmentType="job" />
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-300">Collected $</span>
+                <input
+                  name="finalTotal"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  defaultValue={amountDefault}
+                  className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                  placeholder="350"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-300">Card tip</span>
+                <input
+                  name="cardTip"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                  placeholder="0"
+                />
+              </label>
+            </div>
+            <div className="rounded-md border border-white/10 bg-slate-950 p-3">
+              <p className="text-xs font-semibold text-slate-300">Who worked</p>
+              <div className="mt-2 grid grid-cols-1 gap-2">
+                {teamMembers.length ? teamMembers.map((member) => (
+                  <label key={member.id} className="flex cursor-pointer items-center gap-3 rounded-md border border-white/10 bg-slate-900 px-3 py-3 text-sm text-slate-200">
+                    <input name="crewMemberId" type="checkbox" value={member.id} className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300" />
+                    <span className="min-w-0 truncate">{member.name}</span>
+                  </label>
+                )) : (
+                  <p className="rounded-md border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-xs leading-5 text-amber-100">
+                    No active team members loaded. Refresh before completing this job.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-2">
+              <button
+                type="submit"
+                name="completionMode"
+                value="complete"
+                className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
+              >
+                Convert + complete
+              </button>
+              <button
+                type="submit"
+                name="completionMode"
+                value="convert"
+                className="w-full rounded-md border border-cyan-300/30 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100"
+              >
+                Convert only
+              </button>
+            </div>
+          </form>
+        </details>
+      </div>
     );
   }
 
@@ -923,11 +1056,19 @@ function MobileWeekStrip({
 function MobileWeekAgenda({
   days,
   events,
-  canOpenMessageThreads
+  canOpenMessageThreads,
+  teamMembers,
+  currentTeamMemberId,
+  currentTeamMemberName,
+  isOwner
 }: {
   days: string[];
   events: CalendarEvent[];
   canOpenMessageThreads: boolean;
+  teamMembers: TeamMemberSummary[];
+  currentTeamMemberId: string;
+  currentTeamMemberName: string;
+  isOwner: boolean;
 }) {
   const weekProjectedLabel = formatProjectedRange(events);
   const weekJobCount = events.filter((event) => event.source === "db" && !isQuoteOnlyAppointmentType(event.appointmentType)).length;
@@ -1038,6 +1179,7 @@ function MobileWeekAgenda({
                         />
 
                         {canUpdate ? (
+                          <>
                           <div className="grid grid-cols-2 gap-2">
                             {canOpenMessageThreads ? (
                               <form action={openMobileAppointmentThreadAction}>
@@ -1110,6 +1252,19 @@ function MobileWeekAgenda({
                               </form>
                             </details>
                           </div>
+                          <div className="mt-3">
+                            <MobileCompleteAppointmentForm
+                              event={event}
+                              appointmentId={appointmentId}
+                              calendarDay={dayKey}
+                              screen="calendar"
+                              teamMembers={teamMembers}
+                              currentTeamMemberId={currentTeamMemberId}
+                              currentTeamMemberName={currentTeamMemberName}
+                              isOwner={isOwner}
+                            />
+                          </div>
+                          </>
                         ) : null}
                       </div>
                     </details>
@@ -1256,6 +1411,7 @@ export default async function MobileHomePage({
     date?: string;
     appointment?: string;
     booked?: string;
+    converted?: string;
     upload?: string;
     quote?: string;
     quoteStatus?: string;
@@ -1298,6 +1454,7 @@ export default async function MobileHomePage({
   const contactSaved = params.contact === "1";
   const appointmentSaved = params.appointment === "1";
   const appointmentBooked = params.booked === "1";
+  const appointmentConverted = params.converted === "1" || params.converted === "completed";
   const uploadSaved = params.upload === "1";
   const quoteSaved = params.quote === "1";
   const quoteSent = params.quote === "sent";
@@ -1336,7 +1493,7 @@ export default async function MobileHomePage({
       : [];
   const calendarEvents = eventsForDay(calendarWeekEvents, calendarDay);
   const visibleTodayEvents = activeScreen === "myday" ? calendarEvents.filter((event) => !isCanceledEvent(event)) : calendarEvents;
-  const teamMembers = activeScreen === "myday" ? await loadMobileTeamMembers() : [];
+  const teamMembers = activeScreen === "myday" || activeScreen === "calendar" ? await loadMobileTeamMembers() : [];
   const allQuotes = activeScreen === "quotes" ? await loadMobileQuotes("all") : [];
   const quotes = quoteStatus === "all" ? allQuotes : allQuotes.filter((quote) => quote.status === quoteStatus);
   const expenses = activeScreen === "expenses" ? await loadMobileExpenses() : [];
@@ -1446,6 +1603,11 @@ export default async function MobileHomePage({
           {appointmentBooked ? (
             <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
               Appointment booked.
+            </div>
+          ) : null}
+          {appointmentConverted ? (
+            <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
+              {params.converted === "completed" ? "Quote converted and completed." : "Quote converted to job."}
             </div>
           ) : null}
           {uploadSaved ? (
@@ -2167,6 +2329,9 @@ export default async function MobileHomePage({
                                 calendarDay={calendarDay}
                                 screen="myday"
                                 teamMembers={teamMembers}
+                                currentTeamMemberId={session.teamMember.id}
+                                currentTeamMemberName={session.teamMember.name}
+                                isOwner={session.isOwner}
                               />
                             </div>
                           ) : null}
@@ -2848,6 +3013,10 @@ export default async function MobileHomePage({
                 days={calendarWeekDays}
                 events={calendarWeekEvents}
                 canOpenMessageThreads={canOpenMessageThreads}
+                teamMembers={teamMembers}
+                currentTeamMemberId={session.teamMember.id}
+                currentTeamMemberName={session.teamMember.name}
+                isOwner={session.isOwner}
               />
             </div>
           ) : activeScreen === "owner" && ownerSummary ? (

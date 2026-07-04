@@ -11,14 +11,22 @@ const inputClass =
 const labelClass = "block";
 
 export function MobileAppointmentPricingFields({
-  sourceTeamMemberId
+  sourceTeamMemberId,
+  fixedAppointmentType
 }: {
   sourceTeamMemberId: string;
+  fixedAppointmentType?: AppointmentType;
 }) {
-  const [appointmentType, setAppointmentType] = React.useState<AppointmentType>("job");
+  const [appointmentType, setAppointmentType] = React.useState<AppointmentType>(fixedAppointmentType ?? "job");
   const [serviceType, setServiceType] = React.useState<ServiceType>("junk_removal");
   const [priceMode, setPriceMode] = React.useState<PriceMode>("range");
   const [loadSize, setLoadSize] = React.useState("quarter_to_half");
+
+  React.useEffect(() => {
+    if (fixedAppointmentType) {
+      setAppointmentType(fixedAppointmentType);
+    }
+  }, [fixedAppointmentType]);
 
   React.useEffect(() => {
     if (serviceType === "rental_dumpster") {
@@ -36,30 +44,32 @@ export function MobileAppointmentPricingFields({
       <input type="hidden" name="sourceType" value="team_member" />
       <input type="hidden" name="sourceTeamMemberId" value={sourceTeamMemberId} />
 
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={() => setAppointmentType("job")}
-          className={`rounded-md border px-3 py-2 text-sm font-semibold ${
-            appointmentType === "job"
-              ? "border-cyan-300 bg-cyan-300 text-slate-950"
-              : "border-white/10 bg-slate-950 text-slate-200"
-          }`}
-        >
-          Job
-        </button>
-        <button
-          type="button"
-          onClick={() => setAppointmentType("in_person_quote")}
-          className={`rounded-md border px-3 py-2 text-sm font-semibold ${
-            appointmentType === "in_person_quote"
-              ? "border-cyan-300 bg-cyan-300 text-slate-950"
-              : "border-white/10 bg-slate-950 text-slate-200"
-          }`}
-        >
-          Quote visit
-        </button>
-      </div>
+      {!fixedAppointmentType ? (
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setAppointmentType("job")}
+            className={`rounded-md border px-3 py-2 text-sm font-semibold ${
+              appointmentType === "job"
+                ? "border-cyan-300 bg-cyan-300 text-slate-950"
+                : "border-white/10 bg-slate-950 text-slate-200"
+            }`}
+          >
+            Job
+          </button>
+          <button
+            type="button"
+            onClick={() => setAppointmentType("in_person_quote")}
+            className={`rounded-md border px-3 py-2 text-sm font-semibold ${
+              appointmentType === "in_person_quote"
+                ? "border-cyan-300 bg-cyan-300 text-slate-950"
+                : "border-white/10 bg-slate-950 text-slate-200"
+            }`}
+          >
+            Quote visit
+          </button>
+        </div>
+      ) : null}
       <input type="hidden" name="appointmentType" value={appointmentType} />
 
       {isJob ? (
