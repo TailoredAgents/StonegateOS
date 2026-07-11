@@ -68,6 +68,28 @@ function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
   return aStart < bEnd && bStart < aEnd;
 }
 
+function formString(form: FormData, key: string): string | undefined {
+  const value = form.get(key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function requiresAutonomousBookingRulesForSource(source: string): boolean {
+  const normalized = source
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_");
+  const tokens = normalized.split("_").filter(Boolean);
+  return (
+    tokens.includes("auto") ||
+    tokens.includes("autopilot") ||
+    tokens.includes("agent") ||
+    tokens.includes("assistant") ||
+    tokens.includes("bot") ||
+    tokens.includes("system") ||
+    normalized.includes("autonomous")
+  );
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -81,31 +103,37 @@ export async function POST(request: NextRequest): Promise<Response> {
     payload = (await request.json().catch(() => ({}))) as BookRequest;
   } else if (contentType.includes("application/x-www-form-urlencoded")) {
     const form = await request.formData();
+    const bookingDetailsValue = formString(form, "bookingDetails");
+    const durationValue = formString(form, "durationMinutes");
+    const quotedTotalValue = formString(form, "quotedTotalCents");
+    const servicesValue = formString(form, "services");
+    const travelBufferValue = formString(form, "travelBufferMinutes");
     payload = {
-      contactId: form.get("contactId")?.toString(),
-      propertyId: form.get("propertyId")?.toString(),
-      appointmentType: form.get("appointmentType")?.toString(),
-      startAt: form.get("startAt")?.toString(),
-      durationMinutes: form.get("durationMinutes")
-        ? Number(form.get("durationMinutes"))
+      contactId: formString(form, "contactId"),
+      propertyId: formString(form, "propertyId"),
+      appointmentType: formString(form, "appointmentType"),
+      startAt: formString(form, "startAt"),
+      durationMinutes: durationValue
+        ? Number(durationValue)
         : undefined,
-      travelBufferMinutes: form.get("travelBufferMinutes")
-        ? Number(form.get("travelBufferMinutes"))
+      travelBufferMinutes: travelBufferValue
+        ? Number(travelBufferValue)
         : undefined,
-      quotedTotalCents: form.get("quotedTotalCents")
-        ? Number(form.get("quotedTotalCents"))
+      quotedTotalCents: quotedTotalValue
+        ? Number(quotedTotalValue)
         : undefined,
-      bookingDetails: form.get("bookingDetails")
-        ? JSON.parse(form.get("bookingDetails")!.toString())
+      bookingDetails: bookingDetailsValue
+        ? JSON.parse(bookingDetailsValue)
         : undefined,
-      notes: form.get("notes")?.toString(),
-      soldByMemberId: form.get("soldByMemberId")?.toString(),
-      soldByOverrideCode: form.get("soldByOverrideCode")?.toString(),
-      assignedAssociateMemberId: form.get("assignedAssociateMemberId")?.toString(),
-      services: form.get("services")
-        ? form
-            .get("services")!
-            .toString()
+      notes: formString(form, "notes"),
+      soldByMemberId: formString(form, "soldByMemberId"),
+      soldByOverrideCode: formString(form, "soldByOverrideCode"),
+      assignedAssociateMemberId: formString(form, "assignedAssociateMemberId"),
+      marketingMemberId: formString(form, "marketingMemberId"),
+      source: formString(form, "source"),
+      autonomousConversationAt: formString(form, "autonomousConversationAt"),
+      services: servicesValue
+        ? servicesValue
             .split(",")
             .map((s) => s.trim())
             .filter(Boolean)
@@ -133,7 +161,21 @@ export async function POST(request: NextRequest): Promise<Response> {
     appointmentTypeRaw.toLowerCase() === "in_person_quote"
       ? "in_person_quote"
       : "job";
-  const durationMinutes = getAutonomousBookingDurationMinutes();
+  const source =
+    typeof payload.source === "string" && payload.source.trim().length > 0
+      ? payload.source.trim()
+      : "manual_booking";
+  const requiresAutonomousBookingRules =
+    requiresAutonomousBookingRulesForSource(source);
+  const requestedDurationMinutes =
+    typeof payload.durationMinutes === "number" &&
+    Number.isFinite(payload.durationMinutes) &&
+    payload.durationMinutes > 0
+      ? Math.floor(payload.durationMinutes)
+      : null;
+  const durationMinutes = requiresAutonomousBookingRules
+    ? getAutonomousBookingDurationMinutes()
+    : (requestedDurationMinutes ?? getAutonomousBookingDurationMinutes());
   const travelBufferMinutes =
     typeof payload.travelBufferMinutes === "number" &&
     payload.travelBufferMinutes >= 0
@@ -168,15 +210,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     payload.marketingMemberId.trim().length > 0
       ? payload.marketingMemberId.trim()
       : null;
-  const source =
-    typeof payload.source === "string" && payload.source.trim().length > 0
-      ? payload.source.trim()
-      : "manual_booking";
   const autonomousConversationAt =
     typeof payload.autonomousConversationAt === "string" && payload.autonomousConversationAt.trim().length > 0
       ? payload.autonomousConversationAt.trim()
       : null;
-  const requiresAutonomousBookingRules = /(?:auto|autopilot)/i.test(source);
 
   if (!contactId || !startAtIso) {
     return NextResponse.json(
@@ -300,23 +337,25 @@ export async function POST(request: NextRequest): Promise<Response> {
         throw new Error("property_create_failed");
       }
 
-      const [propertyForRules] = await tx
-        .select({ city: properties.city })
-        .from(properties)
-        .where(eq(properties.id, resolvedPropertyId))
-        .limit(1);
-      const ruleResult = validateAutonomousBookingStart({
-        startAt,
-        city: propertyForRules?.city ?? null,
-        timezone,
-        durationMinutes,
-        conversationAt: requiresAutonomousBookingRules ? (autonomousConversationAt ?? now) : null,
-      });
-      if (!ruleResult.ok) {
-        throw new Error(ruleResult.code);
+      if (requiresAutonomousBookingRules) {
+        const [propertyForRules] = await tx
+          .select({ city: properties.city })
+          .from(properties)
+          .where(eq(properties.id, resolvedPropertyId))
+          .limit(1);
+        const ruleResult = validateAutonomousBookingStart({
+          startAt,
+          city: propertyForRules?.city ?? null,
+          timezone,
+          durationMinutes,
+          conversationAt: autonomousConversationAt ?? now,
+        });
+        if (!ruleResult.ok) {
+          throw new Error(ruleResult.code);
+        }
       }
 
-      if (bookingRules.maxJobsPerDay > 0) {
+      if (requiresAutonomousBookingRules && bookingRules.maxJobsPerDay > 0) {
         const startLocal = DateTime.fromJSDate(startAt, { zone: "utc" }).setZone(timezone);
         const dayStartUtc = startLocal.startOf("day").toUTC().toJSDate();
         const dayEndUtc = startLocal.endOf("day").toUTC().toJSDate();
@@ -346,38 +385,40 @@ export async function POST(request: NextRequest): Promise<Response> {
         }
       }
 
-      const capacity = getAppointmentCapacity();
-      const slotEnd = new Date(startAt.getTime() + (durationMinutes + travelBufferMinutes) * 60_000);
-      const blockStart = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
-      const blockEnd = new Date(slotEnd.getTime() + 24 * 60 * 60 * 1000);
-      const [appointmentBlocks, holdBlocks] = await Promise.all([
-        tx
-          .select({
-            startAt: appointments.startAt,
-            durationMinutes: appointments.durationMinutes,
-            travelBufferMinutes: appointments.travelBufferMinutes,
-          })
-          .from(appointments)
-          .where(and(gte(appointments.startAt, blockStart), lte(appointments.startAt, blockEnd), ne(appointments.status, "canceled"))),
-        tx
-          .select({
-            startAt: appointmentHolds.startAt,
-            durationMinutes: appointmentHolds.durationMinutes,
-            travelBufferMinutes: appointmentHolds.travelBufferMinutes,
-          })
-          .from(appointmentHolds)
-          .where(and(gte(appointmentHolds.startAt, blockStart), lte(appointmentHolds.startAt, blockEnd), eq(appointmentHolds.status, "active"), gt(appointmentHolds.expiresAt, now))),
-      ]);
-      const overlapCount = [...appointmentBlocks, ...holdBlocks].reduce((count, block) => {
-        const blockStartAt = block.startAt;
-        if (!(blockStartAt instanceof Date)) return count;
-        const blockEndAt = new Date(
-          blockStartAt.getTime() + ((block.durationMinutes ?? durationMinutes) + (block.travelBufferMinutes ?? travelBufferMinutes)) * 60_000,
-        );
-        return overlaps(startAt, slotEnd, blockStartAt, blockEndAt) ? count + 1 : count;
-      }, 0);
-      if (overlapCount >= capacity) {
-        throw new Error("slot_full");
+      if (requiresAutonomousBookingRules) {
+        const capacity = getAppointmentCapacity();
+        const slotEnd = new Date(startAt.getTime() + (durationMinutes + travelBufferMinutes) * 60_000);
+        const blockStart = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
+        const blockEnd = new Date(slotEnd.getTime() + 24 * 60 * 60 * 1000);
+        const [appointmentBlocks, holdBlocks] = await Promise.all([
+          tx
+            .select({
+              startAt: appointments.startAt,
+              durationMinutes: appointments.durationMinutes,
+              travelBufferMinutes: appointments.travelBufferMinutes,
+            })
+            .from(appointments)
+            .where(and(gte(appointments.startAt, blockStart), lte(appointments.startAt, blockEnd), ne(appointments.status, "canceled"))),
+          tx
+            .select({
+              startAt: appointmentHolds.startAt,
+              durationMinutes: appointmentHolds.durationMinutes,
+              travelBufferMinutes: appointmentHolds.travelBufferMinutes,
+            })
+            .from(appointmentHolds)
+            .where(and(gte(appointmentHolds.startAt, blockStart), lte(appointmentHolds.startAt, blockEnd), eq(appointmentHolds.status, "active"), gt(appointmentHolds.expiresAt, now))),
+        ]);
+        const overlapCount = [...appointmentBlocks, ...holdBlocks].reduce((count, block) => {
+          const blockStartAt = block.startAt;
+          if (!(blockStartAt instanceof Date)) return count;
+          const blockEndAt = new Date(
+            blockStartAt.getTime() + ((block.durationMinutes ?? durationMinutes) + (block.travelBufferMinutes ?? travelBufferMinutes)) * 60_000,
+          );
+          return overlaps(startAt, slotEnd, blockStartAt, blockEndAt) ? count + 1 : count;
+        }, 0);
+        if (overlapCount >= capacity) {
+          throw new Error("slot_full");
+        }
       }
 
       const token = nanoid(24);
@@ -506,6 +547,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         bookingDetails,
         notesProvided: Boolean(notes),
         source: result.source,
+        autonomousBookingRulesApplied: requiresAutonomousBookingRules,
         soldByMemberId: result.soldByMemberId ?? null,
         marketingMemberId: result.marketingMemberId ?? null,
         soldByOverrideUsed: soldByChangeRequiresOverride({
