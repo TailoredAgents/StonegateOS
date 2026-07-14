@@ -1,6 +1,10 @@
 import type { MetadataRoute } from "next";
 import { absoluteUrl } from "@/lib/metadata";
-import { getOrderedAreas, getOrderedPages, getOrderedServices } from "@/lib/content";
+import {
+  getOrderedAreas,
+  getOrderedPages,
+  getOrderedServices,
+} from "@/lib/content";
 
 type BlogListResponse = {
   ok?: boolean;
@@ -12,9 +16,7 @@ type BlogListResponse = {
 };
 
 const API_BASE_URL =
-  process.env["API_BASE_URL"] ??
-  process.env["NEXT_PUBLIC_API_BASE_URL"] ??
-  "";
+  process.env["API_BASE_URL"] ?? process.env["NEXT_PUBLIC_API_BASE_URL"] ?? "";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
@@ -28,7 +30,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   urls.push({ url: absoluteUrl("/services"), lastModified: now });
   getOrderedServices().forEach((service) => {
-    urls.push({ url: absoluteUrl(`/services/${service.slug}`), lastModified: now });
+    urls.push({
+      url: absoluteUrl(`/services/${service.slug}`),
+      lastModified: now,
+    });
   });
 
   urls.push({ url: absoluteUrl("/areas"), lastModified: now });
@@ -38,12 +43,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   urls.push({ url: absoluteUrl("/estimate"), lastModified: now });
   urls.push({ url: absoluteUrl("/contractors"), lastModified: now });
+  urls.push({ url: absoluteUrl("/service-agreement"), lastModified: now });
 
   urls.push({ url: absoluteUrl("/blog"), lastModified: now });
   const base = API_BASE_URL.replace(/\/$/, "");
   if (base) {
     try {
-      const res = await fetch(`${base}/api/public/blog?limit=1000`, { next: { revalidate: 60 } });
+      const res = await fetch(`${base}/api/public/blog?limit=1000`, {
+        next: { revalidate: 60 },
+      });
       if (res.ok) {
         const data = (await res.json().catch(() => ({}))) as BlogListResponse;
         const posts = Array.isArray(data.posts) ? data.posts : [];
@@ -52,7 +60,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
           const lastModified = post.updatedAt ?? post.publishedAt;
           urls.push({
             url: absoluteUrl(`/blog/${post.slug}`),
-            lastModified: lastModified ? new Date(lastModified) : now
+            lastModified: lastModified ? new Date(lastModified) : now,
           });
         }
       }

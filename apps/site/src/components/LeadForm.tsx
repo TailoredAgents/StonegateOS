@@ -3138,8 +3138,15 @@ export function LeadForm({
                     </div>
                   ) : null}
                   <div className="text-[11px] text-neutral-500">
-                    We&apos;ve saved your estimate with your contact info so we
-                    can help if you have questions.
+                    By booking, you agree to our{" "}
+                    <a
+                      href="/service-agreement"
+                      className="font-semibold text-primary-700 underline-offset-2 hover:underline"
+                    >
+                      Service Agreement and Cancellation Policy
+                    </a>
+                    . We&apos;ve saved your estimate with your contact info so
+                    we can help if you have questions.
                   </div>
                 </div>
               </div>
@@ -3762,8 +3769,15 @@ function QuoteResult({
             </div>
           ) : null}
           <div className="text-[11px] text-neutral-500">
-            We&apos;ve saved your estimate with your contact info so we can help
-            if you have questions.
+            By booking, you agree to our{" "}
+            <a
+              href="/service-agreement"
+              className="font-semibold text-primary-700 underline-offset-2 hover:underline"
+            >
+              Service Agreement and Cancellation Policy
+            </a>
+            . We&apos;ve saved your estimate with your contact info so we can
+            help if you have questions.
           </div>
         </div>
       )}
