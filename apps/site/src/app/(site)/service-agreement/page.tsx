@@ -6,13 +6,10 @@ export const metadata = {
     "Service agreement, cancellation policy, and refund terms for Stonegate Junk Removal bookings.",
 };
 
-function formatDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
+const LAST_UPDATED = "2026-03-14";
 
 export default function ServiceAgreementPage() {
   const company = getPublicCompanyProfile();
-  const lastUpdated = formatDate(new Date());
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-16 md:px-10">
@@ -20,7 +17,7 @@ export default function ServiceAgreementPage() {
         Service Agreement and Cancellation Policy
       </h1>
       <p className="mt-2 text-sm text-neutral-500">
-        Last updated: {lastUpdated}
+        Last updated: {LAST_UPDATED}
       </p>
 
       <div className="prose prose-neutral mt-10 max-w-none">
