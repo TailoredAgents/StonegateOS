@@ -1,7 +1,7 @@
 services:
   - type: web
     name: stonegate-site
-    env: node
+    runtime: node
     plan: standard
     region: virginia
     buildCommand: |
@@ -84,7 +84,7 @@ services:
         - turbo.json
   - type: web
     name: stonegate-api
-    env: node
+    runtime: node
     plan: standard
     region: virginia
     buildCommand: |
@@ -234,7 +234,7 @@ services:
         - turbo.json
   - type: worker
     name: stonegate-outbox-worker
-    env: node
+    runtime: node
     plan: standard
     region: virginia
     buildCommand: |
@@ -343,7 +343,7 @@ services:
         sync: false
   - type: worker
     name: stonegate-discord-agent
-    env: node
+    runtime: node
     plan: starter
     region: virginia
     buildCommand: |
