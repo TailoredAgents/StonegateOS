@@ -48,9 +48,9 @@ const ADJUSTED_CREW_RULE_KEY = [
   .join("|");
 
 const ADJUSTED_CREW_SPLITS = new Map<string, number>([
-  [TEAM_MEMBER_IDS.jeffrey, 375],
-  [TEAM_MEMBER_IDS.austin, 875],
-  [TEAM_MEMBER_IDS.devon, 750],
+  [TEAM_MEMBER_IDS.jeffrey, 300],
+  [TEAM_MEMBER_IDS.austin, 1000],
+  [TEAM_MEMBER_IDS.devon, 700],
 ]);
 
 export function resolveLockedCrewPayout(

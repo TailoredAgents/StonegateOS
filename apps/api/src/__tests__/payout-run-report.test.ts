@@ -18,27 +18,27 @@ describe("describeCommissionMath", () => {
       describeCommissionMath({
         role: "marketing",
         meta: {
-          totalRateBps: 1750,
-          splitBps: 11250,
-          totalSplitBps: 17500,
+          totalRateBps: 1700,
+          splitBps: 12000,
+          totalSplitBps: 17000,
         },
       }),
     ).toEqual({
-      mathLabel: "17.5% management pool x 64.29% split",
-      effectivePercentLabel: "11.25%",
+      mathLabel: "17% management pool x 70.59% split",
+      effectivePercentLabel: "12%",
     });
     expect(
       describeCommissionMath({
         role: "marketing",
         meta: {
-          totalRateBps: 1750,
-          splitBps: 6250,
-          totalSplitBps: 17500,
+          totalRateBps: 1700,
+          splitBps: 5000,
+          totalSplitBps: 17000,
         },
       }),
     ).toEqual({
-      mathLabel: "17.5% management pool x 35.71% split",
-      effectivePercentLabel: "6.25%",
+      mathLabel: "17% management pool x 29.41% split",
+      effectivePercentLabel: "5%",
     });
   });
 
@@ -65,14 +65,14 @@ describe("describeCommissionMath", () => {
         role: "crew",
         meta: {
           poolRateBps: 2000,
-          splitBps: 875,
+          splitBps: 1000,
           totalSplitBps: 2000,
           poolSource: "default",
         },
       }),
     ).toEqual({
-      mathLabel: "20% crew pool x 43.75% split",
-      effectivePercentLabel: "8.75%",
+      mathLabel: "20% crew pool x 50% split",
+      effectivePercentLabel: "10%",
     });
   });
 });

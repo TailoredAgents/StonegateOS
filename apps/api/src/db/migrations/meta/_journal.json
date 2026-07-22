@@ -379,6 +379,13 @@
       "when": 1781481600000,
       "tag": "0056_commission_2026_06_rates",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1784678400000,
+      "tag": "0057_commission_2026_07_rates",
+      "breakpoints": true
     }
   ]
 }

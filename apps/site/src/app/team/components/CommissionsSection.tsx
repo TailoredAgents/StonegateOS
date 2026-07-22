@@ -209,7 +209,7 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
         <p className={TEAM_SECTION_SUBTITLE}>
           Weekly payouts use the current Monday-Sunday week and final amount
           paid. Sales commission is retired for new calculations, management
-          pays Jeffrey 11.25% and Austin 6.25%, and labor stays at 20% of the job
+          pays Jeffrey 12% and Austin 5%, and labor stays at 20% of the job
           total regardless of the crew.
         </p>
       </header>
@@ -609,10 +609,10 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 Management
               </div>
               <div className="mt-1 text-base font-semibold text-slate-900">
-                17.5% total
+                17% total
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                Split 11.25% to Jeffrey and 6.25% to Austin.
+                Split 12% to Jeffrey and 5% to Austin.
               </div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -634,8 +634,8 @@ export async function CommissionsSection(): Promise<React.ReactElement> {
                 Most crew combinations split the 20% labor pool evenly.
               </div>
               <div className="mt-1 text-sm text-slate-700">
-                Jeffrey + Austin + Devon: Jeffrey 15%, Austin 15%, Devon 7.5%
-                total.
+                Jeffrey + Austin + Devon labor: Jeffrey 3%, Austin 10%, Devon
+                7%.
               </div>
               <div className="mt-1 text-xs text-slate-500">
                 Two-person crews receive 10% each.

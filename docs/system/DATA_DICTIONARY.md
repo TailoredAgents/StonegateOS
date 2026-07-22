@@ -114,10 +114,10 @@ If enabled, commissions and payout runs are tracked in tables such as:
 - `commission_settings`, `appointment_commissions`, `payout_runs`, `payout_run_lines`
 
 Current policy: sales commission is retired for new calculations; management is
-17.5% split 11.25% to Jeffrey and 6.25% to Austin; labor is fixed at 20%.
+17% split 12% to Jeffrey and 5% to Austin; labor is fixed at 20%.
 Most crews split labor evenly; Jeffrey + Austin + Devon jobs use an adjusted
-labor split so Jeffrey and Austin each receive 15% total and Devon receives
-7.5% total.
+labor split so Jeffrey receives 3%, Austin receives 10%, and Devon receives
+7%.
 
 ---
 

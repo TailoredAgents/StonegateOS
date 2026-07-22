@@ -85,18 +85,18 @@ describe("commission rules", () => {
       allocations.map((entry) => [entry.memberId, entry.cents]),
     );
     const managementByMemberId = new Map([
-      ["239ca36d-e618-4c5c-a283-b6e5d4ccb704", 6250],
-      ["5ac5217e-3905-4ea3-bdeb-65456982f5e3", 11250],
+      ["239ca36d-e618-4c5c-a283-b6e5d4ccb704", 5000],
+      ["5ac5217e-3905-4ea3-bdeb-65456982f5e3", 12000],
     ]);
 
     expect(amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704")).toBe(
-      8750,
+      10000,
     );
     expect(amountByMemberId.get("5ac5217e-3905-4ea3-bdeb-65456982f5e3")).toBe(
-      3750,
+      3000,
     );
     expect(amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282")).toBe(
-      7500,
+      7000,
     );
     expect(
       (amountByMemberId.get("239ca36d-e618-4c5c-a283-b6e5d4ccb704") ?? 0) +
@@ -110,7 +110,7 @@ describe("commission rules", () => {
     ).toBe(15000);
     expect(
       amountByMemberId.get("b45988bb-7417-48c5-af6d-fcdf71088282"),
-    ).toBe(7500);
+    ).toBe(7000);
   });
 
   it("falls back to an even split for other crew combinations", () => {
