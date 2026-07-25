@@ -7,7 +7,8 @@
         "build": "next build --turbopack",
         "start": "next start",
         "lint": "eslint",
-        "test": "jest --config jest.config.cjs --passWithNoTests"
+        "test": "jest --config jest.config.cjs --passWithNoTests",
+        "typecheck": "tsc --project tsconfig.typecheck.json"
     },
     "dependencies": {
         "@myst-os/pricing": "workspace:*",

@@ -6,7 +6,8 @@
         "dev": "next dev --turbopack",
         "build": "next build --turbopack",
         "start": "next start",
-        "lint": "eslint"
+        "lint": "eslint",
+        "typecheck": "contentlayer build && tsc --project tsconfig.typecheck.json"
     },
     "dependencies": {
         "@myst-os/pricing": "workspace:*",
