@@ -12,12 +12,14 @@ import {
 import { sendSmsMessage } from "@/lib/messaging";
 import { queueSystemOutboundMessage } from "@/lib/system-outbound";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { resolveAutomaticAppointmentStatusForMedia } from "@/lib/appointment-media";
 import {
   appointmentHolds,
   appointmentNotes,
   appointments,
   contacts,
   getDb,
+  outboxEvents,
   partnerBookings,
   partnerRateCards,
   partnerRateItems,
@@ -287,52 +289,76 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const rescheduleToken = nanoid(24);
-  const [appointment] = await db
-    .insert(appointments)
-    .values({
-      contactId: auth.partnerUser.orgContactId,
+  const appointment = await db.transaction(async (tx) => {
+    const appointmentStatus =
+      await resolveAutomaticAppointmentStatusForMedia({
+        proposedStatus: "confirmed",
+        quotedScopeText: null,
+        contactId: auth.partnerUser.orgContactId,
+        database: tx,
+        now,
+      });
+    const [created] = await tx
+      .insert(appointments)
+      .values({
+        contactId: auth.partnerUser.orgContactId,
+        propertyId: property.id,
+        leadId: null,
+        type: "partner",
+        startAt,
+        durationMinutes,
+        status: appointmentStatus,
+        rescheduleToken,
+        travelBufferMinutes: 30,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning({
+        id: appointments.id,
+        startAt: appointments.startAt,
+        status: appointments.status,
+      });
+    if (!created?.id) return null;
+
+    await tx.insert(partnerBookings).values({
+      orgContactId: auth.partnerUser.orgContactId,
+      partnerUserId: auth.partnerUser.id,
       propertyId: property.id,
-      leadId: null,
-      type: "partner",
-      startAt,
-      durationMinutes,
-      status: "confirmed",
-      rescheduleToken,
-      travelBufferMinutes: 30,
+      appointmentId: created.id,
+      serviceKey,
+      tierKey,
+      amountCents,
       createdAt: now,
-      updatedAt: now
-    })
-    .returning({ id: appointments.id, startAt: appointments.startAt, status: appointments.status });
+    });
+
+    await tx.insert(outboxEvents).values({
+      type: "appointment_media.attach_appointment",
+      payload: { appointmentId: created.id },
+    });
+
+    const noteLines = [
+      "[partner-booking]",
+      `Partner user: ${auth.partnerUser.email}`,
+      `Service: ${serviceKey}`,
+      tierKey ? `Tier: ${tierKey}` : null,
+      amountCents !== null
+        ? `Rate: $${(amountCents / 100).toFixed(2)}`
+        : null,
+      notes ? `Notes: ${notes}` : null,
+    ].filter((line): line is string => Boolean(line));
+
+    await tx.insert(appointmentNotes).values({
+      appointmentId: created.id,
+      body: noteLines.join("\n"),
+      createdAt: now,
+    });
+
+    return created;
+  });
 
   if (!appointment?.id) {
     return NextResponse.json({ ok: false, error: "create_failed" }, { status: 500 });
   }
-
-  await db.insert(partnerBookings).values({
-    orgContactId: auth.partnerUser.orgContactId,
-    partnerUserId: auth.partnerUser.id,
-    propertyId: property.id,
-    appointmentId: appointment.id,
-    serviceKey,
-    tierKey,
-    amountCents,
-    createdAt: now
-  });
-
-  const noteLines = [
-    "[partner-booking]",
-    `Partner user: ${auth.partnerUser.email}`,
-    `Service: ${serviceKey}`,
-    tierKey ? `Tier: ${tierKey}` : null,
-    amountCents !== null ? `Rate: $${(amountCents / 100).toFixed(2)}` : null,
-    notes ? `Notes: ${notes}` : null
-  ].filter((line): line is string => Boolean(line));
-
-  await db.insert(appointmentNotes).values({
-    appointmentId: appointment.id,
-    body: noteLines.join("\n"),
-    createdAt: now
-  });
 
   const devonPhone = await resolveDevonPhone(db);
   if (devonPhone) {
@@ -353,7 +379,9 @@ export async function POST(request: NextRequest): Promise<Response> {
         : window.id;
 
     const message = [
-      `New partner booking: ${orgLabel}`,
+      appointment.status === "requested"
+        ? `New partner booking awaiting scope review: ${orgLabel}`
+        : `New partner booking: ${orgLabel}`,
       `${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}`,
       `${formatLocalDateTime(startAt)} (${windowLabel})`,
       tierKey ? `${serviceKey} (${tierKey})` : serviceKey,
@@ -393,12 +421,19 @@ export async function POST(request: NextRequest): Promise<Response> {
     })();
 
     const partnerName = partnerUser?.name?.trim().length ? partnerUser.name.trim() : "there";
-    const smsBody = `Stonegate: booking confirmed for ${when} at ${address}. Reply here if anything changes.`;
-    const emailSubject = "Stonegate Partner booking confirmed";
+    const isPendingScopeReview = appointment.status === "requested";
+    const smsBody = isPendingScopeReview
+      ? `Stonegate: booking received for ${when} at ${address}. Our office will confirm it after reviewing the quoted-work details.`
+      : `Stonegate: booking confirmed for ${when} at ${address}. Reply here if anything changes.`;
+    const emailSubject = isPendingScopeReview
+      ? "Stonegate Partner booking received"
+      : "Stonegate Partner booking confirmed";
     const emailBody = [
       `Hi ${partnerName},`,
       "",
-      "Your booking is confirmed:",
+      isPendingScopeReview
+        ? "Your booking was received and is awaiting quoted-work review:"
+        : "Your booking is confirmed:",
       when,
       address,
       `Service: ${serviceKey}${tierKey ? ` (${tierKey})` : ""}`,
@@ -452,6 +487,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   return NextResponse.json({
     ok: true,
     appointmentId: appointment.id,
-    startAt: appointment.startAt ? appointment.startAt.toISOString() : null
+    startAt: appointment.startAt ? appointment.startAt.toISOString() : null,
+    status: appointment.status,
   });
 }

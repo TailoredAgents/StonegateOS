@@ -80,18 +80,18 @@ describe("autonomous sales agent examination", () => {
   });
 
 
-  it("asks one quote question at a time for vague text estimates", () => {
+  it("asks only for the missing scope details before giving a text estimate", () => {
     expect(getTextQuoteReadiness(contextFromInbound("I want an estimate over text")).missingQuestion).toBe(
-      "What ZIP code is the pickup in?",
+      "What all needs to go?",
     );
 
     expect(getTextQuoteReadiness(contextFromInbound("How much for a couch in 30144?")).missingQuestion).toBe(
-      "About how much is it: single item, small pickup, half trailer, 3/4 trailer, or full trailer?",
+      "No worries. About how many big items or bags are there, and are they easy to get to?",
     );
 
-    expect(getTextQuoteReadiness(contextFromInbound("I have a half trailer of garage junk")).missingQuestion).toBe(
-      "What ZIP code is the pickup in?",
-    );
+    expect(
+      getTextQuoteReadiness(contextFromInbound("I have a half trailer of garage junk")).missingQuestion,
+    ).toBeNull();
   });
 
   it("produces a ballpark range only after location, job type, and rough size are known", () => {

@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getDb, instantQuotes, leads } from "@/db";
+import { listInstantQuoteMediaReadUrls } from "@/lib/appointment-media";
 import { isAdminRequest } from "../../../../web/admin";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 
@@ -39,13 +40,27 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     .orderBy(desc(instantQuotes.createdAt))
     .limit(10);
 
-  const quotes = rows.map((row) => ({
-    id: row.id,
-    createdAt: row.createdAt.toISOString(),
-    photoUrls: Array.isArray(row.photoUrls) ? row.photoUrls.filter(Boolean) : [],
-    jobTypes: Array.isArray(row.jobTypes) ? row.jobTypes.filter(Boolean) : [],
-    perceivedSize: row.perceivedSize
-  }));
+  const quotes = await Promise.all(
+    rows.map(async (row) => {
+      const durablePhotoUrls = await listInstantQuoteMediaReadUrls(
+        row.id,
+      ).catch(() => []);
+      return {
+        id: row.id,
+        createdAt: row.createdAt.toISOString(),
+        photoUrls:
+          durablePhotoUrls.length > 0
+            ? durablePhotoUrls
+            : Array.isArray(row.photoUrls)
+              ? row.photoUrls.filter(Boolean)
+              : [],
+        jobTypes: Array.isArray(row.jobTypes)
+          ? row.jobTypes.filter(Boolean)
+          : [],
+        perceivedSize: row.perceivedSize,
+      };
+    }),
+  );
 
   const flattenedUrls = Array.from(
     new Set(
@@ -62,4 +77,3 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
     photoUrls: flattenedUrls
   });
 }
-

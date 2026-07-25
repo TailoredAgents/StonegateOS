@@ -16,8 +16,9 @@ import {
   integer,
   doublePrecision,
   customType,
+  check,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType() {
@@ -1805,6 +1806,7 @@ export const appointments = pgTable(
     status: appointmentStatusEnum("status").default("requested").notNull(),
     quotedTotalCents: integer("quoted_total_cents"),
     finalTotalCents: integer("final_total_cents"),
+    quotedScopeText: varchar("quoted_scope_text", { length: 4000 }),
     bookingDetails: jsonb(
       "booking_details",
     ).$type<AppointmentBookingDetails | null>(),
@@ -1911,6 +1913,208 @@ export const appointmentAttachments = pgTable(
   (table) => ({
     appointmentIdx: index("appointment_attachments_appointment_idx").on(
       table.appointmentId,
+    ),
+  }),
+);
+
+export const mediaAssets = pgTable(
+  "media_assets",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    storageProvider: text("storage_provider").default("r2").notNull(),
+    storageBucket: text("storage_bucket").notNull(),
+    originalObjectKey: text("original_object_key").notNull(),
+    displayObjectKey: text("display_object_key"),
+    thumbnailObjectKey: text("thumbnail_object_key"),
+    source: text("source").default("manual").notNull(),
+    sourceKey: text("source_key"),
+    status: text("status").default("staging").notNull(),
+    originalFilename: text("original_filename"),
+    contentType: text("content_type"),
+    byteSize: integer("byte_size"),
+    width: integer("width"),
+    height: integer("height"),
+    sha256: varchar("sha256", { length: 64 }),
+    uploadedByMemberId: uuid("uploaded_by_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
+    contactId: uuid("contact_id").references(() => contacts.id, {
+      onDelete: "set null",
+    }),
+    sourceMessageId: uuid("source_message_id").references(
+      () => conversationMessages.id,
+      { onDelete: "set null" },
+    ),
+    sourceMediaIndex: integer("source_media_index"),
+    sourceMetadata: jsonb("source_metadata").$type<Record<
+      string,
+      unknown
+    > | null>(),
+    stagingExpiresAt: timestamp("staging_expires_at", { withTimezone: true }),
+    readyAt: timestamp("ready_at", { withTimezone: true }),
+    processingError: text("processing_error"),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    sourceKeyIdx: uniqueIndex("media_assets_source_key_key").on(
+      table.sourceKey,
+    ),
+    originalObjectKeyIdx: uniqueIndex(
+      "media_assets_original_object_key_key",
+    ).on(table.storageBucket, table.originalObjectKey),
+    contactIdx: index("media_assets_contact_idx").on(
+      table.contactId,
+      table.createdAt,
+    ),
+    sourceMessageIdx: index("media_assets_source_message_idx").on(
+      table.sourceMessageId,
+    ),
+    uploaderIdx: index("media_assets_uploader_idx").on(
+      table.uploadedByMemberId,
+      table.createdAt,
+    ),
+    statusIdx: index("media_assets_status_idx").on(
+      table.status,
+      table.createdAt,
+    ),
+    stagingExpiresIdx: index("media_assets_staging_expires_idx").on(
+      table.stagingExpiresAt,
+    ),
+    deletedIdx: index("media_assets_deleted_idx").on(table.deletedAt),
+  }),
+);
+
+export const appointmentMedia = pgTable(
+  "appointment_media",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    mediaAssetId: uuid("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    purpose: text("purpose").default("quoted_work").notNull(),
+    caption: text("caption"),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    isCover: boolean("is_cover").default(false).notNull(),
+    attachedByMemberId: uuid("attached_by_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
+    attachmentSource: text("attachment_source").default("manual").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    appointmentAssetIdx: uniqueIndex(
+      "appointment_media_appointment_asset_key",
+    ).on(table.appointmentId, table.mediaAssetId),
+    appointmentIdx: index("appointment_media_appointment_idx").on(
+      table.appointmentId,
+      table.purpose,
+      table.sortOrder,
+    ),
+    mediaAssetIdx: index("appointment_media_asset_idx").on(table.mediaAssetId),
+    deletedIdx: index("appointment_media_deleted_idx").on(table.deletedAt),
+    activeCoverIdx: uniqueIndex("appointment_media_active_cover_key")
+      .on(table.appointmentId)
+      .where(sql`${table.isCover} = true AND ${table.deletedAt} IS NULL`),
+  }),
+);
+
+export const instantQuoteMedia = pgTable(
+  "instant_quote_media",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    instantQuoteId: uuid("instant_quote_id")
+      .notNull()
+      .references(() => instantQuotes.id, { onDelete: "cascade" }),
+    mediaAssetId: uuid("media_asset_id")
+      .notNull()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    quoteAssetIdx: uniqueIndex("instant_quote_media_quote_asset_key").on(
+      table.instantQuoteId,
+      table.mediaAssetId,
+    ),
+    quoteIdx: index("instant_quote_media_quote_idx").on(
+      table.instantQuoteId,
+      table.sortOrder,
+    ),
+    mediaAssetIdx: index("instant_quote_media_asset_idx").on(
+      table.mediaAssetId,
+    ),
+  }),
+);
+
+export const mobileOfflineMediaQueueHealth = pgTable(
+  "mobile_offline_media_queue_health",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    teamMemberId: uuid("team_member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    clientDeviceId: uuid("client_device_id").notNull(),
+    queuedCount: integer("queued_count").default(0).notNull(),
+    failedCount: integer("failed_count").default(0).notNull(),
+    oldestQueuedAt: timestamp("oldest_queued_at", { withTimezone: true }),
+    clientReportedAt: timestamp("client_reported_at", {
+      withTimezone: true,
+    }).notNull(),
+    lastReportedAt: timestamp("last_reported_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    memberDeviceIdx: uniqueIndex(
+      "mobile_offline_media_queue_health_member_device_key",
+    ).on(table.teamMemberId, table.clientDeviceId),
+    staleQueueIdx: index(
+      "mobile_offline_media_queue_health_stale_idx",
+    )
+      .on(table.oldestQueuedAt)
+      .where(sql`${table.queuedCount} > 0`),
+    lastReportedIdx: index(
+      "mobile_offline_media_queue_health_last_reported_idx",
+    ).on(table.lastReportedAt),
+    queuedCountCheck: check(
+      "mobile_offline_media_queue_health_queued_count_check",
+      sql`${table.queuedCount} BETWEEN 0 AND 10000`,
+    ),
+    failedCountCheck: check(
+      "mobile_offline_media_queue_health_failed_count_check",
+      sql`${table.failedCount} BETWEEN 0 AND ${table.queuedCount}`,
+    ),
+    queueStateCheck: check(
+      "mobile_offline_media_queue_health_queue_state_check",
+      sql`(${table.queuedCount} = 0 AND ${table.failedCount} = 0 AND ${table.oldestQueuedAt} IS NULL) OR (${table.queuedCount} > 0 AND ${table.oldestQueuedAt} IS NOT NULL)`,
     ),
   }),
 );
@@ -2399,6 +2603,59 @@ export const instantQuotes = pgTable("instant_quotes", {
 export type InstantQuote = typeof instantQuotes.$inferSelect;
 export type InstantQuoteInsert = typeof instantQuotes.$inferInsert;
 
+export const instantQuoteRelations = relations(instantQuotes, ({ many }) => ({
+  media: many(instantQuoteMedia),
+}));
+
+export const mediaAssetRelations = relations(mediaAssets, ({ one, many }) => ({
+  contact: one(contacts, {
+    fields: [mediaAssets.contactId],
+    references: [contacts.id],
+  }),
+  uploadedByMember: one(teamMembers, {
+    fields: [mediaAssets.uploadedByMemberId],
+    references: [teamMembers.id],
+  }),
+  sourceMessage: one(conversationMessages, {
+    fields: [mediaAssets.sourceMessageId],
+    references: [conversationMessages.id],
+  }),
+  appointments: many(appointmentMedia),
+  instantQuotes: many(instantQuoteMedia),
+}));
+
+export const appointmentMediaRelations = relations(
+  appointmentMedia,
+  ({ one }) => ({
+    appointment: one(appointments, {
+      fields: [appointmentMedia.appointmentId],
+      references: [appointments.id],
+    }),
+    mediaAsset: one(mediaAssets, {
+      fields: [appointmentMedia.mediaAssetId],
+      references: [mediaAssets.id],
+    }),
+    attachedByMember: one(teamMembers, {
+      fields: [appointmentMedia.attachedByMemberId],
+      references: [teamMembers.id],
+    }),
+  }),
+);
+
+export const instantQuoteMediaRelations = relations(
+  instantQuoteMedia,
+  ({ one }) => ({
+    instantQuote: one(instantQuotes, {
+      fields: [instantQuoteMedia.instantQuoteId],
+      references: [instantQuotes.id],
+    }),
+    mediaAsset: one(mediaAssets, {
+      fields: [instantQuoteMedia.mediaAssetId],
+      references: [mediaAssets.id],
+    }),
+  }),
+);
+
 // SEO / Blog posts (public content)
 export const blogPosts = pgTable(
   "blog_posts",
@@ -2453,6 +2710,7 @@ export const contactRelations = relations(contacts, ({ many, one }) => ({
   leads: many(leads),
   quotes: many(quotes),
   appointments: many(appointments),
+  mediaAssets: many(mediaAssets),
   tasks: many(crmTasks),
   salesAgentMemories: many(salesAgentMemories),
   mediaJobAnalyses: many(mediaJobAnalyses),
@@ -2551,6 +2809,9 @@ export const appointmentRelations = relations(
       references: [leads.id],
     }),
     notes: many(appointmentNotes),
+    media: many(appointmentMedia),
+    paymentAttempts: many(paymentAttempts),
+    payments: many(payments),
   }),
 );
 
@@ -2756,19 +3017,107 @@ export const expenseRelations = relations(expenses, ({ one }) => ({
   }),
 }));
 
-// Payments (Stripe charge ingestion for reconciliation)
+// Provider-neutral payment attempts and ledger.
+export const paymentAttempts = pgTable(
+  "payment_attempts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    provider: text("provider").default("square").notNull(),
+    clientRequestId: text("client_request_id").notNull(),
+    status: text("status").default("created").notNull(),
+    requestedJobAmountCents: integer("requested_job_amount_cents").notNull(),
+    currency: varchar("currency", { length: 10 }).default("USD").notNull(),
+    providerOrderId: text("provider_order_id"),
+    providerPaymentId: text("provider_payment_id"),
+    squareLocationId: text("square_location_id"),
+    initiatedByMemberId: uuid("initiated_by_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
+    returnNonceHash: text("return_nonce_hash"),
+    returnStateExpiresAt: timestamp("return_state_expires_at", {
+      withTimezone: true,
+    }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    clientRequestIdx: uniqueIndex("payment_attempts_client_request_key").on(
+      table.clientRequestId,
+    ),
+    appointmentIdx: index("payment_attempts_appointment_idx").on(
+      table.appointmentId,
+      table.createdAt,
+    ),
+    statusIdx: index("payment_attempts_status_idx").on(
+      table.status,
+      table.createdAt,
+    ),
+    expiresIdx: index("payment_attempts_expires_idx").on(table.expiresAt),
+    providerOrderIdx: index("payment_attempts_provider_order_idx").on(
+      table.provider,
+      table.providerOrderId,
+    ),
+    providerPaymentIdx: index("payment_attempts_provider_payment_idx").on(
+      table.provider,
+      table.providerPaymentId,
+    ),
+    activeSquareAttemptIdx: uniqueIndex(
+      "payment_attempts_active_square_appointment_key",
+    )
+      .on(table.appointmentId)
+      .where(
+        sql`${table.provider} = 'square' AND ${table.status} IN ('created', 'launched', 'pending_verification')`,
+      ),
+  }),
+);
+
 export const payments = pgTable(
   "payments",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    stripeChargeId: text("stripe_charge_id").notNull(),
+    stripeChargeId: text("stripe_charge_id"),
+    provider: text("provider").default("stripe").notNull(),
+    providerPaymentId: text("provider_payment_id"),
+    providerOrderId: text("provider_order_id"),
+    paymentAttemptId: uuid("payment_attempt_id").references(
+      () => paymentAttempts.id,
+      { onDelete: "set null" },
+    ),
     amount: integer("amount").notNull(), // cents
+    jobAmountCents: integer("job_amount_cents"),
+    tipCents: integer("tip_cents").default(0).notNull(),
+    totalAmountCents: integer("total_amount_cents"),
+    refundedAmountCents: integer("refunded_amount_cents").default(0).notNull(),
     currency: varchar("currency", { length: 10 }).notNull(),
     status: text("status").notNull(),
+    canonicalStatus: text("canonical_status"),
+    providerStatus: text("provider_status"),
     method: text("method"),
+    tenderType: text("tender_type"),
+    entryMethod: text("entry_method"),
     cardBrand: text("card_brand"),
     last4: varchar("last4", { length: 4 }),
     receiptUrl: text("receipt_url"),
+    squareLocationId: text("square_location_id"),
+    initiatedByMemberId: uuid("initiated_by_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
+    legacySource: text("legacy_source"),
     metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
     appointmentId: uuid("appointment_id").references(() => appointments.id, {
       onDelete: "set null",
@@ -2780,11 +3129,169 @@ export const payments = pgTable(
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
+    providerCreatedAt: timestamp("provider_created_at", {
+      withTimezone: true,
+    }),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
     capturedAt: timestamp("captured_at", { withTimezone: true }),
   },
   (table) => ({
     stripeIdx: uniqueIndex("payments_charge_idx").on(table.stripeChargeId),
+    providerPaymentIdx: uniqueIndex("payments_provider_payment_key").on(
+      table.provider,
+      table.providerPaymentId,
+    ),
+    paymentAttemptIdx: uniqueIndex("payments_payment_attempt_key").on(
+      table.paymentAttemptId,
+    ),
     appointmentIdx: index("payments_appointment_idx").on(table.appointmentId),
+    canonicalStatusIdx: index("payments_canonical_status_idx").on(
+      table.canonicalStatus,
+      table.createdAt,
+    ),
+    providerOrderIdx: index("payments_provider_order_idx").on(
+      table.provider,
+      table.providerOrderId,
+    ),
+    paidAtIdx: index("payments_paid_at_idx").on(table.paidAt),
+  }),
+);
+
+export const paymentRefunds = pgTable(
+  "payment_refunds",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    paymentId: uuid("payment_id")
+      .notNull()
+      .references(() => payments.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    providerRefundId: text("provider_refund_id"),
+    amountCents: integer("amount_cents").notNull(),
+    jobAmountCents: integer("job_amount_cents").default(0).notNull(),
+    tipCents: integer("tip_cents").default(0).notNull(),
+    currency: varchar("currency", { length: 10 }).default("USD").notNull(),
+    canonicalStatus: text("canonical_status").notNull(),
+    providerStatus: text("provider_status"),
+    reason: text("reason"),
+    metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
+    providerCreatedAt: timestamp("provider_created_at", {
+      withTimezone: true,
+    }),
+    refundedAt: timestamp("refunded_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    providerRefundIdx: uniqueIndex("payment_refunds_provider_refund_key").on(
+      table.provider,
+      table.providerRefundId,
+    ),
+    paymentIdx: index("payment_refunds_payment_idx").on(
+      table.paymentId,
+      table.createdAt,
+    ),
+    statusIdx: index("payment_refunds_status_idx").on(
+      table.canonicalStatus,
+      table.createdAt,
+    ),
+  }),
+);
+
+export const paymentProviderEvents = pgTable(
+  "payment_provider_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    provider: text("provider").notNull(),
+    providerEventId: text("provider_event_id").notNull(),
+    eventType: text("event_type").notNull(),
+    processingStatus: text("processing_status").default("received").notNull(),
+    paymentId: uuid("payment_id").references(() => payments.id, {
+      onDelete: "set null",
+    }),
+    paymentAttemptId: uuid("payment_attempt_id").references(
+      () => paymentAttempts.id,
+      { onDelete: "set null" },
+    ),
+    payload: jsonb("payload").$type<Record<string, unknown> | null>(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    error: text("error"),
+  },
+  (table) => ({
+    providerEventIdx: uniqueIndex(
+      "payment_provider_events_provider_event_key",
+    ).on(table.provider, table.providerEventId),
+    statusIdx: index("payment_provider_events_status_idx").on(
+      table.processingStatus,
+      table.receivedAt,
+    ),
+    paymentIdx: index("payment_provider_events_payment_idx").on(
+      table.paymentId,
+    ),
+    attemptIdx: index("payment_provider_events_attempt_idx").on(
+      table.paymentAttemptId,
+    ),
+  }),
+);
+
+export const paymentAttemptRelations = relations(
+  paymentAttempts,
+  ({ one, many }) => ({
+    appointment: one(appointments, {
+      fields: [paymentAttempts.appointmentId],
+      references: [appointments.id],
+    }),
+    initiatedByMember: one(teamMembers, {
+      fields: [paymentAttempts.initiatedByMemberId],
+      references: [teamMembers.id],
+    }),
+    payments: many(payments),
+    providerEvents: many(paymentProviderEvents),
+  }),
+);
+
+export const paymentRelations = relations(payments, ({ one, many }) => ({
+  appointment: one(appointments, {
+    fields: [payments.appointmentId],
+    references: [appointments.id],
+  }),
+  paymentAttempt: one(paymentAttempts, {
+    fields: [payments.paymentAttemptId],
+    references: [paymentAttempts.id],
+  }),
+  initiatedByMember: one(teamMembers, {
+    fields: [payments.initiatedByMemberId],
+    references: [teamMembers.id],
+  }),
+  refunds: many(paymentRefunds),
+  providerEvents: many(paymentProviderEvents),
+}));
+
+export const paymentRefundRelations = relations(paymentRefunds, ({ one }) => ({
+  payment: one(payments, {
+    fields: [paymentRefunds.paymentId],
+    references: [payments.id],
+  }),
+}));
+
+export const paymentProviderEventRelations = relations(
+  paymentProviderEvents,
+  ({ one }) => ({
+    payment: one(payments, {
+      fields: [paymentProviderEvents.paymentId],
+      references: [payments.id],
+    }),
+    paymentAttempt: one(paymentAttempts, {
+      fields: [paymentProviderEvents.paymentAttemptId],
+      references: [paymentAttempts.id],
+    }),
   }),
 );
 

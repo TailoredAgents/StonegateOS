@@ -107,7 +107,6 @@ export async function updateApptStatus(formData: FormData) {
 
   if (status === "completed") {
     const finalTotalCents = parseUsdToCents(formData.get("finalTotal"));
-    const cardTipCents = parseUsdToCents(formData.get("cardTip"));
     const same = formData.get("finalTotalSameAsQuoted");
     const finalTotalSameAsQuoted =
       typeof same === "string" && (same === "true" || same === "on");
@@ -116,10 +115,6 @@ export async function updateApptStatus(formData: FormData) {
       payload["finalTotalCents"] = finalTotalCents;
     } else if (finalTotalSameAsQuoted) {
       payload["finalTotalSameAsQuoted"] = true;
-    }
-
-    if (cardTipCents !== null) {
-      payload["cardTipCents"] = cardTipCents;
     }
   }
 
@@ -145,7 +140,10 @@ export async function updateAppointmentEtaStatusAction(formData: FormData) {
 
   const jar = await cookies();
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to save ETA status");
+    const message = await readErrorMessage(
+      response,
+      "Unable to save ETA status",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
   } else {
     jar.set({ name: "myst-flash", value: "ETA status saved", path: "/" });
@@ -167,7 +165,10 @@ export async function sendEtaDraftAction(formData: FormData) {
 
   const jar = await cookies();
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to send ETA draft");
+    const message = await readErrorMessage(
+      response,
+      "Unable to send ETA draft",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
   } else {
     jar.set({ name: "myst-flash", value: "ETA update queued", path: "/" });
@@ -189,7 +190,10 @@ export async function dismissEtaDraftAction(formData: FormData) {
 
   const jar = await cookies();
   if (!response.ok) {
-    const message = await readErrorMessage(response, "Unable to dismiss ETA draft");
+    const message = await readErrorMessage(
+      response,
+      "Unable to dismiss ETA draft",
+    );
     jar.set({ name: "myst-flash-error", value: message, path: "/" });
   } else {
     jar.set({ name: "myst-flash", value: "ETA draft dismissed", path: "/" });
@@ -305,7 +309,10 @@ export async function createInboxQuoteAction(
       const postalCode = readFormString(formData, "newPostalCode");
 
       if (!addressLine1 || !city || !state || !postalCode) {
-        return { ok: false, error: "Enter the new property address before creating the quote." };
+        return {
+          ok: false,
+          error: "Enter the new property address before creating the quote.",
+        };
       }
 
       const propertyResponse = await callAdminApi(
@@ -321,7 +328,9 @@ export async function createInboxQuoteAction(
           }),
         },
       );
-      const propertyData = (await propertyResponse.json().catch(() => null)) as {
+      const propertyData = (await propertyResponse
+        .json()
+        .catch(() => null)) as {
         property?: { id?: string };
         error?: string;
         message?: string;
@@ -330,7 +339,10 @@ export async function createInboxQuoteAction(
       if (!propertyResponse.ok || !propertyData?.property?.id) {
         return {
           ok: false,
-          error: propertyData?.message ?? propertyData?.error ?? "Unable to add address for this quote",
+          error:
+            propertyData?.message ??
+            propertyData?.error ??
+            "Unable to add address for this quote",
         };
       }
 
@@ -341,7 +353,10 @@ export async function createInboxQuoteAction(
     try {
       const parsed = JSON.parse(servicesRaw) as unknown;
       services = Array.isArray(parsed)
-        ? parsed.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        ? parsed.filter(
+            (item): item is string =>
+              typeof item === "string" && item.trim().length > 0,
+          )
         : [];
     } catch {
       services = [];
@@ -369,7 +384,9 @@ export async function createInboxQuoteAction(
       payload["expiresInDays"] = Math.trunc(expiresInDays);
     }
 
-    const jobDurationMinutes = Number(readFormString(formData, "jobDurationMinutes"));
+    const jobDurationMinutes = Number(
+      readFormString(formData, "jobDurationMinutes"),
+    );
     if (
       Number.isFinite(jobDurationMinutes) &&
       jobDurationMinutes >= 30 &&
@@ -386,7 +403,10 @@ export async function createInboxQuoteAction(
 
     if (serviceOverridesRaw) {
       try {
-        const parsed = JSON.parse(serviceOverridesRaw) as Record<string, unknown>;
+        const parsed = JSON.parse(serviceOverridesRaw) as Record<
+          string,
+          unknown
+        >;
         const sanitized: Record<string, number> = {};
         for (const [key, value] of Object.entries(parsed)) {
           const numeric = typeof value === "number" ? value : Number(value);
@@ -413,7 +433,9 @@ export async function createInboxQuoteAction(
       error?: string;
       message?: string;
     };
-    const data = (await response.json().catch(() => null)) as CreateQuoteResponse | null;
+    const data = (await response
+      .json()
+      .catch(() => null)) as CreateQuoteResponse | null;
 
     if (!response.ok) {
       return {
@@ -429,7 +451,8 @@ export async function createInboxQuoteAction(
     if (!shareLink) {
       return {
         ok: false,
-        error: "Quote was created, but no share link was returned. Open Quotes to send or preview it before messaging the customer.",
+        error:
+          "Quote was created, but no share link was returned. Open Quotes to send or preview it before messaging the customer.",
         recordId,
       };
     }
@@ -443,7 +466,10 @@ export async function createInboxQuoteAction(
       refreshKey: String(Date.now()),
     };
   } catch (error) {
-    return { ok: false, error: formatActionError(error, "Unable to create quote") };
+    return {
+      ok: false,
+      error: formatActionError(error, "Unable to create quote"),
+    };
   }
 }
 
@@ -522,30 +548,246 @@ export async function deleteInstantQuoteAction(formData: FormData) {
 export async function attachPaymentAction(formData: FormData) {
   const id = formData.get("paymentId");
   const appt = formData.get("appointmentId");
+  const reviewNote = formData.get("reviewNote");
+  const jobAmountCents = parseUsdToCents(formData.get("jobAmount"));
+  const tipCents = parseUsdToCents(formData.get("tipAmount"));
+  const jar = await cookies();
   if (
     typeof id !== "string" ||
     typeof appt !== "string" ||
-    appt.trim().length === 0
-  )
+    appt.trim().length === 0 ||
+    typeof reviewNote !== "string" ||
+    reviewNote.trim().length === 0 ||
+    jobAmountCents === null ||
+    tipCents === null
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "Appointment, job amount, tip, and review reason are required",
+      path: "/",
+    });
+    revalidatePath("/team");
     return;
+  }
 
-  await callAdminApi(`/api/payments/${id}/attach`, {
+  const response = await callAdminApi(`/api/payments/${id}/attach`, {
     method: "POST",
-    body: JSON.stringify({ appointmentId: appt }),
+    body: JSON.stringify({
+      appointmentId: appt.trim(),
+      jobAmountCents,
+      tipCents,
+      reviewNote: reviewNote.trim(),
+    }),
   });
 
-  const jar = await cookies();
-  jar.set({ name: "myst-flash", value: "Payment attached", path: "/" });
+  if (!response.ok) {
+    jar.set({
+      name: "myst-flash-error",
+      value: await readErrorMessage(
+        response,
+        "Unable to attach and resolve payment",
+      ),
+      path: "/",
+    });
+  } else {
+    jar.set({
+      name: "myst-flash",
+      value: "Stripe payment attached and resolved",
+      path: "/",
+    });
+  }
   revalidatePath("/team");
 }
 
 export async function detachPaymentAction(formData: FormData) {
   const id = formData.get("paymentId");
-  if (typeof id !== "string") return;
-
-  await callAdminApi(`/api/payments/${id}/detach`, { method: "POST" });
+  const reviewNote = formData.get("reviewNote");
   const jar = await cookies();
-  jar.set({ name: "myst-flash", value: "Payment detached", path: "/" });
+  if (
+    typeof id !== "string" ||
+    typeof reviewNote !== "string" ||
+    reviewNote.trim().length === 0
+  ) {
+    jar.set({
+      name: "myst-flash-error",
+      value: "A review reason is required before detaching a payment",
+      path: "/",
+    });
+    revalidatePath("/team");
+    return;
+  }
+
+  const response = await callAdminApi(`/api/payments/${id}/detach`, {
+    method: "POST",
+    body: JSON.stringify({ reviewNote: reviewNote.trim() }),
+  });
+  if (!response.ok) {
+    jar.set({
+      name: "myst-flash-error",
+      value: await readErrorMessage(response, "Unable to detach payment"),
+      path: "/",
+    });
+  } else {
+    jar.set({
+      name: "myst-flash",
+      value: "Payment detached and returned to owner review",
+      path: "/",
+    });
+  }
+  revalidatePath("/team");
+}
+
+export async function paymentReconciliationAction(formData: FormData) {
+  const operation = formData.get("operation");
+  const jar = await cookies();
+  const fail = (message: string) => {
+    jar.set({
+      name: "myst-flash-error",
+      value: message,
+      path: "/",
+    });
+    revalidatePath("/team");
+  };
+  if (typeof operation !== "string") {
+    fail("Missing reconciliation action");
+    return;
+  }
+
+  const stringValue = (name: string): string | null => {
+    const value = formData.get(name);
+    return typeof value === "string" && value.trim().length > 0
+      ? value.trim()
+      : null;
+  };
+  const reviewNote = stringValue("reviewNote");
+  let payload: Record<string, unknown>;
+  let successMessage: string;
+
+  switch (operation) {
+    case "sweep":
+      payload = { sweep: true };
+      successMessage = "Square reconciliation sweep completed";
+      break;
+    case "attempt_retry": {
+      const attemptId = stringValue("attemptId");
+      if (!attemptId) {
+        fail("Payment attempt ID is required");
+        return;
+      }
+      payload = { attemptId };
+      successMessage = "Square attempt checked";
+      break;
+    }
+    case "attempt_dismiss": {
+      const dismissAttemptId = stringValue("attemptId");
+      if (!dismissAttemptId || !reviewNote) {
+        fail("Attempt ID and provider-review reason are required");
+        return;
+      }
+      payload = { dismissAttemptId, reviewNote };
+      successMessage = "Square attempt dismissed after owner review";
+      break;
+    }
+    case "event_retry": {
+      const eventId = stringValue("eventId");
+      if (!eventId) {
+        fail("Provider event ID is required");
+        return;
+      }
+      payload = { eventId };
+      successMessage = "Square provider event retried";
+      break;
+    }
+    case "square_payment_retry": {
+      const providerPaymentId = stringValue("providerPaymentId");
+      if (!providerPaymentId) {
+        fail("Square payment ID is required");
+        return;
+      }
+      payload = { providerPaymentId };
+      successMessage = "Square payment checked";
+      break;
+    }
+    case "square_refund_retry": {
+      const providerRefundId = stringValue("providerRefundId");
+      if (!providerRefundId) {
+        fail("Square refund ID is required");
+        return;
+      }
+      payload = { providerRefundId };
+      successMessage = "Square refund checked";
+      break;
+    }
+    case "refund_acknowledge": {
+      const acknowledgeRefundId = stringValue("refundId");
+      if (!acknowledgeRefundId || !reviewNote) {
+        fail("Refund ID and reconciliation reason are required");
+        return;
+      }
+      payload = { acknowledgeRefundId, reviewNote };
+      successMessage = "Refund and commission impact acknowledged";
+      break;
+    }
+    case "stripe_resolve": {
+      const stripePaymentId = stringValue("paymentId");
+      const appointmentId = stringValue("appointmentId");
+      const jobAmountCents = parseUsdToCents(formData.get("jobAmount"));
+      const tipCents = parseUsdToCents(formData.get("tipAmount"));
+      if (
+        !stripePaymentId ||
+        !appointmentId ||
+        !reviewNote ||
+        jobAmountCents === null ||
+        tipCents === null
+      ) {
+        fail(
+          "Stripe payment, appointment, allocation, and review reason are required",
+        );
+        return;
+      }
+      payload = {
+        stripePaymentId,
+        appointmentId,
+        jobAmountCents,
+        tipCents,
+        reviewNote,
+      };
+      successMessage = "Stripe payment attached and resolved";
+      break;
+    }
+    default:
+      fail("Unknown reconciliation action");
+      return;
+  }
+
+  try {
+    const response = await callAdminApi("/api/admin/payments/reconciliation", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      timeoutMs: operation === "sweep" ? 90_000 : 45_000,
+    });
+    if (!response.ok) {
+      fail(
+        await readErrorMessage(
+          response,
+          "Payment reconciliation action failed",
+        ),
+      );
+      return;
+    }
+    jar.set({
+      name: "myst-flash",
+      value: successMessage,
+      path: "/",
+    });
+  } catch (error) {
+    fail(
+      error instanceof Error
+        ? error.message
+        : "Payment reconciliation action failed",
+    );
+    return;
+  }
   revalidatePath("/team");
 }
 
@@ -689,7 +931,10 @@ export async function createQuoteAction(formData: FormData) {
     }
   }
 
-  if (typeof jobDurationMinutes === "string" && jobDurationMinutes.trim().length > 0) {
+  if (
+    typeof jobDurationMinutes === "string" &&
+    jobDurationMinutes.trim().length > 0
+  ) {
     const minutes = Number(jobDurationMinutes);
     if (Number.isFinite(minutes) && minutes >= 30 && minutes <= 8 * 60) {
       payload["jobDurationMinutes"] = Math.trunc(minutes);
@@ -1091,9 +1336,9 @@ export async function bookAppointmentAction(formData: FormData) {
         return;
       }
 
-      const contactPayload = (await contactResponse.json().catch(() =>
-        null,
-      )) as {
+      const contactPayload = (await contactResponse
+        .json()
+        .catch(() => null)) as {
         contacts?: Array<{
           firstName?: string | null;
           lastName?: string | null;
@@ -1276,11 +1521,16 @@ export async function bookInboxAppointmentAction(
     const propertyId = readFormString(formData, "propertyId");
     const propertyLabel = readFormString(formData, "propertyLabel");
     const appointmentType = readFormString(formData, "appointmentType");
-    const assignedAssociateMemberId = readFormString(formData, "assignedAssociateMemberId");
+    const assignedAssociateMemberId = readFormString(
+      formData,
+      "assignedAssociateMemberId",
+    );
     const soldByMemberId = readFormString(formData, "soldByMemberId");
     const startAt = readFormString(formData, "startAt");
     const durationMinutes = Number(readFormString(formData, "durationMinutes"));
-    const travelBufferMinutes = Number(readFormString(formData, "travelBufferMinutes"));
+    const travelBufferMinutes = Number(
+      readFormString(formData, "travelBufferMinutes"),
+    );
     const notes = readFormString(formData, "notes");
 
     if (!contactId) return { ok: false, error: "Contact ID missing" };
@@ -1289,10 +1539,16 @@ export async function bookInboxAppointmentAction(
     const bookingSelection = resolveBookingSelection(appointmentType);
     const isInPersonQuote = bookingSelection === "in_person_quote";
     if (isInPersonQuote && !propertyId) {
-      return { ok: false, error: "Address is required to book an in-person quote." };
+      return {
+        ok: false,
+        error: "Address is required to book an in-person quote.",
+      };
     }
     if (!isInPersonQuote && !soldByMemberId) {
-      return { ok: false, error: "Who sold the job is required to book a job." };
+      return {
+        ok: false,
+        error: "Who sold the job is required to book a job.",
+      };
     }
 
     let bookingDetailsResult:
@@ -1327,7 +1583,8 @@ export async function bookInboxAppointmentAction(
     };
 
     if (propertyId) payload["propertyId"] = propertyId;
-    if (assignedAssociateMemberId) payload["assignedAssociateMemberId"] = assignedAssociateMemberId;
+    if (assignedAssociateMemberId)
+      payload["assignedAssociateMemberId"] = assignedAssociateMemberId;
     if (soldByMemberId) payload["soldByMemberId"] = soldByMemberId;
     if (notes) payload["notes"] = notes;
     if (bookingDetailsResult.quotedTotalCents !== null) {
@@ -1359,7 +1616,8 @@ export async function bookInboxAppointmentAction(
 
     const recordId =
       data?.appointment?.id ?? data?.appointmentId ?? data?.id ?? undefined;
-    const bookedStartAt = data?.appointment?.startAt ?? data?.startAt ?? startAt;
+    const bookedStartAt =
+      data?.appointment?.startAt ?? data?.startAt ?? startAt;
     const timeText = formatInboxAppointmentTime(bookedStartAt);
     const addressText = propertyLabel ? ` at ${propertyLabel}` : "";
     const draftText = `You're booked for ${timeText}${addressText}. Reply here if anything changes.`;
@@ -1372,7 +1630,10 @@ export async function bookInboxAppointmentAction(
       refreshKey: String(Date.now()),
     };
   } catch (error) {
-    return { ok: false, error: formatActionError(error, "Unable to book appointment") };
+    return {
+      ok: false,
+      error: formatActionError(error, "Unable to book appointment"),
+    };
   }
 }
 
@@ -1413,7 +1674,8 @@ export async function rescheduleInboxAppointmentAction(
     if (!response.ok) {
       return {
         ok: false,
-        error: data?.message ?? data?.error ?? "Unable to reschedule appointment",
+        error:
+          data?.message ?? data?.error ?? "Unable to reschedule appointment",
       };
     }
 
@@ -1428,7 +1690,10 @@ export async function rescheduleInboxAppointmentAction(
       refreshKey: String(Date.now()),
     };
   } catch (error) {
-    return { ok: false, error: formatActionError(error, "Unable to reschedule appointment") };
+    return {
+      ok: false,
+      error: formatActionError(error, "Unable to reschedule appointment"),
+    };
   }
 }
 
@@ -1740,9 +2005,13 @@ async function readErrorMessage(
   return fallback;
 }
 
-async function readJsonRecord(response: Response): Promise<Record<string, unknown>> {
+async function readJsonRecord(
+  response: Response,
+): Promise<Record<string, unknown>> {
   const data = (await response.json().catch(() => null)) as unknown;
-  return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  return data && typeof data === "object"
+    ? (data as Record<string, unknown>)
+    : {};
 }
 
 function formatActionError(error: unknown, fallback: string): string {
@@ -1891,7 +2160,9 @@ export async function createCanvassLeadAction(formData: FormData) {
           value: "Contact already exists. Opening existing record.",
           path: "/",
         });
-        redirect(`/team?tab=quotes&contactId=${encodeURIComponent(existingId)}`);
+        redirect(
+          `/team?tab=quotes&contactId=${encodeURIComponent(existingId)}`,
+        );
       }
     }
 
@@ -3446,8 +3717,10 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
 
   const modeEntry = formData.get("mode");
   const mode = typeof modeEntry === "string" ? modeEntry.trim() : "";
-  const plannerAutoSendEnabled = formData.get("plannerAutoSendEnabled") === "on";
-  const liveReplyAutonomyEnabled = formData.get("liveReplyAutonomyEnabled") === "on";
+  const plannerAutoSendEnabled =
+    formData.get("plannerAutoSendEnabled") === "on";
+  const liveReplyAutonomyEnabled =
+    formData.get("liveReplyAutonomyEnabled") === "on";
   const autoSendAfterMinutes = formData.get("autoSendAfterMinutes");
   const activityWindowMinutes = formData.get("activityWindowMinutes");
   const retryDelayMinutes = formData.get("retryDelayMinutes");
@@ -3455,18 +3728,33 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const dmMinSilenceBeforeSmsMinutes = formData.get(
     "dmMinSilenceBeforeSmsMinutes",
   );
-  const dmMissingInfoFollowupDelayMinutes = formData.get("dmMissingInfoFollowupDelayMinutes");
-  const dmQuoteFollowupDelayMinutes = formData.get("dmQuoteFollowupDelayMinutes");
-  const dmObjectionFollowupDelayMinutes = formData.get("dmObjectionFollowupDelayMinutes");
+  const dmMissingInfoFollowupDelayMinutes = formData.get(
+    "dmMissingInfoFollowupDelayMinutes",
+  );
+  const dmQuoteFollowupDelayMinutes = formData.get(
+    "dmQuoteFollowupDelayMinutes",
+  );
+  const dmObjectionFollowupDelayMinutes = formData.get(
+    "dmObjectionFollowupDelayMinutes",
+  );
   const plannerAutoSendMinDraftAgeMinutes = formData.get(
     "plannerAutoSendMinDraftAgeMinutes",
   );
   const facebookCloserModeEntry = formData.get("facebookCloserMode");
-  const facebookCloserMode = typeof facebookCloserModeEntry === "string" ? facebookCloserModeEntry.trim() : "";
-  const facebookCloserMaxAutoBookDollars = formData.get("facebookCloserMaxAutoBookDollars");
-  const facebookCloserMinConfidenceEntry = formData.get("facebookCloserMinConfidence");
+  const facebookCloserMode =
+    typeof facebookCloserModeEntry === "string"
+      ? facebookCloserModeEntry.trim()
+      : "";
+  const facebookCloserMaxAutoBookDollars = formData.get(
+    "facebookCloserMaxAutoBookDollars",
+  );
+  const facebookCloserMinConfidenceEntry = formData.get(
+    "facebookCloserMinConfidence",
+  );
   const facebookCloserMinConfidence =
-    typeof facebookCloserMinConfidenceEntry === "string" ? facebookCloserMinConfidenceEntry.trim() : "";
+    typeof facebookCloserMinConfidenceEntry === "string"
+      ? facebookCloserMinConfidenceEntry.trim()
+      : "";
   const facebookCloserRequirePhotosAboveDollars = formData.get(
     "facebookCloserRequirePhotosAboveDollars",
   );
@@ -3474,26 +3762,45 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     "facebookCloserMessengerResponseWindowHours",
   );
   const facebookCoachingToneEntry = formData.get("facebookCoachingTone");
-  const facebookCoachingTone = typeof facebookCoachingToneEntry === "string" ? facebookCoachingToneEntry.trim() : "";
+  const facebookCoachingTone =
+    typeof facebookCoachingToneEntry === "string"
+      ? facebookCoachingToneEntry.trim()
+      : "";
   const facebookCoachingPlaybook = formData.get("facebookCoachingPlaybook");
-  const facebookCoachingHumanReviewKeywords = formData.get("facebookCoachingHumanReviewKeywords");
-  const facebookCoachingBlockedAutoReplyKeywords = formData.get("facebookCoachingBlockedAutoReplyKeywords");
+  const facebookCoachingHumanReviewKeywords = formData.get(
+    "facebookCoachingHumanReviewKeywords",
+  );
+  const facebookCoachingBlockedAutoReplyKeywords = formData.get(
+    "facebookCoachingBlockedAutoReplyKeywords",
+  );
   const agentDisplayName = formData.get("agentDisplayName");
   const plannerAutoSendChannels = formData
     .getAll("plannerAutoSendChannels")
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .map((value) => value.trim());
   const plannerAutoSendActions = formData
     .getAll("plannerAutoSendActions")
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .map((value) => value.trim());
   const liveReplyAutonomyChannels = formData
     .getAll("liveReplyAutonomyChannels")
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .map((value) => value.trim());
   const liveReplyAutonomyActions = formData
     .getAll("liveReplyAutonomyActions")
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .map((value) => value.trim());
   const channelModeSms = formData.get("channelMode_sms");
   const channelModeEmail = formData.get("channelMode_email");
@@ -3504,14 +3811,17 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
     dm: typeof channelModeDm === "string" ? channelModeDm.trim() : "",
   };
 
-  const payload: Record<string, unknown> = { plannerAutoSendEnabled, liveReplyAutonomyEnabled };
+  const payload: Record<string, unknown> = {
+    plannerAutoSendEnabled,
+    liveReplyAutonomyEnabled,
+  };
   if (mode === "off" || mode === "partial" || mode === "full") {
     payload["mode"] = mode;
   }
   payload["channelModes"] = channelModes;
 
   for (const [key, value] of [
-      ["autoSendAfterMinutes", autoSendAfterMinutes],
+    ["autoSendAfterMinutes", autoSendAfterMinutes],
     ["activityWindowMinutes", activityWindowMinutes],
     ["retryDelayMinutes", retryDelayMinutes],
     ["dmSmsFallbackAfterMinutes", dmSmsFallbackAfterMinutes],
@@ -3544,20 +3854,26 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
   const facebookCloser: Record<string, unknown> = {
     allowedServices: ["junk_removal"],
     requireCustomerConfirmation: true,
-    allowDmSmsFallback: formData.get("facebookCloserAllowDmSmsFallback") === "on",
+    allowDmSmsFallback:
+      formData.get("facebookCloserAllowDmSmsFallback") === "on",
     emergencyStop: formData.get("facebookCloserEmergencyStop") === "on",
   };
   if (["off", "shadow", "assist", "auto"].includes(facebookCloserMode)) {
     facebookCloser["mode"] = facebookCloserMode;
   }
-  if (facebookCloserMinConfidence === "medium" || facebookCloserMinConfidence === "high") {
+  if (
+    facebookCloserMinConfidence === "medium" ||
+    facebookCloserMinConfidence === "high"
+  ) {
     facebookCloser["minConfidence"] = facebookCloserMinConfidence;
   }
   const maxAutoBookCents = parseUsdToCents(facebookCloserMaxAutoBookDollars);
   if (maxAutoBookCents !== null) {
     facebookCloser["maxAutoBookTotalCents"] = maxAutoBookCents;
   }
-  const requirePhotosAboveCents = parseUsdToCents(facebookCloserRequirePhotosAboveDollars);
+  const requirePhotosAboveCents = parseUsdToCents(
+    facebookCloserRequirePhotosAboveDollars,
+  );
   if (requirePhotosAboveCents !== null) {
     facebookCloser["requirePhotosAboveCents"] = requirePhotosAboveCents;
   }
@@ -3581,10 +3897,14 @@ export async function updateSalesAutopilotPolicyAction(formData: FormData) {
       : [];
   const facebookCoaching: Record<string, unknown> = {
     enabled: formData.get("facebookCoachingEnabled") === "on",
-    requirePhotosBeforeQuote: formData.get("facebookCoachingRequirePhotosBeforeQuote") === "on",
-    requireHumanReviewBeforeBooking: formData.get("facebookCoachingRequireHumanReviewBeforeBooking") === "on",
+    requirePhotosBeforeQuote:
+      formData.get("facebookCoachingRequirePhotosBeforeQuote") === "on",
+    requireHumanReviewBeforeBooking:
+      formData.get("facebookCoachingRequireHumanReviewBeforeBooking") === "on",
     humanReviewKeywords: splitKeywordList(facebookCoachingHumanReviewKeywords),
-    blockedAutoReplyKeywords: splitKeywordList(facebookCoachingBlockedAutoReplyKeywords),
+    blockedAutoReplyKeywords: splitKeywordList(
+      facebookCoachingBlockedAutoReplyKeywords,
+    ),
   };
   if (["friendly", "professional", "concise"].includes(facebookCoachingTone)) {
     facebookCoaching["tone"] = facebookCoachingTone;
@@ -4471,11 +4791,13 @@ export async function suggestThreadReplyAction(formData: FormData) {
     channel?: string;
   } | null;
   const redirectedThreadId =
-    typeof suggestPayload?.threadId === "string" && suggestPayload.threadId.trim().length > 0
+    typeof suggestPayload?.threadId === "string" &&
+    suggestPayload.threadId.trim().length > 0
       ? suggestPayload.threadId.trim()
       : resolvedThreadId;
   const redirectedChannel =
-    typeof suggestPayload?.channel === "string" && suggestPayload.channel.trim().length > 0
+    typeof suggestPayload?.channel === "string" &&
+    suggestPayload.channel.trim().length > 0
       ? suggestPayload.channel.trim()
       : resolvedChannel;
 
@@ -4755,7 +5077,10 @@ export async function runSeoAutopublishAction() {
       value: `SEO run skipped: ${result["reason"]}`,
       path: "/",
     });
-  } else if (result?.["ok"] === false && typeof result?.["error"] === "string") {
+  } else if (
+    result?.["ok"] === false &&
+    typeof result?.["error"] === "string"
+  ) {
     jar.set({
       name: "myst-flash-error",
       value: `SEO run failed: ${result["error"]}`,
@@ -5185,14 +5510,14 @@ function parseOutboundCsv(text: string): OutboundImportRow[] {
       phone,
       email,
       website,
-        domain,
-        title,
-        industry,
-        companySize,
-        linkedinUrl,
-        city,
-        state,
-        zip,
+      domain,
+      title,
+      industry,
+      companySize,
+      linkedinUrl,
+      city,
+      state,
+      zip,
       sourceListName,
       notes,
     });
@@ -5326,13 +5651,13 @@ export async function setOutboundDispositionAction(formData: FormData) {
 
   const response = await callAdminApi("/api/admin/outbound/disposition", {
     method: "POST",
-      body: JSON.stringify({
-        taskId,
-        disposition,
-        callbackAt: callbackAt ?? undefined,
-        recap: recap ?? undefined,
-      }),
-    });
+    body: JSON.stringify({
+      taskId,
+      disposition,
+      callbackAt: callbackAt ?? undefined,
+      recap: recap ?? undefined,
+    }),
+  });
 
   if (!response.ok) {
     const message = await readErrorMessage(
@@ -5561,16 +5886,14 @@ export async function bulkOutboundAction(formData: FormData) {
       ? snoozePresetRaw.trim()
       : null;
 
-  const taskIds = formData
-    .getAll("taskIds")
-    .flatMap((value) =>
-      typeof value === "string"
-        ? value
-            .split(",")
-            .map((part) => part.trim())
-            .filter((part) => part.length > 0)
-        : [],
-    );
+  const taskIds = formData.getAll("taskIds").flatMap((value) =>
+    typeof value === "string"
+      ? value
+          .split(",")
+          .map((part) => part.trim())
+          .filter((part) => part.length > 0)
+      : [],
+  );
 
   if (taskIds.length === 0) {
     jar.set({

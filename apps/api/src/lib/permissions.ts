@@ -12,6 +12,8 @@ type PermissionContext = {
   permissions: string[];
 };
 
+const GENERIC_READ_EXCLUSIONS = new Set(["payments.read"]);
+
 const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   owner: ["*"],
   office: [
@@ -25,6 +27,10 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "audit.read",
     "appointments.read",
     "appointments.update",
+    "appointment_media.capture",
+    "appointment_media.manage",
+    "payments.read",
+    "payments.collect",
     "quotes.read",
     "quotes.write",
     "quotes.send",
@@ -38,13 +44,26 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "messages.send",
     "appointments.read",
     "appointments.update",
+    "appointment_media.capture",
+    "appointment_media.manage",
+    "payments.read",
+    "payments.collect",
     "bookings.manage",
     "quotes.read",
     "quotes.write",
     "quotes.send",
     "quotes.update"
   ],
-  crew: ["messages.read", "appointments.read", "appointments.update", "expenses.read", "expenses.write"],
+  crew: [
+    "messages.read",
+    "appointments.read",
+    "appointments.update",
+    "appointment_media.capture",
+    "payments.read",
+    "payments.collect",
+    "expenses.read",
+    "expenses.write"
+  ],
   read_only: ["read"]
 };
 
@@ -89,11 +108,14 @@ export function computeEffectivePermissions(input: {
   return merged.filter((permission) => !denyList.some((denied) => permissionMatches(denied, permission)));
 }
 
-function permissionMatches(granted: string, required: string): boolean {
+export function permissionMatches(granted: string, required: string): boolean {
   if (granted === "*") return true;
   if (required === "read") return granted === "read";
   if (granted === "read") {
-    return required === "read" || required.endsWith(".read");
+    return (
+      required === "read" ||
+      (required.endsWith(".read") && !GENERIC_READ_EXCLUSIONS.has(required))
+    );
   }
   if (granted.endsWith(".*")) {
     const prefix = granted.slice(0, -2);

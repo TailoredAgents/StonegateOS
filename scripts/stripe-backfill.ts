@@ -21,6 +21,7 @@ function registerAliases() {
 async function main() {
   registerAliases();
   const { getDb, payments } = await import("../apps/api/src/db");
+  const paymentSummary = await import("../apps/api/src/lib/payment-summary");
   const stripeLib = await import("../apps/api/src/lib/stripe");
   const matching = await import("../apps/api/src/lib/payment-matching");
 
@@ -32,35 +33,61 @@ async function main() {
   for (const c of charges) {
     const row = stripeLib.mapChargeToPaymentRow(c);
     const resolvedAppointmentId = row.appointmentId ?? (await matching.resolveAppointmentIdForCharge(db, c));
+    const canonicalStatus = paymentSummary.mapProviderPaymentStatus("stripe", row.status);
+    const paidAt = row.capturedAt ?? row.createdAt;
 
     await db
       .insert(payments)
       .values({
         stripeChargeId: row.stripeChargeId,
+        provider: "stripe",
+        providerPaymentId: row.stripeChargeId,
         amount: row.amount,
+        jobAmountCents: row.amount,
+        tipCents: 0,
+        totalAmountCents: row.amount,
+        refundedAmountCents: 0,
         currency: row.currency,
         status: row.status,
+        canonicalStatus,
+        providerStatus: row.status,
         method: row.method ?? null,
+        tenderType: row.method ?? null,
         cardBrand: row.cardBrand ?? null,
         last4: row.last4 ?? null,
         receiptUrl: row.receiptUrl ?? null,
+        legacySource: "stripe_import",
         metadata: row.metadata ?? null,
         appointmentId: resolvedAppointmentId ?? null,
         createdAt: row.createdAt,
+        providerCreatedAt: row.createdAt,
+        paidAt,
         capturedAt: row.capturedAt ?? null
       })
       .onConflictDoUpdate({
         target: payments.stripeChargeId,
         set: {
+          provider: "stripe",
+          providerPaymentId: row.stripeChargeId,
           amount: row.amount,
+          jobAmountCents: row.amount,
+          tipCents: 0,
+          totalAmountCents: row.amount,
+          refundedAmountCents: 0,
           currency: row.currency,
           status: row.status,
+          canonicalStatus,
+          providerStatus: row.status,
           method: row.method ?? null,
+          tenderType: row.method ?? null,
           cardBrand: row.cardBrand ?? null,
           last4: row.last4 ?? null,
           receiptUrl: row.receiptUrl ?? null,
+          legacySource: "stripe_import",
           metadata: row.metadata ?? null,
           appointmentId: resolvedAppointmentId ?? null,
+          providerCreatedAt: row.createdAt,
+          paidAt,
           capturedAt: row.capturedAt ?? null,
           updatedAt: new Date()
         }

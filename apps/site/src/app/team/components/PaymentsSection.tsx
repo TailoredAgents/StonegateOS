@@ -5,16 +5,30 @@ import { attachPaymentAction, detachPaymentAction } from "../actions";
 
 type PaymentDto = {
   id: string;
-  stripeChargeId: string;
+  stripeChargeId: string | null;
+  provider: string;
+  providerPaymentId: string | null;
+  providerOrderId: string | null;
   amount: number;
+  jobAmountCents: number;
+  tipCents: number;
+  totalAmountCents: number;
   currency: string;
   status: string;
+  canonicalStatus: string;
   method: string | null;
+  tenderType: string | null;
   cardBrand: string | null;
   last4: string | null;
   receiptUrl: string | null;
+  legacySource: string | null;
   createdAt: string;
-  appointment: null | { id: string; status: string; startAt: string | null; contactName: string | null };
+  appointment: null | {
+    id: string;
+    status: string;
+    startAt: string | null;
+    contactName: string | null;
+  };
 };
 
 export async function PaymentsSection(): Promise<ReactElement> {
@@ -23,7 +37,12 @@ export async function PaymentsSection(): Promise<ReactElement> {
 
   const payload = (await res.json()) as {
     payments: PaymentDto[];
-    summary: { total: number; matched: number; unmatched: number };
+    summary: {
+      total: number;
+      matched: number;
+      unmatched: number;
+      needsReview?: number;
+    };
   };
 
   return (

@@ -125,7 +125,7 @@ export function CalendarEventDetail({
               <input type="hidden" name="status" value="completed" />
 
               <label className="flex flex-col gap-1 text-sm text-slate-700">
-                <span>Amount collected</span>
+                <span>Final job total</span>
                 <input
                   name="finalTotal"
                   type="number"
@@ -134,18 +134,6 @@ export function CalendarEventDetail({
                   required
                   defaultValue={completeDefaultValue}
                   placeholder="e.g. 350.00"
-                  className={TEAM_INPUT_COMPACT}
-                />
-              </label>
-
-              <label className="flex flex-col gap-1 text-sm text-slate-700">
-                <span>Card tips (optional)</span>
-                <input
-                  name="cardTip"
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  placeholder="e.g. 20.00"
                   className={TEAM_INPUT_COMPACT}
                 />
               </label>

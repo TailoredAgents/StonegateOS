@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import postgres from "postgres";
-import { TEAM_SESSION_COOKIE, teamSessionCookieOptions } from "../../../apps/site/src/lib/team-session";
+import {
+  TEAM_SESSION_COOKIE,
+  teamSessionCookieOptions,
+} from "../../../apps/site/src/lib/team-session";
 
 type SqlClient = ReturnType<typeof postgres>;
 
@@ -25,6 +28,7 @@ type TeamStorageInput = {
   name: string;
   email: string;
   role: "owner" | "sales";
+  permissionsDeny?: string[];
   siteBase: string;
 };
 
@@ -47,7 +51,7 @@ function getSql(): SqlClient {
     prepare: false,
     max: 5,
     idle_timeout: 20,
-    ...(shouldUseSsl ? { ssl: { rejectUnauthorized: false } } : {})
+    ...(shouldUseSsl ? { ssl: { rejectUnauthorized: false } } : {}),
   });
 
   return cachedClient;
@@ -61,7 +65,9 @@ function sha256Base64Url(value: string): string {
   return crypto.createHash("sha256").update(value).digest("base64url");
 }
 
-function parseSameSite(value: string | boolean | undefined): "Strict" | "Lax" | "None" | undefined {
+function parseSameSite(
+  value: string | boolean | undefined,
+): "Strict" | "Lax" | "None" | undefined {
   if (!value || typeof value !== "string") return undefined;
   const normalized = value.toLowerCase();
   if (normalized === "strict") return "Strict";
@@ -89,8 +95,12 @@ async function upsertRole(role: "owner" | "sales"): Promise<string> {
   return id;
 }
 
-async function upsertMember(input: Omit<TeamStorageInput, "filename" | "siteBase">, roleId: string): Promise<string> {
+async function upsertMember(
+  input: Omit<TeamStorageInput, "filename" | "siteBase">,
+  roleId: string,
+): Promise<string> {
   const sql = getSql();
+  const permissionsDeny = input.permissionsDeny ?? [];
   const existing = await sql<{ id: string }[]>`
     SELECT id
     FROM team_members
@@ -107,7 +117,7 @@ async function upsertMember(input: Omit<TeamStorageInput, "filename" | "siteBase
           role_id = ${roleId},
           active = true,
           permissions_grant = ARRAY[]::text[],
-          permissions_deny = ARRAY[]::text[],
+          permissions_deny = ${permissionsDeny}::text[],
           updated_at = now()
       WHERE id = ${existingId}
     `;
@@ -116,7 +126,7 @@ async function upsertMember(input: Omit<TeamStorageInput, "filename" | "siteBase
 
   const inserted = await sql<{ id: string }[]>`
     INSERT INTO team_members (name, email, role_id, permissions_grant, permissions_deny, active)
-    VALUES (${input.name}, ${input.email}, ${roleId}, ARRAY[]::text[], ARRAY[]::text[], true)
+    VALUES (${input.name}, ${input.email}, ${roleId}, ARRAY[]::text[], ${permissionsDeny}::text[], true)
     RETURNING id
   `;
 
@@ -139,11 +149,17 @@ async function createSession(teamMemberId: string): Promise<string> {
   return token;
 }
 
-async function writeStorageState(filename: string, siteBase: string, sessionToken: string): Promise<void> {
+async function writeStorageState(
+  filename: string,
+  siteBase: string,
+  sessionToken: string,
+): Promise<void> {
   const cookieOptions = teamSessionCookieOptions();
   const url = new URL(siteBase);
   const now = Math.floor(Date.now() / 1000);
-  const expires = cookieOptions.maxAge ? now + cookieOptions.maxAge : now + 60 * 60 * 24 * 30;
+  const expires = cookieOptions.maxAge
+    ? now + cookieOptions.maxAge
+    : now + 60 * 60 * 24 * 30;
   const filePath = path.resolve(process.cwd(), filename);
 
   const state: StorageState = {
@@ -156,17 +172,19 @@ async function writeStorageState(filename: string, siteBase: string, sessionToke
         expires,
         httpOnly: cookieOptions.httpOnly ?? true,
         secure: cookieOptions.secure ?? url.protocol === "https:",
-        sameSite: parseSameSite(cookieOptions.sameSite) ?? "Lax"
-      }
+        sameSite: parseSameSite(cookieOptions.sameSite) ?? "Lax",
+      },
     ],
-    origins: []
+    origins: [],
   };
 
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, JSON.stringify(state, null, 2));
 }
 
-export async function bootstrapTeamStorage(input: TeamStorageInput): Promise<void> {
+export async function bootstrapTeamStorage(
+  input: TeamStorageInput,
+): Promise<void> {
   const roleId = await upsertRole(input.role);
   const memberId = await upsertMember(input, roleId);
   const sessionToken = await createSession(memberId);

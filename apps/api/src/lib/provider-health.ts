@@ -7,7 +7,9 @@ export type ProviderName =
   | "meta_ads"
   | "google_ads"
   | "google_ads_analyst"
-  | "traccar";
+  | "traccar"
+  | "square"
+  | "object_storage";
 
 export async function recordProviderSuccess(provider: ProviderName): Promise<void> {
   const db = getDb();

@@ -7,6 +7,7 @@ import { appointmentHolds, getDb, appointments, crmPipeline, instantQuotes, lead
 import { and, eq, gt, gte, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../../web/persistence";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { resolveAutomaticAppointmentStatusForMedia } from "@/lib/appointment-media";
 import { JUNK_VOLUME_UNIT_PRICE } from "@/lib/junk-volume-pricing";
 import {
   getBusinessHoursPolicy,
@@ -427,6 +428,11 @@ export async function POST(request: NextRequest) {
       const state = body.state.trim().toUpperCase();
       const postalCode = body.postalCode.trim();
       const notes = body.notes ?? quote.notes ?? null;
+      const quotedScopeText = notes?.trim().slice(0, 4_000) || null;
+      const baseAppointmentStatus =
+        (quote.photoUrls?.length ?? 0) > 0 && !quotedScopeText
+          ? ("requested" as const)
+          : ("confirmed" as const);
 
       let leadId: string;
       let propertyId: string;
@@ -600,6 +606,15 @@ export async function POST(request: NextRequest) {
         .from(appointments)
         .where(and(eq(appointments.leadId, leadId), ne(appointments.status, "canceled")))
         .limit(1);
+      const appointmentStatus =
+        await resolveAutomaticAppointmentStatusForMedia({
+          proposedStatus: baseAppointmentStatus,
+          quotedScopeText,
+          contactId: contact.id,
+          appointmentId: existingAppt?.id,
+          database: tx,
+          now,
+        });
 
       const slotEnd = new Date(startAt.getTime() + durationMinutes * 60_000);
       const lookbackStart = new Date(startAt.getTime() - 24 * 60 * 60 * 1000);
@@ -682,7 +697,8 @@ export async function POST(request: NextRequest) {
             startAt,
             durationMinutes,
             travelBufferMinutes,
-            status: "confirmed",
+            status: appointmentStatus,
+            quotedScopeText,
             updatedAt: new Date()
           })
           .where(eq(appointments.id, existingAppt.id))
@@ -701,7 +717,8 @@ export async function POST(request: NextRequest) {
             type: "estimate",
             startAt,
             durationMinutes,
-            status: "confirmed",
+            status: appointmentStatus,
+            quotedScopeText,
             rescheduleToken,
             travelBufferMinutes
           })

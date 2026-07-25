@@ -14,6 +14,7 @@ import { loadQuoteAccuracyOutcomeSummary } from "@/lib/quote-accuracy-outcomes";
 import { loadQuoteHotWindowOutcomeSummary } from "@/lib/quote-hot-window-outcomes";
 import { loadQuoteCloseOutcomeSummary } from "@/lib/quote-close-outcomes";
 import { loadReactivationOutcomeSummary } from "@/lib/reactivation-outcomes";
+import { listInstantQuoteMediaReadUrls } from "@/lib/appointment-media";
 import { isAdminRequest } from "../../web/admin";
 
 function parseLimit(value: string | null): number {
@@ -78,8 +79,22 @@ export async function GET(request: NextRequest) {
       .orderBy(desc(instantQuotes.createdAt))
       .limit(1);
     const quoteInsights = await loadQuoteInsightMap(db, rows.map((row) => row.id));
+    const rowsWithAuthorizedMedia = await Promise.all(
+      rows.map(async (row) => {
+        const durablePhotoUrls = await listInstantQuoteMediaReadUrls(
+          row.id,
+        ).catch(() => []);
+        return {
+          ...row,
+          photoUrls:
+            durablePhotoUrls.length > 0
+              ? durablePhotoUrls
+              : row.photoUrls,
+        };
+      }),
+    );
     return NextResponse.json({
-      quotes: rows.map((row) => ({
+      quotes: rowsWithAuthorizedMedia.map((row) => ({
         ...row,
         tightenedAfterMoreMedia: quoteInsights.get(row.id)?.tightenedAfterMoreMedia ?? false,
       })),

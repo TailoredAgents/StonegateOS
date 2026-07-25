@@ -105,8 +105,28 @@ services:
       mkdir -p "$PNPM_HOME"
       export PATH="$PNPM_HOME:$PATH"
       if [ "${SKIP_DB_MIGRATE:-0}" != "1" ]; then
-        echo "[preDeploy] Running db:migrate"
-        npx -y pnpm@9.15.9 -w db:migrate
+        case "${DB_MIGRATION_TARGET:-}" in
+          0058_appointment_media)
+            echo "[preDeploy] Running db:migrate:media"
+            npx -y pnpm@9.15.9 -w db:migrate:media
+            ;;
+          0059_square_payments)
+            echo "[preDeploy] Running db:migrate:payments"
+            npx -y pnpm@9.15.9 -w db:migrate:payments
+            ;;
+          latest)
+            echo "[preDeploy] Running db:migrate:release-latest"
+            npx -y pnpm@9.15.9 -w db:migrate:release-latest
+            ;;
+          "")
+            echo "[preDeploy] DB_MIGRATION_TARGET must be set explicitly to 0058_appointment_media, 0059_square_payments, or latest" >&2
+            exit 1
+            ;;
+          *)
+            echo "[preDeploy] Unknown DB_MIGRATION_TARGET=${DB_MIGRATION_TARGET}" >&2
+            exit 1
+            ;;
+        esac
       else
         echo "[preDeploy] Skipping db:migrate because SKIP_DB_MIGRATE=1"
       fi
@@ -122,6 +142,8 @@ services:
         fromDatabase:
           name: stonegate-db
           property: connectionString
+      - key: DB_MIGRATION_TARGET
+        sync: false
       - key: API_BASE_URL
         sync: false
       - key: ADMIN_API_KEY
@@ -129,6 +151,52 @@ services:
       - key: NEXT_PUBLIC_SITE_URL
         sync: false
       - key: APPOINTMENT_TIMEZONE
+        sync: false
+      - key: APPOINTMENT_MEDIA_WRITES_ENABLED
+        sync: false
+      - key: PUBLIC_QUOTE_MEDIA_UPLOADS_ENABLED
+        sync: false
+      - key: MEDIA_AUTO_IMPORT_ENABLED
+        sync: false
+      - key: MOBILE_OFFLINE_MEDIA_ENABLED
+        sync: false
+      - key: SQUARE_POS_ENABLED
+        sync: false
+      - key: MEDIA_OBJECT_ENDPOINT
+        sync: false
+      - key: MEDIA_OBJECT_REGION
+        sync: false
+      - key: MEDIA_OBJECT_BUCKET
+        sync: false
+      - key: MEDIA_OBJECT_ACCESS_KEY_ID
+        sync: false
+      - key: MEDIA_OBJECT_SECRET_ACCESS_KEY
+        sync: false
+      - key: MEDIA_OBJECT_FORCE_PATH_STYLE
+        sync: false
+      - key: MEDIA_OBJECT_AUTO_CREATE_BUCKET
+        sync: false
+      - key: APPOINTMENT_MEDIA_CLEANUP_INTERVAL_MS
+        sync: false
+      - key: SQUARE_ENVIRONMENT
+        sync: false
+      - key: SQUARE_APPLICATION_ID
+        sync: false
+      - key: SQUARE_ACCESS_TOKEN
+        sync: false
+      - key: SQUARE_LOCATION_ID
+        sync: false
+      - key: SQUARE_POS_CALLBACK_URL
+        sync: false
+      - key: SQUARE_POS_FALLBACK_URL
+        sync: false
+      - key: SQUARE_POS_STATE_SECRET
+        sync: false
+      - key: SQUARE_WEBHOOK_SIGNATURE_KEY
+        sync: false
+      - key: SQUARE_WEBHOOK_NOTIFICATION_URL
+        sync: false
+      - key: SQUARE_RECONCILIATION_INTERVAL_MS
         sync: false
       - key: OPENAI_API_KEY
         sync: false
@@ -261,6 +329,46 @@ services:
         fromDatabase:
           name: stonegate-db
           property: connectionString
+      - key: APPOINTMENT_MEDIA_WRITES_ENABLED
+        sync: false
+      - key: MEDIA_AUTO_IMPORT_ENABLED
+        sync: false
+      - key: MOBILE_OFFLINE_MEDIA_ENABLED
+        sync: false
+      - key: SQUARE_POS_ENABLED
+        sync: false
+      - key: MEDIA_OBJECT_ENDPOINT
+        sync: false
+      - key: MEDIA_OBJECT_REGION
+        sync: false
+      - key: MEDIA_OBJECT_BUCKET
+        sync: false
+      - key: MEDIA_OBJECT_ACCESS_KEY_ID
+        sync: false
+      - key: MEDIA_OBJECT_SECRET_ACCESS_KEY
+        sync: false
+      - key: MEDIA_OBJECT_FORCE_PATH_STYLE
+        sync: false
+      - key: MEDIA_OBJECT_AUTO_CREATE_BUCKET
+        sync: false
+      - key: APPOINTMENT_MEDIA_CLEANUP_INTERVAL_MS
+        sync: false
+      - key: SQUARE_ENVIRONMENT
+        sync: false
+      - key: SQUARE_APPLICATION_ID
+        sync: false
+      - key: SQUARE_ACCESS_TOKEN
+        sync: false
+      - key: SQUARE_LOCATION_ID
+        sync: false
+      - key: SQUARE_POS_STATE_SECRET
+        sync: false
+      - key: SQUARE_WEBHOOK_SIGNATURE_KEY
+        sync: false
+      - key: SQUARE_WEBHOOK_NOTIFICATION_URL
+        sync: false
+      - key: SQUARE_RECONCILIATION_INTERVAL_MS
+        sync: false
       - key: NEXT_PUBLIC_SITE_URL
         sync: false
       - key: SITE_URL

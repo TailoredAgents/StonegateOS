@@ -13,6 +13,10 @@ import {
 } from "../../../scheduling";
 import type { AppointmentCalendarPayload } from "@/lib/calendar";
 import { createCalendarEventWithRetry, updateCalendarEventWithRetry } from "@/lib/calendar-events";
+import {
+  AppointmentMediaError,
+  assertAppointmentStatusTransitionAllowed,
+} from "@/lib/appointment-media";
 import { isAdminRequest } from "../../../admin";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -147,34 +151,64 @@ export async function POST(
   const travelBufferMinutes =
     input.travelBufferMinutes ?? existing.travelBufferMinutes ?? DEFAULT_TRAVEL_BUFFER_MIN;
 
-  const [updated] = await db
-    .update(appointments)
-    .set({
-      startAt,
-      durationMinutes,
-      travelBufferMinutes,
-      status: "confirmed",
-      updatedAt: new Date()
+  const updatedResult = await db
+    .transaction(async (tx) => {
+      await assertAppointmentStatusTransitionAllowed({
+        appointmentId,
+        nextStatus: "confirmed",
+        database: tx,
+      });
+      const [updated] = await tx
+        .update(appointments)
+        .set({
+          startAt,
+          durationMinutes,
+          travelBufferMinutes,
+          status: "confirmed",
+          updatedAt: new Date(),
+        })
+        .where(eq(appointments.id, appointmentId))
+        .returning({
+          id: appointments.id,
+          startAt: appointments.startAt,
+          durationMinutes: appointments.durationMinutes,
+          travelBufferMinutes: appointments.travelBufferMinutes,
+          rescheduleToken: appointments.rescheduleToken,
+          calendarEventId: appointments.calendarEventId,
+        });
+
+      if (updated && existing.leadId) {
+        await tx
+          .update(leads)
+          .set({ status: "scheduled" })
+          .where(eq(leads.id, existing.leadId));
+      }
+      return updated ?? null;
     })
-    .where(eq(appointments.id, appointmentId))
-    .returning({
-      id: appointments.id,
-      startAt: appointments.startAt,
-      durationMinutes: appointments.durationMinutes,
-      travelBufferMinutes: appointments.travelBufferMinutes,
-      rescheduleToken: appointments.rescheduleToken,
-      calendarEventId: appointments.calendarEventId
+    .catch((error: unknown) => {
+      if (
+        error instanceof AppointmentMediaError &&
+        error.code === "quoted_scope_required"
+      ) {
+        return "quoted_scope_required" as const;
+      }
+      throw error;
     });
 
-  if (!updated) {
-    return NextResponse.json({ error: "update_failed" }, { status: 500 });
+  if (updatedResult === "quoted_scope_required") {
+    return NextResponse.json(
+      {
+        error: "quoted_scope_required",
+        message:
+          "Add the quoted-to-remove summary before confirming this appointment.",
+      },
+      { status: 409 },
+    );
   }
 
-  if (existing.leadId) {
-    await db
-      .update(leads)
-      .set({ status: "scheduled" })
-      .where(eq(leads.id, existing.leadId));
+  const updated = updatedResult;
+  if (!updated) {
+    return NextResponse.json({ error: "update_failed" }, { status: 500 });
   }
 
   const rescheduleUrl = buildRescheduleUrl(updated.id, updated.rescheduleToken);

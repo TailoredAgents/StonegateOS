@@ -38,7 +38,11 @@ export function OfflineBanner() {
   return (
     <div className="rounded-lg border border-amber-300/30 bg-amber-300/10 p-4 text-sm leading-6 text-amber-100" role="status">
       <p className="font-semibold">Offline</p>
-      <p>Messages, quotes, uploads, and edits need signal before they can be submitted.</p>
+      <p>
+        Today&apos;s cached jobs and quoted-work photos remain available. New
+        photos stay queued on this phone; messages, edits, and payments need a
+        connection.
+      </p>
       {blockedSubmit ? <p className="mt-2 text-amber-50">Submission blocked. Try again when the phone is back online.</p> : null}
     </div>
   );

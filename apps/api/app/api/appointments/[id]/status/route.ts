@@ -11,7 +11,17 @@ import {
   outboxEvents,
 } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import {
+  AppointmentMediaError,
+  assertAppointmentStatusTransitionAllowed,
+} from "@/lib/appointment-media";
 import { resolveLockedCrewPayout } from "@/lib/locked-crew-payout";
+import {
+  getActivePaymentAttempt,
+  getFinalTotalPaymentLock,
+  validateFinalTotalChange,
+} from "@/lib/payment-ledger";
+import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { deleteCalendarEvent } from "@/lib/calendar";
@@ -32,6 +42,7 @@ const StatusSchema = z.object({
   owner: z.string().optional().nullable(),
   marketingMemberId: z.string().uuid().optional().nullable(),
   finalTotalCents: z.number().int().nonnegative().optional(),
+  finalTotalChangeReason: z.string().trim().min(1).max(500).optional(),
   cardTipCents: z.number().int().nonnegative().optional(),
   finalTotalSameAsQuoted: z.boolean().optional(),
   completedAt: z.string().min(1).optional(),
@@ -120,8 +131,21 @@ export async function POST(
       { status: 400 },
     );
   }
-
+  const includesPaymentFields =
+    parsed.data.finalTotalCents !== undefined ||
+    parsed.data.finalTotalSameAsQuoted !== undefined ||
+    parsed.data.cardTipCents !== undefined;
   const db = getDb();
+  const paymentLedgerAvailable =
+    includesPaymentFields && (await isPaymentLedgerSchemaAvailable(db));
+  if (includesPaymentFields && paymentLedgerAvailable) {
+    const paymentPermissionError = await requirePermission(
+      request,
+      "payments.collect",
+    );
+    if (paymentPermissionError) return paymentPermissionError;
+  }
+
   const actor = getAuditActorFromRequest(request);
   const actorRole = actor.role?.trim().toLowerCase() ?? null;
   const status = parsed.data.status;
@@ -223,6 +247,51 @@ export async function POST(
     }
   }
 
+  if (
+    paymentLedgerAvailable &&
+    typeof finalTotalCentsToSet === "number"
+  ) {
+    if (existing.finalTotalCents !== finalTotalCentsToSet) {
+      const activeAttempt = await getActivePaymentAttempt(
+        db,
+        appointmentId,
+        undefined,
+        { schemaAvailable: true },
+      );
+      if (activeAttempt) {
+        return NextResponse.json(
+          {
+            error: "square_verification_in_progress",
+            attemptId: activeAttempt.id,
+            message:
+              "Finish or reconcile the active Square attempt before changing the final total.",
+          },
+          { status: 409 },
+        );
+      }
+    }
+    const lock = await getFinalTotalPaymentLock(db, appointmentId, {
+      schemaAvailable: true,
+    });
+    const decision = validateFinalTotalChange({
+      currentFinalTotalCents: existing.finalTotalCents,
+      nextFinalTotalCents: finalTotalCentsToSet,
+      paidTowardJobCents: lock.paidTowardJobCents,
+      hasSuccessfulPayment: lock.hasSuccessfulPayment,
+      actorRole,
+      changeReason: parsed.data.finalTotalChangeReason,
+    });
+    if (!decision.ok) {
+      return NextResponse.json(
+        { error: decision.code, message: decision.message },
+        {
+          status:
+            decision.code === "owner_required_after_payment" ? 403 : 409,
+        },
+      );
+    }
+  }
+
   const becameCompleted =
     existing.status !== "completed" && status === "completed";
   const leavingCompleted =
@@ -265,6 +334,75 @@ export async function POST(
       crewMembers !== undefined);
 
   const updated = await db.transaction(async (tx) => {
+    // Payment attempts lock the same appointment row before calculating the
+    // balance. Lock and revalidate here too so completion cannot race a Square
+    // launch and leave the attempt charging an obsolete total.
+    const [lockedAppointment] = await tx
+      .select({ finalTotalCents: appointments.finalTotalCents })
+      .from(appointments)
+      .where(eq(appointments.id, appointmentId))
+      .limit(1)
+      .for("update");
+    if (!lockedAppointment) {
+      return { kind: "not_found" as const };
+    }
+    try {
+      await assertAppointmentStatusTransitionAllowed({
+        appointmentId,
+        nextStatus: status,
+        database: tx,
+      });
+    } catch (error) {
+      if (
+        error instanceof AppointmentMediaError &&
+        error.code === "quoted_scope_required"
+      ) {
+        return { kind: "scope_required" as const };
+      }
+      throw error;
+    }
+    const isChangingFinalTotal =
+      typeof finalTotalCentsToSet === "number" &&
+      lockedAppointment.finalTotalCents !== finalTotalCentsToSet;
+    if (
+      paymentLedgerAvailable &&
+      (isChangingFinalTotal || cardTipCentsInput !== undefined)
+    ) {
+      const activeAttempt = await getActivePaymentAttempt(
+        tx,
+        appointmentId,
+        undefined,
+        { schemaAvailable: true },
+      );
+      if (activeAttempt) {
+        return {
+          kind: "attempt_in_progress" as const,
+          attemptId: activeAttempt.id,
+        };
+      }
+      const paymentLock = await getFinalTotalPaymentLock(
+        tx,
+        appointmentId,
+        { schemaAvailable: true },
+      );
+      if (cardTipCentsInput !== undefined && paymentLock.hasSuccessfulPayment) {
+        return { kind: "tip_managed_by_payments" as const };
+      }
+      if (isChangingFinalTotal) {
+        const decision = validateFinalTotalChange({
+          currentFinalTotalCents: lockedAppointment.finalTotalCents,
+          nextFinalTotalCents: finalTotalCentsToSet!,
+          paidTowardJobCents: paymentLock.paidTowardJobCents,
+          hasSuccessfulPayment: paymentLock.hasSuccessfulPayment,
+          actorRole,
+          changeReason: parsed.data.finalTotalChangeReason,
+        });
+        if (!decision.ok) {
+          return { kind: "total_rejected" as const, decision };
+        }
+      }
+    }
+
     const baseSet: Record<string, unknown> = {
       status,
       updatedAt: new Date(),
@@ -327,7 +465,7 @@ export async function POST(
     }
 
     if (!row) {
-      return null;
+      return { kind: "not_found" as const };
     }
 
     if (crewMembers !== undefined) {
@@ -346,12 +484,58 @@ export async function POST(
       }
     }
 
-    return row;
+    return { kind: "updated" as const, row };
   });
 
-  if (!updated) {
+  if (updated.kind === "not_found") {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
+  if (updated.kind === "attempt_in_progress") {
+    return NextResponse.json(
+      {
+        error: "square_verification_in_progress",
+        attemptId: updated.attemptId,
+        message:
+          "Finish or reconcile the active Square attempt before changing the final total.",
+      },
+      { status: 409 },
+    );
+  }
+  if (updated.kind === "scope_required") {
+    return NextResponse.json(
+      {
+        error: "quoted_scope_required",
+        message:
+          "Add the quoted-to-remove summary before confirming or completing this appointment.",
+      },
+      { status: 409 },
+    );
+  }
+  if (updated.kind === "total_rejected") {
+    return NextResponse.json(
+      {
+        error: updated.decision.code,
+        message: updated.decision.message,
+      },
+      {
+        status:
+          updated.decision.code === "owner_required_after_payment"
+            ? 403
+            : 409,
+      },
+    );
+  }
+  if (updated.kind === "tip_managed_by_payments") {
+    return NextResponse.json(
+      {
+        error: "card_tip_managed_by_payments",
+        message:
+          "Card tips are synchronized from verified payment records and cannot be edited during completion.",
+      },
+      { status: 409 },
+    );
+  }
+  const updatedRow = updated.row;
 
   if (needsRecalc || (!isQuoteOnly && leavingCompleted)) {
     await recalculateAppointmentCommissionsAndRefreshDraftPayouts(
@@ -360,26 +544,26 @@ export async function POST(
     );
   }
 
-  if (updated.calendarEventId && status === "canceled") {
-    await deleteCalendarEvent(updated.calendarEventId);
+  if (updatedRow.calendarEventId && status === "canceled") {
+    await deleteCalendarEvent(updatedRow.calendarEventId);
     await db
       .update(appointments)
       .set({ calendarEventId: null })
-      .where(eq(appointments.id, updated.id));
+      .where(eq(appointments.id, updatedRow.id));
   }
 
-  if (updated.leadId && status === "confirmed") {
+  if (updatedRow.leadId && status === "confirmed") {
     await db
       .update(leads)
       .set({ status: "scheduled" })
-      .where(eq(leads.id, updated.leadId));
+      .where(eq(leads.id, updatedRow.leadId));
   }
 
   await db.insert(outboxEvents).values({
     type: "estimate.status_changed",
     payload: {
-      appointmentId: updated.id,
-      leadId: updated.leadId,
+      appointmentId: updatedRow.id,
+      leadId: updatedRow.leadId,
       status,
     },
   });
@@ -391,7 +575,7 @@ export async function POST(
     await db.insert(outboxEvents).values({
       type: "review.request",
       payload: {
-        appointmentId: updated.id,
+        appointmentId: updatedRow.id,
       },
     });
   }
@@ -400,12 +584,15 @@ export async function POST(
     actor,
     action: "appointment.status.updated",
     entityType: "appointment",
-    entityId: updated.id,
+    entityId: updatedRow.id,
     meta: {
       status,
-      leadId: updated.leadId ?? null,
+      leadId: updatedRow.leadId ?? null,
       ...(finalTotalCentsToSet !== undefined
         ? { finalTotalCents: finalTotalCentsToSet }
+        : {}),
+      ...(parsed.data.finalTotalChangeReason
+        ? { finalTotalChangeReason: parsed.data.finalTotalChangeReason }
         : {}),
       ...(cardTipCentsInput !== undefined
         ? { cardTipCents: cardTipCentsInput }
@@ -420,5 +607,9 @@ export async function POST(
     },
   });
 
-  return NextResponse.json({ ok: true, appointmentId: updated.id, status });
+  return NextResponse.json({
+    ok: true,
+    appointmentId: updatedRow.id,
+    status,
+  });
 }

@@ -776,15 +776,6 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
       }
       payload["finalTotalCents"] = finalTotalCents;
 
-      const cardTipRaw = formData.get("cardTip");
-      const cardTipCents = parseUsdToCents(cardTipRaw);
-      if (typeof cardTipRaw === "string" && cardTipRaw.trim() && cardTipCents === null) {
-        redirect(`${redirectPath}&error=invalid_card_tip` as Route);
-      }
-      if (cardTipCents !== null) {
-        payload["cardTipCents"] = cardTipCents;
-      }
-
       const crewMembers = formData
         .getAll("crewMemberId")
         .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
@@ -860,12 +851,6 @@ export async function convertMobileQuoteToJobAction(formData: FormData) {
       redirect(`${redirectPath}&error=crew_required` as Route);
     }
 
-    const cardTipRaw = formData.get("cardTip");
-    const cardTipCents = parseUsdToCents(cardTipRaw);
-    if (typeof cardTipRaw === "string" && cardTipRaw.trim() && cardTipCents === null) {
-      redirect(`${redirectPath}&error=invalid_card_tip` as Route);
-    }
-
     completionPayload = {
       status: "completed",
       finalTotalCents,
@@ -873,9 +858,6 @@ export async function convertMobileQuoteToJobAction(formData: FormData) {
     };
     if (session.isOwner) {
       completionPayload["completedAt"] = startAt;
-    }
-    if (cardTipCents !== null) {
-      completionPayload["cardTipCents"] = cardTipCents;
     }
   }
 

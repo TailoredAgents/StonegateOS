@@ -26,6 +26,10 @@ const DEFAULT_ROLES = [
       "audit.read",
       "appointments.read",
       "appointments.update",
+      "appointment_media.capture",
+      "appointment_media.manage",
+      "payments.read",
+      "payments.collect",
       "quotes.read",
       "quotes.write",
       "quotes.send",
@@ -43,6 +47,10 @@ const DEFAULT_ROLES = [
       "messages.send",
       "appointments.read",
       "appointments.update",
+      "appointment_media.capture",
+      "appointment_media.manage",
+      "payments.read",
+      "payments.collect",
       "bookings.manage",
       "quotes.read",
       "quotes.write",
@@ -53,7 +61,16 @@ const DEFAULT_ROLES = [
   {
     name: "Crew",
     slug: "crew",
-    permissions: ["messages.read", "appointments.read", "appointments.update", "expenses.read", "expenses.write"]
+    permissions: [
+      "messages.read",
+      "appointments.read",
+      "appointments.update",
+      "appointment_media.capture",
+      "payments.read",
+      "payments.collect",
+      "expenses.read",
+      "expenses.write"
+    ]
   },
   {
     name: "Read-only",

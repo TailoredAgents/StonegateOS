@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, isNotNull, or, sql } from "drizzle-orm";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import {
   contacts,
@@ -15,8 +15,6 @@ import {
 } from "@/db";
 import { recordAuditEvent } from "@/lib/audit";
 import { getDefaultSalesAssigneeMemberId } from "@/lib/sales-scorecard";
-
-const OPEN_THREAD_STATUSES = ["open", "pending"] as const;
 
 export type InboundChannel = "sms" | "email" | "dm" | "call" | "web";
 
@@ -57,7 +55,7 @@ function parseEmailAddress(value: string): { email: string; name: string | null 
   const trimmed = value.trim();
   const match = /^(.*)<([^>]+)>$/.exec(trimmed);
   if (match) {
-    const name = match[1]?.trim().replace(/^\"|\"$/g, "") ?? "";
+    const name = match[1]?.trim().replace(/^"|"$/g, "") ?? "";
     const email = match[2]?.trim().toLowerCase() ?? "";
     return { email, name: name.length > 0 ? name : null };
   }
@@ -433,7 +431,7 @@ async function createContact(input: {
   source?: string;
 }): Promise<ContactMatch> {
   const db = input.db;
-  const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(db as any);
+  const defaultAssigneeMemberId = await getDefaultSalesAssigneeMemberId(db);
 
   const returning = {
     id: contacts.id,
@@ -767,7 +765,7 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
       let normalized;
       try {
         normalized = normalizePhone(resolvedFromAddress);
-      } catch (error) {
+      } catch {
         throw new Error("invalid_phone");
       }
       contact = await findContactByPhone(tx, normalized.e164, normalized.raw);
@@ -1111,6 +1109,18 @@ export async function recordInboundMessage(input: InboundMessageInput): Promise<
       },
       createdAt: now
     });
+
+    if (mediaUrls.length > 0 && channel !== "email") {
+      await tx.insert(outboxEvents).values({
+        type: "appointment_media.import_message",
+        payload: {
+          messageId: message.id,
+          threadId,
+          mediaCount: mediaUrls.length
+        },
+        createdAt: now
+      });
+    }
 
     return {
       threadId,

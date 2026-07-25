@@ -93,7 +93,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       const response = NextResponse.redirect(redirectTo, 303);
       response.cookies.set({
         name: "myst-flash-error",
-        value: "Amount collected is required to mark complete.",
+        value: "Final job total is required to mark complete.",
         path: "/",
       });
       return response;

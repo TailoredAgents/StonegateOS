@@ -95,6 +95,12 @@ import {
 import { handleFacebookSalesEvaluate } from "@/lib/facebook-sales-autopilot";
 import { recordAuditEvent } from "@/lib/audit";
 import {
+  AppointmentMediaError,
+  importAppointmentRelatedMedia,
+  importConversationMessageMedia,
+} from "@/lib/appointment-media";
+import { isMediaAutoImportEnabled } from "@/lib/feature-flags";
+import {
   recordProviderFailure,
   recordProviderSuccess,
 } from "@/lib/provider-health";
@@ -2725,6 +2731,50 @@ async function handleOutboxEvent(
   event: OutboxEventRecord,
 ): Promise<OutboxOutcome> {
   switch (event.type) {
+    case "appointment_media.import_message": {
+      if (!isMediaAutoImportEnabled()) {
+        return {
+          status: "retry",
+          error: "media_auto_import_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const messageId = readStringValue(payload?.["messageId"]);
+      if (!messageId) return { status: "skipped" };
+      try {
+        await importConversationMessageMedia(messageId);
+        return { status: "processed" };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return error instanceof AppointmentMediaError && error.status < 500
+          ? { status: "processed", error: detail }
+          : { status: "retry", error: detail };
+      }
+    }
+
+    case "appointment_media.attach_appointment": {
+      if (!isMediaAutoImportEnabled()) {
+        return {
+          status: "retry",
+          error: "media_auto_import_disabled",
+          nextAttemptAt: new Date(Date.now() + 15 * 60_000),
+        };
+      }
+      const payload = isRecord(event.payload) ? event.payload : null;
+      const appointmentId = readStringValue(payload?.["appointmentId"]);
+      if (!appointmentId) return { status: "skipped" };
+      try {
+        await importAppointmentRelatedMedia(appointmentId);
+        return { status: "processed" };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return error instanceof AppointmentMediaError && error.status < 500
+          ? { status: "processed", error: detail }
+          : { status: "retry", error: detail };
+      }
+    }
+
     case "facebook.dm.inbound": {
       const payload = isRecord(event.payload) ? event.payload : null;
       const senderId = readStringValue(payload?.["senderId"]);
@@ -2870,6 +2920,24 @@ async function handleOutboxEvent(
           id: event.id,
         });
         return { status: "skipped" };
+      }
+
+      const db = getDb();
+      const [existingMediaImport] = await db
+        .select({ id: outboxEvents.id })
+        .from(outboxEvents)
+        .where(
+          and(
+            eq(outboxEvents.type, "appointment_media.attach_appointment"),
+            sql`(${outboxEvents.payload} ->> 'appointmentId') = ${appointmentId}`,
+          ),
+        )
+        .limit(1);
+      if (!existingMediaImport) {
+        await db.insert(outboxEvents).values({
+          type: "appointment_media.attach_appointment",
+          payload: { appointmentId },
+        });
       }
 
       const services = coerceServices(payload?.["services"]);

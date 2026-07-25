@@ -12,10 +12,17 @@ import {
   leadAutomationStates,
   leads,
   outboxEvents,
-  facebookSalesAutopilotSessions
+  facebookSalesAutopilotSessions,
 } from "@/db";
-import { isConversationState, type ConversationState } from "@/lib/conversation-state";
-import { getServiceAreaPolicy, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import {
+  isConversationState,
+  type ConversationState,
+} from "@/lib/conversation-state";
+import {
+  getServiceAreaPolicy,
+  isPostalCodeAllowed,
+  normalizePostalCode,
+} from "@/lib/policy";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
@@ -27,12 +34,19 @@ const THREAD_STATUS = ["open", "pending", "closed"] as const;
 const CHANNELS = ["sms", "email", "dm", "call", "web"] as const;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 type ThreadStatus = (typeof THREAD_STATUS)[number];
 type Channel = (typeof CHANNELS)[number];
 type ThreadState = ConversationState;
 type InboxView = "attention" | "google" | "all";
-type SourceFamily = "Google" | "Facebook" | "Website" | "Missed Call" | "Partner" | "Other";
+type SourceFamily =
+  | "Google"
+  | "Facebook"
+  | "Website"
+  | "Missed Call"
+  | "Partner"
+  | "Other";
 
 function parseLimit(value: string | null): number {
   if (!value) return DEFAULT_LIMIT;
@@ -52,6 +66,35 @@ function normalizeSearch(term: string): string {
   return term.replace(/[%_]/g, "\\$&").replace(/\s+/g, " ").trim();
 }
 
+function parseDateBoundary(
+  value: string | null,
+  boundary: "start" | "end",
+): string | null {
+  if (!value || !DATE_RE.test(value)) return null;
+  const [yearRaw, monthRaw, dayRaw] = value.split("-");
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  )
+    return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  if (boundary === "end") {
+    date.setUTCDate(date.getUTCDate() + 1);
+  }
+  return date.toISOString();
+}
+
 function isStatus(value: string | null): value is ThreadStatus {
   return value ? (THREAD_STATUS as readonly string[]).includes(value) : false;
 }
@@ -61,7 +104,9 @@ function isChannel(value: string | null): value is Channel {
 }
 
 function parseView(value: string | null): InboxView {
-  return value === "attention" || value === "google" || value === "all" ? value : "all";
+  return value === "attention" || value === "google" || value === "all"
+    ? value
+    : "all";
 }
 
 function classifySourceFamily(input: {
@@ -79,17 +124,35 @@ function classifySourceFamily(input: {
     input.leadGclid ? "google" : null,
     input.leadFbclid ? "facebook" : null,
     input.channel === "dm" ? "facebook" : null,
-    input.channel === "call" ? "missed_call" : null
+    input.channel === "call" ? "missed_call" : null,
   ]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    )
     .join(" ")
     .toLowerCase();
 
   if (values.includes("google") || values.includes("gclid")) return "Google";
-  if (values.includes("facebook") || values.includes("fbclid") || values.includes("meta")) return "Facebook";
-  if (values.includes("missed_call") || values.includes("missed call") || values.includes("inbound_call")) return "Missed Call";
+  if (
+    values.includes("facebook") ||
+    values.includes("fbclid") ||
+    values.includes("meta")
+  )
+    return "Facebook";
+  if (
+    values.includes("missed_call") ||
+    values.includes("missed call") ||
+    values.includes("inbound_call")
+  )
+    return "Missed Call";
   if (values.includes("partner")) return "Partner";
-  if (values.includes("website") || values.includes("public_site") || values.includes("instant_quote") || values.includes("web")) {
+  if (
+    values.includes("website") ||
+    values.includes("public_site") ||
+    values.includes("instant_quote") ||
+    values.includes("web")
+  ) {
     return "Website";
   }
   return "Other";
@@ -105,18 +168,45 @@ export async function GET(request: NextRequest): Promise<Response> {
   const { searchParams } = request.nextUrl;
   const rawSearch = searchParams.get("q");
   const searchTerm = rawSearch ? normalizeSearch(rawSearch) : null;
-  const status = isStatus(searchParams.get("status")) ? (searchParams.get("status") as ThreadStatus) : null;
-  const channel = isChannel(searchParams.get("channel")) ? (searchParams.get("channel") as Channel) : null;
+  const status = isStatus(searchParams.get("status"))
+    ? (searchParams.get("status") as ThreadStatus)
+    : null;
+  const channel = isChannel(searchParams.get("channel"))
+    ? (searchParams.get("channel") as Channel)
+    : null;
   const contactId = searchParams.get("contactId");
   const view = parseView(searchParams.get("view"));
   const limit = parseLimit(searchParams.get("limit"));
   const offset = parseOffset(searchParams.get("offset"));
+  const firstMessageFrom = parseDateBoundary(
+    searchParams.get("firstMessageFrom"),
+    "start",
+  );
+  const firstMessageTo = parseDateBoundary(
+    searchParams.get("firstMessageTo"),
+    "end",
+  );
+  const lastMessageFrom = parseDateBoundary(
+    searchParams.get("lastMessageFrom"),
+    "start",
+  );
+  const lastMessageTo = parseDateBoundary(
+    searchParams.get("lastMessageTo"),
+    "end",
+  );
 
   const db = getDb();
   const now = new Date();
   const nowIso = now.toISOString();
   const lastInboundForThread = sql<Date | null>`(
     select max(coalesce(cm.received_at, cm.created_at))
+    from conversation_messages cm
+    where cm.thread_id = ${conversationThreads.id}
+      and cm.direction = 'inbound'
+      and coalesce(cm.metadata ->> 'draft', 'false') <> 'true'
+  )`;
+  const firstInboundForThread = sql<Date | null>`(
+    select min(coalesce(cm.received_at, cm.created_at))
     from conversation_messages cm
     where cm.thread_id = ${conversationThreads.id}
       and cm.direction = 'inbound'
@@ -211,15 +301,56 @@ export async function GET(request: NextRequest): Promise<Response> {
       or(
         ilike(contacts.firstName, likePattern),
         ilike(contacts.lastName, likePattern),
+        ilike(contacts.company, likePattern),
         ilike(contacts.email, likePattern),
         ilike(contacts.phone, likePattern),
+        ilike(contacts.phoneE164, likePattern),
         ilike(contacts.source, likePattern),
         ilike(leads.source, likePattern),
         ilike(leads.utmSource, likePattern),
+        ilike(leads.utmMedium, likePattern),
+        ilike(leads.utmCampaign, likePattern),
+        ilike(leads.utmTerm, likePattern),
+        ilike(leads.utmContent, likePattern),
+        ilike(leads.notes, likePattern),
+        ilike(properties.addressLine1, likePattern),
+        ilike(properties.addressLine2, likePattern),
+        ilike(properties.city, likePattern),
+        ilike(properties.postalCode, likePattern),
         ilike(conversationThreads.subject, likePattern),
-        ilike(conversationThreads.lastMessagePreview, likePattern)
-      )
+        ilike(conversationThreads.lastMessagePreview, likePattern),
+        sql`exists (
+          select 1
+          from conversation_messages cm
+          where cm.thread_id = ${conversationThreads.id}
+            and coalesce(cm.metadata ->> 'draft', 'false') <> 'true'
+            and (
+              cm.body ilike ${likePattern}
+              or cm.subject ilike ${likePattern}
+              or cm.from_address ilike ${likePattern}
+              or cm.to_address ilike ${likePattern}
+            )
+        )`,
+      ),
     );
+  }
+  if (firstMessageFrom) {
+    filters.push(
+      sql`${firstInboundForThread} >= ${firstMessageFrom}::timestamptz`,
+    );
+  }
+  if (firstMessageTo) {
+    filters.push(
+      sql`${firstInboundForThread} < ${firstMessageTo}::timestamptz`,
+    );
+  }
+  if (lastMessageFrom) {
+    filters.push(
+      sql`${lastInboundForThread} >= ${lastMessageFrom}::timestamptz`,
+    );
+  }
+  if (lastMessageTo) {
+    filters.push(sql`${lastInboundForThread} < ${lastMessageTo}::timestamptz`);
   }
   if (typeof contactId === "string" && UUID_RE.test(contactId)) {
     filters.push(eq(conversationThreads.contactId, contactId));
@@ -235,9 +366,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   const inboundLatest = db
     .select({
       threadId: conversationMessages.threadId,
-      lastInboundAt: sql<Date | null>`max(coalesce(${conversationMessages.receivedAt}, ${conversationMessages.createdAt}))`.as(
-        "lastInboundAt"
-      )
+      lastInboundAt:
+        sql<Date | null>`max(coalesce(${conversationMessages.receivedAt}, ${conversationMessages.createdAt}))`.as(
+          "lastInboundAt",
+        ),
     })
     .from(conversationMessages)
     .where(eq(conversationMessages.direction, "inbound"))
@@ -247,9 +379,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   const outboundLatest = db
     .select({
       threadId: conversationMessages.threadId,
-      lastOutboundAt: sql<Date | null>`max(coalesce(${conversationMessages.sentAt}, ${conversationMessages.createdAt}))`.as(
-        "lastOutboundAt"
-      )
+      lastOutboundAt:
+        sql<Date | null>`max(coalesce(${conversationMessages.sentAt}, ${conversationMessages.createdAt}))`.as(
+          "lastOutboundAt",
+        ),
     })
     .from(conversationMessages)
     .where(eq(conversationMessages.direction, "outbound"))
@@ -261,11 +394,13 @@ export async function GET(request: NextRequest): Promise<Response> {
       threadId: conversationMessages.threadId,
       lastActivityAt:
         sql<Date | null>`max(coalesce(${conversationMessages.receivedAt}, ${conversationMessages.sentAt}, ${conversationMessages.createdAt}))`.as(
-          "lastActivityAt"
-        )
+          "lastActivityAt",
+        ),
     })
     .from(conversationMessages)
-    .where(sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`)
+    .where(
+      sql`coalesce(${conversationMessages.metadata} ->> 'draft', 'false') <> 'true'`,
+    )
     .groupBy(conversationMessages.threadId)
     .as("activityLatest");
 
@@ -274,14 +409,17 @@ export async function GET(request: NextRequest): Promise<Response> {
     .from(conversationThreads)
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
     .leftJoin(leads, eq(conversationThreads.leadId, leads.id))
+    .leftJoin(properties, eq(conversationThreads.propertyId, properties.id))
     .leftJoin(
       leadAutomationStates,
       and(
         eq(leadAutomationStates.leadId, conversationThreads.leadId),
-        sql`${leadAutomationStates.channel}::text = ${conversationThreads.channel}::text`
-      )
+        sql`${leadAutomationStates.channel}::text = ${conversationThreads.channel}::text`,
+      ),
     );
-  const totalResult = whereClause ? await totalQuery.where(whereClause) : await totalQuery;
+  const totalResult = whereClause
+    ? await totalQuery.where(whereClause)
+    : await totalQuery;
   const total = Number(totalResult[0]?.count ?? 0);
 
   const rowsQuery = db
@@ -332,11 +470,18 @@ export async function GET(request: NextRequest): Promise<Response> {
       nextFollowupAt: leadAutomationStates.nextFollowupAt,
       followupPaused: leadAutomationStates.paused,
       followupDnc: leadAutomationStates.dnc,
+      firstInboundAt: sql<Date | null>`(
+        select min(coalesce(cm.received_at, cm.created_at))
+        from conversation_messages cm
+        where cm.thread_id = ${conversationThreads.id}
+          and cm.direction = 'inbound'
+          and coalesce(cm.metadata ->> 'draft', 'false') <> 'true'
+      )`,
       lastInboundAt: inboundLatest.lastInboundAt,
       lastOutboundAt: outboundLatest.lastOutboundAt,
       lastDirection: lastDirectionForThread,
       mediaCount: mediaCountForThread,
-      priorityScore: priorityScoreSql
+      priorityScore: priorityScoreSql,
     })
     .from(conversationThreads)
     .leftJoin(contacts, eq(conversationThreads.contactId, contacts.id))
@@ -346,24 +491,35 @@ export async function GET(request: NextRequest): Promise<Response> {
       leadAutomationStates,
       and(
         eq(leadAutomationStates.leadId, conversationThreads.leadId),
-        sql`${leadAutomationStates.channel}::text = ${conversationThreads.channel}::text`
-      )
+        sql`${leadAutomationStates.channel}::text = ${conversationThreads.channel}::text`,
+      ),
     )
     .leftJoin(teamMembers, eq(conversationThreads.assignedTo, teamMembers.id))
     .leftJoin(inboundLatest, eq(inboundLatest.threadId, conversationThreads.id))
-    .leftJoin(outboundLatest, eq(outboundLatest.threadId, conversationThreads.id))
-    .leftJoin(activityLatest, eq(activityLatest.threadId, conversationThreads.id));
+    .leftJoin(
+      outboundLatest,
+      eq(outboundLatest.threadId, conversationThreads.id),
+    )
+    .leftJoin(
+      activityLatest,
+      eq(activityLatest.threadId, conversationThreads.id),
+    );
 
-  const filteredRowsQuery = whereClause ? rowsQuery.where(whereClause) : rowsQuery;
+  const filteredRowsQuery = whereClause
+    ? rowsQuery.where(whereClause)
+    : rowsQuery;
   const sortedRowsQuery =
     view === "attention" && !searchTerm
       ? filteredRowsQuery.orderBy(
           sql`${attentionSortBucketSql} asc`,
           sql`${activityLatest.lastActivityAt} desc nulls last`,
           sql`${priorityScoreSql} desc`,
-          desc(conversationThreads.updatedAt)
+          desc(conversationThreads.updatedAt),
         )
-      : filteredRowsQuery.orderBy(sql`${activityLatest.lastActivityAt} desc nulls last`, desc(conversationThreads.updatedAt));
+      : filteredRowsQuery.orderBy(
+          sql`${activityLatest.lastActivityAt} desc nulls last`,
+          desc(conversationThreads.updatedAt),
+        );
 
   const rows = await sortedRowsQuery.limit(limit).offset(offset);
 
@@ -375,7 +531,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       ? await db
           .select({
             threadId: conversationMessages.threadId,
-            count: sql<number>`count(*)`
+            count: sql<number>`count(*)`,
           })
           .from(conversationMessages)
           .where(inArray(conversationMessages.threadId, threadIds))
@@ -395,24 +551,32 @@ export async function GET(request: NextRequest): Promise<Response> {
             stage: facebookSalesAutopilotSessions.stage,
             autonomyMode: facebookSalesAutopilotSessions.autonomyMode,
             lastDecision: facebookSalesAutopilotSessions.lastDecision,
-            lastDecisionReason: facebookSalesAutopilotSessions.lastDecisionReason,
-            lastHumanReviewReason: facebookSalesAutopilotSessions.lastHumanReviewReason,
+            lastDecisionReason:
+              facebookSalesAutopilotSessions.lastDecisionReason,
+            lastHumanReviewReason:
+              facebookSalesAutopilotSessions.lastHumanReviewReason,
             quoteLowCents: facebookSalesAutopilotSessions.quoteLowCents,
             quoteHighCents: facebookSalesAutopilotSessions.quoteHighCents,
-            updatedAt: facebookSalesAutopilotSessions.updatedAt
+            updatedAt: facebookSalesAutopilotSessions.updatedAt,
           })
           .from(facebookSalesAutopilotSessions)
           .where(inArray(facebookSalesAutopilotSessions.threadId, threadIds))
       : [];
 
-  const facebookSessionMap = new Map<string, (typeof facebookSessions)[number]>();
+  const facebookSessionMap = new Map<
+    string,
+    (typeof facebookSessions)[number]
+  >();
   for (const session of facebookSessions) {
     facebookSessionMap.set(session.threadId, session);
   }
 
   const normalizeIsoTimestamp = (value: unknown): string | null => {
     if (value instanceof Date) return value.toISOString();
-    if (value && typeof (value as { toISOString?: unknown }).toISOString === "function") {
+    if (
+      value &&
+      typeof (value as { toISOString?: unknown }).toISOString === "function"
+    ) {
       try {
         return (value as { toISOString: () => string }).toISOString();
       } catch {
@@ -427,30 +591,52 @@ export async function GET(request: NextRequest): Promise<Response> {
   };
 
   const threads = rows.map((row) => {
-    const contactName = [row.contactFirstName, row.contactLastName].filter(Boolean).join(" ").trim();
-    const normalizedPostalCode = normalizePostalCode(row.propertyPostalCode ?? null);
+    const contactName = [row.contactFirstName, row.contactLastName]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    const normalizedPostalCode = normalizePostalCode(
+      row.propertyPostalCode ?? null,
+    );
     const outOfArea =
-      normalizedPostalCode !== null ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea) : null;
-    const lastActivityIso = normalizeIsoTimestamp(row.lastActivityAt as unknown);
+      normalizedPostalCode !== null
+        ? !isPostalCodeAllowed(normalizedPostalCode, serviceArea)
+        : null;
+    const lastActivityIso = normalizeIsoTimestamp(
+      row.lastActivityAt as unknown,
+    );
+    const firstInboundIso = normalizeIsoTimestamp(
+      row.firstInboundAt as unknown,
+    );
     const lastInboundIso = normalizeIsoTimestamp(row.lastInboundAt as unknown);
-    const lastOutboundIso = normalizeIsoTimestamp(row.lastOutboundAt as unknown);
+    const lastOutboundIso = normalizeIsoTimestamp(
+      row.lastOutboundAt as unknown,
+    );
     const updatedAtIso = normalizeIsoTimestamp(row.updatedAt as unknown);
-    const stateUpdatedAtIso = normalizeIsoTimestamp(row.stateUpdatedAt as unknown);
-    const attentionHandledIso = normalizeIsoTimestamp(row.attentionHandledAt as unknown);
+    const stateUpdatedAtIso = normalizeIsoTimestamp(
+      row.stateUpdatedAt as unknown,
+    );
+    const attentionHandledIso = normalizeIsoTimestamp(
+      row.attentionHandledAt as unknown,
+    );
     const closedAtIso = normalizeIsoTimestamp(row.closedAt as unknown);
-    const nextFollowupIso = normalizeIsoTimestamp(row.nextFollowupAt as unknown);
+    const nextFollowupIso = normalizeIsoTimestamp(
+      row.nextFollowupAt as unknown,
+    );
     const sourceFamily = classifySourceFamily({
       leadSource: row.leadSource,
       leadUtmSource: row.leadUtmSource,
       leadGclid: row.leadGclid,
       leadFbclid: row.leadFbclid,
       contactSource: row.contactSource,
-      channel: row.channel
+      channel: row.channel,
     });
     const facebookSession = facebookSessionMap.get(row.id);
     const lastInboundMs = lastInboundIso ? Date.parse(lastInboundIso) : NaN;
     const lastOutboundMs = lastOutboundIso ? Date.parse(lastOutboundIso) : NaN;
-    const handledMs = attentionHandledIso ? Date.parse(attentionHandledIso) : NaN;
+    const handledMs = attentionHandledIso
+      ? Date.parse(attentionHandledIso)
+      : NaN;
     const nextFollowupMs = nextFollowupIso ? Date.parse(nextFollowupIso) : NaN;
     const doNotContact = row.doNotContact === true;
     const isClosed = row.status === "closed";
@@ -461,13 +647,23 @@ export async function GET(request: NextRequest): Promise<Response> {
       row.followupDnc !== true;
     const needsReply =
       Number.isFinite(lastInboundMs) &&
-      lastInboundMs > Math.max(Number.isFinite(lastOutboundMs) ? lastOutboundMs : -Infinity, Number.isFinite(handledMs) ? handledMs : -Infinity);
-    const newUnrepliedLead = Boolean(row.leadId) && !Number.isFinite(lastOutboundMs) && !Number.isFinite(handledMs);
-    const needsAttention = !isClosed && !doNotContact && (followupDue || needsReply || newUnrepliedLead);
+      lastInboundMs >
+        Math.max(
+          Number.isFinite(lastOutboundMs) ? lastOutboundMs : -Infinity,
+          Number.isFinite(handledMs) ? handledMs : -Infinity,
+        );
+    const newUnrepliedLead =
+      Boolean(row.leadId) &&
+      !Number.isFinite(lastOutboundMs) &&
+      !Number.isFinite(handledMs);
+    const needsAttention =
+      !isClosed &&
+      !doNotContact &&
+      (followupDue || needsReply || newUnrepliedLead);
     const attentionReason = doNotContact
       ? "dnc"
       : isClosed
-        ? row.closedReason ?? "closed"
+        ? (row.closedReason ?? "closed")
         : followupDue
           ? "follow_up_due"
           : needsReply
@@ -477,7 +673,11 @@ export async function GET(request: NextRequest): Promise<Response> {
               : row.lastDirection === "outbound"
                 ? "waiting"
                 : null;
-    const waitingSince = followupDue ? nextFollowupIso : needsReply || newUnrepliedLead ? lastInboundIso ?? updatedAtIso : null;
+    const waitingSince = followupDue
+      ? nextFollowupIso
+      : needsReply || newUnrepliedLead
+        ? (lastInboundIso ?? updatedAtIso)
+        : null;
     return {
       id: row.id,
       status: row.status,
@@ -489,6 +689,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       lastMessageAt: lastActivityIso,
       updatedAt: updatedAtIso,
       stateUpdatedAt: stateUpdatedAtIso,
+      firstInboundAt: firstInboundIso,
       lastInboundAt: lastInboundIso,
       lastOutboundAt: lastOutboundIso,
       attentionHandledAt: attentionHandledIso,
@@ -505,7 +706,7 @@ export async function GET(request: NextRequest): Promise<Response> {
             id: row.contactId,
             name: contactName || "Contact",
             email: row.contactEmail ?? null,
-            phone: row.contactPhoneE164 ?? row.contactPhone ?? null
+            phone: row.contactPhoneE164 ?? row.contactPhone ?? null,
           }
         : null,
       property: row.propertyId
@@ -515,22 +716,23 @@ export async function GET(request: NextRequest): Promise<Response> {
             city: row.propertyCity ?? "",
             state: row.propertyState ?? "",
             postalCode: row.propertyPostalCode ?? "",
-            outOfArea
+            outOfArea,
           }
         : null,
       leadId: row.leadId ?? null,
       assignedTo: row.assignedTo
         ? {
             id: row.assignedTo,
-            name: row.assignedName ?? "Assigned"
+            name: row.assignedName ?? "Assigned",
           }
         : null,
       messageCount: messageCountMap.get(row.id) ?? 0,
       followup: row.leadId
         ? {
             state: row.followupState ?? null,
-            step: typeof row.followupStep === "number" ? row.followupStep : null,
-            nextAt: nextFollowupIso
+            step:
+              typeof row.followupStep === "number" ? row.followupStep : null,
+            nextAt: nextFollowupIso,
           }
         : null,
       facebookSales: facebookSession
@@ -539,12 +741,13 @@ export async function GET(request: NextRequest): Promise<Response> {
             autonomyMode: facebookSession.autonomyMode,
             lastDecision: facebookSession.lastDecision ?? null,
             lastDecisionReason: facebookSession.lastDecisionReason ?? null,
-            lastHumanReviewReason: facebookSession.lastHumanReviewReason ?? null,
+            lastHumanReviewReason:
+              facebookSession.lastHumanReviewReason ?? null,
             quoteLowCents: facebookSession.quoteLowCents ?? null,
             quoteHighCents: facebookSession.quoteHighCents ?? null,
-            updatedAt: normalizeIsoTimestamp(facebookSession.updatedAt)
+            updatedAt: normalizeIsoTimestamp(facebookSession.updatedAt),
           }
-        : null
+        : null,
     };
   });
 
@@ -556,8 +759,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       limit,
       offset,
       total,
-      nextOffset: nextOffset < total ? nextOffset : null
-    }
+      nextOffset: nextOffset < total ? nextOffset : null,
+    },
   });
 }
 
@@ -584,25 +787,43 @@ export async function POST(request: NextRequest): Promise<Response> {
     return NextResponse.json({ error: "invalid_payload" }, { status: 400 });
   }
 
-  const status = isStatus(payload.status ?? null) ? (payload.status as ThreadStatus) : "open";
-  const channel = isChannel(payload.channel ?? null) ? (payload.channel as Channel) : "sms";
+  const status = isStatus(payload.status ?? null)
+    ? (payload.status as ThreadStatus)
+    : "open";
+  const channel = isChannel(payload.channel ?? null)
+    ? (payload.channel as Channel)
+    : "sms";
   if (payload.state && !isConversationState(payload.state)) {
     return NextResponse.json({ error: "invalid_state" }, { status: 400 });
   }
-  const state = isConversationState(payload.state ?? null) ? (payload.state as ThreadState) : "new";
+  const state = isConversationState(payload.state ?? null)
+    ? (payload.state as ThreadState)
+    : "new";
 
-  let contactId = typeof payload.contactId === "string" ? payload.contactId.trim() : "";
-  const leadId = typeof payload.leadId === "string" ? payload.leadId.trim() : "";
-  let propertyId = typeof payload.propertyId === "string" ? payload.propertyId.trim() : "";
+  let contactId =
+    typeof payload.contactId === "string" ? payload.contactId.trim() : "";
+  const leadId =
+    typeof payload.leadId === "string" ? payload.leadId.trim() : "";
+  let propertyId =
+    typeof payload.propertyId === "string" ? payload.propertyId.trim() : "";
 
   if (!contactId && !leadId) {
-    return NextResponse.json({ error: "contact_or_lead_required" }, { status: 400 });
+    return NextResponse.json(
+      { error: "contact_or_lead_required" },
+      { status: 400 },
+    );
   }
 
-  const subject = typeof payload.subject === "string" && payload.subject.trim().length > 0 ? payload.subject.trim() : null;
-  const messageBody = typeof payload.message === "string" ? payload.message.trim() : "";
+  const subject =
+    typeof payload.subject === "string" && payload.subject.trim().length > 0
+      ? payload.subject.trim()
+      : null;
+  const messageBody =
+    typeof payload.message === "string" ? payload.message.trim() : "";
   const direction =
-    payload.direction === "inbound" || payload.direction === "internal" ? payload.direction : "outbound";
+    payload.direction === "inbound" || payload.direction === "internal"
+      ? payload.direction
+      : "outbound";
 
   const actor = getAuditActorFromRequest(request);
   const db = getDb();
@@ -622,7 +843,7 @@ export async function POST(request: NextRequest): Promise<Response> {
                 lastName: contacts.lastName,
                 email: contacts.email,
                 phone: contacts.phone,
-                phoneE164: contacts.phoneE164
+                phoneE164: contacts.phoneE164,
               })
               .from(contacts)
               .where(eq(contacts.id, contactId))
@@ -634,7 +855,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         const [leadRow] = await tx
           .select({
             contactId: leads.contactId,
-            propertyId: leads.propertyId
+            propertyId: leads.propertyId,
           })
           .from(leads)
           .where(eq(leads.id, leadId))
@@ -649,7 +870,7 @@ export async function POST(request: NextRequest): Promise<Response> {
               lastName: contacts.lastName,
               email: contacts.email,
               phone: contacts.phone,
-              phoneE164: contacts.phoneE164
+              phoneE164: contacts.phoneE164,
             })
             .from(contacts)
             .where(eq(contacts.id, leadRow.contactId))
@@ -675,7 +896,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           subject,
           stateUpdatedAt: now,
           createdAt: now,
-          updatedAt: now
+          updatedAt: now,
         })
         .returning();
 
@@ -685,11 +906,14 @@ export async function POST(request: NextRequest): Promise<Response> {
 
       let contactParticipantId: string | null = null;
       if (contactRecord?.id) {
-        const displayName = [contactRecord.firstName, contactRecord.lastName].filter(Boolean).join(" ").trim();
+        const displayName = [contactRecord.firstName, contactRecord.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
         const externalAddress =
           channel === "email"
             ? contactRecord.email
-            : contactRecord.phoneE164 ?? contactRecord.phone ?? null;
+            : (contactRecord.phoneE164 ?? contactRecord.phone ?? null);
 
         const [participant] = await tx
           .insert(conversationParticipants)
@@ -699,7 +923,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             contactId: contactRecord.id,
             externalAddress,
             displayName: displayName || "Contact",
-            createdAt: new Date()
+            createdAt: new Date(),
           })
           .returning();
 
@@ -718,7 +942,7 @@ export async function POST(request: NextRequest): Promise<Response> {
               participantType: "team",
               teamMemberId: actor.id ?? null,
               displayName: actor.label ?? "Team Console",
-              createdAt: new Date()
+              createdAt: new Date(),
             })
             .returning();
           participantId = teamParticipant?.id ?? null;
@@ -726,7 +950,11 @@ export async function POST(request: NextRequest): Promise<Response> {
 
         const now = new Date();
         const deliveryStatus =
-          direction === "inbound" ? "delivered" : direction === "internal" ? "sent" : "queued";
+          direction === "inbound"
+            ? "delivered"
+            : direction === "internal"
+              ? "sent"
+              : "queued";
 
         const [message] = await tx
           .insert(conversationMessages)
@@ -740,7 +968,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             deliveryStatus,
             sentAt: deliveryStatus === "sent" ? now : null,
             receivedAt: direction === "inbound" ? now : null,
-            createdAt: now
+            createdAt: now,
           })
           .returning();
 
@@ -751,7 +979,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           .set({
             lastMessagePreview: messageBody.slice(0, 140),
             lastMessageAt: now,
-            updatedAt: now
+            updatedAt: now,
           })
           .where(eq(conversationThreads.id, thread.id));
 
@@ -759,9 +987,9 @@ export async function POST(request: NextRequest): Promise<Response> {
           await tx.insert(outboxEvents).values({
             type: "message.send",
             payload: {
-              messageId: message?.id ?? null
+              messageId: message?.id ?? null,
             },
-            createdAt: now
+            createdAt: now,
           });
         }
       }
@@ -769,7 +997,8 @@ export async function POST(request: NextRequest): Promise<Response> {
       return { thread, message: messageRecord };
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "thread_create_failed";
+    const message =
+      error instanceof Error ? error.message : "thread_create_failed";
     const status = message === "contact_not_found" ? 404 : 400;
     return NextResponse.json({ error: message }, { status });
   }
@@ -779,7 +1008,11 @@ export async function POST(request: NextRequest): Promise<Response> {
     action: "thread.created",
     entityType: "conversation_thread",
     entityId: result.thread.id,
-    meta: { channel: result.thread.channel, status: result.thread.status, state: result.thread.state }
+    meta: {
+      channel: result.thread.channel,
+      status: result.thread.status,
+      state: result.thread.state,
+    },
   });
 
   if (result.message) {
@@ -788,7 +1021,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       action: direction === "inbound" ? "message.received" : "message.queued",
       entityType: "conversation_message",
       entityId: result.message.id,
-      meta: { threadId: result.thread.id, channel }
+      meta: { threadId: result.thread.id, channel },
     });
   }
 
@@ -804,7 +1037,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         : null,
       leadId: result.thread.leadId ?? null,
       contactId: result.thread.contactId ?? null,
-      propertyId: result.thread.propertyId ?? null
-    }
+      propertyId: result.thread.propertyId ?? null,
+    },
   });
 }

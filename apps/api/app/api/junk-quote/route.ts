@@ -19,6 +19,13 @@ import {
   type MediaJobAnalysisRecord,
 } from "@/lib/media-job-analysis";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
+import {
+  claimPublicInstantQuoteMediaReferences,
+  type PreparedPublicQuoteMediaReference,
+  PublicQuoteMediaError,
+  resolvePublicInstantQuoteMediaReferences,
+  resolvePublicMediaApiBaseUrl,
+} from "@/lib/public-instant-quote-media";
 
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ??
@@ -909,7 +916,62 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    const body = parsed.data;
+    let preparedPhotoMedia: PreparedPublicQuoteMediaReference[] = [];
+    if (parsed.data.job.photoUrls.length > 0) {
+      const publicApiBaseUrl = resolvePublicMediaApiBaseUrl(
+        request.nextUrl.origin,
+      );
+      if (!publicApiBaseUrl) {
+        return corsJson(
+          {
+            ok: false,
+            error: "public_api_base_url_missing",
+            message: "Photo upload is temporarily unavailable.",
+          },
+          requestOrigin,
+          { status: 503 },
+        );
+      }
+      try {
+        preparedPhotoMedia =
+          await resolvePublicInstantQuoteMediaReferences({
+            urls: parsed.data.job.photoUrls,
+            baseUrl: publicApiBaseUrl,
+          });
+      } catch (error) {
+        if (error instanceof PublicQuoteMediaError) {
+          return corsJson(
+            {
+              ok: false,
+              error: error.code,
+              message:
+                "One or more photos expired or could not be verified. Please upload them again.",
+            },
+            requestOrigin,
+            { status: error.status },
+          );
+        }
+        throw error;
+      }
+    }
+    const body = {
+      ...parsed.data,
+      job: {
+        ...parsed.data.job,
+        photoUrls: preparedPhotoMedia.map(
+          (reference) => reference.referenceUrl,
+        ),
+      },
+    };
+    const mediaAnalysisBody = {
+      ...body,
+      job: {
+        ...body.job,
+        photoUrls: preparedPhotoMedia.map(
+          (reference) => reference.analysisUrl,
+        ),
+      },
+    };
 
     const normalizedPostalCode = normalizePostalCode(body.job.zip);
     if (normalizedPostalCode && !isGeorgiaPostalCode(normalizedPostalCode)) {
@@ -927,7 +989,7 @@ export async function POST(request: NextRequest) {
     if (Array.isArray(body.job.photoUrls) && body.job.photoUrls.length > 0) {
       try {
         const mediaAnalysis = await buildMediaJobAnalysisWithVision(
-          buildQuoteRequestOmniContext(body),
+          buildQuoteRequestOmniContext(mediaAnalysisBody),
         );
         mediaPricing = {
           analysis: mediaAnalysis,
@@ -1057,6 +1119,12 @@ export async function POST(request: NextRequest) {
             phoneE164: normalizedPhone.e164,
             source: "instant_quote",
           });
+          await claimPublicInstantQuoteMediaReferences({
+            instantQuoteId: quoteId,
+            contactId: contact.id,
+            references: preparedPhotoMedia,
+            database: tx,
+          });
 
           const [existingProperty] = await tx
             .select({ id: properties.id })
@@ -1161,6 +1229,13 @@ export async function POST(request: NextRequest) {
           }
         });
       } catch (error) {
+        if (preparedPhotoMedia.length > 0) {
+          await db
+            .delete(instantQuotes)
+            .where(eq(instantQuotes.id, quoteId))
+            .catch(() => undefined);
+          throw error;
+        }
         console.error("[junk-quote] lead_create_failed", {
           quoteId,
           error: String(error),
@@ -1198,6 +1273,18 @@ export async function POST(request: NextRequest) {
       requestOrigin,
     );
   } catch (error) {
+    if (error instanceof PublicQuoteMediaError) {
+      return corsJson(
+        {
+          ok: false,
+          error: error.code,
+          message:
+            "The uploaded photos could not be attached. Please upload them again.",
+        },
+        null,
+        { status: error.status },
+      );
+    }
     console.error("[junk-quote] server_error", error);
     return corsJson({ error: "server_error" }, null, { status: 500 });
   }

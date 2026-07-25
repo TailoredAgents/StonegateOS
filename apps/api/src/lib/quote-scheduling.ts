@@ -18,6 +18,7 @@ import {
   isWithinBusinessHours,
 } from "@/lib/policy";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { resolveAutomaticAppointmentStatusForMedia } from "@/lib/appointment-media";
 import { DEFAULT_TRAVEL_BUFFER_MIN } from "../../app/api/web/scheduling";
 
 const QUOTE_BOOKING_WINDOW_DAYS = 14;
@@ -44,6 +45,7 @@ export type PublicQuoteSchedulingRow = {
   services: string[];
   total: unknown;
   jobDurationMinutes: number;
+  clientScope: string | null;
   expiresAt: Date | null;
   acceptedAppointmentId: string | null;
   contactFirstName: string | null;
@@ -102,6 +104,7 @@ export async function loadPublicQuoteForScheduling(
       services: quotes.services,
       total: quotes.total,
       jobDurationMinutes: quotes.jobDurationMinutes,
+      clientScope: quotes.clientScope,
       expiresAt: quotes.expiresAt,
       acceptedAppointmentId: quotes.acceptedAppointmentId,
       contactFirstName: contacts.firstName,
@@ -359,6 +362,16 @@ export async function bookAcceptedQuote(input: {
         .where(eq(appointmentHolds.id, hold.id));
     }
 
+    const quotedScopeText =
+      input.quote.clientScope?.trim().slice(0, 4_000) || null;
+    const appointmentStatus =
+      await resolveAutomaticAppointmentStatusForMedia({
+        proposedStatus: "confirmed",
+        quotedScopeText,
+        contactId: input.quote.contactId,
+        database: tx,
+        now,
+      });
     const [appointment] = await tx
       .insert(appointments)
       .values({
@@ -368,9 +381,10 @@ export async function bookAcceptedQuote(input: {
         startAt: start,
         durationMinutes: context.durationMinutes,
         travelBufferMinutes: context.travelBufferMinutes,
-        status: "confirmed",
+        status: appointmentStatus,
         rescheduleToken: crypto.randomUUID(),
         quotedTotalCents: Math.round(Number(input.quote.total ?? 0) * 100),
+        quotedScopeText,
       })
       .returning({ id: appointments.id });
     if (!appointment?.id) throw new Error("appointment_create_failed");

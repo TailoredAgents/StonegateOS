@@ -226,6 +226,20 @@ export async function getLatestE2ESeedSummary(): Promise<E2ESeedSummary | null> 
   };
 }
 
+export async function getAppointmentStartAt(appointmentId: string): Promise<Date | null> {
+  const sql = getSql();
+  const rows = await sql<{ startAt: Date | string }[]>`
+    SELECT start_at AS "startAt"
+    FROM appointments
+    WHERE id = ${appointmentId}
+    LIMIT 1
+  `;
+  const value = rows[0]?.startAt;
+  if (!value) return null;
+  const startAt = new Date(value);
+  return Number.isFinite(startAt.getTime()) ? startAt : null;
+}
+
 export async function createE2EPhoneOnlyContact(label = "Direct Caller"): Promise<E2EContactSummary> {
   const sql = getSql();
   const suffix = String(Date.now()).slice(-7);

@@ -18,7 +18,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: "pnpm"
 
       - name: Enable Corepack
@@ -30,13 +30,22 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm exec playwright install --with-deps
 
-      - name: Start docker dependencies
-        run: docker compose -f devops/docker-compose.yml up -d
-
       - name: Prepare environment
         run: |
           pnpm e2e:env
           mkdir -p artifacts/e2e/logs
+
+      - name: Typecheck changed applications
+        run: pnpm typecheck
+
+      - name: Enforce lint debt ratchet
+        run: pnpm lint:ratchet
+
+      - name: Run API unit tests
+        run: pnpm test
+
+      - name: Build applications
+        run: pnpm build
 
       - name: Start dev stack
         run: |
@@ -66,6 +75,10 @@ jobs:
           name: playwright-artifacts
           path: artifacts/e2e
 
+      - name: Cleanup e2e data
+        if: always()
+        run: pnpm cleanup:e2e || true
+
       - name: Kill dev stack
         if: always()
         run: |
@@ -74,7 +87,3 @@ jobs:
           fi
           docker compose -f devops/docker-compose.yml logs --no-color > artifacts/e2e/logs/docker.log || true
           docker compose -f devops/docker-compose.yml down || true
-
-      - name: Cleanup e2e data
-        if: always()
-        run: pnpm cleanup:e2e || true

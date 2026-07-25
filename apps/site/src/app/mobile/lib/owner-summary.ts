@@ -23,6 +23,15 @@ type CalendarFeedResponse = {
 type RevenueSummaryResponse = {
   ok?: boolean;
   currency?: string | null;
+  paymentLedger?: {
+    paymentsCollectedCents?: number;
+    paidTowardJobsCents?: number;
+    tipsCollectedCents?: number;
+    outstandingBalanceCents?: number;
+    refundedCents?: number;
+    needsReviewCents?: number;
+    needsReviewCount?: number;
+  } | null;
   windows?: {
     weekToDate?: { totalCents?: number; count?: number; startsAt?: string; jobs?: unknown[] };
     monthToDate?: { totalCents?: number; count?: number };
@@ -71,6 +80,15 @@ export type MobileOwnerSummary = {
   projectedTodayCents: number;
   bookedJobsToday: number;
   openInboxLeads: number;
+  paymentLedger: {
+    paymentsCollectedCents: number;
+    paidTowardJobsCents: number;
+    tipsCollectedCents: number;
+    outstandingBalanceCents: number;
+    refundedCents: number;
+    needsReviewCents: number;
+    needsReviewCount: number;
+  } | null;
   health: {
     blockers: number;
     warnings: number;
@@ -218,6 +236,32 @@ export async function loadMobileOwnerSummary(): Promise<MobileOwnerSummary> {
     projectedTodayCents,
     bookedJobsToday: bookedEvents.length,
     openInboxLeads: inbox?.threads?.length ?? 0,
+    paymentLedger: revenue?.paymentLedger
+      ? {
+          paymentsCollectedCents: normalizeCents(
+            revenue.paymentLedger.paymentsCollectedCents,
+          ),
+          paidTowardJobsCents: normalizeCents(
+            revenue.paymentLedger.paidTowardJobsCents,
+          ),
+          tipsCollectedCents: normalizeCents(
+            revenue.paymentLedger.tipsCollectedCents,
+          ),
+          outstandingBalanceCents: normalizeCents(
+            revenue.paymentLedger.outstandingBalanceCents,
+          ),
+          refundedCents: normalizeCents(
+            revenue.paymentLedger.refundedCents,
+          ),
+          needsReviewCents: normalizeCents(
+            revenue.paymentLedger.needsReviewCents,
+          ),
+          needsReviewCount:
+            typeof revenue.paymentLedger.needsReviewCount === "number"
+              ? revenue.paymentLedger.needsReviewCount
+              : 0,
+        }
+      : null,
     health: {
       blockers: health?.blockers?.length ?? 0,
       warnings: health?.warnings?.length ?? 0,

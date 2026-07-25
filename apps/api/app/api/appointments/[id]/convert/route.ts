@@ -17,6 +17,10 @@ import {
   parseAppointmentBookingDetails,
   validateQuotedTotalForBookingDetails,
 } from "@/lib/appointment-booking-details";
+import {
+  AppointmentMediaError,
+  assertAppointmentStatusTransitionAllowed,
+} from "@/lib/appointment-media";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import type { AppointmentCalendarPayload } from "@/lib/calendar";
 import {
@@ -198,98 +202,124 @@ export async function POST(
 
   const now = new Date();
 
-  const updated = await db.transaction(async (tx) => {
-    const [appointment] = await tx
-      .update(appointments)
-      .set({
-        type: "job",
-        startAt,
-        status: "confirmed",
-        soldByMemberId: parsed.data.soldByMemberId,
-        quotedTotalCents: parsed.data.quotedTotalCents,
-        bookingDetails,
-        updatedAt: now,
-      })
-      .where(eq(appointments.id, appointmentId))
-      .returning({
-        id: appointments.id,
-        startAt: appointments.startAt,
-        durationMinutes: appointments.durationMinutes,
-        travelBufferMinutes: appointments.travelBufferMinutes,
-        calendarEventId: appointments.calendarEventId,
+  const updated = await db
+    .transaction(async (tx) => {
+      await assertAppointmentStatusTransitionAllowed({
+        appointmentId,
+        nextStatus: "confirmed",
+        database: tx,
       });
-
-    if (!appointment) {
-      return null;
-    }
-
-    if (
-      existing.contactId &&
-      existing.pipelineStage !== "won" &&
-      existing.pipelineStage !== "lost" &&
-      existing.pipelineStage !== "qualified"
-    ) {
-      await tx
-        .insert(crmPipeline)
-        .values({
-          contactId: existing.contactId,
-          stage: "qualified",
+      const [appointment] = await tx
+        .update(appointments)
+        .set({
+          type: "job",
+          startAt,
+          status: "confirmed",
+          soldByMemberId: parsed.data.soldByMemberId,
+          quotedTotalCents: parsed.data.quotedTotalCents,
+          bookingDetails,
           updatedAt: now,
         })
-        .onConflictDoUpdate({
-          target: crmPipeline.contactId,
-          set: { stage: "qualified", updatedAt: now },
+        .where(eq(appointments.id, appointmentId))
+        .returning({
+          id: appointments.id,
+          startAt: appointments.startAt,
+          durationMinutes: appointments.durationMinutes,
+          travelBufferMinutes: appointments.travelBufferMinutes,
+          calendarEventId: appointments.calendarEventId,
         });
 
-      await tx.insert(outboxEvents).values({
-        type: "pipeline.auto_stage_change",
-        payload: {
-          contactId: existing.contactId,
-          fromStage: existing.pipelineStage,
-          toStage: "qualified",
-          reason: "appointment.converted",
-          meta: {
-            appointmentId,
-            fromType: existing.type,
-            toType: "job",
-          },
-        },
-      });
-    }
-
-    if (existing.contactId) {
-      const openQuoteFollowUps = await tx
-        .select({
-          id: crmTasks.id,
-          notes: crmTasks.notes,
-        })
-        .from(crmTasks)
-        .where(
-          and(
-            eq(crmTasks.contactId, existing.contactId),
-            eq(crmTasks.status, "open"),
-            isNotNull(crmTasks.notes),
-            ilike(crmTasks.notes, "%kind=quote_follow_up%"),
-          ),
-        );
-
-      const matchingTaskIds = openQuoteFollowUps
-        .filter(
-          (task) =>
-            extractQuoteFollowUpAppointmentId(task.notes) === appointmentId,
-        )
-        .map((task) => task.id);
-
-      if (matchingTaskIds.length > 0) {
-        await tx
-          .update(crmTasks)
-          .set({ status: "completed", updatedAt: now })
-          .where(inArray(crmTasks.id, matchingTaskIds));
+      if (!appointment) {
+        return null;
       }
-    }
 
-    return appointment;
-  });
+      if (
+        existing.contactId &&
+        existing.pipelineStage !== "won" &&
+        existing.pipelineStage !== "lost" &&
+        existing.pipelineStage !== "qualified"
+      ) {
+        await tx
+          .insert(crmPipeline)
+          .values({
+            contactId: existing.contactId,
+            stage: "qualified",
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: crmPipeline.contactId,
+            set: { stage: "qualified", updatedAt: now },
+          });
+
+        await tx.insert(outboxEvents).values({
+          type: "pipeline.auto_stage_change",
+          payload: {
+            contactId: existing.contactId,
+            fromStage: existing.pipelineStage,
+            toStage: "qualified",
+            reason: "appointment.converted",
+            meta: {
+              appointmentId,
+              fromType: existing.type,
+              toType: "job",
+            },
+          },
+        });
+      }
+
+      if (existing.contactId) {
+        const openQuoteFollowUps = await tx
+          .select({
+            id: crmTasks.id,
+            notes: crmTasks.notes,
+          })
+          .from(crmTasks)
+          .where(
+            and(
+              eq(crmTasks.contactId, existing.contactId),
+              eq(crmTasks.status, "open"),
+              isNotNull(crmTasks.notes),
+              ilike(crmTasks.notes, "%kind=quote_follow_up%"),
+            ),
+          );
+
+        const matchingTaskIds = openQuoteFollowUps
+          .filter(
+            (task) =>
+              extractQuoteFollowUpAppointmentId(task.notes) === appointmentId,
+          )
+          .map((task) => task.id);
+
+        if (matchingTaskIds.length > 0) {
+          await tx
+            .update(crmTasks)
+            .set({ status: "completed", updatedAt: now })
+            .where(inArray(crmTasks.id, matchingTaskIds));
+        }
+      }
+
+      return appointment;
+    })
+    .catch((error: unknown) => {
+      if (
+        error instanceof AppointmentMediaError &&
+        error.code === "quoted_scope_required"
+      ) {
+        return "quoted_scope_required" as const;
+      }
+      throw error;
+    });
+
+  if (updated === "quoted_scope_required") {
+    return NextResponse.json(
+      {
+        error: "quoted_scope_required",
+        message:
+          "Add the quoted-to-remove summary before confirming this appointment.",
+      },
+      { status: 409 },
+    );
+  }
 
   if (!updated) {
     return NextResponse.json({ error: "update_failed" }, { status: 500 });

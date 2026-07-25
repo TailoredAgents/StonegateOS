@@ -70,7 +70,9 @@ function restoreComposeDraft(storageKey: string): void {
   }
 }
 
-function getLatestTimelineMessageAt(message: TimelineMessage | null): string | null {
+function getLatestTimelineMessageAt(
+  message: TimelineMessage | null,
+): string | null {
   return message?.receivedAt ?? message?.sentAt ?? message?.createdAt ?? null;
 }
 
@@ -84,22 +86,38 @@ export function InboxLiveUpdatesClient(props: {
   status: string | null;
   view: string | null;
   q: string | null;
+  firstMessageFrom: string | null;
+  firstMessageTo: string | null;
+  lastMessageFrom: string | null;
+  lastMessageTo: string | null;
   offset: string | null;
 }): React.ReactElement | null {
   const router = useRouter();
   const [hasUpdate, setHasUpdate] = React.useState(false);
 
-  const baselineRef = React.useRef<{ messageCount: number; lastMessageAt: string | null }>({
+  const baselineRef = React.useRef<{
+    messageCount: number;
+    lastMessageAt: string | null;
+  }>({
     messageCount: props.initialMessageCount,
-    lastMessageAt: props.initialLastMessageAt
+    lastMessageAt: props.initialLastMessageAt,
   });
   const threadsSignatureRef = React.useRef(props.initialThreadsSignature);
 
   React.useEffect(() => {
-    baselineRef.current = { messageCount: props.initialMessageCount, lastMessageAt: props.initialLastMessageAt };
+    baselineRef.current = {
+      messageCount: props.initialMessageCount,
+      lastMessageAt: props.initialLastMessageAt,
+    };
     threadsSignatureRef.current = props.initialThreadsSignature;
     setHasUpdate(false);
-  }, [props.threadId, props.channel, props.initialMessageCount, props.initialLastMessageAt, props.initialThreadsSignature]);
+  }, [
+    props.threadId,
+    props.channel,
+    props.initialMessageCount,
+    props.initialLastMessageAt,
+    props.initialThreadsSignature,
+  ]);
 
   const storageKey =
     props.threadId && props.threadId.trim().length
@@ -116,7 +134,7 @@ export function InboxLiveUpdatesClient(props: {
       const t = window.setTimeout(() => restoreComposeDraft(storageKey), 350);
       return () => window.clearTimeout(t);
     },
-    [router, storageKey]
+    [router, storageKey],
   );
 
   React.useEffect(() => {
@@ -133,15 +151,27 @@ export function InboxLiveUpdatesClient(props: {
 
       try {
         if (props.contactId) {
-          const timelineUrl = new URL("/api/team/inbox/timeline", window.location.origin);
+          const timelineUrl = new URL(
+            "/api/team/inbox/timeline",
+            window.location.origin,
+          );
           timelineUrl.searchParams.set("contactId", props.contactId);
           timelineUrl.searchParams.set("limit", "50");
 
-          const timelineRes = await fetch(timelineUrl.toString(), { method: "GET", cache: "no-store" });
+          const timelineRes = await fetch(timelineUrl.toString(), {
+            method: "GET",
+            cache: "no-store",
+          });
           if (timelineRes.ok) {
-            const payload = (await timelineRes.json().catch(() => null)) as TimelinePayload | null;
-            const messages = Array.isArray(payload?.messages) ? payload.messages : [];
-            const latestMessage = messages.length ? messages[messages.length - 1] ?? null : null;
+            const payload = (await timelineRes
+              .json()
+              .catch(() => null)) as TimelinePayload | null;
+            const messages = Array.isArray(payload?.messages)
+              ? payload.messages
+              : [];
+            const latestMessage = messages.length
+              ? (messages[messages.length - 1] ?? null)
+              : null;
             const nextSnapshot = {
               messageCount: messages.length,
               lastMessageAt: getLatestTimelineMessageAt(latestMessage),
@@ -149,7 +179,8 @@ export function InboxLiveUpdatesClient(props: {
             const baseline = baselineRef.current;
             const changed =
               nextSnapshot.messageCount !== baseline.messageCount ||
-              (nextSnapshot.lastMessageAt ?? null) !== (baseline.lastMessageAt ?? null);
+              (nextSnapshot.lastMessageAt ?? null) !==
+                (baseline.lastMessageAt ?? null);
 
             if (changed) {
               if (isComposeDirty() || isComposeFocused()) {
@@ -165,17 +196,47 @@ export function InboxLiveUpdatesClient(props: {
           }
         }
 
-        const threadsUrl = new URL("/api/team/inbox/threads", window.location.origin);
-        threadsUrl.searchParams.set("limit", props.q ? "200" : "50");
-        if (props.view && props.view !== "all" && !props.q) threadsUrl.searchParams.set("view", props.view);
-        if (props.status && props.status !== "all") threadsUrl.searchParams.set("status", props.status);
+        const threadsUrl = new URL(
+          "/api/team/inbox/threads",
+          window.location.origin,
+        );
+        const hasFilters = Boolean(
+          props.q ||
+            props.firstMessageFrom ||
+            props.firstMessageTo ||
+            props.lastMessageFrom ||
+            props.lastMessageTo,
+        );
+        threadsUrl.searchParams.set("limit", hasFilters ? "200" : "50");
+        if (props.view && props.view !== "all" && !props.q)
+          threadsUrl.searchParams.set("view", props.view);
+        if (props.status && props.status !== "all")
+          threadsUrl.searchParams.set("status", props.status);
         if (props.q) threadsUrl.searchParams.set("q", props.q);
+        if (props.firstMessageFrom)
+          threadsUrl.searchParams.set(
+            "firstMessageFrom",
+            props.firstMessageFrom,
+          );
+        if (props.firstMessageTo)
+          threadsUrl.searchParams.set("firstMessageTo", props.firstMessageTo);
+        if (props.lastMessageFrom)
+          threadsUrl.searchParams.set("lastMessageFrom", props.lastMessageFrom);
+        if (props.lastMessageTo)
+          threadsUrl.searchParams.set("lastMessageTo", props.lastMessageTo);
         if (props.offset) threadsUrl.searchParams.set("offset", props.offset);
 
-        const threadsRes = await fetch(threadsUrl.toString(), { method: "GET", cache: "no-store" });
+        const threadsRes = await fetch(threadsUrl.toString(), {
+          method: "GET",
+          cache: "no-store",
+        });
         if (!threadsRes.ok) return;
-        const threadsPayload = (await threadsRes.json().catch(() => null)) as ThreadsPayload | null;
-        const threads = Array.isArray(threadsPayload?.threads) ? threadsPayload.threads : [];
+        const threadsPayload = (await threadsRes
+          .json()
+          .catch(() => null)) as ThreadsPayload | null;
+        const threads = Array.isArray(threadsPayload?.threads)
+          ? threadsPayload.threads
+          : [];
         const nextThreadsSignature = threads
           .map((thread) =>
             [
@@ -190,7 +251,10 @@ export function InboxLiveUpdatesClient(props: {
           )
           .join("|");
 
-        if (nextThreadsSignature && nextThreadsSignature !== threadsSignatureRef.current) {
+        if (
+          nextThreadsSignature &&
+          nextThreadsSignature !== threadsSignatureRef.current
+        ) {
           if (isComposeDirty() || isComposeFocused()) {
             setHasUpdate(true);
             return;
@@ -212,7 +276,18 @@ export function InboxLiveUpdatesClient(props: {
       stopped = true;
       window.clearInterval(timerId);
     };
-  }, [props.contactId, props.offset, props.q, props.status, props.view, doRefresh]);
+  }, [
+    props.contactId,
+    props.firstMessageFrom,
+    props.firstMessageTo,
+    props.lastMessageFrom,
+    props.lastMessageTo,
+    props.offset,
+    props.q,
+    props.status,
+    props.view,
+    doRefresh,
+  ]);
 
   if (!hasUpdate) return null;
 
