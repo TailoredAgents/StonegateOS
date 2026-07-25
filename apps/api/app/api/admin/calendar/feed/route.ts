@@ -10,6 +10,11 @@ import {
   getEtaSummariesForAppointments,
   type EtaAppointmentSummary,
 } from "@/lib/eta-agent";
+import {
+  getAppointmentMediaSummaryMap,
+  type AppointmentMediaSummary,
+} from "@/lib/appointment-media";
+import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
 
 type CalendarEvent = {
@@ -26,6 +31,8 @@ type CalendarEvent = {
   status?: string | null;
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
+  quotedScopeText?: string | null;
+  mediaSummary?: AppointmentMediaSummary;
   bookingDetails?: AppointmentBookingDetails | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
   eta?: {
@@ -44,22 +51,16 @@ type CalendarEvent = {
   };
 };
 
-type CalendarFeedResponse = {
-  ok: boolean;
-  appointments: CalendarEvent[];
-  externalEvents: CalendarEvent[];
-  conflicts: Array<{ a: string; b: string }>;
-  error?: string;
-};
-
 const DEFAULT_DAYS_FORWARD = 30;
 const DEFAULT_DAYS_BACK = 1;
 const MAX_RANGE_DAYS = 366;
 
-export async function GET(request: NextRequest): Promise<NextResponse<CalendarFeedResponse>> {
+export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
     return NextResponse.json({ ok: false, appointments: [], externalEvents: [], conflicts: [], error: "unauthorized" }, { status: 401 });
   }
+  const permissionError = await requirePermission(request, "appointments.read");
+  if (permissionError) return permissionError;
 
   const { windowStart, windowEnd } = getWindow(request);
 
@@ -75,6 +76,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
       rescheduleToken: appointments.rescheduleToken,
       quotedTotalCents: appointments.quotedTotalCents,
       finalTotalCents: appointments.finalTotalCents,
+      quotedScopeText: appointments.quotedScopeText,
       bookingDetails: appointments.bookingDetails,
       contactFirstName: contacts.firstName,
       contactLastName: contacts.lastName,
@@ -102,10 +104,18 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
   );
   const appointmentIds = dbRows.map((row) => row.id).filter((id): id is string => typeof id === "string" && id.length > 0);
   const notesByAppointmentId = new Map<string, Array<{ id: string; body: string; createdAt: string }>>();
-  const etaSummaryMap =
+  const quotedScopeByAppointmentId = new Map(
+    dbRows.map((row) => [row.id, row.quotedScopeText ?? null]),
+  );
+  const [etaSummaryMap, mediaSummaryMap] = await Promise.all([
     appointmentIds.length > 0
-      ? await getEtaSummariesForAppointments(appointmentIds)
-      : new Map<string, EtaAppointmentSummary>();
+      ? getEtaSummariesForAppointments(appointmentIds)
+      : Promise.resolve(new Map<string, EtaAppointmentSummary>()),
+    getAppointmentMediaSummaryMap(
+      appointmentIds,
+      quotedScopeByAppointmentId,
+    ),
+  ]);
   if (appointmentIds.length) {
     const noteRows = await db
       .select({
@@ -194,6 +204,13 @@ export async function GET(request: NextRequest): Promise<NextResponse<CalendarFe
         status: row.status ?? null,
         quotedTotalCents: row.quotedTotalCents ?? null,
         finalTotalCents: row.finalTotalCents ?? null,
+        quotedScopeText: row.quotedScopeText ?? null,
+        mediaSummary: mediaSummaryMap.get(row.id) ?? {
+          readyCount: 0,
+          pendingCount: 0,
+          coverMediaId: null,
+          needsScope: false,
+        },
         bookingDetails: parseAppointmentBookingDetails(row.bookingDetails),
         eta: etaSummaryMap.get(row.id) ?? {
           status: null,

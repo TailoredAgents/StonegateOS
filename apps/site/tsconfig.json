@@ -29,6 +29,7 @@
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
+    "public/mobile-sw.js",
     ".next/types/**/*.ts",
     ".contentlayer/generated"
   ],

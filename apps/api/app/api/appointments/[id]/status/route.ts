@@ -11,6 +11,10 @@ import {
   outboxEvents,
 } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
+import {
+  AppointmentMediaError,
+  assertAppointmentStatusTransitionAllowed,
+} from "@/lib/appointment-media";
 import { resolveLockedCrewPayout } from "@/lib/locked-crew-payout";
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../web/admin";
@@ -264,7 +268,18 @@ export async function POST(
       completedAtToSet !== undefined ||
       crewMembers !== undefined);
 
-  const updated = await db.transaction(async (tx) => {
+  let updated: {
+    id: string;
+    leadId: string | null;
+    calendarEventId: string | null;
+  } | null;
+  try {
+    updated = await db.transaction(async (tx) => {
+      await assertAppointmentStatusTransitionAllowed({
+        appointmentId,
+        nextStatus: status,
+        database: tx,
+      });
     const baseSet: Record<string, unknown> = {
       status,
       updatedAt: new Date(),
@@ -346,8 +361,24 @@ export async function POST(
       }
     }
 
-    return row;
-  });
+      return row;
+    });
+  } catch (error) {
+    if (
+      error instanceof AppointmentMediaError &&
+      error.code === "quoted_scope_required"
+    ) {
+      return NextResponse.json(
+        {
+          error: "quoted_scope_required",
+          message:
+            "Add the quoted-to-remove summary before confirming or completing this appointment.",
+        },
+        { status: 409 },
+      );
+    }
+    throw error;
+  }
 
   if (!updated) {
     return NextResponse.json({ error: "not_found" }, { status: 404 });

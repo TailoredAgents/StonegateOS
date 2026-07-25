@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { getDb, mediaJobAnalyses } from "@/db";
+import { mediaJobAnalyses } from "@/db";
+import type { getDb } from "@/db";
+import { listInstantQuoteMediaReadUrls } from "@/lib/appointment-media";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 
 type DatabaseClient = ReturnType<typeof getDb>;
@@ -740,12 +742,12 @@ export function buildMediaJobAnalysis(context: OmniLeadContext): MediaJobAnalysi
 
 function distributeVideoFrameSlots(videoCount: number, remainingSlots: number): number[] {
   if (videoCount <= 0 || remainingSlots <= 0) return [];
-  const allocations = new Array(videoCount).fill(0);
+  const allocations: number[] = new Array<number>(videoCount).fill(0);
   let slotsLeft = remainingSlots;
   let cursor = 0;
   while (slotsLeft > 0) {
-    if (allocations[cursor] < MAX_VIDEO_FRAMES_PER_VIDEO) {
-      allocations[cursor] += 1;
+    if (allocations[cursor]! < MAX_VIDEO_FRAMES_PER_VIDEO) {
+      allocations[cursor] = allocations[cursor]! + 1;
       slotsLeft -= 1;
     }
     cursor = (cursor + 1) % videoCount;
@@ -805,10 +807,10 @@ async function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: stri
 
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    const stdoutChunks: Uint8Array[] = [];
+    const stderrChunks: Uint8Array[] = [];
+    child.stdout.on("data", (chunk: Uint8Array) => stdoutChunks.push(chunk));
+    child.stderr.on("data", (chunk: Uint8Array) => stderrChunks.push(chunk));
     child.on("error", reject);
     child.on("close", (code) => {
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
@@ -939,25 +941,45 @@ async function buildVisionMediaInputs(
 export async function buildMediaJobAnalysisWithVision(
   context: OmniLeadContext,
 ): Promise<MediaJobAnalysisRecord> {
-  const { photoUrls, videoUrls } = getCollectedMedia(context);
+  const instantQuoteId = context.instantQuote?.id ?? null;
+  const durableInstantQuoteUrls =
+    instantQuoteId &&
+    instantQuoteId !== "00000000-0000-0000-0000-000000000000"
+      ? await listInstantQuoteMediaReadUrls(instantQuoteId).catch(() => [])
+      : [];
+  const analysisContext =
+    durableInstantQuoteUrls.length > 0 && context.instantQuote
+      ? {
+          ...context,
+          instantQuote: {
+            ...context.instantQuote,
+            photoUrls: durableInstantQuoteUrls,
+          },
+        }
+      : context;
+  const { photoUrls, videoUrls } = getCollectedMedia(analysisContext);
   if (photoUrls.length === 0 && videoUrls.length === 0) {
-    return buildScaffoldAnalysis(context, { reason: "no_media_on_file" });
+    return buildScaffoldAnalysis(analysisContext, {
+      reason: "no_media_on_file",
+    });
   }
 
   const config = getMediaAnalyzerConfig();
   if (!config) {
-    return buildScaffoldAnalysis(context, { reason: "openai_not_configured" });
+    return buildScaffoldAnalysis(analysisContext, {
+      reason: "openai_not_configured",
+    });
   }
 
   const { mediaInputs, extractionNotes } = await buildVisionMediaInputs(photoUrls, videoUrls);
   if (mediaInputs.length === 0) {
-    return buildScaffoldAnalysis(context, {
+    return buildScaffoldAnalysis(analysisContext, {
       reason: videoUrls.length > 0 ? "video_frame_extraction_unavailable" : "no_photo_media",
       modelOutput: extractionNotes.length ? { extractionNotes } : null,
     });
   }
 
-  const prompts = buildVisionPrompt(context, mediaInputs);
+  const prompts = buildVisionPrompt(analysisContext, mediaInputs);
   const vision = await callVisionAnalyzer({
     apiKey: config.apiKey,
     model: config.model,
@@ -967,14 +989,14 @@ export async function buildMediaJobAnalysisWithVision(
   });
 
   if (!vision.ok) {
-    return buildScaffoldAnalysis(context, {
+    return buildScaffoldAnalysis(analysisContext, {
       reason: vision.reason,
       modelOutput: vision.detail ? { detail: vision.detail } : null,
     });
   }
 
   return mergeVisionWithScope({
-    context,
+    context: analysisContext,
     photoUrls: photoUrls.slice(0, 8),
     videoUrls,
     mediaInputs,

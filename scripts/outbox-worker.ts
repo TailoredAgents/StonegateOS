@@ -77,6 +77,26 @@ async function runTraccarSyncOnce() {
   }
 }
 
+async function runAppointmentMediaCleanupOnce() {
+  const { cleanupExpiredAppointmentMedia } = await import(
+    "../apps/api/src/lib/appointment-media"
+  );
+  const result = await cleanupExpiredAppointmentMedia();
+  if (
+    result.expiredStaging > 0 ||
+    result.purgedAssets > 0 ||
+    result.failures > 0
+  ) {
+    console.log(
+      JSON.stringify(
+        { ok: result.failures === 0, appointmentMediaCleanup: result },
+        null,
+        2,
+      ),
+    );
+  }
+}
+
 async function main() {
   registerAliases();
   const limit = Number(process.env["OUTBOX_BATCH_SIZE"] ?? 10);
@@ -94,11 +114,15 @@ async function main() {
   const traccarSyncIntervalMs = Number(
     process.env["TRACCAR_SYNC_INTERVAL_MS"] ?? 60 * 1000
   );
+  const appointmentMediaCleanupIntervalMs = Number(
+    process.env["APPOINTMENT_MEDIA_CLEANUP_INTERVAL_MS"] ?? 60 * 60 * 1000
+  );
   let nextSeoAt = Date.now();
   let nextGoogleAdsAt = Date.now();
   let nextSalesDraftPrepAt = Date.now();
   let nextFacebookDmNameBackfillAt = Date.now();
   let nextTraccarSyncAt = Date.now();
+  let nextAppointmentMediaCleanupAt = Date.now();
 
   if (pollIntervalMs > 0) {
     // Continuous polling loop
@@ -161,6 +185,22 @@ async function main() {
             ? traccarSyncIntervalMs
             : 60 * 1000);
       }
+      if (Date.now() >= nextAppointmentMediaCleanupAt) {
+        try {
+          await runAppointmentMediaCleanupOnce();
+        } catch (error) {
+          console.warn(
+            "[appointment_media] cleanup.loop_failed",
+            String(error),
+          );
+        }
+        nextAppointmentMediaCleanupAt =
+          Date.now() +
+          (Number.isFinite(appointmentMediaCleanupIntervalMs) &&
+          appointmentMediaCleanupIntervalMs > 5 * 60_000
+            ? appointmentMediaCleanupIntervalMs
+            : 60 * 60 * 1000);
+      }
       if (stats.total === 0) {
         await sleep(pollIntervalMs);
       }
@@ -172,6 +212,7 @@ async function main() {
     await runSalesDraftPrepOnce();
     await runFacebookDmNameBackfillOnce();
     await runTraccarSyncOnce();
+    await runAppointmentMediaCleanupOnce();
   }
 }
 

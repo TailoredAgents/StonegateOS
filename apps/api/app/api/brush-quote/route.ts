@@ -1,10 +1,18 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
 import { getCompanyProfilePolicy, isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
 import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
 import { normalizeName, normalizePhone } from "../web/utils";
+import {
+  claimPublicInstantQuoteMediaReferences,
+  type PreparedPublicQuoteMediaReference,
+  PublicQuoteMediaError,
+  resolvePublicInstantQuoteMediaReferences,
+  resolvePublicMediaApiBaseUrl,
+} from "@/lib/public-instant-quote-media";
 
 const RAW_ALLOWED_ORIGINS =
   process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
@@ -48,10 +56,6 @@ async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>):
   if (!Number.isFinite(percent)) return 0;
   if (percent <= 0 || percent >= 1) return 0;
   return percent;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 const BrushPrimarySchema = z.enum([
@@ -355,7 +359,9 @@ async function getQuoteFromAi(
     output?: unknown;
   };
 
-  const outputItems = Array.isArray((data as any).output) ? ((data as any).output as unknown[]) : [];
+  const outputItems: unknown[] = Array.isArray(data.output)
+    ? data.output
+    : [];
   const outputJsonParts: unknown[] = [];
   const outputTextParts: string[] = [];
 
@@ -380,7 +386,10 @@ async function getQuoteFromAi(
   }
 
   const candidate = outputJsonParts[0] ?? outputTextParts.join("\n").trim();
-  const parsed = typeof candidate === "string" ? JSON.parse(candidate) : candidate;
+  const parsed: unknown =
+    typeof candidate === "string"
+      ? (JSON.parse(candidate) as unknown)
+      : candidate;
   const validated = QuoteResultSchema.safeParse(parsed);
   if (!validated.success) {
     throw new Error("ai_invalid_response");
@@ -397,7 +406,53 @@ export async function POST(request: NextRequest): Promise<Response> {
         status: 400
       });
     }
-    const body = parsed.data;
+    let preparedPhotoMedia: PreparedPublicQuoteMediaReference[] = [];
+    if (parsed.data.job.photoUrls.length > 0) {
+      const publicApiBaseUrl = resolvePublicMediaApiBaseUrl(
+        request.nextUrl.origin,
+      );
+      if (!publicApiBaseUrl) {
+        return corsJson(
+          {
+            ok: false,
+            error: "public_api_base_url_missing",
+            message: "Photo upload is temporarily unavailable.",
+          },
+          requestOrigin,
+          { status: 503 },
+        );
+      }
+      try {
+        preparedPhotoMedia =
+          await resolvePublicInstantQuoteMediaReferences({
+            urls: parsed.data.job.photoUrls,
+            baseUrl: publicApiBaseUrl,
+          });
+      } catch (error) {
+        if (error instanceof PublicQuoteMediaError) {
+          return corsJson(
+            {
+              ok: false,
+              error: error.code,
+              message:
+                "One or more photos expired or could not be verified. Please upload them again.",
+            },
+            requestOrigin,
+            { status: error.status },
+          );
+        }
+        throw error;
+      }
+    }
+    const body = {
+      ...parsed.data,
+      job: {
+        ...parsed.data.job,
+        photoUrls: preparedPhotoMedia.map(
+          (reference) => reference.referenceUrl,
+        ),
+      },
+    };
 
     const normalizedPostalCode = normalizePostalCode(body.job.zip);
     if (normalizedPostalCode && !isGeorgiaPostalCode(normalizedPostalCode)) {
@@ -509,6 +564,12 @@ export async function POST(request: NextRequest): Promise<Response> {
             phoneE164: normalizedPhone.e164,
             source: "brush_quote",
             email: null
+          });
+          await claimPublicInstantQuoteMediaReferences({
+            instantQuoteId: quoteId,
+            contactId: contact.id,
+            references: preparedPhotoMedia,
+            database: tx,
           });
 
           const [existingProperty] = await tx
@@ -626,6 +687,13 @@ export async function POST(request: NextRequest): Promise<Response> {
           }
         });
       } catch (error) {
+        if (preparedPhotoMedia.length > 0) {
+          await db
+            .delete(instantQuotes)
+            .where(eq(instantQuotes.id, quoteId))
+            .catch(() => undefined);
+          throw error;
+        }
         console.error("[brush-quote] lead_create_failed", { quoteId, error: String(error) });
       }
     }
@@ -649,6 +717,18 @@ export async function POST(request: NextRequest): Promise<Response> {
       requestOrigin
     );
   } catch (error) {
+    if (error instanceof PublicQuoteMediaError) {
+      return corsJson(
+        {
+          ok: false,
+          error: error.code,
+          message:
+            "The uploaded photos could not be attached. Please upload them again.",
+        },
+        null,
+        { status: error.status },
+      );
+    }
     console.error("[brush-quote] server_error", error);
     return corsJson({ error: "server_error" }, null, { status: 500 });
   }

@@ -69,14 +69,16 @@ export async function resolveTeamMemberFromSessionCookie(): Promise<TeamSessionA
 async function resolveActorRole(): Promise<string | null> {
   try {
     const jar = await cookies();
-    if (jar.get(ADMIN_SESSION_COOKIE)?.value) return "owner";
-    if (jar.get(CREW_SESSION_COOKIE)?.value) return "crew";
-
     const teamSessionToken = jar.get(TEAM_SESSION_COOKIE)?.value ?? "";
     if (teamSessionToken) {
       const teamMember = await getTeamSession(teamSessionToken);
-      return teamMember?.roleSlug ?? "office";
+      if (teamMember) {
+        return teamMember.roleSlug ?? "office";
+      }
     }
+
+    if (jar.get(ADMIN_SESSION_COOKIE)?.value) return "owner";
+    if (jar.get(CREW_SESSION_COOKIE)?.value) return "crew";
   } catch {
     // ignore cookie access in non-request contexts
   }

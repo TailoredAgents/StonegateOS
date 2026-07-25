@@ -26,6 +26,8 @@ type TeamMember = {
   } | null;
 };
 
+const ROLLOUT_PERMISSION_OPTIONS = ["payments.collect"] as const;
+
 export async function AccessSection(): Promise<React.ReactElement> {
   let roles: Role[] = [];
   let members: TeamMember[] = [];
@@ -68,9 +70,12 @@ export async function AccessSection(): Promise<React.ReactElement> {
     loadError = `Failed to load access control: ${(error as Error).message}`;
   }
 
-  const permissionOptions = Array.from(new Set(roles.flatMap((role) => role.permissions ?? []))).sort((a, b) =>
-    a.localeCompare(b)
-  );
+  const permissionOptions = Array.from(
+    new Set([
+      ...roles.flatMap((role) => role.permissions ?? []),
+      ...ROLLOUT_PERMISSION_OPTIONS,
+    ]),
+  ).sort((a, b) => a.localeCompare(b));
 
   return (
     <section className="space-y-6">

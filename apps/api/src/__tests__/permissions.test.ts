@@ -10,6 +10,8 @@ describe("team role permissions", () => {
         "messages.send",
         "appointments.read",
         "appointments.update",
+        "appointment_media.capture",
+        "appointment_media.manage",
         "bookings.manage",
         "quotes.read",
         "quotes.write",
@@ -28,6 +30,26 @@ describe("team role permissions", () => {
 
   it("keeps owner as full access", () => {
     expect(getDefaultPermissionsForRole("owner")).toEqual(["*"]);
+  });
+
+  it("grants appointment media permissions by role", () => {
+    const office = getDefaultPermissionsForRole("office");
+    const sales = getDefaultPermissionsForRole("sales");
+    const crew = getDefaultPermissionsForRole("crew");
+    const readOnly = getDefaultPermissionsForRole("read_only");
+
+    for (const permissions of [office, sales]) {
+      expect(permissions).toEqual(
+        expect.arrayContaining([
+          "appointment_media.capture",
+          "appointment_media.manage",
+        ]),
+      );
+    }
+
+    expect(crew).toContain("appointment_media.capture");
+    expect(crew).not.toContain("appointment_media.manage");
+    expect(readOnly).toEqual(["read"]);
   });
 
   it("allows explicit denies to remove sales permissions", () => {

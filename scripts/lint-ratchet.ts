@@ -23,6 +23,7 @@ type AppBaseline = {
 
 type LintBaseline = {
   version: 1;
+  cleanTouchedFilesSince: string;
   totalErrors: number;
   apps: Record<string, AppBaseline>;
 };
@@ -31,6 +32,21 @@ const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const baselinePath = resolve(workspaceRoot, "quality/lint-baseline.json");
 const apps = ["api", "site"] as const;
 const update = process.argv.includes("--update");
+
+function runGit(args: string[]): string {
+  const result = spawnSync("git", args, {
+    cwd: workspaceRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(
+      `git ${args.join(" ")} failed:\n${result.stderr || result.stdout}`,
+    );
+  }
+  return result.stdout.trim();
+}
 
 function sortRecord<T>(value: Record<string, T>): Record<string, T> {
   return Object.fromEntries(
@@ -89,6 +105,7 @@ const currentApps = Object.fromEntries(
 ) as Record<string, AppBaseline>;
 const current: LintBaseline = {
   version: 1,
+  cleanTouchedFilesSince: runGit(["rev-parse", "HEAD"]),
   totalErrors: Object.values(currentApps).reduce(
     (sum, app) => sum + app.totalErrors,
     0,
@@ -119,7 +136,46 @@ for (const [appName, app] of Object.entries(current.apps)) {
   }
 }
 
-if (increases.length > 0) {
+const touchedBase =
+  process.env["LINT_TOUCHED_BASE_REF"]?.trim() ||
+  baseline.cleanTouchedFilesSince;
+if (!touchedBase) {
+  throw new Error(
+    "quality/lint-baseline.json must define cleanTouchedFilesSince",
+  );
+}
+const touchedFiles = new Set(
+  runGit([
+    "diff",
+    "--name-only",
+    touchedBase,
+    "--",
+    "apps/api",
+    "apps/site",
+  ])
+    .split("\n")
+    .filter(Boolean),
+);
+const touchedFileErrors: string[] = [];
+for (const app of Object.values(current.apps)) {
+  for (const [file, rules] of Object.entries(app.byFile)) {
+    if (!touchedFiles.has(file)) continue;
+    const count = Object.values(rules).reduce(
+      (sum, ruleCount) => sum + ruleCount,
+      0,
+    );
+    touchedFileErrors.push(`${file}: ${count}`);
+  }
+}
+
+if (increases.length > 0 || touchedFileErrors.length > 0) {
+  if (touchedFileErrors.length > 0) {
+    console.error(
+      `Touched files must have zero lint errors (base ${touchedBase}):`,
+    );
+    for (const error of touchedFileErrors) console.error(`  ${error}`);
+  }
+  if (increases.length === 0) process.exit(1);
   console.error("Lint debt increased:");
   for (const increase of increases) console.error(`  ${increase}`);
   console.error(

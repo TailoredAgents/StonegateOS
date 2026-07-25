@@ -24,6 +24,7 @@ import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { getBusinessHoursPolicy, getBookingRulesPolicy } from "@/lib/policy";
 import { getAutonomousBookingDurationMinutes, validateAutonomousBookingStart } from "@/lib/after-hours-autonomy";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
+import { resolveAutomaticAppointmentStatusForMedia } from "@/lib/appointment-media";
 import {
   isValidSoldByOverrideCode,
   normalizeSoldByMemberId,
@@ -422,6 +423,15 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
 
       const token = nanoid(24);
+      const appointmentStatus = requiresAutonomousBookingRules
+        ? await resolveAutomaticAppointmentStatusForMedia({
+            proposedStatus: "confirmed",
+            quotedScopeText: null,
+            contactId,
+            database: tx,
+            now,
+          })
+        : ("confirmed" as const);
       const [appointment] = await tx
         .insert(appointments)
         .values({
@@ -430,7 +440,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           type: appointmentType,
           startAt,
           durationMinutes,
-          status: "confirmed",
+          status: appointmentStatus,
           rescheduleToken: token,
           travelBufferMinutes,
           ...(bookingDetails ? { bookingDetails } : {}),

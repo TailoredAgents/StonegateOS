@@ -14,7 +14,6 @@ import {
   createMobileQuoteAction,
   createMobileTeamMemberAction,
   markMobileThreadHandledAction,
-  mobileLogoutAction,
   openMobileAppointmentThreadAction,
   openMobileContactThreadAction,
   runMobilePayoutAction,
@@ -35,6 +34,10 @@ import { InboxRefresh } from "./InboxRefresh";
 import { MobileInboxMediaGallery } from "./MobileInboxMediaGallery";
 import { MobileThreadConversation } from "./MobileThreadConversation";
 import { MobileAppointmentPricingFields } from "./MobileAppointmentPricingFields";
+import { MobileAppointmentDetail } from "./MobileAppointmentDetail";
+import { MobileLogoutForm } from "./MobileLogoutForm";
+import { MobileOfflineRuntime } from "./MobileOfflineRuntime";
+import type { AppointmentMediaSummary } from "./MobileQuotedWorkPanel";
 import { loadMobileOwnerSummary, type MobileOwnerSummary } from "./lib/owner-summary";
 import type { AppointmentBookingDetails } from "../team/lib/booking-details";
 
@@ -190,6 +193,8 @@ type CalendarEvent = {
   status?: string | null;
   quotedTotalCents?: number | null;
   finalTotalCents?: number | null;
+  quotedScopeText?: string | null;
+  mediaSummary?: AppointmentMediaSummary;
   bookingDetails?: AppointmentBookingDetails | null;
   eta?: EtaSummary;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
@@ -556,6 +561,17 @@ function formatEventPricing(event: CalendarEvent): string | null {
   }
   if (pricing?.mode === "exact") return exactLabel ? `Exact ${exactLabel}` : null;
   return exactLabel ? `Quoted ${exactLabel}` : null;
+}
+
+function eventMediaSummary(event: CalendarEvent): AppointmentMediaSummary {
+  return (
+    event.mediaSummary ?? {
+      readyCount: 0,
+      pendingCount: 0,
+      coverMediaId: null,
+      needsScope: false,
+    }
+  );
 }
 
 function formatEventAmountBadge(event: CalendarEvent): string | null {
@@ -1057,6 +1073,8 @@ function MobileWeekAgenda({
   days,
   events,
   canOpenMessageThreads,
+  canCaptureMedia,
+  canManageMedia,
   teamMembers,
   currentTeamMemberId,
   currentTeamMemberName,
@@ -1065,6 +1083,8 @@ function MobileWeekAgenda({
   days: string[];
   events: CalendarEvent[];
   canOpenMessageThreads: boolean;
+  canCaptureMedia: boolean;
+  canManageMedia: boolean;
   teamMembers: TeamMemberSummary[];
   currentTeamMemberId: string;
   currentTeamMemberName: string;
@@ -1142,35 +1162,56 @@ function MobileWeekAgenda({
                       </summary>
 
                       <div className="space-y-3 border-t border-white/10 px-3 pb-3 pt-2">
-                        {mapsHref && event.address ? (
-                          <a
-                            href={mapsHref}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="block rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold leading-5 text-cyan-100 underline-offset-4 hover:underline"
-                          >
-                            {event.address}
-                          </a>
-                        ) : event.address ? (
-                          <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-5 text-slate-300">{event.address}</p>
-                        ) : null}
-                        {event.notes?.length ? (
-                          <div className="space-y-2 rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-6 text-slate-300">
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Notes</p>
-                            {event.notes.map((note) => (
-                              <p key={note.id}>{note.body}</p>
-                            ))}
-                          </div>
+                        {appointmentId ? (
+                          <MobileAppointmentDetail
+                            appointmentId={appointmentId}
+                            employeeId={currentTeamMemberId}
+                            address={event.address}
+                            mapsHref={mapsHref}
+                            notes={event.notes}
+                            pricingLabel={eventPricing}
+                            quotedScopeText={event.quotedScopeText ?? null}
+                            mediaSummary={eventMediaSummary(event)}
+                            canCaptureMedia={canCaptureMedia}
+                            canManageMedia={canManageMedia}
+                          />
                         ) : (
-                          <div className="rounded-md border border-dashed border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-500">
-                            No notes.
-                          </div>
+                          <>
+                            {mapsHref && event.address ? (
+                              <a
+                                href={mapsHref}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold leading-5 text-cyan-100 underline-offset-4 hover:underline"
+                              >
+                                {event.address}
+                              </a>
+                            ) : event.address ? (
+                              <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-5 text-slate-300">
+                                {event.address}
+                              </p>
+                            ) : null}
+                            {event.notes?.length ? (
+                              <div className="space-y-2 rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-6 text-slate-300">
+                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                                  Notes
+                                </p>
+                                {event.notes.map((note) => (
+                                  <p key={note.id}>{note.body}</p>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="rounded-md border border-dashed border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-500">
+                                No notes.
+                              </div>
+                            )}
+                            {eventPricing ? (
+                              <div className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100">
+                                {eventPricing}
+                              </div>
+                            ) : null}
+                          </>
                         )}
-                        {eventPricing ? (
-                          <div className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100">
-                            {eventPricing}
-                          </div>
-                        ) : null}
                         <MobileEtaControls
                           event={event}
                           appointmentId={appointmentId}
@@ -1323,7 +1364,15 @@ async function loadMobileContacts(input: { q: string }): Promise<ContactSummary[
   return Array.isArray(payload?.contacts) ? payload.contacts : [];
 }
 
-async function loadMobileCalendarRange(startDayKey: string, days: number): Promise<CalendarEvent[]> {
+type MobileCalendarRangeResult = {
+  authoritative: boolean;
+  events: CalendarEvent[];
+};
+
+async function loadMobileCalendarRange(
+  startDayKey: string,
+  days: number,
+): Promise<MobileCalendarRangeResult> {
   const start = parseDayKey(startDayKey);
   start.setUTCHours(0, 0, 0, 0);
   const end = new Date(start.getTime());
@@ -1333,10 +1382,21 @@ async function loadMobileCalendarRange(startDayKey: string, days: number): Promi
     `/api/admin/calendar/feed?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`,
     { method: "GET" }
   );
-  if (!response.ok) return [];
+  if (!response.ok) return { authoritative: false, events: [] };
   const payload = (await response.json().catch(() => null)) as CalendarFeedResponse | null;
-  const events = [...(payload?.appointments ?? []), ...(payload?.externalEvents ?? [])];
-  return events.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  if (
+    !payload ||
+    payload.ok === false ||
+    !Array.isArray(payload.appointments) ||
+    !Array.isArray(payload.externalEvents)
+  ) {
+    return { authoritative: false, events: [] };
+  }
+  const events = [...payload.appointments, ...payload.externalEvents];
+  return {
+    authoritative: true,
+    events: events.sort((a, b) => Date.parse(a.start) - Date.parse(b.start)),
+  };
 }
 
 async function loadMobileQuotes(status: string): Promise<QuoteSummary[]> {
@@ -1485,12 +1545,23 @@ export default async function MobileHomePage({
   const contacts = activeScreen === "contacts" || activeScreen === "quotes" ? await loadMobileContacts({ q: inboxQuery }) : [];
   const contactDetail = activeScreen === "contacts" && contactId ? await loadMobileContact(contactId) : null;
   const calendarWeekDays = weekDayKeys(calendarDay);
-  const calendarWeekEvents =
+  const calendarWeekResult =
     activeScreen === "calendar" || activeScreen === "myday"
-      ? (await loadMobileCalendarRange(calendarWeekDays[0] ?? calendarDay, 8)).filter((event) =>
-          calendarWeekDays.includes(eventDayKey(event))
-        )
-      : [];
+      ? await loadMobileCalendarRange(calendarWeekDays[0] ?? calendarDay, 8)
+      : null;
+  const calendarWeekEvents = (calendarWeekResult?.events ?? []).filter((event) =>
+    calendarWeekDays.includes(eventDayKey(event))
+  );
+  const offlineTodayKey = formatDayKey(new Date());
+  const offlineTodayResult =
+    (activeScreen === "calendar" || activeScreen === "myday") &&
+    calendarWeekDays.includes(offlineTodayKey)
+      ? {
+          authoritative: calendarWeekResult?.authoritative ?? false,
+          events: eventsForDay(calendarWeekEvents, offlineTodayKey),
+        }
+      : await loadMobileCalendarRange(offlineTodayKey, 1);
+  const offlineTodayEvents = offlineTodayResult.events;
   const calendarEvents = eventsForDay(calendarWeekEvents, calendarDay);
   const visibleTodayEvents = activeScreen === "myday" ? calendarEvents.filter((event) => !isCanceledEvent(event)) : calendarEvents;
   const teamMembers = activeScreen === "myday" || activeScreen === "calendar" ? await loadMobileTeamMembers() : [];
@@ -1502,6 +1573,14 @@ export default async function MobileHomePage({
   const canOpenMessageThreads = hasMobilePermission(session.teamMember.permissions, "messages.read");
   const canStartMessageThreads = hasMobilePermission(session.teamMember.permissions, "messages.send");
   const canWriteExpenses = hasMobilePermission(session.teamMember.permissions, "expenses.write");
+  const canCaptureMedia = hasMobilePermission(
+    session.teamMember.permissions,
+    "appointment_media.capture",
+  );
+  const canManageMedia = hasMobilePermission(
+    session.teamMember.permissions,
+    "appointment_media.manage",
+  );
   const calendarWeekProjectedLabel = formatProjectedRange(calendarWeekEvents);
   const selectedThread = activeScreen === "inbox" && threadId ? await loadMobileThread(threadId) : null;
   const selectedContact = selectedThread?.thread?.contact?.id
@@ -1530,6 +1609,31 @@ export default async function MobileHomePage({
       ]
     : [];
   const mobileJobEvents = visibleTodayEvents.filter((event) => event.source === "db" && !isQuoteOnlyAppointmentType(event.appointmentType));
+  const offlineSnapshots = offlineTodayEvents
+    .filter(
+      (event) =>
+        event.source === "db" &&
+        !isCanceledEvent(event) &&
+        !isQuoteOnlyAppointmentType(event.appointmentType),
+    )
+    .map((event) => {
+      const appointmentId =
+        event.appointmentId ??
+        (event.id.startsWith("db:") ? event.id.replace(/^db:/, "") : "");
+      return {
+        appointmentId,
+        contactName: event.contactName ?? event.title,
+        address: event.address ?? null,
+        start: event.start,
+        end: event.end,
+        dayKey: offlineTodayKey,
+        status: event.status ?? null,
+        canCaptureMedia,
+        quotedScopeText: event.quotedScopeText ?? null,
+        mediaSummary: eventMediaSummary(event),
+      };
+    })
+    .filter((event) => Boolean(event.appointmentId));
 
   return (
     <main className="min-h-dvh bg-slate-950 text-white">
@@ -1549,6 +1653,12 @@ export default async function MobileHomePage({
 
         <section className="flex-1 space-y-4 px-4 py-4">
           <OfflineBanner />
+          <MobileOfflineRuntime
+            employeeId={session.teamMember.id}
+            dayKey={offlineTodayKey}
+            authoritative={offlineTodayResult.authoritative}
+            snapshots={offlineSnapshots}
+          />
           {activeScreen === "inbox" ? <InboxRefresh threadId={threadId} /> : null}
 
           {needsPasswordSetup ? (
@@ -2216,49 +2326,25 @@ export default async function MobileHomePage({
                                 {formatTime(event.start)} - {formatTime(event.end)}
                               </p>
                               <p className="mt-1 truncate text-sm font-semibold text-white">{event.contactName ?? event.title}</p>
-                              {mapsHref && event.address ? (
-                                <a
-                                  href={mapsHref}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="mt-1 block text-sm font-semibold leading-5 text-cyan-100 underline-offset-4 hover:underline"
-                                >
-                                  {event.address}
-                                </a>
-                              ) : event.address ? (
-                                <p className="mt-1 text-sm leading-5 text-slate-300">{event.address}</p>
-                              ) : null}
                             </div>
                             <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone.badge}`}>
                               {eventKindLabel(event)}
                             </span>
                           </div>
-                          {event.notes?.length ? (
-                            <details className="mt-3 rounded-md border border-white/10 bg-slate-950 p-3" open={event.notes.length <= 2}>
-                              <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
-                                Notes ({event.notes.length})
-                              </summary>
-                              <div className="mt-2 space-y-2">
-                                {event.notes.slice(0, 5).map((note) => (
-                                  <div key={note.id} className="rounded-md border border-white/10 bg-slate-900 px-3 py-2">
-                                    <p className="whitespace-pre-wrap text-sm leading-5 text-slate-200">{note.body}</p>
-                                    <p className="mt-1 text-[11px] text-slate-500">
-                                      {new Date(note.createdAt).toLocaleString("en-US", {
-                                        timeZone: TEAM_TIME_ZONE,
-                                        month: "short",
-                                        day: "numeric",
-                                        hour: "numeric",
-                                        minute: "2-digit"
-                                      })}
-                                    </p>
-                                  </div>
-                                ))}
-                              </div>
-                            </details>
-                          ) : null}
-                          {eventPricing ? (
-                            <div className="mt-3 rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100">
-                              {eventPricing}
+                          {appointmentId ? (
+                            <div className="mt-3 space-y-3">
+                              <MobileAppointmentDetail
+                                appointmentId={appointmentId}
+                                employeeId={session.teamMember.id}
+                                address={event.address}
+                                mapsHref={mapsHref}
+                                notes={event.notes}
+                                pricingLabel={eventPricing}
+                                quotedScopeText={event.quotedScopeText ?? null}
+                                mediaSummary={eventMediaSummary(event)}
+                                canCaptureMedia={canCaptureMedia}
+                                canManageMedia={canManageMedia}
+                              />
                             </div>
                           ) : null}
                           <div className="mt-3">
@@ -3013,6 +3099,8 @@ export default async function MobileHomePage({
                 days={calendarWeekDays}
                 events={calendarWeekEvents}
                 canOpenMessageThreads={canOpenMessageThreads}
+                canCaptureMedia={canCaptureMedia}
+                canManageMedia={canManageMedia}
                 teamMembers={teamMembers}
                 currentTeamMemberId={session.teamMember.id}
                 currentTeamMemberName={session.teamMember.name}
@@ -3605,11 +3693,7 @@ export default async function MobileHomePage({
                 </div>
               ) : null}
 
-              <form action={mobileLogoutAction} className="rounded-lg border border-rose-300/30 bg-rose-300/10 p-4">
-                <button type="submit" className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-4 py-3 text-sm font-semibold text-rose-100">
-                  Log out
-                </button>
-              </form>
+              <MobileLogoutForm />
             </div>
           ) : (
             <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">

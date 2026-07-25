@@ -25,6 +25,8 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "audit.read",
     "appointments.read",
     "appointments.update",
+    "appointment_media.capture",
+    "appointment_media.manage",
     "quotes.read",
     "quotes.write",
     "quotes.send",
@@ -38,13 +40,22 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "messages.send",
     "appointments.read",
     "appointments.update",
+    "appointment_media.capture",
+    "appointment_media.manage",
     "bookings.manage",
     "quotes.read",
     "quotes.write",
     "quotes.send",
     "quotes.update"
   ],
-  crew: ["messages.read", "appointments.read", "appointments.update", "expenses.read", "expenses.write"],
+  crew: [
+    "messages.read",
+    "appointments.read",
+    "appointments.update",
+    "appointment_media.capture",
+    "expenses.read",
+    "expenses.write"
+  ],
   read_only: ["read"]
 };
 

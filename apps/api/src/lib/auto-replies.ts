@@ -16,6 +16,10 @@ import {
 import { deleteCalendarEvent } from "@/lib/calendar";
 import { recordAuditEvent } from "@/lib/audit";
 import {
+  AppointmentMediaError,
+  assertAppointmentStatusTransitionAllowed,
+} from "@/lib/appointment-media";
+import {
   getConfirmationLoopPolicy,
   getServiceAreaPolicy,
   getSalesAutopilotPolicy,
@@ -314,7 +318,7 @@ async function queueThreadMessage(input: {
 }
 
 async function handleConfirmationReply(input: {
-  db: DbExecutor;
+  db: DatabaseClient;
   messageId: string;
   threadId: string;
   leadId: string | null;
@@ -386,23 +390,54 @@ async function handleConfirmationReply(input: {
       : input.contactPhoneE164 ?? input.contactPhone ?? null;
 
   if (intent === "confirm") {
-    await input.db
-      .update(appointments)
-      .set({ status: "confirmed", updatedAt: now })
-      .where(eq(appointments.id, appointment.id));
+    try {
+      await input.db.transaction(async (tx) => {
+        await assertAppointmentStatusTransitionAllowed({
+          appointmentId: appointment.id,
+          nextStatus: "confirmed",
+          database: tx,
+        });
+        await tx
+          .update(appointments)
+          .set({ status: "confirmed", updatedAt: now })
+          .where(eq(appointments.id, appointment.id));
 
-    if (appointment.leadId) {
-      await input.db.update(leads).set({ status: "scheduled" }).where(eq(leads.id, appointment.leadId));
+        if (appointment.leadId) {
+          await tx
+            .update(leads)
+            .set({ status: "scheduled" })
+            .where(eq(leads.id, appointment.leadId));
+        }
+
+        await tx
+          .delete(outboxEvents)
+          .where(
+            and(
+              eq(outboxEvents.type, "estimate.reminder"),
+              sql`(payload->>'appointmentId') = ${appointment.id}`,
+            ),
+          );
+      });
+    } catch (error) {
+      if (
+        error instanceof AppointmentMediaError &&
+        error.code === "quoted_scope_required"
+      ) {
+        await recordAuditEvent({
+          actor: { type: "ai", label: "confirmation-loop" },
+          action: "appointment.confirmation.blocked",
+          entityType: "appointment",
+          entityId: appointment.id,
+          meta: {
+            messageId: input.messageId,
+            channel,
+            reason: "quoted_scope_required",
+          },
+        });
+        return true;
+      }
+      throw error;
     }
-
-    await input.db
-      .delete(outboxEvents)
-      .where(
-        and(
-          eq(outboxEvents.type, "estimate.reminder"),
-          sql`(payload->>'appointmentId') = ${appointment.id}`
-        )
-      );
 
     if (toAddress) {
       const when = appointment.startAt instanceof Date ? formatAppointmentTime(appointment.startAt) : "soon";
