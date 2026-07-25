@@ -32,4 +32,3 @@ export async function GET(
     return appointmentMediaErrorResponse(error);
   }
 }
-

@@ -17,8 +17,10 @@ import {
 } from "@/lib/appointment-media";
 import { resolveLockedCrewPayout } from "@/lib/locked-crew-payout";
 import {
-  getActivePaymentAttempt,
+  expireStalePaymentAttemptsForAppointment,
+  getBlockingSquareAttempt,
   getFinalTotalPaymentLock,
+  requiresSquareAttemptReconciliation,
   validateFinalTotalChange,
 } from "@/lib/payment-ledger";
 import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
@@ -252,19 +254,21 @@ export async function POST(
     typeof finalTotalCentsToSet === "number"
   ) {
     if (existing.finalTotalCents !== finalTotalCentsToSet) {
-      const activeAttempt = await getActivePaymentAttempt(
-        db,
-        appointmentId,
-        undefined,
-        { schemaAvailable: true },
-      );
-      if (activeAttempt) {
+      await expireStalePaymentAttemptsForAppointment(db, appointmentId);
+      const blockingAttempt = await getBlockingSquareAttempt(db, appointmentId);
+      if (blockingAttempt) {
+        const reconciliationRequired = requiresSquareAttemptReconciliation(
+          blockingAttempt.status,
+        );
         return NextResponse.json(
           {
-            error: "square_verification_in_progress",
-            attemptId: activeAttempt.id,
-            message:
-              "Finish or reconcile the active Square attempt before changing the final total.",
+            error: reconciliationRequired
+              ? "square_reconciliation_required"
+              : "square_verification_in_progress",
+            attemptId: blockingAttempt.id,
+            message: reconciliationRequired
+              ? "An unresolved Square attempt must be reviewed by an owner before changing the final total."
+              : "Finish or reconcile the active Square attempt before changing the final total.",
           },
           { status: 409 },
         );
@@ -368,16 +372,13 @@ export async function POST(
       paymentLedgerAvailable &&
       (isChangingFinalTotal || cardTipCentsInput !== undefined)
     ) {
-      const activeAttempt = await getActivePaymentAttempt(
-        tx,
-        appointmentId,
-        undefined,
-        { schemaAvailable: true },
-      );
-      if (activeAttempt) {
+      await expireStalePaymentAttemptsForAppointment(tx, appointmentId);
+      const blockingAttempt = await getBlockingSquareAttempt(tx, appointmentId);
+      if (blockingAttempt) {
         return {
-          kind: "attempt_in_progress" as const,
-          attemptId: activeAttempt.id,
+          kind: "attempt_blocked" as const,
+          attemptId: blockingAttempt.id,
+          attemptStatus: blockingAttempt.status,
         };
       }
       const paymentLock = await getFinalTotalPaymentLock(
@@ -490,13 +491,19 @@ export async function POST(
   if (updated.kind === "not_found") {
     return NextResponse.json({ error: "not_found" }, { status: 404 });
   }
-  if (updated.kind === "attempt_in_progress") {
+  if (updated.kind === "attempt_blocked") {
+    const reconciliationRequired = requiresSquareAttemptReconciliation(
+      updated.attemptStatus,
+    );
     return NextResponse.json(
       {
-        error: "square_verification_in_progress",
+        error: reconciliationRequired
+          ? "square_reconciliation_required"
+          : "square_verification_in_progress",
         attemptId: updated.attemptId,
-        message:
-          "Finish or reconcile the active Square attempt before changing the final total.",
+        message: reconciliationRequired
+          ? "An unresolved Square attempt must be reviewed by an owner before changing the final total."
+          : "Finish or reconcile the active Square attempt before changing the final total.",
       },
       { status: 409 },
     );

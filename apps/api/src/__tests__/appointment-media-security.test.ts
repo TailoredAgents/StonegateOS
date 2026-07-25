@@ -109,6 +109,43 @@ describe("remote appointment media URL policy", () => {
     ).rejects.toThrow("remote_media_host_forbidden");
   });
 
+  it.each([
+    "192.0.2.1",
+    "198.18.0.1",
+    "198.51.100.7",
+    "203.0.113.9",
+    "240.0.0.1",
+  ])("rejects reserved or documentation IPv4 target %s", async (address) => {
+    await expect(
+      assertSafeRemoteMediaUrl(`https://${address}/photo.jpg`),
+    ).rejects.toThrow("remote_media_host_forbidden");
+  });
+
+  it.each([
+    "2001:db8::1",
+    "2002:c0a8:1::",
+    "3fff::1",
+    "5f00::1",
+    "fec0::1",
+    "64:ff9b::c0a8:1",
+  ])(
+    "rejects reserved, local, or transition IPv6 target %s",
+    async (address) => {
+      await expect(
+        assertSafeRemoteMediaUrl(`https://[${address}]/photo.jpg`),
+      ).rejects.toThrow("remote_media_host_forbidden");
+    },
+  );
+
+  it("allows representative globally routed literal addresses", async () => {
+    await expect(
+      assertSafeRemoteMediaUrl("https://8.8.8.8/photo.jpg"),
+    ).resolves.toBeInstanceOf(URL);
+    await expect(
+      assertSafeRemoteMediaUrl("https://[2606:4700:4700::1111]/photo.jpg"),
+    ).resolves.toBeInstanceOf(URL);
+  });
+
   it("uses a prevalidated scalar address with Node 20's real connector", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/plain" });

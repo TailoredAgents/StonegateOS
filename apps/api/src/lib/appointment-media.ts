@@ -62,6 +62,40 @@ export const REMOTE_MEDIA_FETCH_TIMEOUT_MS = 20_000;
 
 export type RemoteMediaProvider = "twilio" | "facebook";
 
+const RETRYABLE_REMOTE_MEDIA_SOURCES = new Set([
+  "twilio_mms",
+  "facebook_messenger",
+  "instant_quote",
+  "legacy_attachment",
+]);
+
+export function shouldExpireIncompleteMediaAsset(input: {
+  status: string;
+  stagingExpiresAt: Date | null;
+  now: Date;
+}): boolean {
+  return (
+    ["staging", "processing", "failed"].includes(input.status) &&
+    input.stagingExpiresAt !== null &&
+    input.stagingExpiresAt <= input.now
+  );
+}
+
+export function canRetryExpiredImportedMediaAsset(input: {
+  source: string;
+  status: string;
+  deletedAt: Date | null;
+  hasActiveAppointmentLink: boolean;
+  hasDeletedAppointmentLink: boolean;
+}): boolean {
+  return (
+    RETRYABLE_REMOTE_MEDIA_SOURCES.has(input.source) &&
+    ["expired", "deleted"].includes(input.status) &&
+    input.deletedAt !== null &&
+    (input.hasActiveAppointmentLink || !input.hasDeletedAppointmentLink)
+  );
+}
+
 export type AppointmentMediaSummary = {
   readyCount: number;
   pendingCount: number;
@@ -1693,63 +1727,132 @@ export async function getAppointmentMediaContentUrl(input: {
   return createMediaReadUrl(key);
 }
 
-function isPrivateIpv4(value: string): boolean {
+function parseIpv4(value: string): number | null {
   const parts = value.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
-    return true;
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 0xff)
+  ) {
+    return null;
   }
   return (
-    parts[0] === 0 ||
-    parts[0] === 10 ||
-    parts[0] === 127 ||
-    (parts[0] === 169 && parts[1] === 254) ||
-    (parts[0] === 172 && (parts[1] ?? 0) >= 16 && (parts[1] ?? 0) <= 31) ||
-    (parts[0] === 192 && parts[1] === 168) ||
-    (parts[0] === 100 && (parts[1] ?? 0) >= 64 && (parts[1] ?? 0) <= 127) ||
-    (parts[0] ?? 0) >= 224
+    (((parts[0] ?? 0) << 24) |
+      ((parts[1] ?? 0) << 16) |
+      ((parts[2] ?? 0) << 8) |
+      (parts[3] ?? 0)) >>>
+    0
+  );
+}
+
+function ipv4InCidr(
+  value: number,
+  base: string,
+  prefixLength: number,
+): boolean {
+  const baseValue = parseIpv4(base);
+  if (baseValue === null) return false;
+  const mask =
+    prefixLength === 0 ? 0 : (0xffffffff << (32 - prefixLength)) >>> 0;
+  return (value & mask) === (baseValue & mask);
+}
+
+const NON_GLOBAL_IPV4_CIDRS = [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.88.99.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
+] as const;
+
+function isNonGlobalIpv4(value: string): boolean {
+  const address = parseIpv4(value);
+  return (
+    address === null ||
+    NON_GLOBAL_IPV4_CIDRS.some(([base, prefixLength]) =>
+      ipv4InCidr(address, base, prefixLength),
+    )
+  );
+}
+
+function parseIpv6Section(section: string): number[] | null {
+  if (!section) return [];
+  const values: number[] = [];
+  for (const [index, part] of section.split(":").entries()) {
+    if (part.includes(".")) {
+      if (index !== section.split(":").length - 1) return null;
+      const ipv4 = parseIpv4(part);
+      if (ipv4 === null) return null;
+      values.push((ipv4 >>> 16) & 0xffff, ipv4 & 0xffff);
+      continue;
+    }
+    if (!/^[a-f0-9]{1,4}$/iu.test(part)) return null;
+    values.push(Number.parseInt(part, 16));
+  }
+  return values;
+}
+
+function parseIpv6(value: string): bigint | null {
+  const sections = value.toLowerCase().split("::");
+  if (sections.length > 2) return null;
+  const left = parseIpv6Section(sections[0] ?? "");
+  const right = parseIpv6Section(sections[1] ?? "");
+  if (!left || !right) return null;
+  const omitted = 8 - left.length - right.length;
+  if (
+    (sections.length === 1 && omitted !== 0) ||
+    (sections.length === 2 && omitted < 1)
+  ) {
+    return null;
+  }
+  const parts =
+    sections.length === 1
+      ? left
+      : [...left, ...Array.from({ length: omitted }, () => 0), ...right];
+  if (parts.length !== 8) return null;
+  return parts.reduce((result, part) => (result << 16n) | BigInt(part), 0n);
+}
+
+function ipv6InCidr(
+  value: bigint,
+  base: string,
+  prefixLength: number,
+): boolean {
+  const baseValue = parseIpv6(base);
+  if (baseValue === null) return false;
+  const shift = BigInt(128 - prefixLength);
+  return value >> shift === baseValue >> shift;
+}
+
+function isNonGlobalIpv6(value: string): boolean {
+  const address = parseIpv6(value);
+  if (address === null) return true;
+  // IPv6 global unicast is allocated from 2000::/3. Reject transition,
+  // translation, local, multicast, and future/reserved space conservatively.
+  if (!ipv6InCidr(address, "2000::", 3)) return true;
+  return [
+    ["2001::", 23],
+    ["2001:db8::", 32],
+    ["2002::", 16],
+    ["3fff::", 20],
+  ].some(([base, prefixLength]) =>
+    ipv6InCidr(address, String(base), Number(prefixLength)),
   );
 }
 
 function isPrivateAddress(value: string): boolean {
   const version = isIP(value);
-  if (version === 4) return isPrivateIpv4(value);
-  if (version === 6) {
-    const normalized = value.toLowerCase();
-    const mappedSuffix = normalized.startsWith("::ffff:")
-      ? normalized.slice("::ffff:".length)
-      : null;
-    if (mappedSuffix) {
-      if (isIP(mappedSuffix) === 4) return isPrivateIpv4(mappedSuffix);
-      const [highText, lowText, ...extra] = mappedSuffix.split(":");
-      const high = Number.parseInt(highText ?? "", 16);
-      const low = Number.parseInt(lowText ?? "", 16);
-      if (
-        extra.length === 0 &&
-        Number.isInteger(high) &&
-        Number.isInteger(low) &&
-        high >= 0 &&
-        high <= 0xffff &&
-        low >= 0 &&
-        low <= 0xffff
-      ) {
-        return isPrivateIpv4(
-          [high >> 8, high & 0xff, low >> 8, low & 0xff].join("."),
-        );
-      }
-      return true;
-    }
-    return (
-      normalized === "::" ||
-      normalized === "::1" ||
-      normalized.startsWith("fc") ||
-      normalized.startsWith("fd") ||
-      normalized.startsWith("fe8") ||
-      normalized.startsWith("fe9") ||
-      normalized.startsWith("fea") ||
-      normalized.startsWith("feb") ||
-      normalized.startsWith("ff")
-    );
-  }
+  if (version === 4) return isNonGlobalIpv4(value);
+  if (version === 6) return isNonGlobalIpv6(value);
   return true;
 }
 
@@ -2315,11 +2418,14 @@ export async function importRemoteAppointmentMedia(input: {
   const [existing] = await db
     .select({
       id: mediaAssets.id,
+      source: mediaAssets.source,
       status: mediaAssets.status,
       updatedAt: mediaAssets.updatedAt,
       storageProvider: mediaAssets.storageProvider,
       storageBucket: mediaAssets.storageBucket,
       contactId: mediaAssets.contactId,
+      stagingExpiresAt: mediaAssets.stagingExpiresAt,
+      deletedAt: mediaAssets.deletedAt,
       createdAt: mediaAssets.createdAt,
     })
     .from(mediaAssets)
@@ -2342,16 +2448,39 @@ export async function importRemoteAppointmentMedia(input: {
         ),
       )
       .limit(1);
+    const [deletedLink] = await db
+      .select({ id: appointmentMedia.id })
+      .from(appointmentMedia)
+      .where(
+        and(
+          eq(appointmentMedia.mediaAssetId, existing.id),
+          isNotNull(appointmentMedia.deletedAt),
+        ),
+      )
+      .limit(1);
     const processingIsStale =
       existing.status === "processing" &&
       existing.updatedAt.getTime() < Date.now() - 30 * 60 * 1_000;
-    if (existing.status === "failed" || processingIsStale) {
+    const expiredImportCanRetry = canRetryExpiredImportedMediaAsset({
+      source: existing.source,
+      status: existing.status,
+      deletedAt: existing.deletedAt,
+      hasActiveAppointmentLink: Boolean(link),
+      hasDeletedAppointmentLink: Boolean(deletedLink),
+    });
+    if (
+      existing.status === "failed" ||
+      processingIsStale ||
+      expiredImportCanRetry
+    ) {
       assertAssetStorageLocation(existing);
       const staleCutoff = new Date(Date.now() - 30 * 60 * 1_000);
       const [claimed] = await db
         .update(mediaAssets)
         .set({
           status: "processing",
+          stagingExpiresAt: null,
+          deletedAt: null,
           processingError: null,
           updatedAt: new Date(),
         })
@@ -2364,6 +2493,14 @@ export async function importRemoteAppointmentMedia(input: {
                 eq(mediaAssets.status, "processing"),
                 lte(mediaAssets.updatedAt, staleCutoff),
               ),
+              ...(expiredImportCanRetry
+                ? [
+                    and(
+                      inArray(mediaAssets.status, ["expired", "deleted"]),
+                      isNotNull(mediaAssets.deletedAt),
+                    ),
+                  ]
+                : []),
             ),
           ),
         )
@@ -2551,8 +2688,10 @@ export async function importBufferedAppointmentMedia(input: {
   const [existingHint] = await db
     .select({
       id: mediaAssets.id,
+      source: mediaAssets.source,
       status: mediaAssets.status,
       updatedAt: mediaAssets.updatedAt,
+      deletedAt: mediaAssets.deletedAt,
     })
     .from(mediaAssets)
     .where(eq(mediaAssets.sourceKey, input.sourceKey))
@@ -2596,10 +2735,30 @@ export async function importBufferedAppointmentMedia(input: {
       alreadyExists: false,
     };
   }
+  let expiredHintCanRetry = false;
+  if (existingHint && ["expired", "deleted"].includes(existingHint.status)) {
+    const hintLinks = await db
+      .select({
+        id: appointmentMedia.id,
+        deletedAt: appointmentMedia.deletedAt,
+      })
+      .from(appointmentMedia)
+      .where(eq(appointmentMedia.mediaAssetId, existingHint.id));
+    expiredHintCanRetry = canRetryExpiredImportedMediaAsset({
+      source: existingHint.source,
+      status: existingHint.status,
+      deletedAt: existingHint.deletedAt,
+      hasActiveAppointmentLink: hintLinks.some((link) => !link.deletedAt),
+      hasDeletedAppointmentLink: hintLinks.some((link) =>
+        Boolean(link.deletedAt),
+      ),
+    });
+  }
   if (
     existingHint &&
     existingHint.status !== "failed" &&
-    existingHint.status !== "processing"
+    existingHint.status !== "processing" &&
+    !expiredHintCanRetry
   ) {
     throw new AppointmentMediaError("media_asset_unavailable", 410);
   }
@@ -2623,6 +2782,7 @@ export async function importBufferedAppointmentMedia(input: {
     const [existing] = await tx
       .select({
         id: mediaAssets.id,
+        source: mediaAssets.source,
         status: mediaAssets.status,
         updatedAt: mediaAssets.updatedAt,
         storageProvider: mediaAssets.storageProvider,
@@ -2631,6 +2791,8 @@ export async function importBufferedAppointmentMedia(input: {
         displayObjectKey: mediaAssets.displayObjectKey,
         thumbnailObjectKey: mediaAssets.thumbnailObjectKey,
         contactId: mediaAssets.contactId,
+        stagingExpiresAt: mediaAssets.stagingExpiresAt,
+        deletedAt: mediaAssets.deletedAt,
       })
       .from(mediaAssets)
       .where(eq(mediaAssets.sourceKey, input.sourceKey))
@@ -2670,7 +2832,23 @@ export async function importBufferedAppointmentMedia(input: {
       const stale =
         existing.status === "processing" &&
         existing.updatedAt.getTime() < Date.now() - 30 * 60 * 1_000;
-      if (existing.status !== "failed" && !stale) {
+      const existingLinks = await tx
+        .select({
+          id: appointmentMedia.id,
+          deletedAt: appointmentMedia.deletedAt,
+        })
+        .from(appointmentMedia)
+        .where(eq(appointmentMedia.mediaAssetId, existing.id));
+      const expiredImportCanRetry = canRetryExpiredImportedMediaAsset({
+        source: existing.source,
+        status: existing.status,
+        deletedAt: existing.deletedAt,
+        hasActiveAppointmentLink: existingLinks.some((link) => !link.deletedAt),
+        hasDeletedAppointmentLink: existingLinks.some((link) =>
+          Boolean(link.deletedAt),
+        ),
+      });
+      if (existing.status !== "failed" && !stale && !expiredImportCanRetry) {
         const [link] = await tx
           .select({ id: appointmentMedia.id })
           .from(appointmentMedia)
@@ -2705,6 +2883,7 @@ export async function importBufferedAppointmentMedia(input: {
           originalObjectKey: originalKey,
           displayObjectKey: displayKey,
           thumbnailObjectKey: thumbnailKey,
+          stagingExpiresAt: null,
           deletedAt: null,
           processingError: null,
           updatedAt: new Date(),
@@ -2994,6 +3173,7 @@ export async function importInstantQuoteMediaAssets(
       assetId: mediaAssets.id,
       sortOrder: instantQuoteMedia.sortOrder,
       status: mediaAssets.status,
+      sourceKey: mediaAssets.sourceKey,
       contactId: mediaAssets.contactId,
       deletedAt: mediaAssets.deletedAt,
     })
@@ -3014,6 +3194,25 @@ export async function importInstantQuoteMediaAssets(
     if (durable) {
       if (durable.contactId !== lead.contactId) {
         throw new AppointmentMediaError("cross_contact_media_forbidden", 409);
+      }
+      const stableSourceKey = `instant_quote:${instantQuoteId}:${index}`;
+      if (
+        durable.sourceKey === stableSourceKey &&
+        ["failed", "processing", "expired", "deleted"].includes(durable.status)
+      ) {
+        results.push(
+          await importRemoteAppointmentMedia({
+            url,
+            source: "instant_quote",
+            sourceKey: stableSourceKey,
+            contactId: lead.contactId,
+            exactLeadId: lead.id,
+            instantQuoteId,
+            sourceMediaIndex: index,
+            sourceCreatedAt: quote.createdAt,
+          }),
+        );
+        continue;
       }
       const attachment =
         durable.status === "ready" && !durable.deletedAt
@@ -3200,8 +3399,6 @@ export async function cleanupExpiredAppointmentMedia(input?: {
   const now = input?.now ?? new Date();
   const limit = Math.min(Math.max(input?.limit ?? 100, 1), 1_000);
   const deletedLinkCutoff = new Date(now.getTime() - MEDIA_RESTORE_WINDOW_MS);
-  const staleProcessingCutoff = new Date(now.getTime() - 30 * 60 * 1_000);
-  const failedRetentionCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1_000);
   let expiredStaging = 0;
   let purgedAssets = 0;
   let failures = 0;
@@ -3217,26 +3414,9 @@ export async function cleanupExpiredAppointmentMedia(input?: {
         isNull(mediaAssets.deletedAt),
         or(
           and(
-            eq(mediaAssets.status, "staging"),
+            inArray(mediaAssets.status, ["staging", "processing", "failed"]),
             isNotNull(mediaAssets.stagingExpiresAt),
             lte(mediaAssets.stagingExpiresAt, now),
-          ),
-          and(
-            eq(mediaAssets.status, "failed"),
-            or(
-              and(
-                isNotNull(mediaAssets.stagingExpiresAt),
-                lte(mediaAssets.stagingExpiresAt, now),
-              ),
-              and(
-                isNull(mediaAssets.stagingExpiresAt),
-                lte(mediaAssets.updatedAt, failedRetentionCutoff),
-              ),
-            ),
-          ),
-          and(
-            eq(mediaAssets.status, "processing"),
-            lte(mediaAssets.updatedAt, staleProcessingCutoff),
           ),
           eq(mediaAssets.status, "deleting"),
         ),
@@ -3409,17 +3589,11 @@ export async function cleanupExpiredAppointmentMedia(input?: {
       }
 
       if (asset.status !== "deleting") {
-        const abandoned =
-          (asset.status === "staging" &&
-            asset.stagingExpiresAt !== null &&
-            asset.stagingExpiresAt <= now) ||
-          (asset.status === "failed" &&
-            ((asset.stagingExpiresAt !== null &&
-              asset.stagingExpiresAt <= now) ||
-              (asset.stagingExpiresAt === null &&
-                asset.updatedAt <= failedRetentionCutoff))) ||
-          (asset.status === "processing" &&
-            asset.updatedAt <= staleProcessingCutoff);
+        const abandoned = shouldExpireIncompleteMediaAsset({
+          status: asset.status,
+          stagingExpiresAt: asset.stagingExpiresAt,
+          now,
+        });
         const intentionallyRemoved =
           Boolean(oldDeletedLink) && !activeLink && !quoteLink;
         const cascadeOrphan =

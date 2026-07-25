@@ -35,6 +35,7 @@
     "db:migrate:release-latest": "corepack pnpm --filter api exec tsx scripts/migrate-to-target.ts latest",
     "db:migrate:targets:validate": "corepack pnpm --filter api exec tsx scripts/migrate-to-target.ts 0058_appointment_media --validate-files && corepack pnpm --filter api exec tsx scripts/migrate-to-target.ts 0059_square_payments --validate-files",
     "appointment-media:backfill:dry-run": "tsx apps/api/scripts/appointment-media-backfill.ts",
+    "appointment-media:backfill:preflight": "tsx apps/api/scripts/appointment-media-backfill.ts --remote-preflight",
     "appointment-media:backfill": "tsx apps/api/scripts/appointment-media-backfill.ts --execute",
     "appointment-media:cleanup": "tsx apps/api/scripts/appointment-media-cleanup.ts",
     "outbox:worker": "tsx scripts/outbox-worker.ts",

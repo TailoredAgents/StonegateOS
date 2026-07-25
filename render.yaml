@@ -361,12 +361,6 @@ services:
         sync: false
       - key: SQUARE_LOCATION_ID
         sync: false
-      - key: SQUARE_POS_STATE_SECRET
-        sync: false
-      - key: SQUARE_WEBHOOK_SIGNATURE_KEY
-        sync: false
-      - key: SQUARE_WEBHOOK_NOTIFICATION_URL
-        sync: false
       - key: SQUARE_RECONCILIATION_INTERVAL_MS
         sync: false
       - key: NEXT_PUBLIC_SITE_URL

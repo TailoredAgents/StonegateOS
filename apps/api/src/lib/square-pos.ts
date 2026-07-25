@@ -30,6 +30,27 @@ export type SquarePosCallback = {
   errorDescription: string | null;
 };
 
+const RETRYABLE_SQUARE_POS_ERROR_CODES = new Set([
+  "disabled",
+  "illegal_location_id",
+  "no_employee_logged_in",
+  "not_logged_in",
+  "payment_canceled",
+  "transaction_canceled",
+  "user_id_mismatch",
+  "user_not_activated",
+  "user_not_active",
+  "user_not_logged_in",
+]);
+
+export function isRetryableSquarePosError(
+  errorCode: string | null | undefined,
+): boolean {
+  return RETRYABLE_SQUARE_POS_ERROR_CODES.has(
+    errorCode?.trim().toLowerCase() ?? "",
+  );
+}
+
 function requiredString(value: string | undefined, name: string): string {
   const normalized = value?.trim();
   if (!normalized) throw new Error(`${name} is not set`);

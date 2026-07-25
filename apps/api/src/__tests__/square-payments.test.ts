@@ -10,6 +10,7 @@ import * as squareClient from "@/lib/square-client";
 import {
   blocksPaymentMutationForAttempt,
   canDismissSquareAttemptAfterReview,
+  canRetrySquareAttempt,
   requiresSquareAttemptReconciliation,
 } from "@/lib/payment-ledger";
 
@@ -130,6 +131,7 @@ describe("Square attempt collection gate", () => {
     for (const status of ["completed", "canceled", "failed", null]) {
       expect(blocksPaymentMutationForAttempt(status)).toBe(false);
     }
+    expect(blocksPaymentMutationForAttempt("retryable")).toBe(false);
   });
 
   it("lets the owner dismiss only failed or reconciled-review attempts", () => {
@@ -145,6 +147,23 @@ describe("Square attempt collection gate", () => {
       null,
     ]) {
       expect(canDismissSquareAttemptAfterReview(status)).toBe(false);
+    }
+  });
+
+  it("reuses only an explicitly retryable provider-declared no-transaction attempt", () => {
+    expect(canRetrySquareAttempt("retryable")).toBe(true);
+    for (const status of [
+      "created",
+      "launched",
+      "pending_verification",
+      "completed",
+      "expired",
+      "needs_review",
+      "failed",
+      "canceled",
+      null,
+    ]) {
+      expect(canRetrySquareAttempt(status)).toBe(false);
     }
   });
 });

@@ -39,7 +39,6 @@ async function authorizeWrite(request: NextRequest): Promise<Response | null> {
   }
   return null;
 }
-
 export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
@@ -105,4 +104,3 @@ export async function DELETE(
     return appointmentMediaErrorResponse(error);
   }
 }
-

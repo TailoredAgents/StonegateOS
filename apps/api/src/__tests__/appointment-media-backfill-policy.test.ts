@@ -61,6 +61,28 @@ describe("instant quote media backfill policy", () => {
     });
   });
 
+  it("retries an old cleanup-expired import instead of blocking its source key", () => {
+    const relationsByQuote = indexInstantQuoteMediaBackfillRelations([
+      relation({
+        sourceKey: "instant_quote:quote-1:0",
+        status: "expired",
+        deletedAt: new Date("2026-07-23T16:00:00.000Z"),
+      }),
+    ]);
+
+    expect(
+      decideInstantQuoteMediaBackfillSlot({
+        instantQuoteId: "quote-1",
+        sortOrder: 0,
+        contactId: "contact-1",
+        relationsByQuote,
+      }),
+    ).toMatchObject({
+      action: "retry",
+      relation: { mediaAssetId: "asset-1" },
+    });
+  });
+
   it("does not replace an unavailable durable upload with a duplicate import", () => {
     const relationsByQuote = indexInstantQuoteMediaBackfillRelations([
       relation({ status: "failed" }),

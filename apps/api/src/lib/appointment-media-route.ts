@@ -22,7 +22,6 @@ export function appointmentMediaErrorResponse(error: unknown): NextResponse {
     { status: 500 },
   );
 }
-
 export function actorMemberId(value: string | null | undefined): string | null {
   const normalized = value?.trim() ?? "";
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -31,4 +30,3 @@ export function actorMemberId(value: string | null | undefined): string | null {
     ? normalized
     : null;
 }
-

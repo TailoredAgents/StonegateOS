@@ -5,7 +5,11 @@ import { and, eq } from "drizzle-orm";
 import { getDb, paymentAttempts } from "@/db";
 import { getAuditActorFromRequest, recordAuditEvent } from "@/lib/audit";
 import { getAppointmentPaymentSummary } from "@/lib/payment-ledger";
-import { parseSquarePosCallback, verifySquarePosState } from "@/lib/square-pos";
+import {
+  isRetryableSquarePosError,
+  parseSquarePosCallback,
+  verifySquarePosState,
+} from "@/lib/square-pos";
 import {
   hashSquareReturnNonce,
   reconcileSquareAttempt,
@@ -122,23 +126,30 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   const actor = getAuditActorFromRequest(request);
   if (callback.status === "error") {
+    const retryableWithoutTransaction =
+      !callback.transactionId &&
+      isRetryableSquarePosError(callback.errorCode);
+    const callbackRecordedAt = new Date();
     await db
       .update(paymentAttempts)
       .set({
-        status: "pending_verification",
+        status: retryableWithoutTransaction
+          ? "retryable"
+          : "pending_verification",
         ...(callback.transactionId
           ? { providerOrderId: callback.transactionId }
           : {}),
         errorCode: callback.errorCode ?? "square_pos_error",
         errorMessage: callback.errorDescription,
-        resolvedAt: null,
+        resolvedAt: retryableWithoutTransaction ? callbackRecordedAt : null,
         metadata: {
           ...(attempt.metadata ?? {}),
           callbackPlatform: callback.platform,
           clientTransactionId: callback.clientTransactionId,
           provisionalCallbackStatus: "error",
+          retryableWithoutTransaction,
         },
-        updatedAt: new Date(),
+        updatedAt: callbackRecordedAt,
       })
       .where(eq(paymentAttempts.id, attempt.id));
     await recordAuditEvent({
@@ -152,13 +163,20 @@ export async function POST(request: NextRequest): Promise<Response> {
         platform: callback.platform,
       },
     });
-    if (!callback.transactionId) {
+    if (retryableWithoutTransaction) {
+      const normalizedErrorCode = callback.errorCode
+        ?.trim()
+        .toLowerCase();
+      const canceled =
+        normalizedErrorCode === "payment_canceled" ||
+        normalizedErrorCode === "transaction_canceled";
       return NextResponse.json({
         ok: true,
-        status: "pending_verification",
+        status: canceled ? "canceled" : "failed",
         appointmentId: attempt.appointmentId,
         attemptId: attempt.id,
         errorCode: callback.errorCode,
+        retryable: true,
       });
     }
   }

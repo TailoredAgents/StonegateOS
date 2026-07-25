@@ -12,9 +12,11 @@ import {
 import { isSquarePosEnabled } from "@/lib/payment-feature-flags";
 import {
   ACTIVE_PAYMENT_ATTEMPT_STATUSES,
+  canRetrySquareAttempt,
   expireStalePaymentAttemptsForAppointment,
   getActivePaymentAttempt,
   getAppointmentPaymentSummary,
+  RETRYABLE_SQUARE_ATTEMPT_STATUS,
   requiresSquareAttemptReconciliation,
   UNRESOLVED_SQUARE_ATTEMPT_STATUSES,
 } from "@/lib/payment-ledger";
@@ -213,19 +215,20 @@ export async function POST(
         if (sameRequest.appointmentId !== appointmentId) {
           return { kind: "request_conflict" as const };
         }
-        if (requiresSquareAttemptReconciliation(sameRequest.status)) {
+        if (canRetrySquareAttempt(sameRequest.status)) {
+          // Continue below. A provider-declared setup/cancel error with no
+          // transaction can safely relaunch this same attempt with fresh state.
+        } else if (requiresSquareAttemptReconciliation(sameRequest.status)) {
           return {
             kind: "reconciliation_required" as const,
             attemptId: sameRequest.id,
           };
-        }
-        if (sameRequest.status === "pending_verification") {
+        } else if (sameRequest.status === "pending_verification") {
           return {
             kind: "verification_in_progress" as const,
             attemptId: sameRequest.id,
           };
-        }
-        if (
+        } else if (
           ACTIVE_PAYMENT_ATTEMPT_STATUSES.includes(
             sameRequest.status as (typeof ACTIVE_PAYMENT_ATTEMPT_STATUSES)[number],
           ) &&
@@ -240,10 +243,11 @@ export async function POST(
             metadata: sameRequest.metadata,
             reused: true,
           };
+        } else {
+          return sameRequest.status === "completed"
+            ? { kind: "already_paid" as const }
+            : { kind: "request_conflict" as const };
         }
-        return sameRequest.status === "completed"
-          ? { kind: "already_paid" as const }
-          : { kind: "request_conflict" as const };
       }
 
       const [unresolvedAttempt] = await tx
@@ -298,6 +302,105 @@ export async function POST(
         return {
           kind: "reconciliation_required" as const,
           attemptId: active.id,
+        };
+      }
+
+      const retryableAttempt =
+        sameRequest && canRetrySquareAttempt(sameRequest.status)
+          ? sameRequest
+          : (
+              await tx
+                .select({
+                  id: paymentAttempts.id,
+                  appointmentId: paymentAttempts.appointmentId,
+                  status: paymentAttempts.status,
+                  requestedJobAmountCents:
+                    paymentAttempts.requestedJobAmountCents,
+                  expiresAt: paymentAttempts.expiresAt,
+                  metadata: paymentAttempts.metadata,
+                })
+                .from(paymentAttempts)
+                .where(
+                  and(
+                    eq(paymentAttempts.appointmentId, appointmentId),
+                    eq(paymentAttempts.provider, "square"),
+                    eq(
+                      paymentAttempts.status,
+                      RETRYABLE_SQUARE_ATTEMPT_STATUS,
+                    ),
+                  ),
+                )
+                .orderBy(desc(paymentAttempts.updatedAt))
+                .limit(1)
+            )[0];
+      if (retryableAttempt) {
+        const retryExpiresAt = new Date(now.getTime() + ATTEMPT_TTL_MS);
+        const retryNonce = crypto.randomBytes(18).toString("base64url");
+        const retryState = createSquarePosState({
+          attemptId: retryableAttempt.id,
+          nonce: retryNonce,
+          secret: stateSecret,
+          now,
+          ttlSeconds: ATTEMPT_TTL_MS / 1_000,
+        });
+        const retryStateExpiresAt = new Date(
+          (Math.floor(now.getTime() / 1_000) + ATTEMPT_TTL_MS / 1_000) * 1_000,
+        );
+        const previousRetryCount =
+          typeof retryableAttempt.metadata?.["retryCount"] === "number" &&
+          Number.isSafeInteger(retryableAttempt.metadata["retryCount"])
+            ? retryableAttempt.metadata["retryCount"]
+            : 0;
+        const [retried] = await tx
+          .update(paymentAttempts)
+          .set({
+            status: "created",
+            requestedJobAmountCents: summary.balanceCents,
+            currency: "USD",
+            providerOrderId: null,
+            providerPaymentId: null,
+            squareLocationId: locationId,
+            initiatedByMemberId: isUuid(actor.id) ? actor.id : null,
+            returnNonceHash: hashSquareReturnNonce(retryNonce),
+            returnStateExpiresAt: retryStateExpiresAt,
+            expiresAt: retryExpiresAt,
+            resolvedAt: null,
+            errorCode: null,
+            errorMessage: null,
+            metadata: {
+              ...(retryableAttempt.metadata ?? {}),
+              platform: parsed.data.platform,
+              squareReturnState: retryState,
+              retryCount: previousRetryCount + 1,
+              retriedAt: now.toISOString(),
+            },
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(paymentAttempts.id, retryableAttempt.id),
+              eq(paymentAttempts.appointmentId, appointmentId),
+              eq(
+                paymentAttempts.status,
+                RETRYABLE_SQUARE_ATTEMPT_STATUS,
+              ),
+            ),
+          )
+          .returning({
+            id: paymentAttempts.id,
+            requestedJobAmountCents: paymentAttempts.requestedJobAmountCents,
+            expiresAt: paymentAttempts.expiresAt,
+            metadata: paymentAttempts.metadata,
+          });
+        if (!retried) throw new Error("payment_attempt_retry_conflict");
+        return {
+          kind: "ready" as const,
+          id: retried.id,
+          amountCents: retried.requestedJobAmountCents,
+          appointmentId,
+          expiresAt: retried.expiresAt,
+          metadata: retried.metadata,
+          reused: true,
         };
       }
 

@@ -1,17 +1,9 @@
 import { NextResponse } from "next/server";
 import { callAdminApi } from "@/app/team/lib/api";
-
-type SquareReturnResult = {
-  ok?: boolean;
-  status?:
-    | "verified"
-    | "pending_verification"
-    | "canceled"
-    | "failed"
-    | "needs_review";
-  attemptId?: string | null;
-  errorCode?: string | null;
-};
+import {
+  shouldRedirectToSquareSetup,
+  type SquareReturnResult,
+} from "./routing";
 
 const returnStatuses = new Set([
   "verified",
@@ -21,22 +13,9 @@ const returnStatuses = new Set([
   "needs_review",
 ]);
 
-const squareSetupErrors = new Set([
-  "disabled",
-  "illegal_location_id",
-  "no_employee_logged_in",
-  "not_logged_in",
-  "user_id_mismatch",
-  "user_not_activated",
-  "user_not_active",
-  "user_not_logged_in",
-]);
-
-function needsSquareSetup(errorCode: string | null | undefined): boolean {
-  return squareSetupErrors.has(errorCode?.trim().toLowerCase() ?? "");
-}
-
-function collectQuery(searchParams: URLSearchParams): Record<string, string | string[]> {
+function collectQuery(
+  searchParams: URLSearchParams,
+): Record<string, string | string[]> {
   const query: Record<string, string | string[]> = {};
   for (const [key, value] of searchParams.entries()) {
     const current = query[key];
@@ -82,7 +61,7 @@ export async function GET(request: Request): Promise<Response> {
   if (result.errorCode) {
     destination.searchParams.set("paymentError", result.errorCode);
   }
-  if (needsSquareSetup(result.errorCode)) {
+  if (shouldRedirectToSquareSetup(result)) {
     const setup = new URL("/mobile/square-setup", requestUrl.origin);
     setup.searchParams.set("reason", result.errorCode!);
     if (result.attemptId) {

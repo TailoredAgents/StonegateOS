@@ -20,10 +20,87 @@ function hasValue(
   return keys.some((key) => Boolean(environment[key]?.trim()));
 }
 
+function firstValue(
+  environment: Environment,
+  ...keys: readonly string[]
+): string | null {
+  for (const key of keys) {
+    const value = environment[key]?.trim();
+    if (value) return value;
+  }
+  return null;
+}
+
+function isProduction(environment: Environment): boolean {
+  return environment["NODE_ENV"]?.trim().toLowerCase() === "production";
+}
+
+function isTruthy(value: string | undefined): boolean {
+  return ["1", "true", "yes", "on"].includes(
+    value?.trim().toLowerCase() ?? "",
+  );
+}
+
+function isLocalHostname(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase().replace(/^\[|\]$/gu, "");
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "localstack" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".localstack")
+  );
+}
+
+function inspectProviderUrl(input: {
+  environment: Environment;
+  key: string;
+  expectedPath?: string;
+}): string | null {
+  const value = input.environment[input.key]?.trim();
+  if (!value) return null;
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return `${input.key} must be a valid URL`;
+  }
+
+  const production = isProduction(input.environment);
+  const localHttp =
+    !production &&
+    url.protocol === "http:" &&
+    isLocalHostname(url.hostname);
+  if (url.protocol !== "https:" && !localHttp) {
+    return `${input.key} must use HTTPS${
+      production ? " in production" : " unless it targets a local development service"
+    }`;
+  }
+  if (production && isLocalHostname(url.hostname)) {
+    return `${input.key} cannot target a local host in production`;
+  }
+  if (
+    !url.hostname ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    return `${input.key} must be an origin URL without credentials, query parameters, or a fragment`;
+  }
+  if (input.expectedPath && url.pathname !== input.expectedPath) {
+    return `${input.key} must use path ${input.expectedPath}`;
+  }
+  return null;
+}
+
 export function inspectSquareConfiguration(
   environment: Environment = process.env,
 ): ProviderConfigurationInspection {
-  const required = [
+  const production = isProduction(environment);
+  const required: string[] = [
     "SQUARE_APPLICATION_ID",
     "SQUARE_ACCESS_TOKEN",
     "SQUARE_LOCATION_ID",
@@ -32,13 +109,52 @@ export function inspectSquareConfiguration(
     "SQUARE_POS_STATE_SECRET",
     "SQUARE_WEBHOOK_SIGNATURE_KEY",
     "SQUARE_WEBHOOK_NOTIFICATION_URL",
-  ] as const;
+    ...(production ? ["SQUARE_ENVIRONMENT"] : []),
+  ];
   const missing = required.filter((key) => !hasValue(environment, key));
   const stateSecret = environment["SQUARE_POS_STATE_SECRET"]?.trim() ?? "";
-  const invalid =
-    stateSecret && Buffer.byteLength(stateSecret, "utf8") < 32
-      ? ["SQUARE_POS_STATE_SECRET must contain at least 32 bytes"]
-      : [];
+  const invalid: string[] = [];
+  if (stateSecret && Buffer.byteLength(stateSecret, "utf8") < 32) {
+    invalid.push("SQUARE_POS_STATE_SECRET must contain at least 32 bytes");
+  }
+
+  const squareEnvironment =
+    environment["SQUARE_ENVIRONMENT"]?.trim().toLowerCase() ?? "";
+  if (production && squareEnvironment && squareEnvironment !== "production") {
+    invalid.push(
+      "SQUARE_ENVIRONMENT must be production when NODE_ENV=production",
+    );
+  } else if (
+    squareEnvironment &&
+    squareEnvironment !== "production" &&
+    squareEnvironment !== "sandbox"
+  ) {
+    invalid.push("SQUARE_ENVIRONMENT must be production or sandbox");
+  }
+
+  const urlRequirements = [
+    {
+      key: "SQUARE_POS_CALLBACK_URL",
+      expectedPath: "/mobile/payment-return",
+    },
+    {
+      key: "SQUARE_POS_FALLBACK_URL",
+      expectedPath: "/mobile/square-setup",
+    },
+    {
+      key: "SQUARE_WEBHOOK_NOTIFICATION_URL",
+      expectedPath: "/api/webhooks/square",
+    },
+  ] as const;
+  for (const requirement of urlRequirements) {
+    const issue = inspectProviderUrl({
+      environment,
+      key: requirement.key,
+      expectedPath: requirement.expectedPath,
+    });
+    if (issue) invalid.push(issue);
+  }
+
   return {
     configured: missing.length === 0 && invalid.length === 0,
     missing,
@@ -89,9 +205,49 @@ export function inspectObjectStorageConfiguration(
   const missing = requirements
     .filter((requirement) => !hasValue(environment, ...requirement.keys))
     .map((requirement) => requirement.label);
+  const invalid: string[] = [];
+  const production = isProduction(environment);
+  const configuredEndpoint = firstValue(
+    environment,
+    "MEDIA_OBJECT_ENDPOINT",
+    "R2_ENDPOINT",
+    "LOCALSTACK_ENDPOINT",
+  );
+  const accountId = environment["R2_ACCOUNT_ID"]?.trim();
+  const endpoint =
+    configuredEndpoint ??
+    (accountId
+      ? `https://${accountId}.r2.cloudflarestorage.com`
+      : null);
+
+  if (production && hasValue(environment, "LOCALSTACK_ENDPOINT")) {
+    invalid.push(
+      "LOCALSTACK_ENDPOINT cannot be used when NODE_ENV=production",
+    );
+  }
+  if (
+    production &&
+    isTruthy(environment["MEDIA_OBJECT_AUTO_CREATE_BUCKET"])
+  ) {
+    invalid.push(
+      "MEDIA_OBJECT_AUTO_CREATE_BUCKET must be disabled in production",
+    );
+  }
+  if (endpoint) {
+    const endpointEnvironment: Environment = {
+      ...environment,
+      MEDIA_OBJECT_ENDPOINT: endpoint,
+    };
+    const issue = inspectProviderUrl({
+      environment: endpointEnvironment,
+      key: "MEDIA_OBJECT_ENDPOINT",
+    });
+    if (issue) invalid.push(issue);
+  }
+
   return {
-    configured: missing.length === 0,
+    configured: missing.length === 0 && invalid.length === 0,
     missing,
-    invalid: [],
+    invalid,
   };
 }

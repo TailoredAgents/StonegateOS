@@ -78,10 +78,12 @@ Before deployment:
 - Take a current PostgreSQL backup and record its timestamp.
 - Record the last known-good API, site, and worker Render deploy IDs.
 - Run `pnpm db:migrate:targets:validate` on the exact release artifact.
-  Release A contains only `0058_appointment_media`, so its media target must be
-  the journal head. Release B appends `0059_square_payments`; on that artifact,
-  the media target must exclude exactly `0059` and the payment target must be
-  the journal head.
+  Release A carries `0059_square_payments` only as inert preflight SQL so its
+  deployed shell can inspect the next migration before Release B. Its runtime,
+  API schema, worker, and UI remain media-only, and its Render pre-deploy
+  allowlist can apply only `0058_appointment_media`. On both artifacts, the
+  media target must exclude exactly `0059` and the payment target must be the
+  journal head. Release B applies `0059` and adds the payment runtime.
 - Confirm the API, site, and worker run Node 20.
 - Confirm the production site and API HTTPS origins.
 - Confirm the Square account has one Stonegate seller location for this flow.
@@ -121,7 +123,7 @@ Do not use `*` for production.
     "AllowedOrigins": ["https://<PRODUCTION_SITE_HOST>", "https://<STAGING_SITE_HOST>"],
     "AllowedMethods": ["GET", "HEAD", "PUT"],
     "AllowedHeaders": ["content-type", "x-amz-checksum-sha256"],
-    "ExposeHeaders": ["etag"],
+    "ExposeHeaders": ["etag", "x-amz-checksum-sha256"],
     "MaxAgeSeconds": 3600
   }
 ]
@@ -271,9 +273,10 @@ for example:
 openssl rand -base64 48
 ```
 
-Set the Square access token, location ID, webhook settings, and reconciliation
-interval on the worker as well. The callback URL and fallback URL are needed by
-the API that creates payment attempts; they are not browser secrets.
+Set only `SQUARE_ENVIRONMENT`, the Square access token, location ID, and
+reconciliation interval on the worker. The application ID, callback/fallback
+URLs, callback state secret, webhook signature key, and exact webhook URL are
+API-only. They are not browser secrets, but the worker does not need them.
 
 Leave `SQUARE_POS_ENABLED=0` until the live pilot step. Webhooks and scheduled
 reconciliation must remain configured even while initiation is disabled.
@@ -351,38 +354,73 @@ custom API hostname and edge controls described above pass verification.
 
 ### Release B: payments
 
-1. Confirm the media rollout is stable and set
-   `DB_MIGRATION_TARGET=0059_square_payments`. From a trusted shell using the
-   production `DATABASE_URL`, verify the selection:
+1. Confirm the media rollout is stable. From a Release A Render shell or
+   one-off job using the production `DATABASE_URL`, run the read-only historical
+   payment audit and save its JSON output:
 
    ```bash
-   pnpm db:migrate:payments:check
+   npx -y pnpm@9.15.9 -w payment-migration:audit -- --sample-limit=25
    ```
 
-   The check should report `0058_appointment_media` as the current database
-   state and only `0059_square_payments` as pending.
+   Review every conflict, unmatched Stripe row, overpayment, and ambiguous tip
+   described in `docs/PAYMENT_MIGRATION_AUDIT.md` before proceeding.
 
-2. Deploy the payment API. Render runs `pnpm db:migrate:payments` to apply
-   through `0059_square_payments.sql`; review its historical backfill report and
-   wait for API health.
-3. Deploy the matching payment worker and site UI with
+2. Still from the deployed Release A artifact, run the inert `0059` migration
+   preflight:
+
+   ```bash
+   npx -y pnpm@9.15.9 -w db:migrate:payments:check
+   ```
+
+   It must report `0058_appointment_media` as the current database state and
+   only `0059_square_payments` as pending. This command acquires the migration
+   advisory lock and performs no migration.
+
+3. Before any Release B API or site deploy, apply member-level
+   `payments.collect` denies to every active non-owner account except the named
+   pilots. Release A can store this permission string even though its payment
+   runtime is absent. Fetch each member's current `permissionsDeny` array,
+   merge `payments.collect`, and PATCH the complete merged array back; the
+   member endpoint replaces the array, so never overwrite existing denies with
+   a one-item list. Verify every non-pilot effective session lacks
+   `payments.collect`. This gate covers final-total changes and manual
+   cash/check recording as well as Square collection.
+
+4. Set
+   `DB_MIGRATION_TARGET=0059_square_payments`. From a trusted shell using the
+   production `DATABASE_URL`, repeat the preflight if any environment value or
+   artifact changed after step 2.
+
+5. Deploy the payment API. Render runs `pnpm db:migrate:payments` to apply
+   through `0059_square_payments.sql`; wait for API health.
+6. From a Release B Render shell or one-off job, run and save the audit again:
+
+   ```bash
+   npx -y pnpm@9.15.9 -w payment-migration:audit -- --sample-limit=25
+   ```
+
+   Require `"phase": "post_0059"` and review the actual legacy rows,
+   duplicates, unmatched rows, and every Needs Review count against the saved
+   pre-migration report before enabling any payment collector.
+
+7. Deploy the matching payment worker and site UI with
    `SQUARE_POS_ENABLED=0`.
-4. Register the live callback and webhook after their endpoints are deployed.
-5. Confirm an unsigned request to the production webhook is rejected with
+8. Register the live callback and webhook after their endpoints are deployed.
+9. Confirm an unsigned request to the production webhook is rejected with
    `401`, proving the public route is reachable without weakening signature
    validation. Do not use Square's synthetic **Send test event** as the
    end-to-end payment check: its illustrative payment/refund IDs are not
    guaranteed to be retrievable, while StonegateOS deliberately retrieves the
    authoritative provider object before processing. The first low-dollar live
-   charge and refund in step 7 are the definitive signed-webhook tests. Confirm
+   charge and refund in step 11 are the definitive signed-webhook tests. Confirm
    those deliveries return `2xx`, then redeliver the same real event from
    Square's webhook logs and confirm the provider-event row remains idempotent.
-6. Apply the non-pilot `payments.collect` denies above, then enable Square for
-   the owner only.
-7. Run a small live charge and refund on iPhone, then Android.
-8. Pilot one employee on each operating system.
-9. Expand to all collectors only after every live charge reconciles to the
-   correct appointment and exact job balance.
+10. Reconfirm the non-pilot denies from step 3, then enable Square for the owner
+    only.
+11. Run a small live charge and refund on iPhone, then Android.
+12. Pilot one employee on each operating system.
+13. Expand to all collectors only after every live charge reconciles to the
+    correct appointment and exact job balance.
 
 Render deploys the API and site separately. The safe sequence is always:
 
@@ -390,10 +428,11 @@ Render deploys the API and site separately. The safe sequence is always:
 database migration -> API -> worker -> site -> flags
 ```
 
-Before each release, pause Render auto-deploy for the site and worker. Prepare
-Release A and Release B as separate release commits/artifacts, deploy the
-selected database migration and API first, and wait for their health checks
-before manually deploying the matching worker and site artifact. Resume
+Before each release, pause Render auto-deploy for the API, site, and worker.
+Prepare Release A and Release B as separate release commits/artifacts, deploy
+the selected exact commit to the API first so its pre-deploy migration runs,
+and wait for its health check before manually deploying the matching worker and
+site commit. Resume
 auto-deploy only after the release is complete and every service is on the same
 compatible release. Never set `DB_MIGRATION_TARGET=latest` during Release A or
 let the site start ahead of its API contract. After Release B is stable, set
@@ -406,30 +445,54 @@ advancing to the latest journal entry.
 Run from a Render shell or a trusted machine with production `DATABASE_URL` and
 the production `MEDIA_OBJECT_*` values.
 
-Dry run:
+Inventory-only dry run:
 
 ```bash
 pnpm appointment-media:backfill:dry-run
 ```
 
+This first pass reads PostgreSQL but does not fetch remote media or write R2 or
+PostgreSQL. Use it to review candidate counts, unsupported legacy records, and
+relationship blockers.
+
+Required non-writing remote preflight:
+
+```bash
+pnpm appointment-media:backfill:preflight
+```
+
+The preflight fetches every candidate through the production importer's same
+HTTPS, provider-host, DNS/IP, redirect, 10 MB, and 20-second timeout controls.
+It then runs the same magic-byte, declared-MIME, decode, dimension,
+decompression, and corruption checks entirely in memory. It does not write R2
+or PostgreSQL. Because it downloads and decodes every pending source, run it
+from a trusted shell with production provider credentials and allow enough time
+for the full report.
+
 Optional limited rehearsal (the limit applies independently to each source
 query):
 
 ```bash
-pnpm appointment-media:backfill:dry-run -- --limit=25
+pnpm appointment-media:backfill:preflight -- --limit=25
 ```
 
 Review the JSON:
 
 - `candidates` is the expected work by source.
 - `skipped` lists legacy non-images and invalid/unsupported data URLs by ID.
+- `preflight.enabled` must be `true`; `checked` and `passed` record the
+  non-writing validation totals.
+- `preflight.failed` reports unavailable, corrupt, oversized, unsafe-dimension,
+  unsupported, and rejected media by stable source ID and category.
 - `retainedWithoutAppointmentLink` means the asset was safely copied but no
   appointment link was created, usually because it belongs to a contact or an
   appointment already reached its 50-image limit.
-- `failed` reports each unavailable, corrupt, oversized, unsupported, or
-  rejected source item by stable source ID during execution.
+- `failed` reports relationship blockers during dry-run/preflight and any
+  source item that fails during execution.
 
-Execute only after the dry-run report is approved:
+Both dry-run commands exit nonzero when blockers are present. Execute only
+after the inventory and full preflight reports are approved and contain no
+failures:
 
 ```bash
 pnpm appointment-media:backfill
@@ -686,6 +749,12 @@ Useful worker log markers include `[appointment_media]` and `[square]`.
    phone until upload succeeds or the employee explicitly discards them.
 7. Roll the site back first if the UI is broken, then the API if necessary.
 8. Do not reverse the migration or delete R2 objects.
+
+If the database is already at `0059_square_payments` and the API must be rolled
+back to the Release A runtime, set `SKIP_DB_MIGRATE=1` for that rollback deploy.
+Release A's strict pre-deploy target intentionally refuses a database already
+beyond `0058`. Keep all payment initiation disabled and retain a compatible
+Release B callback/webhook/reconciliation path until pending attempts settle.
 
 ### Square rollback
 

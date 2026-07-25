@@ -221,11 +221,12 @@ export default async function TeamPage({
   const permissionMatches = (granted: string, required: string): boolean => {
     if (granted === "*") return true;
     if (required === "read") return granted === "read";
-    if (granted === "read")
+    if (granted === "read") {
       return (
         required === "read" ||
         (required.endsWith(".read") && required !== "payments.read")
       );
+    }
     if (granted.endsWith(".*")) {
       const prefix = granted.slice(0, -2);
       return required.startsWith(prefix);

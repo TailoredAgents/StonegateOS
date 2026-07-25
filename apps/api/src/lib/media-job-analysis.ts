@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { getDb, mediaJobAnalyses } from "@/db";
+import { mediaJobAnalyses } from "@/db";
+import type { getDb } from "@/db";
 import { listInstantQuoteMediaReadUrls } from "@/lib/appointment-media";
 import type { OmniLeadContext } from "@/lib/omni-lead-context";
 
@@ -741,12 +742,12 @@ export function buildMediaJobAnalysis(context: OmniLeadContext): MediaJobAnalysi
 
 function distributeVideoFrameSlots(videoCount: number, remainingSlots: number): number[] {
   if (videoCount <= 0 || remainingSlots <= 0) return [];
-  const allocations = new Array(videoCount).fill(0);
+  const allocations: number[] = new Array<number>(videoCount).fill(0);
   let slotsLeft = remainingSlots;
   let cursor = 0;
   while (slotsLeft > 0) {
-    if (allocations[cursor] < MAX_VIDEO_FRAMES_PER_VIDEO) {
-      allocations[cursor] += 1;
+    if (allocations[cursor]! < MAX_VIDEO_FRAMES_PER_VIDEO) {
+      allocations[cursor] = allocations[cursor]! + 1;
       slotsLeft -= 1;
     }
     cursor = (cursor + 1) % videoCount;
@@ -806,10 +807,10 @@ async function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: stri
 
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    const stdoutChunks: Uint8Array[] = [];
+    const stderrChunks: Uint8Array[] = [];
+    child.stdout.on("data", (chunk: Uint8Array) => stdoutChunks.push(chunk));
+    child.stderr.on("data", (chunk: Uint8Array) => stderrChunks.push(chunk));
     child.on("error", reject);
     child.on("close", (code) => {
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");

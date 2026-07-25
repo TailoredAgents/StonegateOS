@@ -3,6 +3,7 @@ import {
   buildSquarePosLaunchUrl,
   createSquarePosState,
   extractSquareAttemptIdFromOrder,
+  isRetryableSquarePosError,
   parseSquarePosCallback,
   verifySquarePosState,
   verifySquareWebhookSignature,
@@ -136,6 +137,32 @@ describe("Square POS URLs and callbacks", () => {
       errorCode: "TRANSACTION_CANCELED",
       state: "signed.state",
     });
+  });
+
+  it("allows retry only for documented setup and cancellation errors", () => {
+    for (const code of [
+      "PAYMENT_CANCELED",
+      "TRANSACTION_CANCELED",
+      "ILLEGAL_LOCATION_ID",
+      "NO_EMPLOYEE_LOGGED_IN",
+      "NOT_LOGGED_IN",
+      "USER_ID_MISMATCH",
+      "USER_NOT_ACTIVATED",
+      "USER_NOT_ACTIVE",
+      "USER_NOT_LOGGED_IN",
+      "DISABLED",
+    ]) {
+      expect(isRetryableSquarePosError(code)).toBe(true);
+    }
+    for (const code of [
+      "NO_NETWORK",
+      "NO_RESULT",
+      "UNEXPECTED",
+      "COULD_NOT_PERFORM",
+      null,
+    ]) {
+      expect(isRetryableSquarePosError(code)).toBe(false);
+    }
   });
 });
 

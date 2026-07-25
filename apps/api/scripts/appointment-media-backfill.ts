@@ -19,6 +19,11 @@ import {
   decideInstantQuoteMediaBackfillSlot,
   indexInstantQuoteMediaBackfillRelations,
 } from "../src/lib/appointment-media-backfill-policy";
+import {
+  preflightAppointmentMediaCandidates,
+  type AppointmentMediaPreflightCandidate,
+  type AppointmentMediaPreflightReport,
+} from "../src/lib/appointment-media-preflight";
 
 type BackfillStats = {
   mode: "dry_run" | "execute";
@@ -35,6 +40,9 @@ type BackfillStats = {
   imported: number;
   alreadyPresent: number;
   retainedWithoutAppointmentLink: number;
+  preflight:
+    | { enabled: false }
+    | ({ enabled: true } & AppointmentMediaPreflightReport);
   skipped: Array<{
     source: string;
     id: string;
@@ -102,6 +110,10 @@ function parseDataUrl(
 
 async function main(): Promise<void> {
   const execute = process.argv.includes("--execute");
+  const remotePreflight = process.argv.includes("--remote-preflight");
+  if (execute && remotePreflight) {
+    throw new Error("remote_preflight_is_dry_run_only");
+  }
   const limit = parseLimit();
   const db = getDb();
   const attachmentQuery = db
@@ -291,6 +303,7 @@ async function main(): Promise<void> {
     imported: 0,
     alreadyPresent: 0,
     retainedWithoutAppointmentLink: 0,
+    preflight: { enabled: false },
     skipped: [
       ...skippedAttachments.map((row) => ({
         source: "appointment_attachment",
@@ -346,7 +359,71 @@ async function main(): Promise<void> {
   };
 
   if (!execute) {
+    if (remotePreflight) {
+      const preflightCandidates: AppointmentMediaPreflightCandidate[] = [
+        ...imageAttachments.map((attachment) => {
+          const data = parseDataUrl(attachment.url);
+          return {
+            source: "appointment_attachment",
+            id: attachment.id,
+            input: data
+              ? {
+                  kind: "buffer" as const,
+                  bytes: data.bytes,
+                  contentType: data.contentType,
+                }
+              : {
+                  kind: "remote" as const,
+                  url: attachment.url,
+                },
+          };
+        }),
+        ...quoteMediaPlans.flatMap((plan) => {
+          if (
+            !plan.lead ||
+            (plan.decision?.action !== "import" &&
+              plan.decision?.action !== "retry")
+          ) {
+            return [];
+          }
+          return [
+            {
+              source: "instant_quote",
+              id: plan.sourceId,
+              input: {
+                kind: "remote" as const,
+                url: plan.url,
+              },
+            },
+          ];
+        }),
+        ...inboundMessages.flatMap((message) => {
+          const source = inboundMediaSource(message);
+          if (!source || !message.contactId) return [];
+          const provider = source === "twilio_mms" ? "twilio" : "facebook";
+          return message.mediaUrls.map((url, index) => ({
+            source: "conversation_message",
+            id: `${message.id}:${index}`,
+            input: {
+              kind: "remote" as const,
+              url,
+              provider,
+            },
+          }));
+        }),
+      ];
+      stats.preflight = {
+        enabled: true,
+        ...(await preflightAppointmentMediaCandidates(preflightCandidates)),
+      };
+    }
     console.log(JSON.stringify(stats, null, 2));
+    if (
+      stats.failed.length > 0 ||
+      (stats.preflight.enabled && stats.preflight.failed.length > 0)
+    ) {
+      process.exitCode = 1;
+    }
     return;
   }
 

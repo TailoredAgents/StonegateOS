@@ -61,4 +61,3 @@ export async function PATCH(
     return appointmentMediaErrorResponse(error);
   }
 }
-

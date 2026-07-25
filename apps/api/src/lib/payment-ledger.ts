@@ -25,6 +25,8 @@ export const UNRESOLVED_SQUARE_ATTEMPT_STATUSES = [
   "needs_review",
 ] as const;
 
+export const RETRYABLE_SQUARE_ATTEMPT_STATUS = "retryable" as const;
+
 export const PAYMENT_MUTATION_BLOCKING_ATTEMPT_STATUSES = [
   ...ACTIVE_PAYMENT_ATTEMPT_STATUSES,
   ...UNRESOLVED_SQUARE_ATTEMPT_STATUSES,
@@ -52,13 +54,20 @@ export function canDismissSquareAttemptAfterReview(
   return status === "failed" || requiresSquareAttemptReconciliation(status);
 }
 
+export function canRetrySquareAttempt(
+  status: string | null | undefined,
+): boolean {
+  return status === RETRYABLE_SQUARE_ATTEMPT_STATUS;
+}
+
 export type PaymentAttemptStatus =
   | (typeof ACTIVE_PAYMENT_ATTEMPT_STATUSES)[number]
   | "completed"
   | "canceled"
   | "failed"
   | "needs_review"
-  | "expired";
+  | "expired"
+  | typeof RETRYABLE_SQUARE_ATTEMPT_STATUS;
 
 export type SquareAttemptSummaryState = {
   activeAttemptId: string | null;

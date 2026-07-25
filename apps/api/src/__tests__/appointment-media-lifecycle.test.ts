@@ -3,6 +3,7 @@ import {
   AUTOMATIC_BOOKING_MEDIA_STATUSES,
   appointmentStatusRequiresQuotedScope,
   assertAppointmentStatusTransitionAllowed,
+  canRetryExpiredImportedMediaAsset,
   canAutoAttachMediaToNearestAppointment,
   evaluateAutomaticMediaScopePolicy,
   getConversationMediaImportSource,
@@ -10,6 +11,7 @@ import {
   MEDIA_RESTORE_WINDOW_MS,
   moveMediaIdToIndex,
   resolveAutomaticBookingStatusForQuotedWork,
+  shouldExpireIncompleteMediaAsset,
   sortAppointmentIdsForMediaLock,
 } from "@/lib/appointment-media";
 
@@ -252,11 +254,7 @@ describe("appointment media ordering", () => {
       "c",
       "b",
     ]);
-    expect(moveMediaIdToIndex(["a", "c"], "b", -4)).toEqual([
-      "b",
-      "a",
-      "c",
-    ]);
+    expect(moveMediaIdToIndex(["a", "c"], "b", -4)).toEqual(["b", "a", "c"]);
   });
 });
 
@@ -278,6 +276,87 @@ describe("appointment media restore window", () => {
         new Date(now.getTime() - MEDIA_RESTORE_WINDOW_MS),
         now,
       ),
+    ).toBe(false);
+  });
+});
+
+describe("appointment media staging cleanup", () => {
+  const now = new Date("2026-07-24T16:00:00.000Z");
+  const expired = new Date("2026-07-24T15:59:59.000Z");
+
+  it.each(["staging", "processing", "failed"])(
+    "expires an incomplete %s upload only when its staging lease elapsed",
+    (status) => {
+      expect(
+        shouldExpireIncompleteMediaAsset({
+          status,
+          stagingExpiresAt: expired,
+          now,
+        }),
+      ).toBe(true);
+      expect(
+        shouldExpireIncompleteMediaAsset({
+          status,
+          stagingExpiresAt: null,
+          now,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("retains provider and contact-linked failures without a staging lease", () => {
+    expect(
+      shouldExpireIncompleteMediaAsset({
+        status: "failed",
+        stagingExpiresAt: null,
+        now,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("stable source-key retry policy", () => {
+  it.each([
+    "twilio_mms",
+    "facebook_messenger",
+    "instant_quote",
+    "legacy_attachment",
+  ])(
+    "revives an expired %s import for an active/contact-owned source",
+    (source) => {
+      expect(
+        canRetryExpiredImportedMediaAsset({
+          source,
+          status: "expired",
+          deletedAt: new Date("2026-07-23T16:00:00.000Z"),
+          hasActiveAppointmentLink: false,
+          hasDeletedAppointmentLink: false,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("does not silently revive media that staff removed from an appointment", () => {
+    expect(
+      canRetryExpiredImportedMediaAsset({
+        source: "twilio_mms",
+        status: "deleted",
+        deletedAt: new Date("2026-07-23T16:00:00.000Z"),
+        hasActiveAppointmentLink: false,
+        hasDeletedAppointmentLink: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not treat manual source keys as provider import retries", () => {
+    expect(
+      canRetryExpiredImportedMediaAsset({
+        source: "direct_upload",
+        status: "expired",
+        deletedAt: new Date("2026-07-23T16:00:00.000Z"),
+        hasActiveAppointmentLink: true,
+        hasDeletedAppointmentLink: false,
+      }),
     ).toBe(false);
   });
 });

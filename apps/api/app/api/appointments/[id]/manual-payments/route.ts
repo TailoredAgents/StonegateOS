@@ -234,6 +234,7 @@ export async function POST(
             "created",
             "launched",
             "pending_verification",
+            "retryable",
           ]),
         ),
       );

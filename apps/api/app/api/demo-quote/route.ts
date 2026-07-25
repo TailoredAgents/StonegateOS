@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
-import { getCompanyProfilePolicy, isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
+import { isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
 import { desc, eq } from "drizzle-orm";
 import { upsertContact, upsertProperty } from "../web/persistence";
 import { normalizeName, normalizePhone } from "../web/utils";
@@ -43,20 +44,6 @@ function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseIn
 
 export function OPTIONS(request: NextRequest): NextResponse {
   return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
-}
-
-async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>): Promise<number> {
-  const envRaw = process.env["INSTANT_QUOTE_DISCOUNT"];
-  const envValue = envRaw ? Number(envRaw) : NaN;
-  if (Number.isFinite(envValue) && envValue > 0 && envValue < 1) {
-    return envValue;
-  }
-
-  const profile = await getCompanyProfilePolicy(db);
-  const percent = profile.discountPercent;
-  if (!Number.isFinite(percent)) return 0;
-  if (percent <= 0 || percent >= 1) return 0;
-  return percent;
 }
 
 function resolveDemoFixedDiscountDollars(): number {
@@ -207,8 +194,6 @@ const QuoteResultSchema = z
       });
     }
   });
-
-type QuoteResult = z.infer<typeof QuoteResultSchema>;
 
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -428,14 +413,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     const maxHigh = Math.max(boundedLow, boundedHigh);
 
     const label = sizeLabel(body.job.type, body.job.size);
-    const quote: QuoteResult = {
+    const quote = QuoteResultSchema.parse({
       loadFractionEstimate: clamp(base.load, 0.1, 4),
       priceLow: minLow,
       priceHigh: maxHigh,
       displayTierLabel: `Demo (${label})`,
       reasonSummary: "Estimate based on your selections. We’ll confirm details on-site before we start.",
       needsInPersonEstimate: Boolean(base.needsEstimate)
-    };
+    });
 
     const db = getDb();
     const storedAiResult = {

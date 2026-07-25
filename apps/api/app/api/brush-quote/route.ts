@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { getDb, crmPipeline, instantQuotes, leads, outboxEvents, properties } from "@/db";
 import { getCompanyProfilePolicy, isGeorgiaPostalCode, normalizePostalCode } from "@/lib/policy";
@@ -55,10 +56,6 @@ async function resolveInstantQuoteDiscountPercent(db: ReturnType<typeof getDb>):
   if (!Number.isFinite(percent)) return 0;
   if (percent <= 0 || percent >= 1) return 0;
   return percent;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 const BrushPrimarySchema = z.enum([
@@ -362,7 +359,9 @@ async function getQuoteFromAi(
     output?: unknown;
   };
 
-  const outputItems = Array.isArray((data as any).output) ? ((data as any).output as unknown[]) : [];
+  const outputItems: unknown[] = Array.isArray(data.output)
+    ? data.output
+    : [];
   const outputJsonParts: unknown[] = [];
   const outputTextParts: string[] = [];
 
@@ -387,7 +386,10 @@ async function getQuoteFromAi(
   }
 
   const candidate = outputJsonParts[0] ?? outputTextParts.join("\n").trim();
-  const parsed = typeof candidate === "string" ? JSON.parse(candidate) : candidate;
+  const parsed: unknown =
+    typeof candidate === "string"
+      ? (JSON.parse(candidate) as unknown)
+      : candidate;
   const validated = QuoteResultSchema.safeParse(parsed);
   if (!validated.success) {
     throw new Error("ai_invalid_response");

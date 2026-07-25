@@ -87,9 +87,11 @@ export function decideInstantQuoteMediaBackfillSlot(input: {
   const legacySourceKey = `instant_quote:${input.instantQuoteId}:${input.sortOrder}`;
   const retryable = matchingContact.find(
     (relation) =>
-      !relation.deletedAt &&
       relation.sourceKey === legacySourceKey &&
-      (relation.status === "failed" || relation.status === "processing"),
+      ((!relation.deletedAt &&
+        (relation.status === "failed" || relation.status === "processing")) ||
+        relation.status === "expired" ||
+        relation.status === "deleted"),
   );
   if (retryable) {
     return {
