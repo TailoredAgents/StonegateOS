@@ -1,5 +1,8 @@
 import { cookies } from "next/headers";
 import { TEAM_SESSION_COOKIE } from "@/lib/team-session";
+import { hasMobilePermission } from "./permission-matching";
+
+export { hasMobilePermission } from "./permission-matching";
 
 const API_BASE_URL =
   process.env["API_BASE_URL"] ??
@@ -32,21 +35,6 @@ type TeamSessionApiResponse = {
     permissions?: string[];
   };
 };
-
-function permissionMatches(granted: string, required: string): boolean {
-  if (granted === "*") return true;
-  if (required === "read") return granted === "read";
-  if (granted === "read") return required === "read" || required.endsWith(".read");
-  if (granted.endsWith(".*")) {
-    const prefix = granted.slice(0, -2);
-    return required.startsWith(prefix);
-  }
-  return granted === required;
-}
-
-export function hasMobilePermission(permissions: string[], required: string): boolean {
-  return permissions.some((permission) => permissionMatches(permission, required));
-}
 
 export function buildAllowedMobileScreens(member: MobileTeamMember): string[] {
   const permissions = member.permissions ?? [];

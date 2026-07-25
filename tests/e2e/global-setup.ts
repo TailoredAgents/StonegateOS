@@ -16,8 +16,12 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   const apiBase = getEnvVar("API_BASE_URL", "http://localhost:3001");
 
   await Promise.all([
-    waitForHealthcheck(new URL("/api/healthz", siteBase).toString(), { service: "site" }),
-    waitForHealthcheck(new URL("/api/healthz", apiBase).toString(), { service: "api" })
+    waitForHealthcheck(new URL("/api/healthz", siteBase).toString(), {
+      service: "site",
+    }),
+    waitForHealthcheck(new URL("/api/healthz", apiBase).toString(), {
+      service: "api",
+    }),
   ]);
 
   await Promise.all([
@@ -28,14 +32,22 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
       name: "E2E Mobile Owner",
       email: "e2e-mobile-owner@mystos.test",
       role: "owner",
-      siteBase
+      siteBase,
     }),
     bootstrapTeamStorage({
       filename: "tests/e2e/storage/mobile-sales.json",
       name: "E2E Mobile Sales",
       email: "e2e-mobile-sales@mystos.test",
       role: "sales",
-      siteBase
-    })
+      siteBase,
+    }),
+    bootstrapTeamStorage({
+      filename: "tests/e2e/storage/mobile-payment-denied.json",
+      name: "E2E Payment Denied",
+      email: "e2e-mobile-payment-denied@mystos.test",
+      role: "sales",
+      permissionsDeny: ["payments.read", "payments.collect"],
+      siteBase,
+    }),
   ]);
 }

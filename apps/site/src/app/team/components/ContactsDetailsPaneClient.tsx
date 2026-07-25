@@ -136,7 +136,12 @@ export function ContactsDetailsPaneClient({
         .filter(isSystemTask)
         .sort((a, b) => Date.parse(a.dueAt ?? "") - Date.parse(b.dueAt ?? "")),
     );
-  }, [contact.id]);
+  }, [
+    contact.id,
+    contact.pipeline?.stage,
+    contact.reminders,
+    contact.salespersonMemberId,
+  ]);
 
   React.useEffect(() => {
     const controller = new AbortController();
@@ -696,7 +701,7 @@ export function ContactsDetailsPaneClient({
 
                 <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
                   Range-only jobs stay out of exact revenue projections until an
-                  exact quote or exact collected total is saved.
+                  exact quote or final job total is saved.
                 </div>
 
                 <label className="flex flex-col gap-1 sm:col-span-2">

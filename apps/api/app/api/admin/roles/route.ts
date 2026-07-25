@@ -28,6 +28,8 @@ const DEFAULT_ROLES = [
       "appointments.update",
       "appointment_media.capture",
       "appointment_media.manage",
+      "payments.read",
+      "payments.collect",
       "quotes.read",
       "quotes.write",
       "quotes.send",
@@ -47,6 +49,8 @@ const DEFAULT_ROLES = [
       "appointments.update",
       "appointment_media.capture",
       "appointment_media.manage",
+      "payments.read",
+      "payments.collect",
       "bookings.manage",
       "quotes.read",
       "quotes.write",
@@ -62,6 +66,8 @@ const DEFAULT_ROLES = [
       "appointments.read",
       "appointments.update",
       "appointment_media.capture",
+      "payments.read",
+      "payments.collect",
       "expenses.read",
       "expenses.write"
     ]

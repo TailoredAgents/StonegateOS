@@ -2810,6 +2810,8 @@ export const appointmentRelations = relations(
     }),
     notes: many(appointmentNotes),
     media: many(appointmentMedia),
+    paymentAttempts: many(paymentAttempts),
+    payments: many(payments),
   }),
 );
 
@@ -3015,19 +3017,107 @@ export const expenseRelations = relations(expenses, ({ one }) => ({
   }),
 }));
 
-// Payments (Stripe charge ingestion for reconciliation)
+// Provider-neutral payment attempts and ledger.
+export const paymentAttempts = pgTable(
+  "payment_attempts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    appointmentId: uuid("appointment_id")
+      .notNull()
+      .references(() => appointments.id, { onDelete: "cascade" }),
+    provider: text("provider").default("square").notNull(),
+    clientRequestId: text("client_request_id").notNull(),
+    status: text("status").default("created").notNull(),
+    requestedJobAmountCents: integer("requested_job_amount_cents").notNull(),
+    currency: varchar("currency", { length: 10 }).default("USD").notNull(),
+    providerOrderId: text("provider_order_id"),
+    providerPaymentId: text("provider_payment_id"),
+    squareLocationId: text("square_location_id"),
+    initiatedByMemberId: uuid("initiated_by_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
+    returnNonceHash: text("return_nonce_hash"),
+    returnStateExpiresAt: timestamp("return_state_expires_at", {
+      withTimezone: true,
+    }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    errorCode: text("error_code"),
+    errorMessage: text("error_message"),
+    metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    clientRequestIdx: uniqueIndex("payment_attempts_client_request_key").on(
+      table.clientRequestId,
+    ),
+    appointmentIdx: index("payment_attempts_appointment_idx").on(
+      table.appointmentId,
+      table.createdAt,
+    ),
+    statusIdx: index("payment_attempts_status_idx").on(
+      table.status,
+      table.createdAt,
+    ),
+    expiresIdx: index("payment_attempts_expires_idx").on(table.expiresAt),
+    providerOrderIdx: index("payment_attempts_provider_order_idx").on(
+      table.provider,
+      table.providerOrderId,
+    ),
+    providerPaymentIdx: index("payment_attempts_provider_payment_idx").on(
+      table.provider,
+      table.providerPaymentId,
+    ),
+    activeSquareAttemptIdx: uniqueIndex(
+      "payment_attempts_active_square_appointment_key",
+    )
+      .on(table.appointmentId)
+      .where(
+        sql`${table.provider} = 'square' AND ${table.status} IN ('created', 'launched', 'pending_verification')`,
+      ),
+  }),
+);
+
 export const payments = pgTable(
   "payments",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    stripeChargeId: text("stripe_charge_id").notNull(),
+    stripeChargeId: text("stripe_charge_id"),
+    provider: text("provider").default("stripe").notNull(),
+    providerPaymentId: text("provider_payment_id"),
+    providerOrderId: text("provider_order_id"),
+    paymentAttemptId: uuid("payment_attempt_id").references(
+      () => paymentAttempts.id,
+      { onDelete: "set null" },
+    ),
     amount: integer("amount").notNull(), // cents
+    jobAmountCents: integer("job_amount_cents"),
+    tipCents: integer("tip_cents").default(0).notNull(),
+    totalAmountCents: integer("total_amount_cents"),
+    refundedAmountCents: integer("refunded_amount_cents").default(0).notNull(),
     currency: varchar("currency", { length: 10 }).notNull(),
     status: text("status").notNull(),
+    canonicalStatus: text("canonical_status"),
+    providerStatus: text("provider_status"),
     method: text("method"),
+    tenderType: text("tender_type"),
+    entryMethod: text("entry_method"),
     cardBrand: text("card_brand"),
     last4: varchar("last4", { length: 4 }),
     receiptUrl: text("receipt_url"),
+    squareLocationId: text("square_location_id"),
+    initiatedByMemberId: uuid("initiated_by_member_id").references(
+      () => teamMembers.id,
+      { onDelete: "set null" },
+    ),
+    legacySource: text("legacy_source"),
     metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
     appointmentId: uuid("appointment_id").references(() => appointments.id, {
       onDelete: "set null",
@@ -3039,11 +3129,169 @@ export const payments = pgTable(
       .defaultNow()
       .notNull()
       .$onUpdate(() => new Date()),
+    providerCreatedAt: timestamp("provider_created_at", {
+      withTimezone: true,
+    }),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
     capturedAt: timestamp("captured_at", { withTimezone: true }),
   },
   (table) => ({
     stripeIdx: uniqueIndex("payments_charge_idx").on(table.stripeChargeId),
+    providerPaymentIdx: uniqueIndex("payments_provider_payment_key").on(
+      table.provider,
+      table.providerPaymentId,
+    ),
+    paymentAttemptIdx: uniqueIndex("payments_payment_attempt_key").on(
+      table.paymentAttemptId,
+    ),
     appointmentIdx: index("payments_appointment_idx").on(table.appointmentId),
+    canonicalStatusIdx: index("payments_canonical_status_idx").on(
+      table.canonicalStatus,
+      table.createdAt,
+    ),
+    providerOrderIdx: index("payments_provider_order_idx").on(
+      table.provider,
+      table.providerOrderId,
+    ),
+    paidAtIdx: index("payments_paid_at_idx").on(table.paidAt),
+  }),
+);
+
+export const paymentRefunds = pgTable(
+  "payment_refunds",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    paymentId: uuid("payment_id")
+      .notNull()
+      .references(() => payments.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    providerRefundId: text("provider_refund_id"),
+    amountCents: integer("amount_cents").notNull(),
+    jobAmountCents: integer("job_amount_cents").default(0).notNull(),
+    tipCents: integer("tip_cents").default(0).notNull(),
+    currency: varchar("currency", { length: 10 }).default("USD").notNull(),
+    canonicalStatus: text("canonical_status").notNull(),
+    providerStatus: text("provider_status"),
+    reason: text("reason"),
+    metadata: jsonb("metadata").$type<Record<string, unknown> | null>(),
+    providerCreatedAt: timestamp("provider_created_at", {
+      withTimezone: true,
+    }),
+    refundedAt: timestamp("refunded_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    providerRefundIdx: uniqueIndex("payment_refunds_provider_refund_key").on(
+      table.provider,
+      table.providerRefundId,
+    ),
+    paymentIdx: index("payment_refunds_payment_idx").on(
+      table.paymentId,
+      table.createdAt,
+    ),
+    statusIdx: index("payment_refunds_status_idx").on(
+      table.canonicalStatus,
+      table.createdAt,
+    ),
+  }),
+);
+
+export const paymentProviderEvents = pgTable(
+  "payment_provider_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    provider: text("provider").notNull(),
+    providerEventId: text("provider_event_id").notNull(),
+    eventType: text("event_type").notNull(),
+    processingStatus: text("processing_status").default("received").notNull(),
+    paymentId: uuid("payment_id").references(() => payments.id, {
+      onDelete: "set null",
+    }),
+    paymentAttemptId: uuid("payment_attempt_id").references(
+      () => paymentAttempts.id,
+      { onDelete: "set null" },
+    ),
+    payload: jsonb("payload").$type<Record<string, unknown> | null>(),
+    receivedAt: timestamp("received_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    error: text("error"),
+  },
+  (table) => ({
+    providerEventIdx: uniqueIndex(
+      "payment_provider_events_provider_event_key",
+    ).on(table.provider, table.providerEventId),
+    statusIdx: index("payment_provider_events_status_idx").on(
+      table.processingStatus,
+      table.receivedAt,
+    ),
+    paymentIdx: index("payment_provider_events_payment_idx").on(
+      table.paymentId,
+    ),
+    attemptIdx: index("payment_provider_events_attempt_idx").on(
+      table.paymentAttemptId,
+    ),
+  }),
+);
+
+export const paymentAttemptRelations = relations(
+  paymentAttempts,
+  ({ one, many }) => ({
+    appointment: one(appointments, {
+      fields: [paymentAttempts.appointmentId],
+      references: [appointments.id],
+    }),
+    initiatedByMember: one(teamMembers, {
+      fields: [paymentAttempts.initiatedByMemberId],
+      references: [teamMembers.id],
+    }),
+    payments: many(payments),
+    providerEvents: many(paymentProviderEvents),
+  }),
+);
+
+export const paymentRelations = relations(payments, ({ one, many }) => ({
+  appointment: one(appointments, {
+    fields: [payments.appointmentId],
+    references: [appointments.id],
+  }),
+  paymentAttempt: one(paymentAttempts, {
+    fields: [payments.paymentAttemptId],
+    references: [paymentAttempts.id],
+  }),
+  initiatedByMember: one(teamMembers, {
+    fields: [payments.initiatedByMemberId],
+    references: [teamMembers.id],
+  }),
+  refunds: many(paymentRefunds),
+  providerEvents: many(paymentProviderEvents),
+}));
+
+export const paymentRefundRelations = relations(paymentRefunds, ({ one }) => ({
+  payment: one(payments, {
+    fields: [paymentRefunds.paymentId],
+    references: [payments.id],
+  }),
+}));
+
+export const paymentProviderEventRelations = relations(
+  paymentProviderEvents,
+  ({ one }) => ({
+    payment: one(payments, {
+      fields: [paymentProviderEvents.paymentId],
+      references: [payments.id],
+    }),
+    paymentAttempt: one(paymentAttempts, {
+      fields: [paymentProviderEvents.paymentAttemptId],
+      references: [paymentAttempts.id],
+    }),
   }),
 );
 

@@ -226,9 +226,7 @@ export async function getLatestE2ESeedSummary(): Promise<E2ESeedSummary | null> 
   };
 }
 
-export async function getAppointmentStartAt(
-  appointmentId: string,
-): Promise<Date | null> {
+export async function getAppointmentStartAt(appointmentId: string): Promise<Date | null> {
   const sql = getSql();
   const rows = await sql<{ startAt: Date | string }[]>`
     SELECT start_at AS "startAt"

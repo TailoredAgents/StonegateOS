@@ -1,5 +1,7 @@
 "use client";
 
+import * as React from "react";
+import { MobilePaymentPanel, type AppointmentPaymentSummary } from "./MobilePaymentPanel";
 import {
   MobileQuotedWorkPanel,
   type AppointmentMediaSummary,
@@ -20,8 +22,12 @@ export function MobileAppointmentDetail({
   pricingLabel,
   quotedScopeText,
   mediaSummary,
+  paymentSummary,
   canCaptureMedia,
   canManageMedia,
+  canReadPayments,
+  canCollectPayments,
+  isOwner,
 }: {
   appointmentId: string;
   employeeId: string;
@@ -31,9 +37,19 @@ export function MobileAppointmentDetail({
   pricingLabel: string | null;
   quotedScopeText: string | null;
   mediaSummary: AppointmentMediaSummary;
+  paymentSummary: AppointmentPaymentSummary | null;
   canCaptureMedia: boolean;
   canManageMedia: boolean;
+  canReadPayments: boolean;
+  canCollectPayments: boolean;
+  isOwner: boolean;
 }) {
+  const [needsScope, setNeedsScope] = React.useState(mediaSummary.needsScope);
+
+  React.useEffect(() => {
+    setNeedsScope(mediaSummary.needsScope);
+  }, [appointmentId, mediaSummary.needsScope]);
+
   return (
     <>
       {mapsHref && address ? (
@@ -97,10 +113,20 @@ export function MobileAppointmentDetail({
         appointmentId={appointmentId}
         employeeId={employeeId}
         initialScope={quotedScopeText}
-        initialSummary={mediaSummary}
+        initialSummary={{ ...mediaSummary, needsScope }}
         canCapture={canCaptureMedia}
         canManage={canManageMedia}
+        onScopeRequirementChange={setNeedsScope}
       />
+      {canReadPayments && paymentSummary ? (
+        <MobilePaymentPanel
+          appointmentId={appointmentId}
+          initialSummary={paymentSummary}
+          canCollect={canCollectPayments}
+          isOwner={isOwner}
+          needsScope={needsScope}
+        />
+      ) : null}
     </>
   );
 }

@@ -153,10 +153,38 @@ export default async function TeamPage({
       "audit.read",
       "appointments.read",
       "appointments.update",
+      "appointment_media.capture",
+      "appointment_media.manage",
+      "payments.read",
+      "payments.collect",
       "expenses.read",
       "expenses.write"
     ],
-    crew: ["messages.read", "appointments.read", "appointments.update", "expenses.read", "expenses.write"],
+    sales: [
+      "messages.read",
+      "messages.send",
+      "appointments.read",
+      "appointments.update",
+      "appointment_media.capture",
+      "appointment_media.manage",
+      "payments.read",
+      "payments.collect",
+      "bookings.manage",
+      "quotes.read",
+      "quotes.write",
+      "quotes.send",
+      "quotes.update"
+    ],
+    crew: [
+      "messages.read",
+      "appointments.read",
+      "appointments.update",
+      "appointment_media.capture",
+      "payments.read",
+      "payments.collect",
+      "expenses.read",
+      "expenses.write"
+    ],
     read_only: ["read"]
   };
 
@@ -171,7 +199,12 @@ export default async function TeamPage({
   const permissionMatches = (granted: string, required: string): boolean => {
     if (granted === "*") return true;
     if (required === "read") return granted === "read";
-    if (granted === "read") return required === "read" || required.endsWith(".read");
+    if (granted === "read") {
+      return (
+        required === "read" ||
+        (required.endsWith(".read") && required !== "payments.read")
+      );
+    }
     if (granted.endsWith(".*")) {
       const prefix = granted.slice(0, -2);
       return required.startsWith(prefix);
@@ -339,7 +372,11 @@ export default async function TeamPage({
     const fallbackTab =
       resolvedTabs.find((candidate) => candidate.id === fallback && isAllowed(candidate.requires)) ??
       resolvedTabs.find((candidate) => isAllowed(candidate.requires));
-    redirect((fallbackTab ? fallbackTab.href : "/team/login") as Parameters<typeof redirect>[0]);
+    redirect(
+      (fallbackTab ? fallbackTab.href : "/team/login") as Parameters<
+        typeof redirect
+      >[0]
+    );
   }
 
   let calendarBadge: CalendarSyncBadge | null = null;

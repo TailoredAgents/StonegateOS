@@ -14,7 +14,7 @@ type CalendarRevenueEvent = CalendarAmounts & {
 
 export type CalendarDayRevenueSummary = {
   amountCents: number;
-  label: "Projected" | "Collected";
+  label: "Projected" | "Completed job revenue";
 };
 
 export function formatCalendarEventAmounts(
@@ -22,13 +22,13 @@ export function formatCalendarEventAmounts(
 ): string | null {
   const parts: string[] = [];
   const quoted = formatUsdCents(event.quotedTotalCents);
-  const collected = formatUsdCents(event.finalTotalCents);
+  const finalTotal = formatUsdCents(event.finalTotalCents);
 
   if (quoted) {
     parts.push(`Quoted ${quoted}`);
   }
-  if (collected) {
-    parts.push(`Collected ${collected}`);
+  if (finalTotal) {
+    parts.push(`Final job total ${finalTotal}`);
   }
 
   return parts.length ? parts.join(" / ") : null;
@@ -51,10 +51,12 @@ export function buildRevenueSummaryByDay(
     const dayKey = formatDayKey(date);
     if (!dayKey) continue;
 
-    const label = isPastDayKey(dayKey, todayKey) ? "Collected" : "Projected";
+    const label = isPastDayKey(dayKey, todayKey)
+      ? "Completed job revenue"
+      : "Projected";
     const cents =
-      label === "Collected"
-        ? getCollectedRevenueCents(event)
+      label === "Completed job revenue"
+        ? getCompletedJobRevenueCents(event)
         : getProjectedRevenueCents(event);
     if (cents <= 0) continue;
 
@@ -110,10 +112,11 @@ function getProjectedRevenueCents(event: CalendarRevenueEvent): number {
   );
 }
 
-function getCollectedRevenueCents(event: CalendarRevenueEvent): number {
+function getCompletedJobRevenueCents(event: CalendarRevenueEvent): number {
   if (event.source !== "db") return 0;
   if (isCanceledStatus(event.status)) return 0;
   if (isQuoteOnlyAppointment(event.appointmentType)) return 0;
+  if (normalizeText(event.status) !== "completed") return 0;
 
   return normalizeCents(event.finalTotalCents) ?? 0;
 }

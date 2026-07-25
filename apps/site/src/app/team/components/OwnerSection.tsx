@@ -1,5 +1,10 @@
 import React from "react";
 import { OwnerAssistClient } from "./OwnerAssistClient";
+import {
+  PaymentReconciliationPanel,
+  type PaymentReconciliationAppointment,
+  type PaymentReconciliationPayload,
+} from "./PaymentReconciliationPanel";
 import { callAdminApi } from "../lib/api";
 import {
   formatAppointmentPricing,
@@ -36,6 +41,16 @@ type RevenuePayload = {
   ok: true;
   currency: string;
   timezone: string;
+  paymentLedger?: {
+    scope: "all_time";
+    paymentsCollectedCents: number;
+    paidTowardJobsCents: number;
+    tipsCollectedCents: number;
+    outstandingBalanceCents: number;
+    refundedCents: number;
+    needsReviewCents: number;
+    needsReviewCount: number;
+  } | null;
   windows: {
     weekToDate: RevenueWindow & {
       startsAt: string;
@@ -206,6 +221,7 @@ type BookingSourceSummaryPayload = {
 type OwnerView =
   | "overview"
   | "revenue"
+  | "payments"
   | "expenses"
   | "payroll"
   | "pl"
@@ -223,8 +239,13 @@ const OWNER_VIEWS: Array<{
   },
   {
     id: "revenue",
-    label: "Revenue",
-    description: "Completed jobs and collected totals",
+    label: "Job revenue",
+    description: "Completed jobs and final job totals",
+  },
+  {
+    id: "payments",
+    label: "Payments",
+    description: "Provider reconciliation and refunds",
   },
   {
     id: "expenses",
@@ -355,7 +376,7 @@ function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
       continue;
     }
 
-    const collected = job.finalTotalCents;
+    const finalTotal = job.finalTotalCents;
     const exact = job.quotedTotalCents;
     const rangeMin = pricing.rangeMinCents ?? null;
     const rangeMax = pricing.rangeMaxCents ?? null;
@@ -363,7 +384,7 @@ function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
     if (pricing.mode === "exact") {
       if (exact == null) {
         missingPricingCount += 1;
-      } else if (exact !== collected) {
+      } else if (exact !== finalTotal) {
         pricingMismatchCount += 1;
       }
       continue;
@@ -372,7 +393,7 @@ function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
     if (pricing.mode === "range") {
       if (rangeMin == null || rangeMax == null) {
         missingPricingCount += 1;
-      } else if (collected < rangeMin || collected > rangeMax) {
+      } else if (finalTotal < rangeMin || finalTotal > rangeMax) {
         pricingMismatchCount += 1;
       }
       continue;
@@ -385,7 +406,7 @@ function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
       continue;
     }
 
-    if (hasExact && exact !== collected) {
+    if (hasExact && exact !== finalTotal) {
       pricingMismatchCount += 1;
       continue;
     }
@@ -394,7 +415,7 @@ function analyzeWeekJobs(jobs: RevenueWeekJob[]) {
       hasRange &&
       typeof rangeMin === "number" &&
       typeof rangeMax === "number" &&
-      (collected < rangeMin || collected > rangeMax)
+      (finalTotal < rangeMin || finalTotal > rangeMax)
     ) {
       pricingMismatchCount += 1;
     }
@@ -497,6 +518,44 @@ export async function OwnerSection({
     bookingSourceError = "Booking source summary unavailable.";
   }
 
+  let paymentReconciliation: PaymentReconciliationPayload | null = null;
+  let paymentReconciliationError: string | null = null;
+  let paymentReconciliationAppointments: PaymentReconciliationAppointment[] =
+    [];
+  if (activeOwnerView === "payments") {
+    try {
+      const [reconciliationRes, appointmentsRes] = await Promise.all([
+        callAdminApi("/api/admin/payments/reconciliation", {
+          timeoutMs: 30_000,
+        }),
+        callAdminApi("/api/appointments?status=all&limit=200", {
+          timeoutMs: 20_000,
+        }),
+      ]);
+      if (reconciliationRes.ok) {
+        paymentReconciliation =
+          (await reconciliationRes.json()) as PaymentReconciliationPayload;
+      } else {
+        const payload = (await reconciliationRes.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        paymentReconciliationError = (
+          payload?.error ??
+          `Payment reconciliation unavailable (HTTP ${reconciliationRes.status})`
+        ).replace(/_/g, " ");
+      }
+      if (appointmentsRes.ok) {
+        const payload = (await appointmentsRes.json()) as {
+          data?: PaymentReconciliationAppointment[];
+        };
+        paymentReconciliationAppointments = payload.data ?? [];
+      }
+    } catch {
+      paymentReconciliationError =
+        "Payment reconciliation is temporarily unavailable.";
+    }
+  }
+
   const weekJobInsights = revenue?.ok
     ? analyzeWeekJobs(revenue.windows.weekToDate.jobs)
     : { missingPricingCount: 0, pricingMismatchCount: 0 };
@@ -541,7 +600,7 @@ export async function OwnerSection({
         </div>
 
         <nav
-          className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6"
+          className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7"
           aria-label="Owner HQ sections"
         >
           {OWNER_VIEWS.map((view) => {
@@ -600,7 +659,7 @@ export async function OwnerSection({
                 </div>
                 <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-3 text-sky-900">
                   <div className="font-semibold">
-                    {weekJobInsights.pricingMismatchCount} jobs collected
+                    {weekJobInsights.pricingMismatchCount} completed jobs priced
                     outside the recorded quote/range
                   </div>
                   <div className="mt-1 text-xs text-sky-700">
@@ -629,11 +688,10 @@ export async function OwnerSection({
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-lg font-semibold text-slate-900">
-                Weekly cash flow
+                Weekly operating snapshot
               </h3>
               <p className="mt-1 text-sm text-slate-600">
-                What came in, what is logged out, and what is still owed this
-                week.
+                Completed job revenue, logged costs, and payroll for this week.
               </p>
             </div>
           </div>
@@ -641,7 +699,7 @@ export async function OwnerSection({
           <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                Collected
+                Completed job revenue
               </div>
               <div className="mt-2 text-xl font-semibold text-emerald-950">
                 {fmtMoney(weekRevenue, "USD")}
@@ -693,7 +751,7 @@ export async function OwnerSection({
                 {fmtMoney(weekNetAfterPayroll, "USD")}
               </div>
               <div className="mt-1 text-xs text-slate-600">
-                Collected minus logged expenses and payroll
+                Completed job revenue minus logged expenses and payroll
               </div>
             </div>
           </div>
@@ -743,7 +801,7 @@ export async function OwnerSection({
                       bookingSourceSummary.facebook.estimatedRevenueCents,
                       "USD",
                     )}{" "}
-                    quoted/collected
+                    quoted/final totals
                   </div>
                 </div>
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
@@ -758,7 +816,7 @@ export async function OwnerSection({
                       bookingSourceSummary.google.estimatedRevenueCents,
                       "USD",
                     )}{" "}
-                    quoted/collected
+                    quoted/final totals
                   </div>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -868,7 +926,7 @@ export async function OwnerSection({
           className={`${TEAM_CARD_PADDED} block transition hover:border-primary-200 hover:bg-white`}
         >
           <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            Revenue review
+            Completed job revenue
           </div>
           <div className="mt-2 text-2xl font-semibold text-slate-900">
             {fmtMoney(weekRevenue, "USD")}
@@ -927,18 +985,109 @@ export async function OwnerSection({
         </a>
       </div>
 
+      {activeOwnerView === "payments" ? (
+        <PaymentReconciliationPanel
+          data={paymentReconciliation}
+          error={paymentReconciliationError}
+          appointments={paymentReconciliationAppointments}
+        />
+      ) : null}
+
       <div
         className={`${TEAM_CARD_PADDED} ${activeOwnerView === "revenue" ? "" : "hidden"}`}
       >
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-slate-900">Revenue</h3>
+            <h3 className="text-lg font-semibold text-slate-900">
+              Completed job revenue
+            </h3>
             <p className="text-sm text-slate-600">
-              Completed appointments counted from actual collected totals on
-              their scheduled calendar date.
+              Completed appointments counted from final job totals on their
+              scheduled calendar date. Payment collection is reported
+              separately.
             </p>
           </div>
         </div>
+        {revenue?.paymentLedger ? (
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div>
+              <div className="text-sm font-semibold text-slate-900">
+                Payment ledger · All time
+              </div>
+              <p className="mt-1 text-xs text-slate-600">
+                Verified money movement is shown separately from completed job
+                revenue. Tips are included in payments collected but never
+                reduce a job balance.
+              </p>
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                  Payments collected
+                </div>
+                <div className="mt-2 text-lg font-semibold text-emerald-950">
+                  {fmtMoney(
+                    revenue.paymentLedger.paymentsCollectedCents,
+                    revenue.currency,
+                  )}
+                </div>
+                <div className="mt-1 text-[11px] text-emerald-800">
+                  Includes{" "}
+                  {fmtMoney(
+                    revenue.paymentLedger.tipsCollectedCents,
+                    revenue.currency,
+                  )}{" "}
+                  in net tips
+                </div>
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                  Outstanding balance
+                </div>
+                <div className="mt-2 text-lg font-semibold text-amber-950">
+                  {fmtMoney(
+                    revenue.paymentLedger.outstandingBalanceCents,
+                    revenue.currency,
+                  )}
+                </div>
+                <div className="mt-1 text-[11px] text-amber-800">
+                  Final job totals minus net job payments
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Refunded
+                </div>
+                <div className="mt-2 text-lg font-semibold text-slate-900">
+                  {fmtMoney(
+                    revenue.paymentLedger.refundedCents,
+                    revenue.currency,
+                  )}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-600">
+                  Recorded provider and manual refunds
+                </div>
+              </div>
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">
+                  Needs review
+                </div>
+                <div className="mt-2 text-lg font-semibold text-rose-950">
+                  {fmtMoney(
+                    revenue.paymentLedger.needsReviewCents,
+                    revenue.currency,
+                  )}
+                </div>
+                <div className="mt-1 text-[11px] text-rose-800">
+                  {revenue.paymentLedger.needsReviewCount} flagged ledger{" "}
+                  {revenue.paymentLedger.needsReviewCount === 1
+                    ? "item"
+                    : "items"}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
         <div className="mt-4 space-y-2 text-sm text-slate-700">
           {revenueError ? (
             <p className="text-amber-700">{revenueError}</p>
@@ -1070,7 +1219,7 @@ export async function OwnerSection({
                             </div>
                             <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
                               <div className="font-semibold text-slate-500">
-                                Collected
+                                Final job total
                               </div>
                               <div className="mt-1 text-slate-900">
                                 {formatUsdCents(job.finalTotalCents) ??
@@ -1510,7 +1659,7 @@ export async function OwnerSection({
           ) : (
             <p className="mt-4 text-sm text-slate-600">
               Commissions are calculated from completed jobs in the current
-              Monday-Sunday week using final amount paid.
+              Monday-Sunday week using the final job total.
             </p>
           )}
         </div>
@@ -1521,8 +1670,8 @@ export async function OwnerSection({
       >
         <h3 className="text-lg font-semibold text-slate-900">P&amp;L</h3>
         <p className="mt-1 text-sm text-slate-600">
-          Revenue (completed jobs) minus expenses (including commission payouts
-          once marked paid).
+          Completed job revenue minus expenses (including commission payouts
+          once marked paid). This is not a cash-collection report.
         </p>
 
         {revenue?.ok && expensesSummary?.ok ? (
@@ -1549,7 +1698,9 @@ export async function OwnerSection({
                   </div>
                   <div className="mt-2 space-y-1 text-sm text-slate-700">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-slate-600">Revenue</span>
+                      <span className="text-slate-600">
+                        Completed job revenue
+                      </span>
                       <span className="font-semibold text-slate-900">
                         {fmtMoney(rev, "USD")}
                       </span>

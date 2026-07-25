@@ -222,8 +222,8 @@ function defaultQuoteFollowUpInputValue(
 function formatMoneySummary(appointment: AppointmentDto): string | null {
   const quoted = fmtUsdCents(appointment.quotedTotalCents);
   const final = fmtUsdCents(appointment.finalTotalCents);
-  if (quoted && final) return `${quoted} quoted / ${final} collected`;
-  if (final) return `${final} collected`;
+  if (quoted && final) return `${quoted} quoted / ${final} final job total`;
+  if (final) return `${final} final job total`;
   if (quoted) return `${quoted} quoted`;
   return null;
 }
@@ -981,7 +981,7 @@ function AppointmentCard({
                 <input type="hidden" name="status" value="completed" />
 
                 <label className="flex flex-col gap-1">
-                  <span>Amount collected</span>
+                  <span>Final job total</span>
                   <input
                     name="finalTotal"
                     type="number"
@@ -1000,22 +1000,10 @@ function AppointmentCard({
                   />
                 </label>
 
-                <label className="flex flex-col gap-1">
-                  <span>Card tips (optional)</span>
-                  <input
-                    name="cardTip"
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    placeholder="e.g. 20.00"
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-
                 <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
                   {a.quotedTotalCents !== null
-                    ? `Quoted amount is prefilled at ${fmtUsdCents(a.quotedTotalCents)} for speed. Card tips are tracked separately and are not counted in revenue.`
-                    : "Card tips are tracked separately and are not counted in revenue."}
+                    ? `Quoted amount is prefilled at ${fmtUsdCents(a.quotedTotalCents)} for speed. Tips are recorded by the payment flow and kept separate from job revenue.`
+                    : "Tips are recorded by the payment flow and kept separate from job revenue."}
                 </div>
 
                 <CrewCompletionBookingDetailsEditor

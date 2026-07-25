@@ -56,6 +56,7 @@ function isLocalHostname(hostname: string): boolean {
 function inspectProviderUrl(input: {
   environment: Environment;
   key: string;
+  expectedPath?: string;
 }): string | null {
   const value = input.environment[input.key]?.trim();
   if (!value) return null;
@@ -74,9 +75,7 @@ function inspectProviderUrl(input: {
     isLocalHostname(url.hostname);
   if (url.protocol !== "https:" && !localHttp) {
     return `${input.key} must use HTTPS${
-      production
-        ? " in production"
-        : " unless it targets a local development service"
+      production ? " in production" : " unless it targets a local development service"
     }`;
   }
   if (production && isLocalHostname(url.hostname)) {
@@ -91,7 +90,76 @@ function inspectProviderUrl(input: {
   ) {
     return `${input.key} must be an origin URL without credentials, query parameters, or a fragment`;
   }
+  if (input.expectedPath && url.pathname !== input.expectedPath) {
+    return `${input.key} must use path ${input.expectedPath}`;
+  }
   return null;
+}
+
+export function inspectSquareConfiguration(
+  environment: Environment = process.env,
+): ProviderConfigurationInspection {
+  const production = isProduction(environment);
+  const required: string[] = [
+    "SQUARE_APPLICATION_ID",
+    "SQUARE_ACCESS_TOKEN",
+    "SQUARE_LOCATION_ID",
+    "SQUARE_POS_CALLBACK_URL",
+    "SQUARE_POS_FALLBACK_URL",
+    "SQUARE_POS_STATE_SECRET",
+    "SQUARE_WEBHOOK_SIGNATURE_KEY",
+    "SQUARE_WEBHOOK_NOTIFICATION_URL",
+    ...(production ? ["SQUARE_ENVIRONMENT"] : []),
+  ];
+  const missing = required.filter((key) => !hasValue(environment, key));
+  const stateSecret = environment["SQUARE_POS_STATE_SECRET"]?.trim() ?? "";
+  const invalid: string[] = [];
+  if (stateSecret && Buffer.byteLength(stateSecret, "utf8") < 32) {
+    invalid.push("SQUARE_POS_STATE_SECRET must contain at least 32 bytes");
+  }
+
+  const squareEnvironment =
+    environment["SQUARE_ENVIRONMENT"]?.trim().toLowerCase() ?? "";
+  if (production && squareEnvironment && squareEnvironment !== "production") {
+    invalid.push(
+      "SQUARE_ENVIRONMENT must be production when NODE_ENV=production",
+    );
+  } else if (
+    squareEnvironment &&
+    squareEnvironment !== "production" &&
+    squareEnvironment !== "sandbox"
+  ) {
+    invalid.push("SQUARE_ENVIRONMENT must be production or sandbox");
+  }
+
+  const urlRequirements = [
+    {
+      key: "SQUARE_POS_CALLBACK_URL",
+      expectedPath: "/mobile/payment-return",
+    },
+    {
+      key: "SQUARE_POS_FALLBACK_URL",
+      expectedPath: "/mobile/square-setup",
+    },
+    {
+      key: "SQUARE_WEBHOOK_NOTIFICATION_URL",
+      expectedPath: "/api/webhooks/square",
+    },
+  ] as const;
+  for (const requirement of urlRequirements) {
+    const issue = inspectProviderUrl({
+      environment,
+      key: requirement.key,
+      expectedPath: requirement.expectedPath,
+    });
+    if (issue) invalid.push(issue);
+  }
+
+  return {
+    configured: missing.length === 0 && invalid.length === 0,
+    missing,
+    invalid,
+  };
 }
 
 export function inspectObjectStorageConfiguration(

@@ -8,6 +8,7 @@ export type ProviderName =
   | "google_ads"
   | "google_ads_analyst"
   | "traccar"
+  | "square"
   | "object_storage";
 
 export async function recordProviderSuccess(provider: ProviderName): Promise<void> {

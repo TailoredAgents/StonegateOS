@@ -19,10 +19,17 @@ import {
   mediaAssets,
   mobileOfflineMediaQueueHealth,
   outboxEvents,
+  paymentAttempts,
+  paymentProviderEvents,
+  paymentRefunds,
+  payments,
   providerHealth,
 } from "@/db";
 import { resolvePublicSiteBaseUrl } from "@/lib/public-site-url";
 import { isGoogleCalendarEnabled } from "@/lib/calendar";
+import { isSquarePosEnabled } from "@/lib/payment-feature-flags";
+import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
+import { SQUARE_PROVIDER_EVENT_LEASE_MS } from "@/lib/square-payments";
 import {
   areAppointmentMediaWritesEnabled,
   arePublicQuoteMediaUploadsEnabled,
@@ -35,6 +42,7 @@ import {
 } from "@/lib/media-storage";
 import {
   inspectObjectStorageConfiguration,
+  inspectSquareConfiguration,
   isProviderConfigurationBlocking,
   type ProviderConfigurationInspection,
 } from "@/lib/provider-configuration";
@@ -47,6 +55,7 @@ const PROVIDERS = [
   "meta_ads",
   "google_ads",
   "traccar",
+  "square",
   "object_storage",
 ] as const;
 
@@ -123,6 +132,33 @@ function getTwilioBlocker(): HealthFinding | null {
   };
 }
 
+function getSquareBlocker(
+  configuration: ProviderConfigurationInspection,
+): HealthFinding | null {
+  if (
+    !isProviderConfigurationBlocking({
+      enabled: isSquarePosEnabled(),
+      configuration,
+    })
+  ) {
+    return null;
+  }
+  const issues = [
+    ...configuration.missing.map((key) => `missing ${key}`),
+    ...configuration.invalid,
+  ];
+  return {
+    id: "square_not_configured",
+    severity: "blocker",
+    title: "Square Tap to Pay is enabled but incomplete",
+    detail: `Square payment collection is blocked because its configuration is incomplete: ${issues.join(", ")}.`,
+    fix: [
+      "Configure the missing Square production credentials and exact callback/webhook URLs.",
+      "Redeploy the API and verify the Square provider health check before enabling employees.",
+    ],
+  };
+}
+
 function isObjectStorageFeatureEnabled(): boolean {
   return (
     areAppointmentMediaWritesEnabled() ||
@@ -165,6 +201,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const blockers: HealthFinding[] = [];
   const warnings: HealthFinding[] = [];
   const calendarEnabled = isGoogleCalendarEnabled();
+  const squareConfiguration = inspectSquareConfiguration();
   const objectStorageConfiguration = inspectObjectStorageConfiguration();
 
   const siteUrlBlocker = getPublicSiteUrlBlocker();
@@ -172,6 +209,8 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const twilioBlocker = getTwilioBlocker();
   if (twilioBlocker) blockers.push(twilioBlocker);
+  const squareBlocker = getSquareBlocker(squareConfiguration);
+  if (squareBlocker) blockers.push(squareBlocker);
   const objectStorageBlocker = getObjectStorageBlocker(
     objectStorageConfiguration,
   );
@@ -245,12 +284,22 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   const db = getDb();
+  const paymentLedgerAvailable = await isPaymentLedgerSchemaAvailable(db);
+  const emptyCountRows = Promise.resolve([{ count: 0 }]);
+  const staleAttemptCutoff = new Date(Date.now() - 35 * 60 * 1_000);
+  const staleProviderEventLeaseCutoff = new Date(
+    Date.now() - SQUARE_PROVIDER_EVENT_LEASE_MS,
+  );
   const stuckMediaProcessingCutoff = new Date(Date.now() - 30 * 60 * 1_000);
   const staleOfflineMediaQueueCutoff = new Date(
     Date.now() - 24 * 60 * 60 * 1_000,
   );
   const [
     rows,
+    stuckAttemptRows,
+    unmatchedPaymentRows,
+    failedEventRows,
+    refundReviewRows,
     failedMediaRows,
     expiredStagingRows,
     stuckProcessingRows,
@@ -268,6 +317,93 @@ export async function GET(request: NextRequest): Promise<Response> {
       })
       .from(providerHealth)
       .where(inArray(providerHealth.provider, [...PROVIDERS])),
+    paymentLedgerAvailable
+      ? db
+          .select({ count: sql<number>`count(*)` })
+          .from(paymentAttempts)
+          .where(
+            and(
+              eq(paymentAttempts.provider, "square"),
+              or(
+                inArray(paymentAttempts.status, ["needs_review", "expired"]),
+                and(
+                  inArray(paymentAttempts.status, [
+                    "created",
+                    "launched",
+                    "pending_verification",
+                  ]),
+                  lt(paymentAttempts.updatedAt, staleAttemptCutoff),
+                ),
+              ),
+            ),
+          )
+      : emptyCountRows,
+    paymentLedgerAvailable
+      ? db
+          .select({ count: sql<number>`count(*)` })
+          .from(payments)
+          .where(
+            and(
+              inArray(payments.provider, ["square", "stripe"]),
+              or(
+                isNull(payments.appointmentId),
+                eq(payments.canonicalStatus, "needs_review"),
+              ),
+            ),
+          )
+      : emptyCountRows,
+    paymentLedgerAvailable
+      ? db
+          .select({ count: sql<number>`count(*)` })
+          .from(paymentProviderEvents)
+          .where(
+            and(
+              eq(paymentProviderEvents.provider, "square"),
+              or(
+                inArray(paymentProviderEvents.processingStatus, [
+                  "failed",
+                  "needs_review",
+                ]),
+                and(
+                  inArray(paymentProviderEvents.processingStatus, [
+                    "processing",
+                    "received",
+                  ]),
+                  or(
+                    lte(
+                      paymentProviderEvents.processedAt,
+                      staleProviderEventLeaseCutoff,
+                    ),
+                    and(
+                      isNull(paymentProviderEvents.processedAt),
+                      lte(
+                        paymentProviderEvents.receivedAt,
+                        staleProviderEventLeaseCutoff,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          )
+      : emptyCountRows,
+    paymentLedgerAvailable
+      ? db
+          .select({ count: sql<number>`count(*)` })
+          .from(paymentRefunds)
+          .where(
+            and(
+              eq(paymentRefunds.provider, "square"),
+              or(
+                eq(paymentRefunds.canonicalStatus, "needs_review"),
+                and(
+                  sql`${paymentRefunds.metadata}->>'commissionReviewRequired' = 'true'`,
+                  sql`${paymentRefunds.metadata}->>'commissionReviewAcknowledgedAt' is null`,
+                ),
+              ),
+            ),
+          )
+      : emptyCountRows,
     db
       .select({ count: sql<number>`count(*)` })
       .from(mediaAssets)
@@ -397,6 +533,58 @@ export async function GET(request: NextRequest): Promise<Response> {
     });
   }
 
+  const paymentAlertCounts = {
+    stuckAttempts: Number(stuckAttemptRows[0]?.count ?? 0),
+    unmatchedPayments: Number(unmatchedPaymentRows[0]?.count ?? 0),
+    failedEvents: Number(failedEventRows[0]?.count ?? 0),
+    refundReviews: Number(refundReviewRows[0]?.count ?? 0),
+  };
+  if (paymentAlertCounts.stuckAttempts > 0) {
+    warnings.push({
+      id: "square_attempts_stuck",
+      severity: "warning",
+      title: "Square payments awaiting reconciliation",
+      detail: `${paymentAlertCounts.stuckAttempts} Square payment attempt(s) are stale, expired, or need review.`,
+      fix: [
+        "Open the owner payment reconciliation view and run a Square sweep.",
+        "Do not collect the same balance again until the provider result is resolved.",
+      ],
+    });
+  }
+  if (paymentAlertCounts.unmatchedPayments > 0) {
+    warnings.push({
+      id: "provider_payments_unmatched",
+      severity: "warning",
+      title: "Provider payments need owner review",
+      detail: `${paymentAlertCounts.unmatchedPayments} Square or historical Stripe payment(s) are unmatched or need owner review.`,
+      fix: [
+        "Open owner payment reconciliation and compare the provider record before attaching any payment.",
+      ],
+    });
+  }
+  if (paymentAlertCounts.failedEvents > 0) {
+    warnings.push({
+      id: "square_events_failed",
+      severity: "warning",
+      title: "Square webhook or reconciliation failures",
+      detail: `${paymentAlertCounts.failedEvents} Square provider event(s) failed, stalled, or need review.`,
+      fix: [
+        "Verify the exact Square webhook notification URL and signature key, then retry reconciliation.",
+      ],
+    });
+  }
+  if (paymentAlertCounts.refundReviews > 0) {
+    warnings.push({
+      id: "square_refunds_review",
+      severity: "warning",
+      title: "Square refund and commission review",
+      detail: `${paymentAlertCounts.refundReviews} refund(s) need financial or commission-impact review.`,
+      fix: [
+        "Review the refund against completed-job commissions and locked payouts, then acknowledge the reconciliation item.",
+      ],
+    });
+  }
+
   const mediaAlertCounts = {
     processingFailures: Number(failedMediaRows[0]?.count ?? 0),
     expiredStaging: Number(expiredStagingRows[0]?.count ?? 0),
@@ -430,7 +618,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       id: "appointment_media_scope_required",
       severity: "warning",
       title: "Quoted-work scope needs immediate review",
-      detail: `${mediaAlertCounts.needsScopeAppointments} active appointment(s) have quoted-work photos but no “Quoted to remove” summary. Confirmation and completion remain blocked until staff adds the scope.`,
+      detail: `${mediaAlertCounts.needsScopeAppointments} active appointment(s) have quoted-work photos but no “Quoted to remove” summary. Confirmation, payment, and completion remain blocked until staff adds the scope.`,
       fix: [
         "Open each affected appointment’s Quoted Work section, review the customer photos, and add the quoted-to-remove summary.",
         "Confirm Requested appointments only after the written scope matches what was quoted.",
@@ -504,6 +692,12 @@ export async function GET(request: NextRequest): Promise<Response> {
     config: {
       publicSiteUrl: resolvePublicSiteBaseUrl(),
       twilioConfigured: !getTwilioBlocker(),
+      squarePosEnabled: isSquarePosEnabled(),
+      squareConfigured: squareConfiguration.configured,
+      squareConfigurationIssues: [
+        ...squareConfiguration.missing.map((key) => `missing ${key}`),
+        ...squareConfiguration.invalid,
+      ],
       appointmentMediaWritesEnabled: areAppointmentMediaWritesEnabled(),
       publicQuoteMediaUploadsEnabled: arePublicQuoteMediaUploadsEnabled(),
       mediaAutoImportEnabled: isMediaAutoImportEnabled(),
@@ -514,6 +708,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       ],
       objectStorageVerification,
     },
+    paymentAlerts: paymentAlertCounts,
     mediaAlerts: mediaAlertCounts,
   });
 }

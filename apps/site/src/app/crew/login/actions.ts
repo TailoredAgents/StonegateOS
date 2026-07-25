@@ -24,5 +24,5 @@ export async function crewLoginAction(
   }
 
   (await cookies()).set(CREW_SESSION_COOKIE, getCrewKey(), crewSessionCookieOptions());
-  redirect(redirectTo as any);
+  redirect(redirectTo as Parameters<typeof redirect>[0]);
 }

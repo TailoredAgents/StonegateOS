@@ -2,9 +2,18 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { and, eq, gte, isNotNull, lt, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
-import { contacts, getDb, appointments, properties } from "@/db";
+import {
+  appointments,
+  contacts,
+  getDb,
+  paymentRefunds,
+  payments,
+  properties,
+} from "@/db";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
 import { requirePermission } from "@/lib/permissions";
+import { buildPaymentLedgerReportingSummary } from "@/lib/revenue-payment-ledger";
+import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
 import { isAdminRequest } from "../../web/admin";
 
 type WindowSummary = {
@@ -23,7 +32,7 @@ type WeekToDateJob = {
   postalCode: string | null;
   quotedTotalCents: number | null;
   finalTotalCents: number;
-  bookingDetails: unknown | null;
+  bookingDetails: unknown;
 };
 
 const REVENUE_TIME_ZONE =
@@ -90,6 +99,48 @@ async function computeAllTimeWindow(
     totalCents: row?.totalCents ?? 0,
     count: row?.count ?? 0,
   };
+}
+
+async function computePaymentLedgerSummary(db: ReturnType<typeof getDb>) {
+  const [appointmentRows, paymentRows, reviewRefundRows] = await Promise.all([
+    db
+      .select({
+        id: appointments.id,
+        status: appointments.status,
+        appointmentType: appointments.type,
+        finalTotalCents: appointments.finalTotalCents,
+      })
+      .from(appointments)
+      .where(isNotNull(appointments.finalTotalCents)),
+    db
+      .select({
+        id: payments.id,
+        appointmentId: payments.appointmentId,
+        amountCents: payments.amount,
+        jobAmountCents: payments.jobAmountCents,
+        tipCents: payments.tipCents,
+        totalAmountCents: payments.totalAmountCents,
+        refundedAmountCents: payments.refundedAmountCents,
+        status: payments.status,
+        canonicalStatus: payments.canonicalStatus,
+        providerStatus: payments.providerStatus,
+      })
+      .from(payments),
+    db
+      .select({
+        id: paymentRefunds.id,
+        paymentId: paymentRefunds.paymentId,
+        amountCents: paymentRefunds.amountCents,
+      })
+      .from(paymentRefunds)
+      .where(eq(paymentRefunds.canonicalStatus, "needs_review")),
+  ]);
+
+  return buildPaymentLedgerReportingSummary({
+    appointments: appointmentRows,
+    payments: paymentRows,
+    reviewRefunds: reviewRefundRows,
+  });
 }
 
 async function computeWeekToDateJobs(
@@ -166,6 +217,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   const permissionError = await requirePermission(request, "appointments.read");
   if (permissionError) return permissionError;
+  const canReadPayments =
+    (await requirePermission(request, "payments.read")) === null;
 
   const db = getDb();
   const now = new Date();
@@ -200,10 +253,29 @@ export async function GET(request: NextRequest): Promise<Response> {
     computeAllTimeWindow(db),
   ]);
 
+  let paymentLedger = null;
+  if (canReadPayments && (await isPaymentLedgerSchemaAvailable(db))) {
+    try {
+      paymentLedger = {
+        scope: "all_time" as const,
+        ...(await computePaymentLedgerSummary(db)),
+      };
+    } catch (error) {
+      console.warn("[revenue] payment_ledger_summary_failed", error);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     currency: "USD",
     timezone: REVENUE_TIME_ZONE,
+    reportingBasis: {
+      completedJobRevenue:
+        "Final job totals for completed appointments, grouped by scheduled date.",
+      paymentsCollected:
+        "Provider-neutral completed payments including tips, net of refunds.",
+    },
+    paymentLedger,
     windows: {
       weekToDate: {
         ...weekToDate,

@@ -186,7 +186,7 @@ type MediaAnalysisSummaryResponse = {
 };
 
 type ProviderHealth = {
-  provider: "sms" | "email" | "calendar";
+  provider: "sms" | "email" | "calendar" | "square" | "object_storage";
   status: "healthy" | "degraded" | "unknown";
   lastSuccessAt: string | null;
   lastFailureAt: string | null;
@@ -289,6 +289,10 @@ function formatProviderLabel(value: ProviderHealth["provider"]): string {
       return "Email";
     case "calendar":
       return "Calendar";
+    case "square":
+      return "Square";
+    case "object_storage":
+      return "Photo storage";
     default:
       return value;
   }

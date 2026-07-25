@@ -60,7 +60,9 @@ export async function rescheduleAction(
     try {
       const err = (await response.json()) as { error?: string };
       if (err?.error) message = err.error;
-    } catch {}
+    } catch {
+      // Keep the generic status message when the API body is not JSON.
+    }
     return { error: message };
   }
 
@@ -73,7 +75,7 @@ export async function rescheduleAction(
   };
 
   if (typeof next === "string" && next.startsWith("/")) {
-    redirect(next as any);
+    redirect(next as Parameters<typeof redirect>[0]);
   }
 
   return {
@@ -84,4 +86,3 @@ export async function rescheduleAction(
     timeWindow: data.timeWindow ?? (typeof timeWindow === "string" ? timeWindow : null)
   };
 }
-

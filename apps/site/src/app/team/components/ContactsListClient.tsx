@@ -1148,7 +1148,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   />
                   <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-600">
                     Range-only jobs stay out of exact revenue projections until
-                    an exact collected total or exact quote is saved.
+                    a final job total or exact quote is saved.
                   </div>
                   <label className="flex flex-col gap-1 sm:col-span-2">
                     <span>Appointment notes (optional)</span>
@@ -1495,7 +1495,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                             type="button"
                             disabled={reminderCompletingId === reminder.id}
                             className="rounded-full border border-emerald-200 px-3 py-1.5 font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-70"
-                            onClick={() => completeReminder(reminder.id)}
+                            onClick={() => void completeReminder(reminder.id)}
                           >
                             {reminderCompletingId === reminder.id
                               ? "Saving..."
@@ -1583,7 +1583,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
               {showReminderForm ? (
                 <form
                   className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600"
-                  onSubmit={submitReminder}
+                  onSubmit={(event) => void submitReminder(event)}
                 >
                   <label className="flex flex-col gap-1">
                     <span>When</span>
@@ -1674,7 +1674,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                       saving={noteEditSavingId === note.id}
                       editDraft={noteEditingId === note.id ? noteEditDraft : ""}
                       onChangeDraft={setNoteEditDraft}
-                      onDelete={deleteNote}
+                      onDelete={(noteId) => void deleteNote(noteId)}
                       onStartEdit={() => startEditNote(note)}
                       onCancelEdit={() => {
                         setNoteEditingId(null);
@@ -1696,7 +1696,7 @@ function ContactCard({ contact, teamMembers }: ContactCardProps) {
                   action="/api/team/contacts/notes"
                   method="post"
                   className="mt-4 grid grid-cols-1 gap-3 text-xs text-slate-600"
-                  onSubmit={submitNote}
+                  onSubmit={(event) => void submitNote(event)}
                 >
                   <input
                     type="hidden"

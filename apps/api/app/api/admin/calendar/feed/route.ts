@@ -14,7 +14,10 @@ import {
   getAppointmentMediaSummaryMap,
   type AppointmentMediaSummary,
 } from "@/lib/appointment-media";
+import { getAppointmentPaymentSummaryMap } from "@/lib/payment-ledger";
+import type { AppointmentPaymentSummary } from "@/lib/payment-summary";
 import { requirePermission } from "@/lib/permissions";
+import { isPaymentLedgerSchemaAvailable } from "@/lib/payment-schema";
 import { isAdminRequest } from "../../../web/admin";
 
 type CalendarEvent = {
@@ -33,6 +36,7 @@ type CalendarEvent = {
   finalTotalCents?: number | null;
   quotedScopeText?: string | null;
   mediaSummary?: AppointmentMediaSummary;
+  paymentSummary?: AppointmentPaymentSummary;
   bookingDetails?: AppointmentBookingDetails | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
   eta?: {
@@ -61,6 +65,10 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
   const permissionError = await requirePermission(request, "appointments.read");
   if (permissionError) return permissionError;
+  const canReadPayments =
+    (await requirePermission(request, "payments.read")) === null;
+  const paymentLedgerAvailable =
+    canReadPayments && (await isPaymentLedgerSchemaAvailable());
 
   const { windowStart, windowEnd } = getWindow(request);
 
@@ -107,7 +115,7 @@ export async function GET(request: NextRequest): Promise<Response> {
   const quotedScopeByAppointmentId = new Map(
     dbRows.map((row) => [row.id, row.quotedScopeText ?? null]),
   );
-  const [etaSummaryMap, mediaSummaryMap] = await Promise.all([
+  const [etaSummaryMap, mediaSummaryMap, paymentSummaryMap] = await Promise.all([
     appointmentIds.length > 0
       ? getEtaSummariesForAppointments(appointmentIds)
       : Promise.resolve(new Map<string, EtaAppointmentSummary>()),
@@ -115,6 +123,14 @@ export async function GET(request: NextRequest): Promise<Response> {
       appointmentIds,
       quotedScopeByAppointmentId,
     ),
+    paymentLedgerAvailable
+      ? getAppointmentPaymentSummaryMap(
+          appointmentIds,
+          new Map(
+            dbRows.map((row) => [row.id, row.finalTotalCents ?? null]),
+          ),
+        )
+      : Promise.resolve(new Map<string, AppointmentPaymentSummary>()),
   ]);
   if (appointmentIds.length) {
     const noteRows = await db
@@ -203,7 +219,6 @@ export async function GET(request: NextRequest): Promise<Response> {
         address: addressParts.length ? addressParts : null,
         status: row.status ?? null,
         quotedTotalCents: row.quotedTotalCents ?? null,
-        finalTotalCents: row.finalTotalCents ?? null,
         quotedScopeText: row.quotedScopeText ?? null,
         mediaSummary: mediaSummaryMap.get(row.id) ?? {
           readyCount: 0,
@@ -211,6 +226,21 @@ export async function GET(request: NextRequest): Promise<Response> {
           coverMediaId: null,
           needsScope: false,
         },
+        ...(paymentLedgerAvailable
+          ? {
+              finalTotalCents: row.finalTotalCents ?? null,
+              paymentSummary: paymentSummaryMap.get(row.id) ?? {
+                status: row.finalTotalCents == null ? "unknown" : "unpaid",
+                jobTotalCents: row.finalTotalCents ?? null,
+                paidTowardJobCents: 0,
+                tipCents: 0,
+                refundedCents: 0,
+                balanceCents: row.finalTotalCents ?? null,
+                activeAttemptId: null,
+                latestReceiptUrl: null,
+              },
+            }
+          : {}),
         bookingDetails: parseAppointmentBookingDetails(row.bookingDetails),
         eta: etaSummaryMap.get(row.id) ?? {
           status: null,

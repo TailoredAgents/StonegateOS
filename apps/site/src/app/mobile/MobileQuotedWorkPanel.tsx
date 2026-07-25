@@ -568,7 +568,7 @@ export function MobileQuotedWorkPanel({
                 }`}
               >
                 {scope ||
-                  "Quoted scope is missing. Ask the office to fill it in before completion."}
+                  "Quoted scope is missing. Ask the office to fill it in before payment or completion."}
               </p>
             )}
           </section>

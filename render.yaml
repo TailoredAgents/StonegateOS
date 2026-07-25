@@ -110,8 +110,16 @@ services:
             echo "[preDeploy] Running db:migrate:media"
             npx -y pnpm@9.15.9 -w db:migrate:media
             ;;
+          0059_square_payments)
+            echo "[preDeploy] Running db:migrate:payments"
+            npx -y pnpm@9.15.9 -w db:migrate:payments
+            ;;
+          latest)
+            echo "[preDeploy] Running db:migrate:release-latest"
+            npx -y pnpm@9.15.9 -w db:migrate:release-latest
+            ;;
           "")
-            echo "[preDeploy] DB_MIGRATION_TARGET must be set explicitly to 0058_appointment_media" >&2
+            echo "[preDeploy] DB_MIGRATION_TARGET must be set explicitly to 0058_appointment_media, 0059_square_payments, or latest" >&2
             exit 1
             ;;
           *)
@@ -152,6 +160,8 @@ services:
         sync: false
       - key: MOBILE_OFFLINE_MEDIA_ENABLED
         sync: false
+      - key: SQUARE_POS_ENABLED
+        sync: false
       - key: MEDIA_OBJECT_ENDPOINT
         sync: false
       - key: MEDIA_OBJECT_REGION
@@ -167,6 +177,26 @@ services:
       - key: MEDIA_OBJECT_AUTO_CREATE_BUCKET
         sync: false
       - key: APPOINTMENT_MEDIA_CLEANUP_INTERVAL_MS
+        sync: false
+      - key: SQUARE_ENVIRONMENT
+        sync: false
+      - key: SQUARE_APPLICATION_ID
+        sync: false
+      - key: SQUARE_ACCESS_TOKEN
+        sync: false
+      - key: SQUARE_LOCATION_ID
+        sync: false
+      - key: SQUARE_POS_CALLBACK_URL
+        sync: false
+      - key: SQUARE_POS_FALLBACK_URL
+        sync: false
+      - key: SQUARE_POS_STATE_SECRET
+        sync: false
+      - key: SQUARE_WEBHOOK_SIGNATURE_KEY
+        sync: false
+      - key: SQUARE_WEBHOOK_NOTIFICATION_URL
+        sync: false
+      - key: SQUARE_RECONCILIATION_INTERVAL_MS
         sync: false
       - key: OPENAI_API_KEY
         sync: false
@@ -305,6 +335,8 @@ services:
         sync: false
       - key: MOBILE_OFFLINE_MEDIA_ENABLED
         sync: false
+      - key: SQUARE_POS_ENABLED
+        sync: false
       - key: MEDIA_OBJECT_ENDPOINT
         sync: false
       - key: MEDIA_OBJECT_REGION
@@ -320,6 +352,16 @@ services:
       - key: MEDIA_OBJECT_AUTO_CREATE_BUCKET
         sync: false
       - key: APPOINTMENT_MEDIA_CLEANUP_INTERVAL_MS
+        sync: false
+      - key: SQUARE_ENVIRONMENT
+        sync: false
+      - key: SQUARE_APPLICATION_ID
+        sync: false
+      - key: SQUARE_ACCESS_TOKEN
+        sync: false
+      - key: SQUARE_LOCATION_ID
+        sync: false
+      - key: SQUARE_RECONCILIATION_INTERVAL_MS
         sync: false
       - key: NEXT_PUBLIC_SITE_URL
         sync: false

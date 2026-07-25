@@ -30,5 +30,5 @@ export async function loginAction(
   }
 
   (await cookies()).set(ADMIN_SESSION_COOKIE, adminKey, adminSessionCookieOptions());
-  redirect(redirectTo as any);
+  redirect(redirectTo as Parameters<typeof redirect>[0]);
 }

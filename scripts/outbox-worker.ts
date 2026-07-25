@@ -97,6 +97,33 @@ async function runAppointmentMediaCleanupOnce() {
   }
 }
 
+async function runSquareReconciliationOnce() {
+  // The launch kill switch must not stop verification of a charge that may
+  // already have happened. Keep reconciliation running whenever provider
+  // credentials remain configured.
+  if (
+    !process.env["SQUARE_ACCESS_TOKEN"]?.trim() ||
+    !process.env["SQUARE_LOCATION_ID"]?.trim()
+  ) {
+    return;
+  }
+  const { reconcilePendingSquareAttempts } = await import(
+    "../apps/api/src/lib/square-payments"
+  );
+  const result = await reconcilePendingSquareAttempts();
+  if (
+    result.verified > 0 ||
+    result.pending > 0 ||
+    result.needsReview > 0 ||
+    result.unmatched > 0 ||
+    result.refundsReconciled > 0
+  ) {
+    console.log(
+      JSON.stringify({ ok: true, squareReconciliation: result }, null, 2),
+    );
+  }
+}
+
 async function main() {
   registerAliases();
   const limit = Number(process.env["OUTBOX_BATCH_SIZE"] ?? 10);
@@ -117,12 +144,16 @@ async function main() {
   const appointmentMediaCleanupIntervalMs = Number(
     process.env["APPOINTMENT_MEDIA_CLEANUP_INTERVAL_MS"] ?? 60 * 60 * 1000
   );
+  const squareReconciliationIntervalMs = Number(
+    process.env["SQUARE_RECONCILIATION_INTERVAL_MS"] ?? 2 * 60 * 1000
+  );
   let nextSeoAt = Date.now();
   let nextGoogleAdsAt = Date.now();
   let nextSalesDraftPrepAt = Date.now();
   let nextFacebookDmNameBackfillAt = Date.now();
   let nextTraccarSyncAt = Date.now();
   let nextAppointmentMediaCleanupAt = Date.now();
+  let nextSquareReconciliationAt = Date.now();
 
   if (pollIntervalMs > 0) {
     // Continuous polling loop
@@ -201,6 +232,19 @@ async function main() {
             ? appointmentMediaCleanupIntervalMs
             : 60 * 60 * 1000);
       }
+      if (Date.now() >= nextSquareReconciliationAt) {
+        try {
+          await runSquareReconciliationOnce();
+        } catch (error) {
+          console.warn("[square] reconciliation.loop_failed", String(error));
+        }
+        nextSquareReconciliationAt =
+          Date.now() +
+          (Number.isFinite(squareReconciliationIntervalMs) &&
+          squareReconciliationIntervalMs > 30_000
+            ? squareReconciliationIntervalMs
+            : 2 * 60 * 1000);
+      }
       if (stats.total === 0) {
         await sleep(pollIntervalMs);
       }
@@ -213,6 +257,7 @@ async function main() {
     await runFacebookDmNameBackfillOnce();
     await runTraccarSyncOnce();
     await runAppointmentMediaCleanupOnce();
+    await runSquareReconciliationOnce();
   }
 }
 

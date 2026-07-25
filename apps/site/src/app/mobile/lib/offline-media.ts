@@ -22,6 +22,23 @@ const QUEUE_BROADCAST_CHANNEL = "stonegate-mobile-media-queue";
 
 export const MOBILE_STALE_QUEUE_MS = STALE_QUEUE_MS;
 
+export type OfflinePaymentSummary = {
+  status:
+    | "unknown"
+    | "unpaid"
+    | "partial"
+    | "paid"
+    | "refunded"
+    | "needs_review";
+  jobTotalCents: number | null;
+  paidTowardJobCents: number;
+  tipCents: number;
+  refundedCents: number;
+  balanceCents: number | null;
+  activeAttemptId: string | null;
+  latestReceiptUrl: string | null;
+};
+
 export type OfflineAppointmentSnapshot = {
   key: string;
   employeeId: string;
@@ -40,6 +57,7 @@ export type OfflineAppointmentSnapshot = {
     coverMediaId: string | null;
     needsScope: boolean;
   };
+  paymentSummary: OfflinePaymentSummary | null;
   savedAt: number;
   expiresAt: number;
 };

@@ -307,7 +307,7 @@ export default function MobileOfflinePage() {
           <p className="mt-2 text-sm leading-6 text-amber-100">
             Cached job details and photos remain available. New photos stay on
             this phone and upload when StonegateOS is reopened with a
-            connection.
+            connection. Payments are disabled offline.
           </p>
         </header>
 
@@ -383,7 +383,7 @@ export default function MobileOfflinePage() {
                     }`}
                   >
                     {job.quotedScopeText ||
-                      "Scope is missing. Completion remains blocked until staff fills it in online."}
+                      "Scope is missing. Payment and completion remain blocked until staff fills it in online."}
                   </p>
                 </section>
 
@@ -478,6 +478,15 @@ export default function MobileOfflinePage() {
                   </div>
                 ) : null}
 
+                {job.paymentSummary ? (
+                  <button
+                    type="button"
+                    disabled
+                    className="w-full cursor-not-allowed rounded-md border border-white/10 bg-slate-950 px-3 py-3 text-sm font-semibold text-slate-500"
+                  >
+                    Accept payment · Online only
+                  </button>
+                ) : null}
               </div>
             </details>
           ))

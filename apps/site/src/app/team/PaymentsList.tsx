@@ -5,27 +5,44 @@ import { SubmitButton } from "@/components/SubmitButton";
 
 type Payment = {
   id: string;
-  stripeChargeId: string;
+  stripeChargeId: string | null;
+  provider: string;
+  providerPaymentId: string | null;
+  providerOrderId: string | null;
   amount: number;
+  jobAmountCents: number;
+  tipCents: number;
+  totalAmountCents: number;
   currency: string;
   status: string;
+  canonicalStatus: string;
   method: string | null;
+  tenderType: string | null;
   cardBrand: string | null;
   last4: string | null;
   receiptUrl: string | null;
+  legacySource: string | null;
   createdAt: string;
-  appointment: null | { id: string; status: string; startAt: string | null; contactName: string | null };
+  appointment: null | {
+    id: string;
+    status: string;
+    startAt: string | null;
+    contactName: string | null;
+  };
 };
 
 function fmtMoney(cents: number, currency: string) {
   try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+    }).format(cents / 100);
   } catch {
     return `$${(cents / 100).toFixed(2)}`;
   }
 }
 
-type AttachAction = (formData: FormData) => void;
+type AttachAction = (formData: FormData) => Promise<void>;
 
 type ApptItem = {
   id: string;
@@ -34,14 +51,28 @@ type ApptItem = {
   property: { addressLine1: string; city: string };
 };
 
+function paymentIdentifier(payment: Payment): string {
+  return (
+    payment.providerPaymentId ??
+    payment.stripeChargeId ??
+    payment.providerOrderId ??
+    payment.id
+  );
+}
+
 export function PaymentsList({
   initial,
   summary,
   attachAction,
-  detachAction
+  detachAction,
 }: {
   initial: Payment[];
-  summary: { total: number; matched: number; unmatched: number };
+  summary: {
+    total: number;
+    matched: number;
+    unmatched: number;
+    needsReview?: number;
+  };
   attachAction: AttachAction;
   detachAction: AttachAction;
 }) {
@@ -52,7 +83,9 @@ export function PaymentsList({
   useEffect(() => {
     void (async () => {
       try {
-        const res = await fetch("/api/admin/appointments?status=all", { cache: "no-store" });
+        const res = await fetch("/api/admin/appointments?status=all", {
+          cache: "no-store",
+        });
         if (!res.ok) return;
         const data = (await res.json()) as { ok: boolean; data: ApptItem[] };
         setAppts(data.data ?? []);
@@ -69,7 +102,9 @@ export function PaymentsList({
       if (scope === "unmatched" && it.appointment) return false;
       if (!hay) return true;
       return (
-        it.stripeChargeId.toLowerCase().includes(hay) ||
+        paymentIdentifier(it).toLowerCase().includes(hay) ||
+        it.provider.toLowerCase().includes(hay) ||
+        it.canonicalStatus.toLowerCase().includes(hay) ||
         (it.appointment?.contactName ?? "").toLowerCase().includes(hay)
       );
     });
@@ -81,6 +116,11 @@ export function PaymentsList({
         <span>Total: {summary.total}</span>
         <span>Matched: {summary.matched}</span>
         <span>Unmatched: {summary.unmatched}</span>
+        {(summary.needsReview ?? 0) > 0 ? (
+          <span className="font-semibold text-amber-700">
+            Needs review: {summary.needsReview}
+          </span>
+        ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -89,7 +129,11 @@ export function PaymentsList({
           placeholder="Search charge ID or name"
           className="min-w-[240px] flex-1 rounded-md border border-neutral-300 px-2 py-1 text-sm"
         />
-        <select value={scope} onChange={(e) => setScope(e.target.value)} className="rounded-md border border-neutral-300 px-2 py-1 text-sm">
+        <select
+          value={scope}
+          onChange={(e) => setScope(e.target.value)}
+          className="rounded-md border border-neutral-300 px-2 py-1 text-sm"
+        >
           <option value="all">All</option>
           <option value="matched">Matched</option>
           <option value="unmatched">Unmatched</option>
@@ -97,40 +141,124 @@ export function PaymentsList({
       </div>
       <ul className="space-y-3">
         {filtered.map((p) => (
-          <li key={p.id} className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
+          <li
+            key={p.id}
+            className="rounded-lg border border-neutral-200 bg-white p-4 shadow-sm"
+          >
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-primary-900">{fmtMoney(p.amount, p.currency)}</p>
-                <p className="text-xs text-neutral-500">
-                  {p.stripeChargeId.slice(0, 10)}... - {p.status}
+                <p className="text-sm font-medium text-primary-900">
+                  {fmtMoney(p.totalAmountCents, p.currency)}
                 </p>
+                <p className="text-xs text-neutral-500">
+                  {p.provider} · {paymentIdentifier(p).slice(0, 18)}
+                  {paymentIdentifier(p).length > 18 ? "…" : ""} ·{" "}
+                  {p.canonicalStatus}
+                </p>
+                {p.legacySource ? (
+                  <p className="text-xs text-amber-700">Paid (legacy)</p>
+                ) : null}
                 {p.appointment ? (
-                  <p className="text-xs text-neutral-600">Linked to {p.appointment.contactName ?? "appointment"}</p>
+                  <p className="text-xs text-neutral-600">
+                    Linked to {p.appointment.contactName ?? "appointment"}
+                  </p>
                 ) : (
                   <p className="text-xs text-rose-600">Unmatched</p>
                 )}
               </div>
               {p.receiptUrl ? (
-                <a href={p.receiptUrl} target="_blank" rel="noreferrer" className="text-xs text-neutral-600 underline">Receipt</a>
+                <a
+                  href={p.receiptUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-neutral-600 underline"
+                >
+                  Receipt
+                </a>
               ) : null}
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               {p.appointment ? (
-                <form action={detachAction}>
+                <details className="w-full rounded-md border border-neutral-200 p-2">
+                  <summary className="cursor-pointer text-xs font-semibold text-neutral-700">
+                    Detach for owner review
+                  </summary>
+                  <form action={detachAction} className="mt-2 space-y-2">
+                    <input type="hidden" name="paymentId" value={p.id} />
+                    <textarea
+                      name="reviewNote"
+                      required
+                      minLength={3}
+                      maxLength={500}
+                      placeholder="Why this payment is attached to the wrong job"
+                      className="min-h-16 w-full rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                    />
+                    <SubmitButton
+                      className="rounded-md border border-rose-300 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-800"
+                      pendingLabel="Detaching..."
+                    >
+                      Detach and flag
+                    </SubmitButton>
+                  </form>
+                </details>
+              ) : p.provider === "stripe" ? (
+                <form
+                  action={attachAction}
+                  className="flex flex-wrap items-center gap-2"
+                >
                   <input type="hidden" name="paymentId" value={p.id} />
-                  <SubmitButton className="rounded-md border border-neutral-300 px-3 py-1 text-xs text-neutral-700" pendingLabel="Detaching...">Detach</SubmitButton>
-                </form>
-              ) : (
-                <form action={attachAction} className="flex flex-wrap items-center gap-2">
-                  <input type="hidden" name="paymentId" value={p.id} />
-                  <input list={`appts-${p.id}`} name="appointmentId" placeholder="Search or enter ID" className="min-w-[220px] rounded-md border border-neutral-300 px-2 py-1 text-xs" />
+                  <input
+                    list={`appts-${p.id}`}
+                    name="appointmentId"
+                    placeholder="Search or enter ID"
+                    className="min-w-[220px] rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                  />
                   <datalist id={`appts-${p.id}`}>
                     {appts.map((a) => (
-                      <option key={a.id} value={a.id}>{`${a.contact.name} - ${a.property.addressLine1}, ${a.property.city}`}</option>
+                      <option
+                        key={a.id}
+                        value={a.id}
+                      >{`${a.contact.name} - ${a.property.addressLine1}, ${a.property.city}`}</option>
                     ))}
                   </datalist>
-                  <SubmitButton className="rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white" pendingLabel="Attaching...">Attach</SubmitButton>
+                  <input
+                    name="jobAmount"
+                    inputMode="decimal"
+                    required
+                    defaultValue={(p.jobAmountCents / 100).toFixed(2)}
+                    aria-label="Job amount"
+                    className="w-28 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                  />
+                  <input
+                    name="tipAmount"
+                    inputMode="decimal"
+                    required
+                    defaultValue={(p.tipCents / 100).toFixed(2)}
+                    aria-label="Tip amount"
+                    className="w-24 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                  />
+                  <textarea
+                    name="reviewNote"
+                    required
+                    minLength={3}
+                    maxLength={500}
+                    placeholder="Reason this Stripe charge belongs to this job"
+                    className="min-h-16 min-w-[260px] flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+                  />
+                  <SubmitButton
+                    className="rounded-md bg-primary-800 px-3 py-1 text-xs font-semibold text-white"
+                    pendingLabel="Resolving..."
+                  >
+                    Attach and resolve
+                  </SubmitButton>
                 </form>
+              ) : (
+                <a
+                  href="/team?tab=owner&ownerView=payments"
+                  className="text-xs font-semibold text-primary-700 underline"
+                >
+                  Review in Owner HQ
+                </a>
               )}
             </div>
           </li>
@@ -139,5 +267,3 @@ export function PaymentsList({
     </section>
   );
 }
-
-

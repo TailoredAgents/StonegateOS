@@ -10,6 +10,7 @@ const PROVIDERS = [
   "calendar",
   "meta_ads",
   "google_ads",
+  "square",
   "object_storage",
 ] as const;
 
