@@ -317,7 +317,8 @@ export function MobileQuotedWorkPanel({
   React.useEffect(() => {
     const onQueueChange = () => {
       void refreshQueue();
-      if (navigator.onLine && loaded) void load();
+      void syncQueuedMedia(employeeId).catch(() => undefined);
+      if (loaded) void load();
     };
     const queueTimer = window.setInterval(() => {
       void refreshQueue();
@@ -327,35 +328,40 @@ export function MobileQuotedWorkPanel({
       window.removeEventListener(MOBILE_MEDIA_QUEUE_EVENT, onQueueChange);
       window.clearInterval(queueTimer);
     };
-  }, [load, loaded, refreshQueue]);
+  }, [employeeId, load, loaded, refreshQueue]);
 
-  const addFiles = async (files: FileList | null) => {
-    if (!files?.length) return;
-    setMessage(null);
-    const selected = Array.from(files);
-    if (selected.length > 10) {
-      setMessage("Choose no more than 10 photos at a time.");
-      return;
-    }
-    setBusy("upload");
-    for (const file of selected) {
-      try {
-        await queueMediaUpload({
-          employeeId,
-          appointmentId,
-          file,
-          caption: newCaption,
-          quotedScopeText: canManage ? scope : null,
-        });
-      } catch (error) {
-        setMessage(friendlyError(error));
+  const addFiles = async (files: FileList | null, input: HTMLInputElement) => {
+    try {
+      if (!files?.length) return;
+      setMessage(null);
+      const selected = Array.from(files);
+      if (selected.length > 10) {
+        setMessage("Choose no more than 10 photos at a time.");
+        return;
       }
+      setBusy("upload");
+      for (const file of selected) {
+        try {
+          await queueMediaUpload({
+            employeeId,
+            appointmentId,
+            file,
+            capturedOffline: false,
+            caption: newCaption,
+            quotedScopeText: canManage ? scope : null,
+          });
+        } catch (error) {
+          setMessage(friendlyError(error));
+        }
+      }
+      await refreshQueue();
+      await syncQueuedMedia(employeeId).catch(() => undefined);
+      await refreshQueue();
+      await load();
+    } finally {
+      input.value = "";
+      setBusy(null);
     }
-    await refreshQueue();
-    if (navigator.onLine) await syncQueuedMedia(employeeId);
-    await refreshQueue();
-    if (navigator.onLine) await load();
-    setBusy(null);
   };
 
   const saveScope = async () => {
@@ -765,9 +771,10 @@ export function MobileQuotedWorkPanel({
                     capture="environment"
                     disabled={busy === "upload"}
                     className="sr-only"
-                    onChange={(event) =>
-                      void addFiles(event.currentTarget.files)
-                    }
+                    onChange={(event) => {
+                      const input = event.currentTarget;
+                      void addFiles(input.files, input);
+                    }}
                   />
                 </label>
                 <label className="cursor-pointer rounded-md border border-cyan-300/40 bg-slate-900 px-3 py-3 text-center text-sm font-semibold text-cyan-100">
@@ -778,9 +785,10 @@ export function MobileQuotedWorkPanel({
                     multiple
                     disabled={busy === "upload"}
                     className="sr-only"
-                    onChange={(event) =>
-                      void addFiles(event.currentTarget.files)
-                    }
+                    onChange={(event) => {
+                      const input = event.currentTarget;
+                      void addFiles(input.files, input);
+                    }}
                   />
                 </label>
               </div>

@@ -97,6 +97,294 @@ async function openSeededPayment(
 test.describe("Mobile appointment quoted work and payments", () => {
   test.use({ storageState: "tests/e2e/storage/mobile-owner.json" });
 
+  test("drains photos queued during an active sync even when online status is wrong", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment();
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "onLine", {
+        configurable: true,
+        get: () => false,
+      });
+    });
+    let reauthenticated = true;
+    let pausedMeRequests = 0;
+    await page.route("**/api/mobile/me", async (route) => {
+      if (reauthenticated) {
+        await route.continue();
+        return;
+      }
+      pausedMeRequests += 1;
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "session_expired" }),
+      });
+    });
+
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/media`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            quotedScopeText: "Remove both photographed items.",
+            mediaSummary: {
+              readyCount: 0,
+              pendingCount: 0,
+              coverMediaId: null,
+              needsScope: false,
+            },
+            items: [],
+            legacyAttachments: [],
+          }),
+        });
+      },
+    );
+
+    const intentClientIds: string[] = [];
+    const intentUploadModes: string[] = [];
+    const mediaIds = new Map<string, string>();
+    let delayedIntent = false;
+    let returnedProcessingState = false;
+    let returnedAuthPausedState = false;
+    let authPausedClientId: string | null = null;
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/media/upload-intents`,
+      async (route) => {
+        const body = route.request().postDataJSON() as {
+          uploadMode?: string;
+          files?: Array<{ clientId?: string }>;
+        };
+        const clientId = body.files?.[0]?.clientId;
+        if (!clientId) {
+          await route.fulfill({ status: 400, body: "missing client id" });
+          return;
+        }
+        intentClientIds.push(clientId);
+        intentUploadModes.push(body.uploadMode ?? "");
+        let mediaId = mediaIds.get(clientId);
+        if (!mediaId) {
+          mediaId = `11111111-1111-4111-8111-${String(
+            mediaIds.size + 1,
+          ).padStart(12, "0")}`;
+          mediaIds.set(clientId, mediaId);
+        }
+        const origin = new URL(route.request().url()).origin;
+        if (
+          clientId === "22222222-2222-4222-8222-222222222222" &&
+          !returnedProcessingState
+        ) {
+          returnedProcessingState = true;
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              intents: [{ mediaId, status: "processing" }],
+            }),
+          });
+          return;
+        }
+        if (body.uploadMode === "direct_mobile" && !returnedAuthPausedState) {
+          returnedAuthPausedState = true;
+          authPausedClientId = clientId;
+          reauthenticated = false;
+          await route.fulfill({
+            status: 401,
+            contentType: "application/json",
+            body: JSON.stringify({ error: "session_expired" }),
+          });
+          return;
+        }
+        if (!delayedIntent) {
+          delayedIntent = true;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            intents: [
+              {
+                mediaId,
+                uploadUrl: `${origin}/__e2e/media-object/${mediaId}`,
+                headers: {},
+                alreadyCompleted: false,
+              },
+            ],
+          }),
+        });
+      },
+    );
+    await page.route("**/__e2e/media-object/*", async (route) => {
+      await route.fulfill({ status: 200, body: "" });
+    });
+    let completedUploads = 0;
+    await page.route(
+      "**/api/mobile/appointment-media/*/complete",
+      async (route) => {
+        completedUploads += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true }),
+        });
+      },
+    );
+
+    await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
+    await page.getByText("E2E Contact", { exact: true }).click();
+    await page.getByText("Quoted Work", { exact: true }).click();
+
+    const input = page
+      .locator("label", { hasText: "Choose photos" })
+      .locator('input[type="file"]');
+    const onePixelPng = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    );
+    const employeeId = await page.evaluate(async () => {
+      const response = await fetch("/api/mobile/me", { cache: "no-store" });
+      const payload = (await response.json()) as {
+        teamMember?: { id?: string };
+      };
+      return payload.teamMember?.id ?? null;
+    });
+    if (!employeeId) throw new Error("Mobile employee was not available.");
+
+    await page.evaluate(
+      ({
+        appointmentId: queuedAppointmentId,
+        employeeId: queuedEmployeeId,
+        imageBytes,
+      }) =>
+        new Promise<void>((resolve, reject) => {
+          const request = indexedDB.open("stonegate-mobile", 2);
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const database = request.result;
+            const transaction = database.transaction(
+              ["app-metadata", "media-upload-queue"],
+              "readwrite",
+            );
+            transaction.onerror = () => reject(transaction.error);
+            transaction.onabort = () => reject(transaction.error);
+            transaction.oncomplete = () => {
+              database.close();
+              resolve();
+            };
+            const now = Date.now();
+            transaction.objectStore("app-metadata").put({
+              key: "mediaSyncLease",
+              owner: "window:terminated-production-realm",
+              employeeId: queuedEmployeeId,
+              expiresAt: now + 10 * 60 * 1000,
+            });
+            transaction.objectStore("media-upload-queue").put({
+              clientId: "22222222-2222-4222-8222-222222222222",
+              employeeId: queuedEmployeeId,
+              appointmentId: queuedAppointmentId,
+              filename: "interrupted.jpg",
+              contentType: "image/jpeg",
+              byteCount: imageBytes.length,
+              checksumSha256: "0".repeat(64),
+              caption: null,
+              quotedScopeText: "Remove both photographed items.",
+              blob: new Blob([new Uint8Array(imageBytes)], {
+                type: "image/jpeg",
+              }),
+              capturedOffline: true,
+              status: "uploading",
+              error: null,
+              attempts: 1,
+              createdAt: now - 12 * 60 * 1000,
+              updatedAt: now - 11 * 60 * 1000,
+            });
+          };
+        }),
+      {
+        appointmentId,
+        employeeId,
+        imageBytes: Array.from(onePixelPng),
+      },
+    );
+
+    await input.setInputFiles([
+      {
+        name: "first.png",
+        mimeType: "image/png",
+        buffer: onePixelPng,
+      },
+      {
+        name: "second.png",
+        mimeType: "image/png",
+        buffer: onePixelPng,
+      },
+    ]);
+
+    await expect.poll(() => authPausedClientId).not.toBeNull();
+    await expect.poll(() => input.inputValue()).toBe("");
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect.poll(() => pausedMeRequests).toBeGreaterThan(0);
+    await page.waitForTimeout(250);
+    expect(
+      intentClientIds.filter((clientId) => clientId === authPausedClientId),
+    ).toHaveLength(1);
+    reauthenticated = true;
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+
+    await expect.poll(() => intentClientIds.length).toBe(5);
+    await expect.poll(() => completedUploads).toBe(3);
+    expect(new Set(intentClientIds).size).toBe(3);
+    expect(
+      intentUploadModes.filter((mode) => mode === "direct_mobile"),
+    ).toHaveLength(3);
+    expect(
+      intentUploadModes.filter((mode) => mode === "offline_queue"),
+    ).toHaveLength(2);
+    await expect.poll(() => input.inputValue()).toBe("");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          ({ employeeStore, appointmentId: expectedAppointmentId }) =>
+            new Promise<number>((resolve, reject) => {
+              const request = indexedDB.open("stonegate-mobile", 2);
+              request.onerror = () => reject(request.error);
+              request.onsuccess = () => {
+                const database = request.result;
+                const transaction = database.transaction(
+                  employeeStore,
+                  "readonly",
+                );
+                const getAll = transaction.objectStore(employeeStore).getAll();
+                getAll.onerror = () => reject(getAll.error);
+                getAll.onsuccess = () => {
+                  const remaining = (
+                    getAll.result as Array<{ appointmentId?: string }>
+                  ).filter(
+                    (row) => row.appointmentId === expectedAppointmentId,
+                  ).length;
+                  database.close();
+                  resolve(remaining);
+                };
+              };
+            }),
+          {
+            employeeStore: "media-upload-queue",
+            appointmentId,
+          },
+        ),
+      )
+      .toBe(0);
+  });
+
   test("shares the gallery and payment controls on mobile", async ({
     page,
     isMobile,

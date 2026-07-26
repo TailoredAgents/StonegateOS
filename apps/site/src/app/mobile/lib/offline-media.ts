@@ -11,13 +11,19 @@ const LAST_EMPLOYEE_KEY = "stonegate:last-mobile-employee";
 const SNAPSHOT_TTL_MS = 48 * 60 * 60 * 1000;
 const STALE_QUEUE_MS = 24 * 60 * 60 * 1000;
 const UPLOAD_ROW_LEASE_MS = 10 * 60 * 1000;
-const SYNC_COORDINATOR_LEASE_MS = 10 * 60 * 1000;
-const SYNC_COORDINATOR_HEARTBEAT_MS = 60 * 1000;
+const SYNC_COORDINATOR_LEASE_MS = 30 * 1000;
+const SYNC_COORDINATOR_HEARTBEAT_MS = 5 * 1000;
+const VISIBLE_SYNC_RETRY_MS = 5 * 1000;
+const API_FETCH_TIMEOUT_MS = 45 * 1000;
+const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
 const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 const STONEGATE_TIME_ZONE = "America/New_York";
 const SYNC_LEASE_KEY = "mediaSyncLease";
+const SYNC_LEASE_VERSION = 2;
 const DEVICE_ID_KEY = "mobileDeviceId";
 const QUEUE_HEALTH_REFRESH_MS = 5 * 60 * 1000;
+const QUEUE_HEALTH_FAILURE_BACKOFF_MS = 60 * 1000;
 const QUEUE_BROADCAST_CHANNEL = "stonegate-mobile-media-queue";
 
 export const MOBILE_STALE_QUEUE_MS = STALE_QUEUE_MS;
@@ -113,13 +119,73 @@ type UploadIntent = {
   uploadUrl: string;
   headers: Record<string, string>;
   alreadyCompleted: boolean;
+  processing: boolean;
 };
 
 const queueHealthReports = new Map<
   string,
   { fingerprint: string; reportedAt: number }
 >();
+const queueHealthFailuresUntil = new Map<string, number>();
+const queueHealthInFlight = new Map<string, Promise<boolean>>();
+const pendingQueueSyncEmployees = new Set<string>();
+const visibleSyncRetryTimers = new Map<string, number>();
 let queueBroadcastChannel: BroadcastChannel | null = null;
+let foregroundSyncOwner: string | null = null;
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "AbortError"
+  );
+}
+
+async function timedFetch<T>(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  consume: (response: Response) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+    return await consume(response);
+  } finally {
+    globalThis.clearTimeout(timer);
+  }
+}
+
+function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  return timedFetch(input, init, timeoutMs, (response) =>
+    Promise.resolve(response),
+  );
+}
+
+function fetchJsonWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<{ response: Response; payload: unknown }> {
+  return timedFetch(input, init, timeoutMs, async (response) => {
+    let payload: unknown = null;
+    try {
+      payload = (await response.json()) as unknown;
+    } catch (error) {
+      if (isAbortError(error)) throw error;
+    }
+    return { response, payload };
+  });
+}
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -148,8 +214,24 @@ function getQueueBroadcastChannel(): BroadcastChannel | null {
   }
   if (!queueBroadcastChannel) {
     queueBroadcastChannel = new BroadcastChannel(QUEUE_BROADCAST_CHANNEL);
-    queueBroadcastChannel.addEventListener("message", () => {
-      window.dispatchEvent(new Event(MOBILE_MEDIA_QUEUE_EVENT));
+    queueBroadcastChannel.addEventListener("message", (event) => {
+      const data =
+        typeof event.data === "object" && event.data !== null
+          ? (event.data as Record<string, unknown>)
+          : null;
+      const employeeId =
+        typeof data?.["employeeId"] === "string" ? data["employeeId"] : null;
+      if (data?.["requestSync"] === true && employeeId) {
+        pendingQueueSyncEmployees.add(employeeId);
+      }
+      window.dispatchEvent(
+        new CustomEvent(MOBILE_MEDIA_QUEUE_EVENT, {
+          detail: {
+            employeeId,
+            requestSync: data?.["requestSync"] === true,
+          },
+        }),
+      );
     });
   }
   return queueBroadcastChannel;
@@ -595,8 +677,7 @@ export async function normalizeImageForQueue(file: File): Promise<{
   }
   const source = bitmap ?? browserImage?.image;
   const sourceWidth = bitmap?.width ?? browserImage?.image.naturalWidth ?? 0;
-  const sourceHeight =
-    bitmap?.height ?? browserImage?.image.naturalHeight ?? 0;
+  const sourceHeight = bitmap?.height ?? browserImage?.image.naturalHeight ?? 0;
   if (!source) throw new Error("image_decode_failed");
   if (
     sourceWidth <= 0 ||
@@ -644,6 +725,7 @@ export async function queueMediaUpload(input: {
   employeeId: string;
   appointmentId: string;
   file: File;
+  capturedOffline: boolean;
   caption?: string | null;
   quotedScopeText?: string | null;
 }): Promise<QueuedMediaUpload> {
@@ -660,7 +742,7 @@ export async function queueMediaUpload(input: {
     caption: input.caption?.trim().slice(0, 500) || null,
     quotedScopeText: input.quotedScopeText?.trim().slice(0, 4_000) || null,
     blob: normalized.blob,
-    capturedOffline: !navigator.onLine,
+    capturedOffline: input.capturedOffline,
     status: "queued",
     error: null,
     attempts: 0,
@@ -672,7 +754,7 @@ export async function queueMediaUpload(input: {
   transaction.objectStore(QUEUE_STORE).put(row);
   await transactionDone(transaction);
   database.close();
-  dispatchQueueChange();
+  dispatchQueueChange(row.employeeId, true);
   void registerMediaBackgroundSync();
   void checkStoragePressure();
   return row;
@@ -717,12 +799,9 @@ async function getOrCreateMobileDeviceId(): Promise<string> {
   return deviceId;
 }
 
-export async function reportOfflineQueueHealth(
+async function performOfflineQueueHealthReport(
   employeeId: string,
 ): Promise<boolean> {
-  if (typeof navigator !== "undefined" && !navigator.onLine) {
-    return false;
-  }
   try {
     const rows = await listEmployeeQueue(employeeId);
     const failedCount = rows.filter((row) => row.status === "failed").length;
@@ -741,28 +820,60 @@ export async function reportOfflineQueueHealth(
       return true;
     }
 
-    const response = await fetch("/api/mobile/offline-media-queue-health", {
-      method: "POST",
-      credentials: "same-origin",
-      keepalive: true,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        deviceId: await getOrCreateMobileDeviceId(),
-        queuedCount: rows.length,
-        failedCount,
-        oldestQueuedAt:
-          oldestCreatedAt === null
-            ? null
-            : new Date(oldestCreatedAt).toISOString(),
-        reportedAt: new Date(now).toISOString(),
-      }),
-    });
-    if (!response.ok) return false;
+    const response = await fetchWithTimeout(
+      "/api/mobile/offline-media-queue-health",
+      {
+        method: "POST",
+        credentials: "same-origin",
+        keepalive: true,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          deviceId: await getOrCreateMobileDeviceId(),
+          queuedCount: rows.length,
+          failedCount,
+          oldestQueuedAt:
+            oldestCreatedAt === null
+              ? null
+              : new Date(oldestCreatedAt).toISOString(),
+          reportedAt: new Date(now).toISOString(),
+        }),
+      },
+      QUEUE_HEALTH_TIMEOUT_MS,
+    );
+    if (!response.ok) {
+      queueHealthFailuresUntil.set(
+        employeeId,
+        Date.now() + QUEUE_HEALTH_FAILURE_BACKOFF_MS,
+      );
+      return false;
+    }
+    queueHealthFailuresUntil.delete(employeeId);
     queueHealthReports.set(employeeId, { fingerprint, reportedAt: now });
     return true;
   } catch {
+    queueHealthFailuresUntil.set(
+      employeeId,
+      Date.now() + QUEUE_HEALTH_FAILURE_BACKOFF_MS,
+    );
     return false;
   }
+}
+
+export function reportOfflineQueueHealth(employeeId: string): Promise<boolean> {
+  const active = queueHealthInFlight.get(employeeId);
+  if (active) return active;
+  if ((queueHealthFailuresUntil.get(employeeId) ?? 0) > Date.now()) {
+    return Promise.resolve(false);
+  }
+
+  const promise = performOfflineQueueHealthReport(employeeId);
+  const settled = promise.finally(() => {
+    if (queueHealthInFlight.get(employeeId) === settled) {
+      queueHealthInFlight.delete(employeeId);
+    }
+  });
+  queueHealthInFlight.set(employeeId, settled);
+  return settled;
 }
 
 export async function getAppointmentQueue(
@@ -779,7 +890,7 @@ async function putQueueRow(row: QueuedMediaUpload): Promise<void> {
   transaction.objectStore(QUEUE_STORE).put(row);
   await transactionDone(transaction);
   database.close();
-  dispatchQueueChange();
+  dispatchQueueChange(row.employeeId);
   void checkStoragePressure();
 }
 
@@ -810,7 +921,7 @@ export async function retryQueuedMedia(clientId: string): Promise<void> {
   }
   await transactionDone(transaction);
   database.close();
-  dispatchQueueChange();
+  if (row) dispatchQueueChange(row.employeeId, true);
 }
 
 export async function getQueueSummary(
@@ -859,13 +970,15 @@ async function reclaimInterruptedQueueRows(employeeId: string): Promise<void> {
   }
   await transactionDone(transaction);
   database.close();
-  if (changed) dispatchQueueChange();
+  if (changed) dispatchQueueChange(employeeId);
 }
 
 type SyncLease = {
   key: typeof SYNC_LEASE_KEY;
+  version: typeof SYNC_LEASE_VERSION;
   owner: string;
   employeeId: string;
+  heartbeatAt: number;
   expiresAt: number;
 };
 
@@ -880,15 +993,21 @@ async function acquireSyncLease(
     | SyncLease
     | undefined;
   const now = Date.now();
-  if (existing && existing.expiresAt > now && existing.owner !== owner) {
+  if (
+    existing?.version === SYNC_LEASE_VERSION &&
+    existing.expiresAt > now &&
+    existing.owner !== owner
+  ) {
     await transactionDone(transaction);
     database.close();
     return false;
   }
   store.put({
     key: SYNC_LEASE_KEY,
+    version: SYNC_LEASE_VERSION,
     owner,
     employeeId,
+    heartbeatAt: now,
     expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
   } satisfies SyncLease);
   await transactionDone(transaction);
@@ -903,15 +1022,16 @@ async function renewSyncLease(owner: string): Promise<boolean> {
   const existing = (await requestResult(store.get(SYNC_LEASE_KEY))) as
     | SyncLease
     | undefined;
-  if (existing?.owner === owner) {
+  if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
     store.put({
       ...existing,
+      heartbeatAt: Date.now(),
       expiresAt: Date.now() + SYNC_COORDINATOR_LEASE_MS,
     } satisfies SyncLease);
   }
   await transactionDone(transaction);
   database.close();
-  return existing?.owner === owner;
+  return existing?.version === SYNC_LEASE_VERSION && existing.owner === owner;
 }
 
 async function releaseSyncLease(owner: string): Promise<void> {
@@ -921,15 +1041,28 @@ async function releaseSyncLease(owner: string): Promise<void> {
   const existing = (await requestResult(store.get(SYNC_LEASE_KEY))) as
     | SyncLease
     | undefined;
-  if (existing?.owner === owner) store.delete(SYNC_LEASE_KEY);
+  if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
+    store.delete(SYNC_LEASE_KEY);
+  }
   await transactionDone(transaction);
   database.close();
 }
 
-function dispatchQueueChange(): void {
+function dispatchQueueChange(employeeId?: string, requestSync = false): void {
+  if (requestSync && employeeId) {
+    pendingQueueSyncEmployees.add(employeeId);
+  }
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(MOBILE_MEDIA_QUEUE_EVENT));
-    getQueueBroadcastChannel()?.postMessage({ changedAt: Date.now() });
+    window.dispatchEvent(
+      new CustomEvent(MOBILE_MEDIA_QUEUE_EVENT, {
+        detail: { employeeId: employeeId ?? null, requestSync },
+      }),
+    );
+    getQueueBroadcastChannel()?.postMessage({
+      changedAt: Date.now(),
+      employeeId: employeeId ?? null,
+      requestSync,
+    });
   }
 }
 
@@ -974,8 +1107,9 @@ function parseUploadIntent(payload: unknown): UploadIntent | null {
   );
   const alreadyCompleted =
     candidate["alreadyCompleted"] === true || candidate["status"] === "ready";
-  if (!mediaId || (!uploadUrl && !alreadyCompleted)) return null;
-  return { mediaId, uploadUrl, headers, alreadyCompleted };
+  const processing = !alreadyCompleted && candidate["status"] === "processing";
+  if (!mediaId || (!uploadUrl && !alreadyCompleted && !processing)) return null;
+  return { mediaId, uploadUrl, headers, alreadyCompleted, processing };
 }
 
 function errorFromPayload(payload: unknown, fallback: string): string {
@@ -985,6 +1119,59 @@ function errorFromPayload(payload: unknown, fallback: string): string {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return fallback;
+}
+
+type QueueUploadFailureMode = "retry" | "auth_paused" | "terminal";
+
+class QueueUploadError extends Error {
+  constructor(
+    message: string,
+    readonly mode: QueueUploadFailureMode,
+  ) {
+    super(message);
+    this.name = "QueueUploadError";
+  }
+}
+
+function responseFailure(
+  response: Response,
+  payload: unknown,
+  fallback: string,
+): QueueUploadError {
+  const message = errorFromPayload(payload, fallback);
+  const record = asRecord(payload);
+  const errorCode = ["errorCode", "error", "code"]
+    .map((key) => record?.[key])
+    .find((value): value is string => typeof value === "string");
+  const terminalErrors = new Set([
+    "appointment_media_writes_disabled",
+    "media_writes_disabled",
+    "mobile_offline_media_disabled",
+    "offline_media_disabled",
+    "forbidden",
+    "unauthorized",
+  ]);
+  let mode: QueueUploadFailureMode = "terminal";
+  if (response.status === 401) {
+    mode = "auth_paused";
+  } else if (
+    response.status !== 403 &&
+    !terminalErrors.has(errorCode ?? message) &&
+    (response.status === 408 ||
+      response.status === 425 ||
+      response.status === 429 ||
+      (response.status === 409 &&
+        (errorCode === "media_processing" || message === "media_processing")) ||
+      response.status >= 500)
+  ) {
+    mode = "retry";
+  }
+  return new QueueUploadError(message, mode);
+}
+
+function uploadFailureMode(error: unknown): QueueUploadFailureMode {
+  if (isAbortError(error) || error instanceof TypeError) return "retry";
+  return error instanceof QueueUploadError ? error.mode : "terminal";
 }
 
 async function uploadQueueRow(row: QueuedMediaUpload): Promise<void> {
@@ -998,49 +1185,61 @@ async function uploadQueueRow(row: QueuedMediaUpload): Promise<void> {
   await putQueueRow(uploading);
 
   try {
-    const intentResponse = await fetch(
-      `/api/mobile/appointments/${encodeURIComponent(row.appointmentId)}/media/upload-intents`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          uploadMode: row.capturedOffline ? "offline_queue" : "direct_mobile",
-          ...(row.quotedScopeText
-            ? { quotedScopeText: row.quotedScopeText }
-            : {}),
-          files: [
-            {
-              clientId: row.clientId,
-              filename: row.filename,
-              contentType: row.contentType,
-              mimeType: row.contentType,
-              byteLength: row.byteCount,
-              checksumSha256: row.checksumSha256,
-              caption: row.caption,
-            },
-          ],
-        }),
-      },
-    );
-    const intentPayload = (await intentResponse
-      .json()
-      .catch(() => null)) as unknown;
+    const { response: intentResponse, payload: intentPayload } =
+      await fetchJsonWithTimeout(
+        `/api/mobile/appointments/${encodeURIComponent(row.appointmentId)}/media/upload-intents`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            uploadMode: row.capturedOffline ? "offline_queue" : "direct_mobile",
+            ...(row.quotedScopeText
+              ? { quotedScopeText: row.quotedScopeText }
+              : {}),
+            files: [
+              {
+                clientId: row.clientId,
+                filename: row.filename,
+                contentType: row.contentType,
+                mimeType: row.contentType,
+                byteLength: row.byteCount,
+                checksumSha256: row.checksumSha256,
+                caption: row.caption,
+              },
+            ],
+          }),
+        },
+        API_FETCH_TIMEOUT_MS,
+      );
     if (!intentResponse.ok) {
-      throw new Error(errorFromPayload(intentPayload, "upload_intent_failed"));
+      throw responseFailure(
+        intentResponse,
+        intentPayload,
+        "upload_intent_failed",
+      );
     }
     const intent = parseUploadIntent(intentPayload);
     if (!intent) throw new Error("invalid_upload_intent");
+    if (intent.processing) {
+      throw new QueueUploadError("media_processing", "retry");
+    }
 
     if (!intent.alreadyCompleted) {
-      const uploadResponse = await fetch(intent.uploadUrl, {
-        method: "PUT",
-        headers: {
-          "content-type": row.contentType,
-          ...intent.headers,
+      const uploadResponse = await fetchWithTimeout(
+        intent.uploadUrl,
+        {
+          method: "PUT",
+          headers: {
+            "content-type": row.contentType,
+            ...intent.headers,
+          },
+          body: row.blob,
         },
-        body: row.blob,
-      });
-      if (!uploadResponse.ok) throw new Error("object_upload_failed");
+        OBJECT_UPLOAD_TIMEOUT_MS,
+      );
+      if (!uploadResponse.ok) {
+        throw responseFailure(uploadResponse, null, "object_upload_failed");
+      }
     }
 
     await putQueueRow({
@@ -1048,39 +1247,66 @@ async function uploadQueueRow(row: QueuedMediaUpload): Promise<void> {
       status: "finalizing",
       updatedAt: Date.now(),
     });
-    const completeResponse = await fetch(
-      `/api/mobile/appointment-media/${encodeURIComponent(intent.mediaId)}/complete`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          checksumSha256: row.checksumSha256,
-        }),
-      },
-    );
-    const completePayload = (await completeResponse
-      .json()
-      .catch(() => null)) as unknown;
+    const { response: completeResponse, payload: completePayload } =
+      await fetchJsonWithTimeout(
+        `/api/mobile/appointment-media/${encodeURIComponent(intent.mediaId)}/complete`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            checksumSha256: row.checksumSha256,
+          }),
+        },
+        API_FETCH_TIMEOUT_MS,
+      );
     if (!completeResponse.ok) {
-      throw new Error(
-        errorFromPayload(completePayload, "media_finalize_failed"),
+      throw responseFailure(
+        completeResponse,
+        completePayload,
+        "media_finalize_failed",
       );
     }
     await discardQueuedMedia(row.clientId);
   } catch (error) {
+    const failureMode = uploadFailureMode(error);
+    const queued = failureMode !== "terminal";
     await putQueueRow({
       ...uploading,
-      status: "failed",
+      status: queued ? "queued" : "failed",
       error: error instanceof Error ? error.message : "upload_failed",
       updatedAt: Date.now(),
     });
+    if (failureMode === "retry") {
+      scheduleVisibleSyncRetry(row.employeeId);
+    }
   }
 }
 
 let activeSync: {
   employeeId: string;
   promise: Promise<void>;
+  rerunRequested: boolean;
 } | null = null;
+
+function scheduleVisibleSyncRetry(
+  employeeId: string,
+  delayMs = VISIBLE_SYNC_RETRY_MS,
+): void {
+  if (typeof window === "undefined" || visibleSyncRetryTimers.has(employeeId)) {
+    return;
+  }
+  const timer = window.setTimeout(() => {
+    visibleSyncRetryTimers.delete(employeeId);
+    if (document.visibilityState !== "visible") return;
+    void syncQueuedMedia(employeeId).catch(() => undefined);
+  }, delayMs);
+  visibleSyncRetryTimers.set(employeeId, timer);
+}
+
+function getForegroundSyncOwner(): string {
+  foregroundSyncOwner ??= `window:${crypto.randomUUID()}`;
+  return foregroundSyncOwner;
+}
 
 export function registerMediaBackgroundSync(): Promise<void> {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
@@ -1099,24 +1325,93 @@ export function registerMediaBackgroundSync(): Promise<void> {
 }
 
 export function syncQueuedMedia(employeeId: string): Promise<void> {
-  if (activeSync?.employeeId === employeeId) return activeSync.promise;
+  if (activeSync?.employeeId === employeeId) {
+    if (pendingQueueSyncEmployees.has(employeeId)) {
+      activeSync.rerunRequested = true;
+    }
+    return activeSync.promise;
+  }
   if (activeSync) {
-    return activeSync.promise.then(() => syncQueuedMedia(employeeId));
+    return activeSync.promise
+      .catch(() => undefined)
+      .then(() => syncQueuedMedia(employeeId));
   }
 
+  const syncState = {
+    employeeId,
+    promise: Promise.resolve(),
+    rerunRequested: false,
+  };
   const promise = (async () => {
-    if (typeof navigator !== "undefined" && !navigator.onLine) return;
-    const meResponse = await fetch("/api/mobile/me", { cache: "no-store" });
-    if (!meResponse.ok) return;
-    const mePayload = asRecord(
-      (await meResponse.json().catch(() => null)) as unknown,
+    pendingQueueSyncEmployees.delete(employeeId);
+    let initialRows: QueuedMediaUpload[];
+    try {
+      initialRows = await listEmployeeQueue(employeeId);
+    } catch {
+      void registerMediaBackgroundSync();
+      scheduleVisibleSyncRetry(employeeId);
+      return;
+    }
+    const hasSyncableRows = initialRows.some(
+      (row) =>
+        row.status === "queued" ||
+        row.status === "uploading" ||
+        row.status === "finalizing",
     );
-    const teamMember = asRecord(mePayload?.["teamMember"]);
-    if (teamMember?.["id"] !== employeeId) return;
+    if (!hasSyncableRows && !pendingQueueSyncEmployees.has(employeeId)) {
+      syncState.rerunRequested = false;
+      return;
+    }
 
-    const owner = `window:${crypto.randomUUID()}`;
-    if (!(await acquireSyncLease(owner, employeeId))) {
-      await registerMediaBackgroundSync();
+    let meResponse: Response;
+    let mePayload: unknown;
+    try {
+      const result = await fetchJsonWithTimeout(
+        "/api/mobile/me",
+        { cache: "no-store" },
+        API_FETCH_TIMEOUT_MS,
+      );
+      meResponse = result.response;
+      mePayload = result.payload;
+    } catch {
+      void registerMediaBackgroundSync();
+      scheduleVisibleSyncRetry(employeeId);
+      return;
+    }
+    if (!meResponse.ok) {
+      if (
+        meResponse.status === 408 ||
+        meResponse.status === 425 ||
+        meResponse.status === 429 ||
+        meResponse.status >= 500
+      ) {
+        void registerMediaBackgroundSync();
+        scheduleVisibleSyncRetry(employeeId);
+      } else {
+        pendingQueueSyncEmployees.delete(employeeId);
+        syncState.rerunRequested = false;
+      }
+      return;
+    }
+    const teamMember = asRecord(asRecord(mePayload)?.["teamMember"]);
+    if (teamMember?.["id"] !== employeeId) {
+      pendingQueueSyncEmployees.delete(employeeId);
+      syncState.rerunRequested = false;
+      return;
+    }
+
+    const owner = getForegroundSyncOwner();
+    let leaseAcquired = false;
+    try {
+      leaseAcquired = await acquireSyncLease(owner, employeeId);
+    } catch {
+      void registerMediaBackgroundSync();
+      scheduleVisibleSyncRetry(employeeId);
+      return;
+    }
+    if (!leaseAcquired) {
+      void registerMediaBackgroundSync();
+      scheduleVisibleSyncRetry(employeeId);
       return;
     }
 
@@ -1129,32 +1424,56 @@ export function syncQueuedMedia(employeeId: string): Promise<void> {
 
     try {
       await reclaimInterruptedQueueRows(employeeId);
-      const rows = (await listEmployeeQueue(employeeId)).filter(
-        (row) => row.status === "queued" || row.status === "failed",
-      );
-      let cursor = 0;
-      const worker = async () => {
-        while (cursor < rows.length && leaseActive) {
-          const row = rows[cursor];
-          cursor += 1;
-          if (!row) continue;
-          leaseActive = await renewSyncLease(owner);
-          if (!leaseActive) return;
-          await uploadQueueRow(row);
+      const attemptedClientIds = new Set<string>();
+      while (leaseActive) {
+        pendingQueueSyncEmployees.delete(employeeId);
+        syncState.rerunRequested = false;
+        const rows = (await listEmployeeQueue(employeeId)).filter(
+          (row) =>
+            row.status === "queued" && !attemptedClientIds.has(row.clientId),
+        );
+        if (!rows.length) {
+          if (
+            pendingQueueSyncEmployees.has(employeeId) ||
+            syncState.rerunRequested
+          ) {
+            continue;
+          }
+          break;
         }
-      };
-      await Promise.all([worker(), worker()]);
+
+        let cursor = 0;
+        const worker = async () => {
+          while (cursor < rows.length && leaseActive) {
+            const row = rows[cursor];
+            cursor += 1;
+            if (!row) continue;
+            attemptedClientIds.add(row.clientId);
+            leaseActive = await renewSyncLease(owner);
+            if (!leaseActive) return;
+            await uploadQueueRow(row);
+          }
+        };
+        await Promise.all([worker(), worker()]);
+      }
     } finally {
       window.clearInterval(heartbeat);
       await releaseSyncLease(owner);
     }
-  })();
+  })().catch(() => {
+    void registerMediaBackgroundSync();
+    scheduleVisibleSyncRetry(employeeId);
+  });
 
   const settled = promise.finally(() => {
-    if (activeSync?.promise === settled) activeSync = null;
-    dispatchQueueChange();
+    if (activeSync?.promise !== settled) return;
+    const shouldRerun =
+      activeSync.rerunRequested || pendingQueueSyncEmployees.has(employeeId);
+    activeSync = null;
+    if (shouldRerun) scheduleVisibleSyncRetry(employeeId, 0);
   });
-  activeSync = { employeeId, promise: settled };
+  syncState.promise = settled;
+  activeSync = syncState;
   return settled;
 }
 

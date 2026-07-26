@@ -1,4 +1,4 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v2";
+const SHELL_CACHE = "stonegate-mobile-shell-v3";
 const DATABASE_NAME = "stonegate-mobile";
 const DATABASE_VERSION = 2;
 const SNAPSHOT_STORE = "appointment-snapshots";
@@ -6,15 +6,62 @@ const MEDIA_STORE = "appointment-media";
 const QUEUE_STORE = "media-upload-queue";
 const METADATA_STORE = "app-metadata";
 const UPLOAD_ROW_LEASE_MS = 10 * 60 * 1000;
-const SYNC_COORDINATOR_LEASE_MS = 10 * 60 * 1000;
-const SYNC_COORDINATOR_HEARTBEAT_MS = 60 * 1000;
+const SYNC_COORDINATOR_LEASE_MS = 30 * 1000;
+const SYNC_COORDINATOR_HEARTBEAT_MS = 5 * 1000;
+const API_FETCH_TIMEOUT_MS = 45 * 1000;
+const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
 const SYNC_LEASE_KEY = "mediaSyncLease";
+const SYNC_LEASE_VERSION = 2;
 const DEVICE_ID_KEY = "mobileDeviceId";
 const SHELL_URLS = [
   "/manifest.webmanifest",
   "/apple-touch-icon.png",
   "/favicon.png",
 ];
+let workerSyncOwner = null;
+let workerActiveSync = null;
+
+function workerIsAbortError(error) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "AbortError"
+  );
+}
+
+async function workerTimedFetch(input, init, timeoutMs, consume) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+    return await consume(response);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function workerFetchWithTimeout(input, init, timeoutMs) {
+  return workerTimedFetch(input, init, timeoutMs, (response) =>
+    Promise.resolve(response),
+  );
+}
+
+function workerFetchJsonWithTimeout(input, init, timeoutMs) {
+  return workerTimedFetch(input, init, timeoutMs, async (response) => {
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      if (workerIsAbortError(error)) throw error;
+    }
+    return { response, payload };
+  });
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -211,21 +258,25 @@ async function reportQueueHealth(employeeId) {
         oldest === null || row.createdAt < oldest ? row.createdAt : oldest,
       null,
     );
-    await fetch("/api/mobile/offline-media-queue-health", {
-      method: "POST",
-      credentials: "include",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        deviceId: await getOrCreateDeviceId(),
-        queuedCount: rows.length,
-        failedCount,
-        oldestQueuedAt:
-          oldestQueuedAt === null
-            ? null
-            : new Date(oldestQueuedAt).toISOString(),
-        reportedAt: new Date().toISOString(),
-      }),
-    });
+    await workerFetchWithTimeout(
+      "/api/mobile/offline-media-queue-health",
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          deviceId: await getOrCreateDeviceId(),
+          queuedCount: rows.length,
+          failedCount,
+          oldestQueuedAt:
+            oldestQueuedAt === null
+              ? null
+              : new Date(oldestQueuedAt).toISOString(),
+          reportedAt: new Date().toISOString(),
+        }),
+      },
+      QUEUE_HEALTH_TIMEOUT_MS,
+    );
   } catch {
     // The next foreground/visibility sync reports the queue again.
   }
@@ -237,15 +288,21 @@ async function acquireSyncLease(owner, employeeId) {
   const store = transaction.objectStore(METADATA_STORE);
   const existing = await requestResult(store.get(SYNC_LEASE_KEY));
   const now = Date.now();
-  if (existing && existing.expiresAt > now && existing.owner !== owner) {
+  if (
+    existing?.version === SYNC_LEASE_VERSION &&
+    existing.expiresAt > now &&
+    existing.owner !== owner
+  ) {
     await transactionDone(transaction);
     database.close();
     return false;
   }
   store.put({
     key: SYNC_LEASE_KEY,
+    version: SYNC_LEASE_VERSION,
     owner,
     employeeId,
+    heartbeatAt: now,
     expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
   });
   await transactionDone(transaction);
@@ -258,15 +315,17 @@ async function renewSyncLease(owner) {
   const transaction = database.transaction(METADATA_STORE, "readwrite");
   const store = transaction.objectStore(METADATA_STORE);
   const existing = await requestResult(store.get(SYNC_LEASE_KEY));
-  if (existing?.owner === owner) {
+  if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
+    const now = Date.now();
     store.put({
       ...existing,
-      expiresAt: Date.now() + SYNC_COORDINATOR_LEASE_MS,
+      heartbeatAt: now,
+      expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
     });
   }
   await transactionDone(transaction);
   database.close();
-  return existing?.owner === owner;
+  return existing?.version === SYNC_LEASE_VERSION && existing.owner === owner;
 }
 
 async function releaseSyncLease(owner) {
@@ -274,7 +333,9 @@ async function releaseSyncLease(owner) {
   const transaction = database.transaction(METADATA_STORE, "readwrite");
   const store = transaction.objectStore(METADATA_STORE);
   const existing = await requestResult(store.get(SYNC_LEASE_KEY));
-  if (existing?.owner === owner) store.delete(SYNC_LEASE_KEY);
+  if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
+    store.delete(SYNC_LEASE_KEY);
+  }
   await transactionDone(transaction);
   database.close();
 }
@@ -333,13 +394,69 @@ function firstIntent(payload) {
     candidate.headers ||
     candidate.requiredHeaders ||
     {};
-  if (!mediaId || (!uploadUrl && candidate.status !== "ready")) return null;
+  const ready =
+    candidate.alreadyCompleted === true || candidate.status === "ready";
+  const processing = !ready && candidate.status === "processing";
+  if (!mediaId || (!uploadUrl && !ready && !processing)) return null;
   return {
     mediaId,
     uploadUrl,
     uploadHeaders,
-    ready: candidate.status === "ready",
+    ready,
+    processing,
   };
+}
+
+class WorkerQueueUploadError extends Error {
+  constructor(message, mode) {
+    super(message);
+    this.name = "WorkerQueueUploadError";
+    this.mode = mode;
+  }
+}
+
+function responseErrorMessage(payload, fallback) {
+  for (const key of ["message", "error", "errorCode"]) {
+    const value = payload?.[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return fallback;
+}
+
+function workerResponseFailure(response, payload, fallback) {
+  const message = responseErrorMessage(payload, fallback);
+  const errorCode = ["errorCode", "error", "code"]
+    .map((key) => payload?.[key])
+    .find((value) => typeof value === "string");
+  const terminalErrors = new Set([
+    "appointment_media_writes_disabled",
+    "media_writes_disabled",
+    "mobile_offline_media_disabled",
+    "offline_media_disabled",
+    "forbidden",
+    "unauthorized",
+  ]);
+  let mode = "terminal";
+  if (response.status === 401) {
+    mode = "auth_paused";
+  } else if (
+    response.status !== 403 &&
+    !terminalErrors.has(errorCode || message) &&
+    (response.status === 408 ||
+      response.status === 425 ||
+      response.status === 429 ||
+      (response.status === 409 &&
+        (errorCode === "media_processing" || message === "media_processing")) ||
+      response.status >= 500)
+  ) {
+    mode = "retry";
+  }
+  return new WorkerQueueUploadError(message, mode);
+}
+
+function workerUploadFailureMode(error) {
+  if (workerIsAbortError(error) || error instanceof TypeError) return "retry";
+  return error instanceof WorkerQueueUploadError ? error.mode : "terminal";
 }
 
 async function uploadRow(row) {
@@ -353,51 +470,65 @@ async function uploadRow(row) {
   await putQueue(working);
 
   try {
-    const intentResponse = await fetch(
-      `/api/mobile/appointments/${encodeURIComponent(row.appointmentId)}/media/upload-intents`,
-      {
-        method: "POST",
-        credentials: "include",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          uploadMode: row.capturedOffline ? "offline_queue" : "direct_mobile",
-          ...(row.quotedScopeText
-            ? { quotedScopeText: row.quotedScopeText }
-            : {}),
-          files: [
-            {
-              clientId: row.clientId,
-              filename: row.filename,
-              contentType: row.contentType,
-              byteLength: row.byteCount,
-              checksumSha256: row.checksumSha256,
-              caption: row.caption,
-            },
-          ],
-        }),
-      },
-    );
-    const intentPayload = await intentResponse.json().catch(() => null);
+    const { response: intentResponse, payload: intentPayload } =
+      await workerFetchJsonWithTimeout(
+        `/api/mobile/appointments/${encodeURIComponent(row.appointmentId)}/media/upload-intents`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            uploadMode: row.capturedOffline ? "offline_queue" : "direct_mobile",
+            ...(row.quotedScopeText
+              ? { quotedScopeText: row.quotedScopeText }
+              : {}),
+            files: [
+              {
+                clientId: row.clientId,
+                filename: row.filename,
+                contentType: row.contentType,
+                byteLength: row.byteCount,
+                checksumSha256: row.checksumSha256,
+                caption: row.caption,
+              },
+            ],
+          }),
+        },
+        API_FETCH_TIMEOUT_MS,
+      );
     if (!intentResponse.ok) {
-      throw new Error(
-        intentPayload?.message ||
-          intentPayload?.error ||
-          "upload_intent_failed",
+      throw workerResponseFailure(
+        intentResponse,
+        intentPayload,
+        "upload_intent_failed",
       );
     }
     const intent = firstIntent(intentPayload);
     if (!intent) throw new Error("invalid_upload_intent");
+    if (intent.processing) {
+      throw new WorkerQueueUploadError("media_processing", "retry");
+    }
 
     if (!intent.ready) {
-      const objectResponse = await fetch(intent.uploadUrl, {
-        method: "PUT",
-        headers: {
-          "content-type": row.contentType,
-          ...intent.uploadHeaders,
+      const objectResponse = await workerFetchWithTimeout(
+        intent.uploadUrl,
+        {
+          method: "PUT",
+          headers: {
+            "content-type": row.contentType,
+            ...intent.uploadHeaders,
+          },
+          body: row.blob,
         },
-        body: row.blob,
-      });
-      if (!objectResponse.ok) throw new Error("object_upload_failed");
+        OBJECT_UPLOAD_TIMEOUT_MS,
+      );
+      if (!objectResponse.ok) {
+        throw workerResponseFailure(
+          objectResponse,
+          null,
+          "object_upload_failed",
+        );
+      }
     }
 
     await putQueue({
@@ -405,49 +536,69 @@ async function uploadRow(row) {
       status: "finalizing",
       updatedAt: Date.now(),
     });
-    const completeResponse = await fetch(
-      `/api/mobile/appointment-media/${encodeURIComponent(intent.mediaId)}/complete`,
-      {
-        method: "POST",
-        credentials: "include",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ checksumSha256: row.checksumSha256 }),
-      },
-    );
-    const completePayload = await completeResponse.json().catch(() => null);
+    const { response: completeResponse, payload: completePayload } =
+      await workerFetchJsonWithTimeout(
+        `/api/mobile/appointment-media/${encodeURIComponent(intent.mediaId)}/complete`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ checksumSha256: row.checksumSha256 }),
+        },
+        API_FETCH_TIMEOUT_MS,
+      );
     if (!completeResponse.ok) {
-      throw new Error(
-        completePayload?.message ||
-          completePayload?.error ||
-          "media_finalize_failed",
+      throw workerResponseFailure(
+        completeResponse,
+        completePayload,
+        "media_finalize_failed",
       );
     }
     await deleteQueue(row.clientId);
-    return true;
+    return "success";
   } catch (error) {
+    const failureMode = workerUploadFailureMode(error);
+    const queued = failureMode !== "terminal";
     await putQueue({
       ...working,
-      status: "failed",
+      status: queued ? "queued" : "failed",
       error: error instanceof Error ? error.message : "upload_failed",
       updatedAt: Date.now(),
     });
-    return false;
+    return failureMode;
   }
 }
 
-async function syncQueue() {
+async function performSyncQueue() {
   const activeEmployeeId = await getActiveEmployeeId();
   if (!activeEmployeeId) return;
-  const sessionResponse = await fetch("/api/mobile/me", {
-    credentials: "include",
-    cache: "no-store",
-  });
-  if (!sessionResponse.ok) return;
-  const sessionPayload = await sessionResponse.json().catch(() => null);
+  const { response: sessionResponse, payload: sessionPayload } =
+    await workerFetchJsonWithTimeout(
+      "/api/mobile/me",
+      {
+        credentials: "include",
+        cache: "no-store",
+      },
+      API_FETCH_TIMEOUT_MS,
+    );
+  if (!sessionResponse.ok) {
+    if (
+      sessionResponse.status === 408 ||
+      sessionResponse.status === 425 ||
+      sessionResponse.status === 429 ||
+      sessionResponse.status >= 500
+    ) {
+      throw new Error("media_sync_session_unavailable");
+    }
+    return;
+  }
   if (sessionPayload?.teamMember?.id !== activeEmployeeId) return;
 
-  const owner = `worker:${crypto.randomUUID()}`;
-  if (!(await acquireSyncLease(owner, activeEmployeeId))) return;
+  workerSyncOwner ||= `worker:${crypto.randomUUID()}`;
+  const owner = workerSyncOwner;
+  if (!(await acquireSyncLease(owner, activeEmployeeId))) {
+    throw new Error("media_sync_lease_busy");
+  }
 
   let leaseActive = true;
   const heartbeat = setInterval(() => {
@@ -455,25 +606,34 @@ async function syncQueue() {
       leaseActive = renewed;
     });
   }, SYNC_COORDINATOR_HEARTBEAT_MS);
-  let failed = 0;
+  let retryableFailures = 0;
   try {
     await reclaimInterruptedRows(activeEmployeeId);
-    const rows = (await getQueue()).filter(
-      (row) =>
-        row.employeeId === activeEmployeeId &&
-        (row.status === "queued" || row.status === "failed"),
-    );
-    let cursor = 0;
-    const worker = async () => {
-      while (cursor < rows.length && leaseActive) {
-        const row = rows[cursor++];
-        if (!row) continue;
-        leaseActive = await renewSyncLease(owner);
-        if (!leaseActive) return;
-        if (!(await uploadRow(row))) failed += 1;
-      }
-    };
-    await Promise.all([worker(), worker()]);
+    const attemptedClientIds = new Set();
+    while (leaseActive) {
+      const rows = (await getQueue()).filter(
+        (row) =>
+          row.employeeId === activeEmployeeId &&
+          row.status === "queued" &&
+          !attemptedClientIds.has(row.clientId),
+      );
+      if (!rows.length) break;
+
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < rows.length && leaseActive) {
+          const row = rows[cursor++];
+          if (!row) continue;
+          attemptedClientIds.add(row.clientId);
+          leaseActive = await renewSyncLease(owner);
+          if (!leaseActive) return;
+          if ((await uploadRow(row)) === "retry") {
+            retryableFailures += 1;
+          }
+        }
+      };
+      await Promise.all([worker(), worker()]);
+    }
   } finally {
     clearInterval(heartbeat);
     await releaseSyncLease(owner);
@@ -486,7 +646,17 @@ async function syncQueue() {
       client.postMessage({ type: "stonegate-media-sync-complete" });
     }
   }
-  if (failed > 0) throw new Error("media_sync_incomplete");
+  if (retryableFailures > 0) throw new Error("media_sync_incomplete");
+}
+
+function syncQueue() {
+  if (workerActiveSync) return workerActiveSync;
+  const promise = performSyncQueue();
+  const settled = promise.finally(() => {
+    if (workerActiveSync === settled) workerActiveSync = null;
+  });
+  workerActiveSync = settled;
+  return settled;
 }
 
 self.addEventListener("sync", (event) => {

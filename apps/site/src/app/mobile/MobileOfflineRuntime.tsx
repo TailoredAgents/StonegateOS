@@ -75,12 +75,16 @@ export function MobileOfflineRuntime({
   const refreshQueue = React.useCallback(async () => {
     const summary = await getQueueSummary(employeeId).catch(() => null);
     setQueue(summary);
-    if (summary?.total) await registerMediaBackgroundSync();
+    if (summary?.total) void registerMediaBackgroundSync();
     void reportOfflineQueueHealth(employeeId);
   }, [employeeId]);
 
   const synchronize = React.useCallback(async () => {
-    if (!navigator.onLine) return;
+    const current = await getQueueSummary(employeeId).catch(() => null);
+    if (!current?.total || current.failed === current.total) {
+      if (current) setQueue(current);
+      return;
+    }
     await syncQueuedMedia(employeeId).catch(() => undefined);
     await refreshQueue();
   }, [employeeId, refreshQueue]);
@@ -133,7 +137,10 @@ export function MobileOfflineRuntime({
     void synchronize();
 
     const onOnline = () => void synchronize();
-    const onQueueChange = () => void refreshQueue();
+    const onQueueChange = () => {
+      void refreshQueue();
+      void synchronize();
+    };
     const onStorageWarning = (event: Event) => {
       const detail = (event as CustomEvent<{ ratio?: number }>).detail;
       if (typeof detail?.ratio === "number") setStoragePressure(detail.ratio);
@@ -157,10 +164,10 @@ export function MobileOfflineRuntime({
     };
     const retryTimer = window.setInterval(() => {
       void refreshQueue();
-      if (document.visibilityState === "visible" && navigator.onLine) {
+      if (document.visibilityState === "visible") {
         void synchronize();
       }
-    }, 60_000);
+    }, 15_000);
 
     window.addEventListener("online", onOnline);
     window.addEventListener(MOBILE_MEDIA_QUEUE_EVENT, onQueueChange);
