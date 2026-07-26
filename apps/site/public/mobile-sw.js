@@ -1,4 +1,4 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v4";
+const SHELL_CACHE = "stonegate-mobile-shell-v5";
 const DATABASE_NAME = "stonegate-mobile";
 const DATABASE_VERSION = 2;
 const SNAPSHOT_STORE = "appointment-snapshots";
@@ -11,8 +11,9 @@ const SYNC_COORDINATOR_HEARTBEAT_MS = 5 * 1000;
 const API_FETCH_TIMEOUT_MS = 45 * 1000;
 const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
-const SYNC_LEASE_KEY = "mediaSyncLease";
-const SYNC_LEASE_VERSION = 3;
+const SYNC_LEASE_KEY = "mediaSyncLease:callback-v1";
+// Keep this aligned with the foreground coordinator in offline-media.ts.
+const SYNC_LEASE_VERSION = 4;
 const DEVICE_ID_KEY = "mobileDeviceId";
 const SHELL_URLS = [
   "/manifest.webmanifest",
@@ -184,9 +185,20 @@ function openDatabase() {
   });
 }
 
-function requestResult(request) {
+function requestResult(request, onSuccess) {
   return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      try {
+        resolve(onSuccess ? onSuccess(request.result) : request.result);
+      } catch (error) {
+        try {
+          request.transaction?.abort();
+        } catch {
+          // The transaction may already be aborting.
+        }
+        reject(error);
+      }
+    };
     request.onerror = () => reject(request.error || new Error("db_error"));
   });
 }
@@ -238,21 +250,23 @@ async function getOrCreateDeviceId() {
   const transaction = database.transaction(METADATA_STORE, "readwrite");
   const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
-  const existing = await requestResult(store.get(DEVICE_ID_KEY));
-  const deviceId =
-    typeof existing?.value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-      existing.value,
-    )
-      ? existing.value
-      : crypto.randomUUID();
-  if (deviceId !== existing?.value) {
-    store.put({
-      key: DEVICE_ID_KEY,
-      value: deviceId,
-      updatedAt: Date.now(),
-    });
-  }
+  const deviceId = await requestResult(store.get(DEVICE_ID_KEY), (existing) => {
+    const resolvedDeviceId =
+      typeof existing?.value === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        existing.value,
+      )
+        ? existing.value
+        : crypto.randomUUID();
+    if (resolvedDeviceId !== existing?.value) {
+      store.put({
+        key: DEVICE_ID_KEY,
+        value: resolvedDeviceId,
+        updatedAt: Date.now(),
+      });
+    }
+    return resolvedDeviceId;
+  });
   await completion;
   database.close();
   return deviceId;
@@ -298,28 +312,31 @@ async function acquireSyncLease(owner, employeeId) {
   const transaction = database.transaction(METADATA_STORE, "readwrite");
   const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
-  const existing = await requestResult(store.get(SYNC_LEASE_KEY));
-  const now = Date.now();
-  if (
-    existing?.version === SYNC_LEASE_VERSION &&
-    existing.expiresAt > now &&
-    existing.owner !== owner
-  ) {
-    await completion;
-    database.close();
-    return false;
-  }
-  store.put({
-    key: SYNC_LEASE_KEY,
-    version: SYNC_LEASE_VERSION,
-    owner,
-    employeeId,
-    heartbeatAt: now,
-    expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
-  });
+  const acquired = await requestResult(
+    store.get(SYNC_LEASE_KEY),
+    (existing) => {
+      const now = Date.now();
+      if (
+        existing?.version === SYNC_LEASE_VERSION &&
+        existing.expiresAt > now &&
+        existing.owner !== owner
+      ) {
+        return false;
+      }
+      store.put({
+        key: SYNC_LEASE_KEY,
+        version: SYNC_LEASE_VERSION,
+        owner,
+        employeeId,
+        heartbeatAt: now,
+        expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
+      });
+      return true;
+    },
+  );
   await completion;
   database.close();
-  return true;
+  return acquired;
 }
 
 async function renewSyncLease(owner) {
@@ -327,18 +344,22 @@ async function renewSyncLease(owner) {
   const transaction = database.transaction(METADATA_STORE, "readwrite");
   const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
-  const existing = await requestResult(store.get(SYNC_LEASE_KEY));
-  if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
-    const now = Date.now();
-    store.put({
-      ...existing,
-      heartbeatAt: now,
-      expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
-    });
-  }
+  const renewed = await requestResult(store.get(SYNC_LEASE_KEY), (existing) => {
+    const ownsLease =
+      existing?.version === SYNC_LEASE_VERSION && existing.owner === owner;
+    if (ownsLease) {
+      const now = Date.now();
+      store.put({
+        ...existing,
+        heartbeatAt: now,
+        expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
+      });
+    }
+    return ownsLease;
+  });
   await completion;
   database.close();
-  return existing?.version === SYNC_LEASE_VERSION && existing.owner === owner;
+  return renewed;
 }
 
 async function releaseSyncLease(owner) {
@@ -346,10 +367,11 @@ async function releaseSyncLease(owner) {
   const transaction = database.transaction(METADATA_STORE, "readwrite");
   const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
-  const existing = await requestResult(store.get(SYNC_LEASE_KEY));
-  if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
-    store.delete(SYNC_LEASE_KEY);
-  }
+  await requestResult(store.get(SYNC_LEASE_KEY), (existing) => {
+    if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
+      store.delete(SYNC_LEASE_KEY);
+    }
+  });
   await completion;
   database.close();
 }
@@ -359,24 +381,41 @@ async function reclaimInterruptedRows(employeeId) {
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
   const completion = transactionDone(transaction);
   const store = transaction.objectStore(QUEUE_STORE);
-  const rows = await requestResult(
-    store.index("employeeId").getAll(employeeId),
-  );
-  const now = Date.now();
-  for (const row of rows) {
-    if (
-      (row.status === "uploading" || row.status === "finalizing") &&
-      row.updatedAt <= now - UPLOAD_ROW_LEASE_MS
-    ) {
-      store.put({
-        ...row,
-        status: "queued",
-        error: "Previous upload was interrupted. Retrying safely.",
-        updatedAt: now,
-      });
-    }
-  }
-  await completion;
+  const traversal = new Promise((resolve, reject) => {
+    const request = store.index("employeeId").openCursor(employeeId);
+    request.onerror = () => reject(request.error || new Error("db_error"));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+      try {
+        const row = cursor.value;
+        const now = Date.now();
+        if (
+          (row.status === "uploading" || row.status === "finalizing") &&
+          row.updatedAt <= now - UPLOAD_ROW_LEASE_MS
+        ) {
+          cursor.update({
+            ...row,
+            status: "queued",
+            error: "Previous upload was interrupted. Retrying safely.",
+            updatedAt: now,
+          });
+        }
+        cursor.continue();
+      } catch (error) {
+        try {
+          transaction.abort();
+        } catch {
+          // The transaction already failed; preserve the original error.
+        }
+        reject(error);
+      }
+    };
+  });
+  await Promise.all([traversal, completion]);
   database.close();
 }
 
