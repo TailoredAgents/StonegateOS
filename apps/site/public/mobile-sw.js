@@ -1,4 +1,4 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v5";
+const SHELL_CACHE = "stonegate-mobile-shell-v6";
 const DATABASE_NAME = "stonegate-mobile";
 const DATABASE_VERSION = 2;
 const SNAPSHOT_STORE = "appointment-snapshots";
@@ -22,6 +22,66 @@ const SHELL_URLS = [
 ];
 let workerSyncOwner = null;
 let workerActiveSync = null;
+
+function workerDiagnosticErrorCode(error, fallback = "unknown") {
+  if (workerIsAbortError(error)) return "timeout";
+  if (error instanceof TypeError) return "network";
+  const name =
+    error && typeof error === "object" && typeof error.name === "string"
+      ? error.name
+      : "";
+  if (
+    name === "ConstraintError" ||
+    name === "DataCloneError" ||
+    name === "DataError" ||
+    name === "InvalidStateError" ||
+    name === "QuotaExceededError" ||
+    name === "ReadOnlyError" ||
+    name === "TransactionInactiveError" ||
+    name === "UnknownError"
+  ) {
+    return "indexeddb";
+  }
+  return fallback;
+}
+
+function reportWorkerMediaSyncDiagnostic(
+  diagnostic,
+  phase,
+  outcome,
+  errorCode = "none",
+) {
+  const counts = {
+    queuedCount: 0,
+    uploadingCount: 0,
+    finalizingCount: 0,
+    failedCount: 0,
+  };
+  for (const row of diagnostic.rows) {
+    if (row.status === "queued") counts.queuedCount += 1;
+    if (row.status === "uploading") counts.uploadingCount += 1;
+    if (row.status === "finalizing") counts.finalizingCount += 1;
+    if (row.status === "failed") counts.failedCount += 1;
+  }
+  void fetch("/api/mobile/media-sync-diagnostic", {
+    method: "POST",
+    credentials: "include",
+    keepalive: true,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      schemaVersion: 1,
+      runId: diagnostic.runId,
+      source: "service_worker",
+      phase,
+      outcome,
+      errorCode,
+      queueTotal: diagnostic.rows.length,
+      ...counts,
+      leaseVersion: SYNC_LEASE_VERSION,
+      eventAt: new Date().toISOString(),
+    }),
+  }).catch(() => undefined);
+}
 
 function workerIsAbortError(error) {
   return (
@@ -515,7 +575,7 @@ function workerUploadFailureMode(error) {
   return error instanceof WorkerQueueUploadError ? error.mode : "terminal";
 }
 
-async function uploadRow(row) {
+async function uploadRow(row, diagnostic) {
   const working = {
     ...row,
     status: "uploading",
@@ -523,9 +583,23 @@ async function uploadRow(row) {
     attempts: (row.attempts || 0) + 1,
     updatedAt: Date.now(),
   };
-  await putQueue(working);
-
+  reportWorkerMediaSyncDiagnostic(diagnostic, "row_prepare", "started");
   try {
+    await putQueue(working);
+    reportWorkerMediaSyncDiagnostic(diagnostic, "row_prepare", "ok");
+  } catch (error) {
+    reportWorkerMediaSyncDiagnostic(
+      diagnostic,
+      "row_prepare",
+      "error",
+      workerDiagnosticErrorCode(error),
+    );
+    throw error;
+  }
+
+  let intentSettled = false;
+  try {
+    reportWorkerMediaSyncDiagnostic(diagnostic, "intent", "started");
     const { response: intentResponse, payload: intentPayload } =
       await workerFetchJsonWithTimeout(
         `/api/mobile/appointments/${encodeURIComponent(row.appointmentId)}/media/upload-intents`,
@@ -552,6 +626,8 @@ async function uploadRow(row) {
         },
         API_FETCH_TIMEOUT_MS,
       );
+    intentSettled = true;
+    reportWorkerMediaSyncDiagnostic(diagnostic, "intent", "ok");
     if (!intentResponse.ok) {
       throw workerResponseFailure(
         intentResponse,
@@ -614,6 +690,14 @@ async function uploadRow(row) {
     return "success";
   } catch (error) {
     const failureMode = workerUploadFailureMode(error);
+    if (!intentSettled) {
+      reportWorkerMediaSyncDiagnostic(
+        diagnostic,
+        "intent",
+        failureMode === "retry" ? "retry" : "error",
+        workerDiagnosticErrorCode(error, "server"),
+      );
+    }
     const queued = failureMode !== "terminal";
     await putQueue({
       ...working,
@@ -628,8 +712,12 @@ async function uploadRow(row) {
 async function performSyncQueue() {
   const activeEmployeeId = await getActiveEmployeeId();
   if (!activeEmployeeId) return;
-  const { response: sessionResponse, payload: sessionPayload } =
-    await workerFetchJsonWithTimeout(
+  const diagnostic = { runId: crypto.randomUUID(), rows: [] };
+  reportWorkerMediaSyncDiagnostic(diagnostic, "preflight", "ok");
+  reportWorkerMediaSyncDiagnostic(diagnostic, "session", "started");
+  let sessionResult;
+  try {
+    sessionResult = await workerFetchJsonWithTimeout(
       "/api/mobile/me",
       {
         credentials: "include",
@@ -637,6 +725,16 @@ async function performSyncQueue() {
       },
       API_FETCH_TIMEOUT_MS,
     );
+  } catch (error) {
+    reportWorkerMediaSyncDiagnostic(
+      diagnostic,
+      "session",
+      "retry",
+      workerDiagnosticErrorCode(error),
+    );
+    throw error;
+  }
+  const { response: sessionResponse, payload: sessionPayload } = sessionResult;
   if (!sessionResponse.ok) {
     if (
       sessionResponse.status === 408 ||
@@ -644,17 +742,57 @@ async function performSyncQueue() {
       sessionResponse.status === 429 ||
       sessionResponse.status >= 500
     ) {
+      reportWorkerMediaSyncDiagnostic(
+        diagnostic,
+        "session",
+        "retry",
+        sessionResponse.status === 408 ? "timeout" : "server",
+      );
       throw new Error("media_sync_session_unavailable");
     }
+    reportWorkerMediaSyncDiagnostic(
+      diagnostic,
+      "session",
+      "error",
+      sessionResponse.status === 401
+        ? "session"
+        : sessionResponse.status === 403
+          ? "permission"
+          : "server",
+    );
     return;
   }
-  if (sessionPayload?.teamMember?.id !== activeEmployeeId) return;
+  if (sessionPayload?.teamMember?.id !== activeEmployeeId) {
+    reportWorkerMediaSyncDiagnostic(diagnostic, "session", "error", "session");
+    return;
+  }
+  reportWorkerMediaSyncDiagnostic(diagnostic, "session", "ok");
 
   workerSyncOwner ||= `worker:${crypto.randomUUID()}`;
   const owner = workerSyncOwner;
-  if (!(await acquireSyncLease(owner, activeEmployeeId))) {
+  reportWorkerMediaSyncDiagnostic(diagnostic, "lease_acquire", "started");
+  let leaseAcquired;
+  try {
+    leaseAcquired = await acquireSyncLease(owner, activeEmployeeId);
+  } catch (error) {
+    reportWorkerMediaSyncDiagnostic(
+      diagnostic,
+      "lease_acquire",
+      "error",
+      workerDiagnosticErrorCode(error),
+    );
+    throw error;
+  }
+  if (!leaseAcquired) {
+    reportWorkerMediaSyncDiagnostic(
+      diagnostic,
+      "lease_acquired",
+      "busy",
+      "lease_busy",
+    );
     throw new Error("media_sync_lease_busy");
   }
+  reportWorkerMediaSyncDiagnostic(diagnostic, "lease_acquired", "ok");
 
   let leaseActive = true;
   const heartbeat = setInterval(() => {
@@ -663,15 +801,23 @@ async function performSyncQueue() {
     });
   }, SYNC_COORDINATOR_HEARTBEAT_MS);
   let retryableFailures = 0;
+  let diagnosticPhase = "reclaim";
   try {
+    reportWorkerMediaSyncDiagnostic(diagnostic, "reclaim", "started");
     await reclaimInterruptedRows(activeEmployeeId);
+    reportWorkerMediaSyncDiagnostic(diagnostic, "reclaim", "ok");
     const attemptedClientIds = new Set();
     while (leaseActive) {
-      const rows = (await getQueue()).filter(
+      diagnosticPhase = "queue_scan";
+      reportWorkerMediaSyncDiagnostic(diagnostic, "queue_scan", "started");
+      const employeeRows = (await getQueue()).filter(
+        (row) => row.employeeId === activeEmployeeId,
+      );
+      diagnostic.rows = employeeRows;
+      reportWorkerMediaSyncDiagnostic(diagnostic, "queue_scan", "ok");
+      const rows = employeeRows.filter(
         (row) =>
-          row.employeeId === activeEmployeeId &&
-          row.status === "queued" &&
-          !attemptedClientIds.has(row.clientId),
+          row.status === "queued" && !attemptedClientIds.has(row.clientId),
       );
       if (!rows.length) break;
 
@@ -681,18 +827,64 @@ async function performSyncQueue() {
           const row = rows[cursor++];
           if (!row) continue;
           attemptedClientIds.add(row.clientId);
-          leaseActive = await renewSyncLease(owner);
-          if (!leaseActive) return;
-          if ((await uploadRow(row)) === "retry") {
+          diagnosticPhase = "lease_renew";
+          reportWorkerMediaSyncDiagnostic(diagnostic, "lease_renew", "started");
+          try {
+            leaseActive = await renewSyncLease(owner);
+          } catch (error) {
+            reportWorkerMediaSyncDiagnostic(
+              diagnostic,
+              "lease_renew",
+              "error",
+              workerDiagnosticErrorCode(error),
+            );
+            throw error;
+          }
+          if (!leaseActive) {
+            reportWorkerMediaSyncDiagnostic(
+              diagnostic,
+              "lease_renew",
+              "error",
+              "lease_lost",
+            );
+            return;
+          }
+          reportWorkerMediaSyncDiagnostic(diagnostic, "lease_renew", "ok");
+          diagnosticPhase = "row_prepare";
+          if ((await uploadRow(row, diagnostic)) === "retry") {
             retryableFailures += 1;
           }
         }
       };
       await Promise.all([worker(), worker()]);
     }
+  } catch (error) {
+    reportWorkerMediaSyncDiagnostic(
+      diagnostic,
+      diagnosticPhase,
+      "error",
+      workerDiagnosticErrorCode(error),
+    );
+    throw error;
   } finally {
     clearInterval(heartbeat);
-    await releaseSyncLease(owner);
+    reportWorkerMediaSyncDiagnostic(diagnostic, "release", "started");
+    await releaseSyncLease(owner).then(
+      () => reportWorkerMediaSyncDiagnostic(diagnostic, "release", "ok"),
+      (error) => {
+        reportWorkerMediaSyncDiagnostic(
+          diagnostic,
+          "release",
+          "error",
+          workerDiagnosticErrorCode(error),
+        );
+        return Promise.reject(
+          error instanceof Error
+            ? error
+            : new Error("media_sync_release_failed"),
+        );
+      },
+    );
     await reportQueueHealth(activeEmployeeId);
     const clients = await self.clients.matchAll({
       type: "window",
