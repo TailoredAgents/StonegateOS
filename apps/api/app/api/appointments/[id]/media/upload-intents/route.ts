@@ -17,7 +17,7 @@ import {
 import { requirePermission } from "@/lib/permissions";
 import { isAdminRequest } from "../../../../web/admin";
 
-const BodySchema = z.object({
+export const AppointmentMediaUploadIntentBodySchema = z.object({
   uploadMode: z.enum(["offline_queue", "direct_mobile"]).optional(),
   quotedScopeText: z.string().max(4_000).optional(),
   files: z
@@ -31,7 +31,7 @@ const BodySchema = z.object({
           .string()
           .regex(/^[a-f0-9]{64}$/i)
           .optional(),
-        caption: z.string().max(500).optional(),
+        caption: z.string().max(500).nullish(),
       }),
     )
     .min(1)
@@ -58,7 +58,7 @@ export async function POST(
   }
 
   const payload = (await request.json().catch(() => null)) as unknown;
-  const parsed = BodySchema.safeParse(payload);
+  const parsed = AppointmentMediaUploadIntentBodySchema.safeParse(payload);
   if (!parsed.success) {
     return NextResponse.json(
       { error: "invalid_payload", message: parsed.error.flatten() },
