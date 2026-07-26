@@ -65,9 +65,7 @@ function OfflineQueueList({
                     type="button"
                     onClick={() => {
                       void retryQueuedMedia(item.clientId).then(() =>
-                        navigator.onLine
-                          ? syncQueuedMedia(employeeId)
-                          : undefined,
+                        syncQueuedMedia(employeeId),
                       );
                     }}
                     className="rounded-md border border-cyan-300/40 px-2 py-2 text-xs font-semibold text-cyan-100"
@@ -187,7 +185,10 @@ export default function MobileOfflinePage() {
 
   React.useEffect(() => {
     if (!employeeId) return;
-    const refresh = () => void load(employeeId);
+    const refresh = () => {
+      void load(employeeId);
+      void syncQueuedMedia(employeeId).catch(() => undefined);
+    };
     window.addEventListener(MOBILE_MEDIA_QUEUE_EVENT, refresh);
     return () => window.removeEventListener(MOBILE_MEDIA_QUEUE_EVENT, refresh);
   }, [employeeId, load]);
@@ -224,7 +225,6 @@ export default function MobileOfflinePage() {
   React.useEffect(() => {
     if (!employeeId) return;
     const synchronize = async () => {
-      if (!navigator.onLine) return;
       await syncQueuedMedia(employeeId).catch(() => undefined);
       await load(employeeId).catch(() => undefined);
     };
@@ -244,10 +244,10 @@ export default function MobileOfflinePage() {
       }
     };
     const retryTimer = window.setInterval(() => {
-      if (document.visibilityState === "visible" && navigator.onLine) {
+      if (document.visibilityState === "visible") {
         void synchronize();
       }
-    }, 60_000);
+    }, 15_000);
     void synchronize();
     window.addEventListener("online", onOnline);
     document.addEventListener("visibilitychange", onVisibility);
@@ -269,23 +269,32 @@ export default function MobileOfflinePage() {
     [jobs],
   );
 
-  const chooseFiles = async (appointmentId: string, files: FileList | null) => {
-    if (!employeeId || !files?.length) return;
-    setError(null);
-    const selected = Array.from(files).slice(0, 10);
-    for (const file of selected) {
-      try {
-        await queueMediaUpload({
-          employeeId,
-          appointmentId,
-          file,
-          caption: captions[appointmentId] ?? null,
-        });
-      } catch (uploadError) {
-        setError(friendlyUploadError(uploadError));
+  const chooseFiles = async (
+    appointmentId: string,
+    files: FileList | null,
+    input: HTMLInputElement,
+  ) => {
+    try {
+      if (!employeeId || !files?.length) return;
+      setError(null);
+      const selected = Array.from(files).slice(0, 10);
+      for (const file of selected) {
+        try {
+          await queueMediaUpload({
+            employeeId,
+            appointmentId,
+            file,
+            capturedOffline: true,
+            caption: captions[appointmentId] ?? null,
+          });
+        } catch (uploadError) {
+          setError(friendlyUploadError(uploadError));
+        }
       }
+      await load(employeeId);
+    } finally {
+      input.value = "";
     }
-    await load(employeeId);
   };
 
   const appointmentIds = new Set(jobs.map((job) => job.appointmentId));
@@ -439,12 +448,14 @@ export default function MobileOfflinePage() {
                           accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
                           capture="environment"
                           className="sr-only"
-                          onChange={(event) =>
+                          onChange={(event) => {
+                            const input = event.currentTarget;
                             void chooseFiles(
                               job.appointmentId,
-                              event.currentTarget.files,
-                            )
-                          }
+                              input.files,
+                              input,
+                            );
+                          }}
                         />
                       </label>
                       <label className="cursor-pointer rounded-md border border-cyan-300/40 bg-slate-950 px-3 py-3 text-center text-sm font-semibold text-cyan-100">
@@ -454,12 +465,14 @@ export default function MobileOfflinePage() {
                           accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
                           multiple
                           className="sr-only"
-                          onChange={(event) =>
+                          onChange={(event) => {
+                            const input = event.currentTarget;
                             void chooseFiles(
                               job.appointmentId,
-                              event.currentTarget.files,
-                            )
-                          }
+                              input.files,
+                              input,
+                            );
+                          }}
                         />
                       </label>
                     </div>
