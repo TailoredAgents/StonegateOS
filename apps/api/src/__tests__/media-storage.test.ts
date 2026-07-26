@@ -90,9 +90,15 @@ describe("appointment media object storage", () => {
     });
 
     expect(intent.headers).toEqual({ "content-type": "image/jpeg" });
+    const parameters = new URL(intent.url).searchParams;
+    expect(parameters.get("X-Amz-SignedHeaders")).not.toContain(
+      "x-amz-checksum-sha256",
+    );
     expect(
-      new URL(intent.url).searchParams.get("X-Amz-SignedHeaders"),
-    ).not.toContain("x-amz-checksum-sha256");
+      [...parameters.keys()].filter((key) =>
+        /^x-amz-(?:checksum-|sdk-checksum)/iu.test(key),
+      ),
+    ).toEqual([]);
   });
 
   it("verifies bucket access with one read-only HEAD request", async () => {
