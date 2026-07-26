@@ -174,6 +174,10 @@ function buildClient(): {
     region: config.region,
     ...(config.endpoint ? { endpoint: config.endpoint } : {}),
     forcePathStyle: config.forcePathStyle,
+    // Presigning a PutObject without a Body otherwise makes current AWS SDK
+    // versions add an empty-body CRC32 query parameter. Only use checksums
+    // when Stonegate explicitly supplies one for a compatible provider.
+    requestChecksumCalculation: "WHEN_REQUIRED",
     credentials: { accessKeyId, secretAccessKey },
   });
   return { client, config, bucketReady: null };
