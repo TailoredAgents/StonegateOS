@@ -11,16 +11,12 @@ const LAST_EMPLOYEE_KEY = "stonegate:last-mobile-employee";
 const SNAPSHOT_TTL_MS = 48 * 60 * 60 * 1000;
 const STALE_QUEUE_MS = 24 * 60 * 60 * 1000;
 const UPLOAD_ROW_LEASE_MS = 10 * 60 * 1000;
-const SYNC_COORDINATOR_LEASE_MS = 30 * 1000;
-const SYNC_COORDINATOR_HEARTBEAT_MS = 5 * 1000;
 const VISIBLE_SYNC_RETRY_MS = 5 * 1000;
 const API_FETCH_TIMEOUT_MS = 45 * 1000;
 const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
 const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 const STONEGATE_TIME_ZONE = "America/New_York";
-const SYNC_LEASE_KEY = "mediaSyncLease:callback-v1";
-const SYNC_LEASE_VERSION = 4;
 const DEVICE_ID_KEY = "mobileDeviceId";
 const QUEUE_HEALTH_REFRESH_MS = 5 * 60 * 1000;
 const QUEUE_HEALTH_FAILURE_BACKOFF_MS = 60 * 1000;
@@ -131,24 +127,6 @@ const queueHealthInFlight = new Map<string, Promise<boolean>>();
 const pendingQueueSyncEmployees = new Set<string>();
 const visibleSyncRetryTimers = new Map<string, number>();
 let queueBroadcastChannel: BroadcastChannel | null = null;
-let foregroundSyncOwner: string | null = null;
-
-type MediaSyncDiagnosticPhase =
-  | "preflight"
-  | "session"
-  | "lease_acquire"
-  | "lease_acquired"
-  | "reclaim"
-  | "queue_scan"
-  | "lease_renew"
-  | "row_prepare"
-  | "intent"
-  | "release";
-
-type MediaSyncDiagnosticContext = {
-  runId: string;
-  rows: QueuedMediaUpload[];
-};
 
 function isAbortError(error: unknown): boolean {
   return (
@@ -157,82 +135,6 @@ function isAbortError(error: unknown): boolean {
     "name" in error &&
     error.name === "AbortError"
   );
-}
-
-function mediaSyncDiagnosticErrorCode(
-  error: unknown,
-  fallback: "server" | "unknown" = "unknown",
-): "indexeddb" | "network" | "timeout" | "server" | "unknown" {
-  if (isAbortError(error)) return "timeout";
-  if (error instanceof TypeError) return "network";
-  const name =
-    typeof error === "object" &&
-    error !== null &&
-    "name" in error &&
-    typeof error.name === "string"
-      ? error.name
-      : "";
-  if (
-    name === "ConstraintError" ||
-    name === "DataCloneError" ||
-    name === "DataError" ||
-    name === "InvalidStateError" ||
-    name === "QuotaExceededError" ||
-    name === "ReadOnlyError" ||
-    name === "TransactionInactiveError" ||
-    name === "UnknownError"
-  ) {
-    return "indexeddb";
-  }
-  return fallback;
-}
-
-function reportMediaSyncDiagnostic(
-  context: MediaSyncDiagnosticContext,
-  phase: MediaSyncDiagnosticPhase,
-  outcome: "started" | "ok" | "busy" | "retry" | "error",
-  errorCode:
-    | "none"
-    | "indexeddb"
-    | "lease_busy"
-    | "lease_lost"
-    | "network"
-    | "timeout"
-    | "session"
-    | "permission"
-    | "server"
-    | "unknown" = "none",
-): void {
-  const counts = {
-    queuedCount: 0,
-    uploadingCount: 0,
-    finalizingCount: 0,
-    failedCount: 0,
-  };
-  for (const row of context.rows) {
-    if (row.status === "queued") counts.queuedCount += 1;
-    if (row.status === "uploading") counts.uploadingCount += 1;
-    if (row.status === "finalizing") counts.finalizingCount += 1;
-    if (row.status === "failed") counts.failedCount += 1;
-  }
-  void fetch("/api/mobile/media-sync-diagnostic", {
-    method: "POST",
-    credentials: "same-origin",
-    keepalive: true,
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      schemaVersion: 1,
-      runId: context.runId,
-      source: "window",
-      phase,
-      outcome,
-      errorCode,
-      queueTotal: context.rows.length,
-      ...counts,
-      leaseVersion: SYNC_LEASE_VERSION,
-      eventAt: new Date().toISOString(),
-    }),
-  }).catch(() => undefined);
 }
 
 async function timedFetch<T>(
@@ -1060,17 +962,6 @@ export async function getAppointmentQueue(
   return rows.filter((row) => row.appointmentId === appointmentId);
 }
 
-async function putQueueRow(row: QueuedMediaUpload): Promise<void> {
-  const database = await openDatabase();
-  const transaction = database.transaction(QUEUE_STORE, "readwrite");
-  const completion = transactionDone(transaction);
-  transaction.objectStore(QUEUE_STORE).put(row);
-  await completion;
-  database.close();
-  dispatchQueueChange(row.employeeId);
-  void checkStoragePressure();
-}
-
 export async function discardQueuedMedia(clientId: string): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
@@ -1079,6 +970,25 @@ export async function discardQueuedMedia(clientId: string): Promise<void> {
   await completion;
   database.close();
   dispatchQueueChange();
+  void checkStoragePressure();
+}
+
+async function discardUploadedMedia(
+  clientIds: readonly string[],
+  employeeId: string,
+): Promise<void> {
+  if (!clientIds.length) return;
+  const database = await openDatabase();
+  const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
+  const store = transaction.objectStore(QUEUE_STORE);
+  for (const clientId of clientIds) store.delete(clientId);
+  try {
+    await completion;
+  } finally {
+    database.close();
+  }
+  dispatchQueueChange(employeeId);
   void checkStoragePressure();
 }
 
@@ -1127,123 +1037,6 @@ export function isInterruptedQueueRow(
     (row.status === "uploading" || row.status === "finalizing") &&
     row.updatedAt <= now - UPLOAD_ROW_LEASE_MS
   );
-}
-
-async function reclaimInterruptedQueueRows(employeeId: string): Promise<void> {
-  const database = await openDatabase();
-  const transaction = database.transaction(QUEUE_STORE, "readwrite");
-  const completion = transactionDone(transaction);
-  const store = transaction.objectStore(QUEUE_STORE);
-  const changed = await handleRequestResult(
-    store.index("employeeId").getAll(employeeId),
-    (result) => {
-      const now = Date.now();
-      let changed = false;
-      for (const row of result as QueuedMediaUpload[]) {
-        if (!isInterruptedQueueRow(row, now)) continue;
-        store.put({
-          ...row,
-          status: "queued",
-          error: "Previous upload was interrupted. Retrying safely.",
-          updatedAt: now,
-        } satisfies QueuedMediaUpload);
-        changed = true;
-      }
-      return changed;
-    },
-  );
-  await completion;
-  database.close();
-  if (changed) dispatchQueueChange(employeeId);
-}
-
-type SyncLease = {
-  key: typeof SYNC_LEASE_KEY;
-  version: typeof SYNC_LEASE_VERSION;
-  owner: string;
-  employeeId: string;
-  heartbeatAt: number;
-  expiresAt: number;
-};
-
-async function acquireSyncLease(
-  owner: string,
-  employeeId: string,
-): Promise<boolean> {
-  const database = await openDatabase();
-  const transaction = database.transaction(METADATA_STORE, "readwrite");
-  const completion = transactionDone(transaction);
-  const store = transaction.objectStore(METADATA_STORE);
-  const acquired = await handleRequestResult(
-    store.get(SYNC_LEASE_KEY),
-    (result) => {
-      const existing = result as SyncLease | undefined;
-      const now = Date.now();
-      if (
-        existing?.version === SYNC_LEASE_VERSION &&
-        existing.expiresAt > now &&
-        existing.owner !== owner
-      ) {
-        return false;
-      }
-      store.put({
-        key: SYNC_LEASE_KEY,
-        version: SYNC_LEASE_VERSION,
-        owner,
-        employeeId,
-        heartbeatAt: now,
-        expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
-      } satisfies SyncLease);
-      return true;
-    },
-  );
-  await completion;
-  database.close();
-  return acquired;
-}
-
-async function renewSyncLease(owner: string): Promise<boolean> {
-  const database = await openDatabase();
-  const transaction = database.transaction(METADATA_STORE, "readwrite");
-  const completion = transactionDone(transaction);
-  const store = transaction.objectStore(METADATA_STORE);
-  const renewed = await handleRequestResult(
-    store.get(SYNC_LEASE_KEY),
-    (result) => {
-      const existing = result as SyncLease | undefined;
-      if (
-        existing?.version !== SYNC_LEASE_VERSION ||
-        existing.owner !== owner
-      ) {
-        return false;
-      }
-      const now = Date.now();
-      store.put({
-        ...existing,
-        heartbeatAt: now,
-        expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
-      } satisfies SyncLease);
-      return true;
-    },
-  );
-  await completion;
-  database.close();
-  return renewed;
-}
-
-async function releaseSyncLease(owner: string): Promise<void> {
-  const database = await openDatabase();
-  const transaction = database.transaction(METADATA_STORE, "readwrite");
-  const completion = transactionDone(transaction);
-  const store = transaction.objectStore(METADATA_STORE);
-  await handleRequestResult(store.get(SYNC_LEASE_KEY), (result) => {
-    const existing = result as SyncLease | undefined;
-    if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
-      store.delete(SYNC_LEASE_KEY);
-    }
-  });
-  await completion;
-  database.close();
 }
 
 function dispatchQueueChange(employeeId?: string, requestSync = false): void {
@@ -1372,34 +1165,20 @@ function uploadFailureMode(error: unknown): QueueUploadFailureMode {
   return error instanceof QueueUploadError ? error.mode : "terminal";
 }
 
+function isReadyCompletion(payload: unknown, mediaId: string): boolean {
+  const root = asRecord(payload);
+  const media = asRecord(root?.["media"]);
+  return (
+    root?.["ok"] === true &&
+    media?.["id"] === mediaId &&
+    media["status"] === "ready"
+  );
+}
+
 async function uploadQueueRow(
   row: QueuedMediaUpload,
-  diagnostic: MediaSyncDiagnosticContext,
-): Promise<void> {
-  const uploading: QueuedMediaUpload = {
-    ...row,
-    status: "uploading",
-    error: null,
-    attempts: row.attempts + 1,
-    updatedAt: Date.now(),
-  };
-  reportMediaSyncDiagnostic(diagnostic, "row_prepare", "started");
+): Promise<"success" | QueueUploadFailureMode> {
   try {
-    await putQueueRow(uploading);
-    reportMediaSyncDiagnostic(diagnostic, "row_prepare", "ok");
-  } catch (error) {
-    reportMediaSyncDiagnostic(
-      diagnostic,
-      "row_prepare",
-      "error",
-      mediaSyncDiagnosticErrorCode(error),
-    );
-    throw error;
-  }
-
-  let intentSettled = false;
-  try {
-    reportMediaSyncDiagnostic(diagnostic, "intent", "started");
     const { response: intentResponse, payload: intentPayload } =
       await fetchJsonWithTimeout(
         `/api/mobile/appointments/${encodeURIComponent(row.appointmentId)}/media/upload-intents`,
@@ -1426,8 +1205,6 @@ async function uploadQueueRow(
         },
         API_FETCH_TIMEOUT_MS,
       );
-    intentSettled = true;
-    reportMediaSyncDiagnostic(diagnostic, "intent", "ok");
     if (!intentResponse.ok) {
       throw responseFailure(
         intentResponse,
@@ -1459,11 +1236,6 @@ async function uploadQueueRow(
       }
     }
 
-    await putQueueRow({
-      ...uploading,
-      status: "finalizing",
-      updatedAt: Date.now(),
-    });
     const { response: completeResponse, payload: completePayload } =
       await fetchJsonWithTimeout(
         `/api/mobile/appointment-media/${encodeURIComponent(intent.mediaId)}/complete`,
@@ -1483,27 +1255,12 @@ async function uploadQueueRow(
         "media_finalize_failed",
       );
     }
-    await discardQueuedMedia(row.clientId);
+    if (!isReadyCompletion(completePayload, intent.mediaId)) {
+      throw new QueueUploadError("invalid_media_finalize_response", "retry");
+    }
+    return "success";
   } catch (error) {
-    const failureMode = uploadFailureMode(error);
-    if (!intentSettled) {
-      reportMediaSyncDiagnostic(
-        diagnostic,
-        "intent",
-        failureMode === "retry" ? "retry" : "error",
-        mediaSyncDiagnosticErrorCode(error, "server"),
-      );
-    }
-    const queued = failureMode !== "terminal";
-    await putQueueRow({
-      ...uploading,
-      status: queued ? "queued" : "failed",
-      error: error instanceof Error ? error.message : "upload_failed",
-      updatedAt: Date.now(),
-    });
-    if (failureMode === "retry") {
-      scheduleVisibleSyncRetry(row.employeeId);
-    }
+    return uploadFailureMode(error);
   }
 }
 
@@ -1526,11 +1283,6 @@ function scheduleVisibleSyncRetry(
     void syncQueuedMedia(employeeId).catch(() => undefined);
   }, delayMs);
   visibleSyncRetryTimers.set(employeeId, timer);
-}
-
-function getForegroundSyncOwner(): string {
-  foregroundSyncOwner ??= `window:${crypto.randomUUID()}`;
-  return foregroundSyncOwner;
 }
 
 export function registerMediaBackgroundSync(): Promise<void> {
@@ -1567,9 +1319,6 @@ export function syncQueuedMedia(employeeId: string): Promise<void> {
     promise: Promise.resolve(),
     rerunRequested: false,
   };
-  let diagnostic: MediaSyncDiagnosticContext | null = null;
-  let diagnosticPhase: MediaSyncDiagnosticPhase = "preflight";
-  let diagnosticErrorReported = false;
   const promise = (async () => {
     pendingQueueSyncEmployees.delete(employeeId);
     let initialRows: QueuedMediaUpload[];
@@ -1581,25 +1330,15 @@ export function syncQueuedMedia(employeeId: string): Promise<void> {
       return;
     }
     const hasSyncableRows = initialRows.some(
-      (row) =>
-        row.status === "queued" ||
-        row.status === "uploading" ||
-        row.status === "finalizing",
+      (row) => row.status === "queued" || isInterruptedQueueRow(row),
     );
     if (!hasSyncableRows && !pendingQueueSyncEmployees.has(employeeId)) {
       syncState.rerunRequested = false;
       return;
     }
-    diagnostic = {
-      runId: crypto.randomUUID(),
-      rows: initialRows,
-    };
-    reportMediaSyncDiagnostic(diagnostic, "preflight", "ok");
 
     let meResponse: Response;
     let mePayload: unknown;
-    diagnosticPhase = "session";
-    reportMediaSyncDiagnostic(diagnostic, "session", "started");
     try {
       const result = await fetchJsonWithTimeout(
         "/api/mobile/me",
@@ -1608,14 +1347,7 @@ export function syncQueuedMedia(employeeId: string): Promise<void> {
       );
       meResponse = result.response;
       mePayload = result.payload;
-    } catch (error) {
-      diagnosticErrorReported = true;
-      reportMediaSyncDiagnostic(
-        diagnostic,
-        "session",
-        "retry",
-        mediaSyncDiagnosticErrorCode(error),
-      );
+    } catch {
       void registerMediaBackgroundSync();
       scheduleVisibleSyncRetry(employeeId);
       return;
@@ -1633,168 +1365,40 @@ export function syncQueuedMedia(employeeId: string): Promise<void> {
         pendingQueueSyncEmployees.delete(employeeId);
         syncState.rerunRequested = false;
       }
-      reportMediaSyncDiagnostic(
-        diagnostic,
-        "session",
-        meResponse.status === 401 || meResponse.status >= 500
-          ? "retry"
-          : "error",
-        meResponse.status === 401
-          ? "session"
-          : meResponse.status === 403
-            ? "permission"
-            : "server",
-      );
       return;
     }
-    reportMediaSyncDiagnostic(diagnostic, "session", "ok");
     const teamMember = asRecord(asRecord(mePayload)?.["teamMember"]);
     if (teamMember?.["id"] !== employeeId) {
-      reportMediaSyncDiagnostic(diagnostic, "session", "error", "session");
       pendingQueueSyncEmployees.delete(employeeId);
       syncState.rerunRequested = false;
       return;
     }
 
-    const owner = getForegroundSyncOwner();
-    let leaseAcquired = false;
-    diagnosticPhase = "lease_acquire";
-    reportMediaSyncDiagnostic(diagnostic, "lease_acquire", "started");
-    try {
-      leaseAcquired = await acquireSyncLease(owner, employeeId);
-    } catch (error) {
-      diagnosticErrorReported = true;
-      reportMediaSyncDiagnostic(
-        diagnostic,
-        "lease_acquire",
-        "error",
-        mediaSyncDiagnosticErrorCode(error),
-      );
-      void registerMediaBackgroundSync();
-      scheduleVisibleSyncRetry(employeeId);
-      return;
-    }
-    if (!leaseAcquired) {
-      reportMediaSyncDiagnostic(
-        diagnostic,
-        "lease_acquired",
-        "busy",
-        "lease_busy",
-      );
-      void registerMediaBackgroundSync();
-      scheduleVisibleSyncRetry(employeeId);
-      return;
-    }
-    reportMediaSyncDiagnostic(diagnostic, "lease_acquired", "ok");
-
-    let leaseActive = true;
-    const heartbeat = window.setInterval(() => {
-      void renewSyncLease(owner).then((renewed) => {
-        leaseActive = renewed;
-      });
-    }, SYNC_COORDINATOR_HEARTBEAT_MS);
-
-    try {
-      diagnosticPhase = "reclaim";
-      reportMediaSyncDiagnostic(diagnostic, "reclaim", "started");
-      await reclaimInterruptedQueueRows(employeeId);
-      reportMediaSyncDiagnostic(diagnostic, "reclaim", "ok");
-      const attemptedClientIds = new Set<string>();
-      while (leaseActive) {
-        pendingQueueSyncEmployees.delete(employeeId);
-        syncState.rerunRequested = false;
-        diagnosticPhase = "queue_scan";
-        reportMediaSyncDiagnostic(diagnostic, "queue_scan", "started");
-        const allRows = await listEmployeeQueue(employeeId);
-        diagnostic.rows = allRows;
-        reportMediaSyncDiagnostic(diagnostic, "queue_scan", "ok");
-        const rows = allRows.filter(
-          (row) =>
-            row.status === "queued" && !attemptedClientIds.has(row.clientId),
-        );
-        if (!rows.length) {
-          if (
-            pendingQueueSyncEmployees.has(employeeId) ||
-            syncState.rerunRequested
-          ) {
-            continue;
-          }
-          break;
-        }
-
-        let cursor = 0;
-        const workerDiagnostic = diagnostic;
-        const worker = async () => {
-          while (cursor < rows.length && leaseActive) {
-            const row = rows[cursor];
-            cursor += 1;
-            if (!row) continue;
-            attemptedClientIds.add(row.clientId);
-            diagnosticPhase = "lease_renew";
-            reportMediaSyncDiagnostic(
-              workerDiagnostic,
-              "lease_renew",
-              "started",
-            );
-            try {
-              leaseActive = await renewSyncLease(owner);
-            } catch (error) {
-              diagnosticErrorReported = true;
-              reportMediaSyncDiagnostic(
-                workerDiagnostic,
-                "lease_renew",
-                "error",
-                mediaSyncDiagnosticErrorCode(error),
-              );
-              throw error;
-            }
-            if (!leaseActive) {
-              reportMediaSyncDiagnostic(
-                workerDiagnostic,
-                "lease_renew",
-                "error",
-                "lease_lost",
-              );
-              return;
-            }
-            reportMediaSyncDiagnostic(workerDiagnostic, "lease_renew", "ok");
-            diagnosticPhase = "row_prepare";
-            await uploadQueueRow(row, workerDiagnostic);
-          }
-        };
-        await Promise.all([worker(), worker()]);
+    const rows = initialRows.filter(
+      (row) => row.status === "queued" || isInterruptedQueueRow(row),
+    );
+    const completedClientIds: string[] = [];
+    let retryableFailure = false;
+    for (const row of rows) {
+      const outcome = await uploadQueueRow(row);
+      if (outcome === "success") {
+        completedClientIds.push(row.clientId);
+      } else if (outcome === "retry") {
+        retryableFailure = true;
+      } else if (outcome === "auth_paused") {
+        break;
       }
-    } finally {
-      window.clearInterval(heartbeat);
-      const releaseDiagnostic = diagnostic;
-      reportMediaSyncDiagnostic(releaseDiagnostic, "release", "started");
-      await releaseSyncLease(owner).then(
-        () => reportMediaSyncDiagnostic(releaseDiagnostic, "release", "ok"),
-        (error: unknown) => {
-          diagnosticErrorReported = true;
-          reportMediaSyncDiagnostic(
-            releaseDiagnostic,
-            "release",
-            "error",
-            mediaSyncDiagnosticErrorCode(error),
-          );
-          return Promise.reject(
-            error instanceof Error
-              ? error
-              : new Error("media_sync_release_failed"),
-          );
-        },
+    }
+    if (completedClientIds.length) {
+      await discardUploadedMedia(completedClientIds, employeeId).catch(
+        () => undefined,
       );
     }
-  })().catch((error) => {
-    if (diagnostic && !diagnosticErrorReported) {
-      reportMediaSyncDiagnostic(
-        diagnostic,
-        diagnosticPhase,
-        "error",
-        mediaSyncDiagnosticErrorCode(error),
-      );
+    if (retryableFailure) {
+      void registerMediaBackgroundSync();
+      scheduleVisibleSyncRetry(employeeId);
     }
+  })().catch(() => {
     void registerMediaBackgroundSync();
     scheduleVisibleSyncRetry(employeeId);
   });

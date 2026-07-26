@@ -231,10 +231,20 @@ test.describe("Mobile appointment quoted work and payments", () => {
       "**/api/mobile/appointment-media/*/complete",
       async (route) => {
         completedUploads += 1;
+        const mediaId = new URL(route.request().url()).pathname
+          .split("/")
+          .at(-2);
+        if (!mediaId) {
+          await route.fulfill({ status: 400, body: "missing media id" });
+          return;
+        }
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ ok: true }),
+          body: JSON.stringify({
+            ok: true,
+            media: { id: mediaId, status: "ready" },
+          }),
         });
       },
     );
@@ -278,13 +288,67 @@ test.describe("Mobile appointment quoted work and payments", () => {
             transaction.onabort = () => reject(transaction.error);
             transaction.oncomplete = () => {
               database.close();
+              const originalPut = IDBObjectStore.prototype.put;
+              const originalCursorUpdate = IDBCursorWithValue.prototype.update;
+              const knownQueueClientIds = new Set([
+                "22222222-2222-4222-8222-222222222222",
+              ]);
+              let mediaQueueRewriteAttempts = 0;
+              IDBObjectStore.prototype.put = function (
+                value: unknown,
+                key?: IDBValidKey,
+              ) {
+                const row =
+                  typeof value === "object" && value !== null
+                    ? (value as { clientId?: unknown })
+                    : null;
+                if (this.name === "media-upload-queue") {
+                  const clientId =
+                    typeof row?.clientId === "string" ? row.clientId : null;
+                  if (clientId && knownQueueClientIds.has(clientId)) {
+                    mediaQueueRewriteAttempts += 1;
+                    throw new DOMException(
+                      "Large Blob row rewrites are unavailable.",
+                      "UnknownError",
+                    );
+                  }
+                  if (clientId) knownQueueClientIds.add(clientId);
+                }
+                return key === undefined
+                  ? originalPut.call(this, value)
+                  : originalPut.call(this, value, key);
+              };
+              IDBCursorWithValue.prototype.update = function (value: unknown) {
+                const row =
+                  typeof value === "object" && value !== null
+                    ? (value as { clientId?: unknown })
+                    : null;
+                const clientId =
+                  typeof row?.clientId === "string" ? row.clientId : null;
+                if (clientId && knownQueueClientIds.has(clientId)) {
+                  mediaQueueRewriteAttempts += 1;
+                  throw new DOMException(
+                    "Large Blob cursor rewrites are unavailable.",
+                    "UnknownError",
+                  );
+                }
+                if (clientId) knownQueueClientIds.add(clientId);
+                return originalCursorUpdate.call(this, value);
+              };
+              (
+                window as Window & {
+                  __mediaQueueRewriteAttempts?: () => number;
+                }
+              ).__mediaQueueRewriteAttempts = () => mediaQueueRewriteAttempts;
               resolve();
             };
             const now = Date.now();
             transaction.objectStore("app-metadata").put({
-              key: "mediaSyncLease",
+              key: "mediaSyncLease:callback-v1",
+              version: 4,
               owner: "window:terminated-production-realm",
               employeeId: queuedEmployeeId,
+              heartbeatAt: now,
               expiresAt: now + 10 * 60 * 1000,
             });
             transaction.objectStore("media-upload-queue").put({
@@ -383,6 +447,135 @@ test.describe("Mobile appointment quoted work and payments", () => {
         ),
       )
       .toBe(0);
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __mediaQueueRewriteAttempts?: () => number;
+            }
+          ).__mediaQueueRewriteAttempts?.() ?? -1,
+      ),
+    ).toBe(0);
+  });
+
+  test("keeps a queued photo when finalization is not verified ready", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment();
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/media`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            quotedScopeText: "Remove the photographed item.",
+            mediaSummary: {
+              readyCount: 0,
+              pendingCount: 0,
+              coverMediaId: null,
+              needsScope: false,
+            },
+            items: [],
+            legacyAttachments: [],
+          }),
+        });
+      },
+    );
+
+    const mediaId = "33333333-3333-4333-8333-333333333333";
+    let completeRequests = 0;
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/media/upload-intents`,
+      async (route) => {
+        const origin = new URL(route.request().url()).origin;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            intents: [
+              {
+                mediaId,
+                uploadUrl: `${origin}/__e2e/unverified-media-object`,
+                headers: {},
+                alreadyCompleted: false,
+              },
+            ],
+          }),
+        });
+      },
+    );
+    await page.route("**/__e2e/unverified-media-object", async (route) => {
+      await route.fulfill({ status: 200, body: "" });
+    });
+    await page.route(
+      `**/api/mobile/appointment-media/${mediaId}/complete`,
+      async (route) => {
+        completeRequests += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true }),
+        });
+      },
+    );
+
+    await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
+    await page.getByText("E2E Contact", { exact: true }).click();
+    await page.getByText("Quoted Work", { exact: true }).click();
+    const input = page
+      .locator("label", { hasText: "Choose photos" })
+      .locator('input[type="file"]');
+    await input.setInputFiles({
+      name: "unverified.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    });
+
+    await expect.poll(() => completeRequests).toBeGreaterThan(0);
+    await expect.poll(() => input.inputValue()).toBe("");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (expectedAppointmentId) =>
+            new Promise<number>((resolve, reject) => {
+              const request = indexedDB.open("stonegate-mobile", 2);
+              request.onerror = () => reject(request.error);
+              request.onsuccess = () => {
+                const database = request.result;
+                const transaction = database.transaction(
+                  "media-upload-queue",
+                  "readonly",
+                );
+                const getAll = transaction
+                  .objectStore("media-upload-queue")
+                  .getAll();
+                getAll.onerror = () => reject(getAll.error);
+                getAll.onsuccess = () => {
+                  const remaining = (
+                    getAll.result as Array<{ appointmentId?: string }>
+                  ).filter(
+                    (row) => row.appointmentId === expectedAppointmentId,
+                  ).length;
+                  database.close();
+                  resolve(remaining);
+                };
+              };
+            }),
+          appointmentId,
+        ),
+      )
+      .toBe(1);
   });
 
   test("shares the gallery and payment controls on mobile", async ({
