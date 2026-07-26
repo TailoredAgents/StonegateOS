@@ -1,4 +1,4 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v3";
+const SHELL_CACHE = "stonegate-mobile-shell-v4";
 const DATABASE_NAME = "stonegate-mobile";
 const DATABASE_VERSION = 2;
 const SNAPSHOT_STORE = "appointment-snapshots";
@@ -12,7 +12,7 @@ const API_FETCH_TIMEOUT_MS = 45 * 1000;
 const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
 const SYNC_LEASE_KEY = "mediaSyncLease";
-const SYNC_LEASE_VERSION = 2;
+const SYNC_LEASE_VERSION = 3;
 const DEVICE_ID_KEY = "mobileDeviceId";
 const SHELL_URLS = [
   "/manifest.webmanifest",
@@ -192,22 +192,31 @@ function requestResult(request) {
 }
 
 function transactionDone(transaction) {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () =>
-      reject(transaction.error || new Error("db_transaction_failed"));
-    transaction.onabort = () =>
-      reject(transaction.error || new Error("db_transaction_aborted"));
+  const completion = new Promise((resolve, reject) => {
+    transaction.addEventListener("complete", () => resolve(), { once: true });
+    transaction.addEventListener(
+      "error",
+      () => reject(transaction.error || new Error("db_transaction_failed")),
+      { once: true },
+    );
+    transaction.addEventListener(
+      "abort",
+      () => reject(transaction.error || new Error("db_transaction_aborted")),
+      { once: true },
+    );
   });
+  void completion.catch(() => undefined);
+  return completion;
 }
 
 async function getQueue() {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readonly");
+  const completion = transactionDone(transaction);
   const rows = await requestResult(
     transaction.objectStore(QUEUE_STORE).getAll(),
   );
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return rows;
 }
@@ -215,10 +224,11 @@ async function getQueue() {
 async function getActiveEmployeeId() {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readonly");
+  const completion = transactionDone(transaction);
   const row = await requestResult(
     transaction.objectStore(METADATA_STORE).get("activeEmployeeId"),
   );
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return typeof row?.value === "string" ? row.value : null;
 }
@@ -226,6 +236,7 @@ async function getActiveEmployeeId() {
 async function getOrCreateDeviceId() {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
   const existing = await requestResult(store.get(DEVICE_ID_KEY));
   const deviceId =
@@ -242,7 +253,7 @@ async function getOrCreateDeviceId() {
       updatedAt: Date.now(),
     });
   }
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return deviceId;
 }
@@ -285,6 +296,7 @@ async function reportQueueHealth(employeeId) {
 async function acquireSyncLease(owner, employeeId) {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
   const existing = await requestResult(store.get(SYNC_LEASE_KEY));
   const now = Date.now();
@@ -293,7 +305,7 @@ async function acquireSyncLease(owner, employeeId) {
     existing.expiresAt > now &&
     existing.owner !== owner
   ) {
-    await transactionDone(transaction);
+    await completion;
     database.close();
     return false;
   }
@@ -305,7 +317,7 @@ async function acquireSyncLease(owner, employeeId) {
     heartbeatAt: now,
     expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
   });
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return true;
 }
@@ -313,6 +325,7 @@ async function acquireSyncLease(owner, employeeId) {
 async function renewSyncLease(owner) {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
   const existing = await requestResult(store.get(SYNC_LEASE_KEY));
   if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
@@ -323,7 +336,7 @@ async function renewSyncLease(owner) {
       expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
     });
   }
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return existing?.version === SYNC_LEASE_VERSION && existing.owner === owner;
 }
@@ -331,18 +344,20 @@ async function renewSyncLease(owner) {
 async function releaseSyncLease(owner) {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
   const existing = await requestResult(store.get(SYNC_LEASE_KEY));
   if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
     store.delete(SYNC_LEASE_KEY);
   }
-  await transactionDone(transaction);
+  await completion;
   database.close();
 }
 
 async function reclaimInterruptedRows(employeeId) {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(QUEUE_STORE);
   const rows = await requestResult(
     store.index("employeeId").getAll(employeeId),
@@ -361,23 +376,25 @@ async function reclaimInterruptedRows(employeeId) {
       });
     }
   }
-  await transactionDone(transaction);
+  await completion;
   database.close();
 }
 
 async function putQueue(row) {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   transaction.objectStore(QUEUE_STORE).put(row);
-  await transactionDone(transaction);
+  await completion;
   database.close();
 }
 
 async function deleteQueue(clientId) {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   transaction.objectStore(QUEUE_STORE).delete(clientId);
-  await transactionDone(transaction);
+  await completion;
   database.close();
 }
 

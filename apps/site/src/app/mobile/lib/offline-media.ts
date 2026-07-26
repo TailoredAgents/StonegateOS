@@ -20,7 +20,7 @@ const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
 const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 const STONEGATE_TIME_ZONE = "America/New_York";
 const SYNC_LEASE_KEY = "mediaSyncLease";
-const SYNC_LEASE_VERSION = 2;
+const SYNC_LEASE_VERSION = 3;
 const DEVICE_ID_KEY = "mobileDeviceId";
 const QUEUE_HEALTH_REFRESH_MS = 5 * 60 * 1000;
 const QUEUE_HEALTH_FAILURE_BACKOFF_MS = 60 * 1000;
@@ -178,13 +178,25 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 function transactionDone(transaction: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () =>
-      reject(transaction.error ?? new Error("indexed_db_transaction_error"));
-    transaction.onabort = () =>
-      reject(transaction.error ?? new Error("indexed_db_transaction_aborted"));
+  const completion = new Promise<void>((resolve, reject) => {
+    transaction.addEventListener("complete", () => resolve(), { once: true });
+    transaction.addEventListener(
+      "error",
+      () =>
+        reject(transaction.error ?? new Error("indexed_db_transaction_error")),
+      { once: true },
+    );
+    transaction.addEventListener(
+      "abort",
+      () =>
+        reject(
+          transaction.error ?? new Error("indexed_db_transaction_aborted"),
+        ),
+      { once: true },
+    );
   });
+  void completion.catch(() => undefined);
+  return completion;
 }
 
 function getQueueBroadcastChannel(): BroadcastChannel | null {
@@ -352,8 +364,9 @@ export function clearActiveOfflineIdentity(): Promise<void> {
   return openDatabase()
     .then(async (database) => {
       const transaction = database.transaction(METADATA_STORE, "readwrite");
+      const completion = transactionDone(transaction);
       transaction.objectStore(METADATA_STORE).delete("activeEmployeeId");
-      await transactionDone(transaction);
+      await completion;
       database.close();
     })
     .catch(() => undefined);
@@ -376,6 +389,7 @@ export async function saveAppointmentSnapshots(
     [SNAPSHOT_STORE, MEDIA_STORE, METADATA_STORE],
     "readwrite",
   );
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(SNAPSHOT_STORE);
   const existing = (await requestResult(
     store.index("employeeId").getAll(employeeId),
@@ -419,7 +433,7 @@ export async function saveAppointmentSnapshots(
     updatedAt: now,
   });
   await Promise.all(mediaCleanup);
-  await transactionDone(transaction);
+  await completion;
   database.close();
   rememberMobileEmployee(employeeId);
   void checkStoragePressure();
@@ -434,6 +448,7 @@ export async function getAppointmentSnapshots(
     [SNAPSHOT_STORE, MEDIA_STORE],
     "readwrite",
   );
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(SNAPSHOT_STORE);
   const rows = (await requestResult(
     store.index("employeeId").getAll(employeeId),
@@ -453,7 +468,7 @@ export async function getAppointmentSnapshots(
     );
   }
   await Promise.all(mediaCleanup);
-  await transactionDone(transaction);
+  await completion;
   database.close();
   void checkStoragePressure();
   return rows
@@ -512,6 +527,7 @@ export async function cacheAppointmentMedia(
 
   const database = await openDatabase();
   const transaction = database.transaction(MEDIA_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(MEDIA_STORE);
   await new Promise<void>((resolve, reject) => {
     const request = store
@@ -533,7 +549,7 @@ export async function cacheAppointmentMedia(
     };
   });
   for (const record of records) store.put(record);
-  await transactionDone(transaction);
+  await completion;
   database.close();
   void checkStoragePressure();
 }
@@ -544,13 +560,14 @@ export async function getCachedAppointmentMedia(
 ): Promise<OfflineMediaRecord[]> {
   const database = await openDatabase();
   const transaction = database.transaction(MEDIA_STORE, "readonly");
+  const completion = transactionDone(transaction);
   const rows = (await requestResult(
     transaction
       .objectStore(MEDIA_STORE)
       .index("appointmentId")
       .getAll(appointmentId),
   )) as OfflineMediaRecord[];
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return rows
     .filter((row) => row.employeeId === employeeId)
@@ -733,8 +750,9 @@ export async function queueMediaUpload(input: {
   };
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   transaction.objectStore(QUEUE_STORE).put(row);
-  await transactionDone(transaction);
+  await completion;
   database.close();
   dispatchQueueChange(row.employeeId, true);
   void registerMediaBackgroundSync();
@@ -747,10 +765,11 @@ export async function listEmployeeQueue(
 ): Promise<QueuedMediaUpload[]> {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readonly");
+  const completion = transactionDone(transaction);
   const rows = (await requestResult(
     transaction.objectStore(QUEUE_STORE).index("employeeId").getAll(employeeId),
   )) as QueuedMediaUpload[];
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return rows.sort((left, right) => left.createdAt - right.createdAt);
 }
@@ -758,6 +777,7 @@ export async function listEmployeeQueue(
 async function getOrCreateMobileDeviceId(): Promise<string> {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
   const existing = (await requestResult(store.get(DEVICE_ID_KEY))) as
     | { key: typeof DEVICE_ID_KEY; value?: unknown }
@@ -776,7 +796,7 @@ async function getOrCreateMobileDeviceId(): Promise<string> {
       updatedAt: Date.now(),
     });
   }
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return deviceId;
 }
@@ -869,8 +889,9 @@ export async function getAppointmentQueue(
 async function putQueueRow(row: QueuedMediaUpload): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   transaction.objectStore(QUEUE_STORE).put(row);
-  await transactionDone(transaction);
+  await completion;
   database.close();
   dispatchQueueChange(row.employeeId);
   void checkStoragePressure();
@@ -879,8 +900,9 @@ async function putQueueRow(row: QueuedMediaUpload): Promise<void> {
 export async function discardQueuedMedia(clientId: string): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   transaction.objectStore(QUEUE_STORE).delete(clientId);
-  await transactionDone(transaction);
+  await completion;
   database.close();
   dispatchQueueChange();
   void checkStoragePressure();
@@ -889,6 +911,7 @@ export async function discardQueuedMedia(clientId: string): Promise<void> {
 export async function retryQueuedMedia(clientId: string): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(QUEUE_STORE);
   const row = (await requestResult(store.get(clientId))) as
     | QueuedMediaUpload
@@ -901,7 +924,7 @@ export async function retryQueuedMedia(clientId: string): Promise<void> {
       updatedAt: Date.now(),
     } satisfies QueuedMediaUpload);
   }
-  await transactionDone(transaction);
+  await completion;
   database.close();
   if (row) dispatchQueueChange(row.employeeId, true);
 }
@@ -934,6 +957,7 @@ export function isInterruptedQueueRow(
 async function reclaimInterruptedQueueRows(employeeId: string): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(QUEUE_STORE);
   const rows = (await requestResult(
     store.index("employeeId").getAll(employeeId),
@@ -950,7 +974,7 @@ async function reclaimInterruptedQueueRows(employeeId: string): Promise<void> {
     } satisfies QueuedMediaUpload);
     changed = true;
   }
-  await transactionDone(transaction);
+  await completion;
   database.close();
   if (changed) dispatchQueueChange(employeeId);
 }
@@ -970,6 +994,7 @@ async function acquireSyncLease(
 ): Promise<boolean> {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
   const existing = (await requestResult(store.get(SYNC_LEASE_KEY))) as
     | SyncLease
@@ -980,7 +1005,7 @@ async function acquireSyncLease(
     existing.expiresAt > now &&
     existing.owner !== owner
   ) {
-    await transactionDone(transaction);
+    await completion;
     database.close();
     return false;
   }
@@ -992,7 +1017,7 @@ async function acquireSyncLease(
     heartbeatAt: now,
     expiresAt: now + SYNC_COORDINATOR_LEASE_MS,
   } satisfies SyncLease);
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return true;
 }
@@ -1000,6 +1025,7 @@ async function acquireSyncLease(
 async function renewSyncLease(owner: string): Promise<boolean> {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
   const existing = (await requestResult(store.get(SYNC_LEASE_KEY))) as
     | SyncLease
@@ -1011,7 +1037,7 @@ async function renewSyncLease(owner: string): Promise<boolean> {
       expiresAt: Date.now() + SYNC_COORDINATOR_LEASE_MS,
     } satisfies SyncLease);
   }
-  await transactionDone(transaction);
+  await completion;
   database.close();
   return existing?.version === SYNC_LEASE_VERSION && existing.owner === owner;
 }
@@ -1019,6 +1045,7 @@ async function renewSyncLease(owner: string): Promise<boolean> {
 async function releaseSyncLease(owner: string): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
+  const completion = transactionDone(transaction);
   const store = transaction.objectStore(METADATA_STORE);
   const existing = (await requestResult(store.get(SYNC_LEASE_KEY))) as
     | SyncLease
@@ -1026,7 +1053,7 @@ async function releaseSyncLease(owner: string): Promise<void> {
   if (existing?.version === SYNC_LEASE_VERSION && existing.owner === owner) {
     store.delete(SYNC_LEASE_KEY);
   }
-  await transactionDone(transaction);
+  await completion;
   database.close();
 }
 
