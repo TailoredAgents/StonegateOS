@@ -292,9 +292,15 @@ export async function createMediaUploadUrl(input: {
 }): Promise<{ url: string; headers: Record<string, string>; expiresAt: Date }> {
   await ensureBucket();
   const storage = getStorage();
-  const checksum = input.checksumSha256Hex
-    ? Buffer.from(input.checksumSha256Hex, "hex").toString("base64")
-    : undefined;
+  // R2 does not support a full-object SHA-256 checksum on a single PutObject.
+  // Keep the client digest in PostgreSQL and verify it from the downloaded
+  // staging bytes during finalization instead of signing an unsupported R2
+  // request header. S3-compatible development storage can still validate the
+  // checksum at upload time.
+  const checksum =
+    getMediaStorageProvider() === "s3" && input.checksumSha256Hex
+      ? Buffer.from(input.checksumSha256Hex, "hex").toString("base64")
+      : undefined;
   const command = new PutObjectCommand({
     Bucket: storage.config.bucket,
     Key: input.key,
