@@ -71,6 +71,30 @@ describe("appointment media object storage", () => {
     expect(getMediaStorageProvider()).toBe("r2");
   });
 
+  it("does not sign R2 browser uploads with an unsupported full-object SHA-256 header", async () => {
+    process.env["MEDIA_OBJECT_ENDPOINT"] =
+      "https://abc123.r2.cloudflarestorage.com";
+    process.env["MEDIA_OBJECT_REGION"] = "auto";
+    process.env["MEDIA_OBJECT_BUCKET"] = "media-test";
+    process.env["MEDIA_OBJECT_ACCESS_KEY_ID"] = "key";
+    process.env["MEDIA_OBJECT_SECRET_ACCESS_KEY"] = "secret";
+    process.env["MEDIA_OBJECT_FORCE_PATH_STYLE"] = "1";
+    process.env["MEDIA_OBJECT_AUTO_CREATE_BUCKET"] = "0";
+
+    const intent = await createMediaUploadUrl({
+      key: "staging/example/photo.jpg",
+      contentType: "image/jpeg",
+      byteLength: 123,
+      checksumSha256Hex: "ab".repeat(32),
+      expiresInSeconds: 600,
+    });
+
+    expect(intent.headers).toEqual({ "content-type": "image/jpeg" });
+    expect(
+      new URL(intent.url).searchParams.get("X-Amz-SignedHeaders"),
+    ).not.toContain("x-amz-checksum-sha256");
+  });
+
   it("verifies bucket access with one read-only HEAD request", async () => {
     process.env["MEDIA_OBJECT_ENDPOINT"] = "http://localhost:4566";
     process.env["MEDIA_OBJECT_REGION"] = "us-east-1";
