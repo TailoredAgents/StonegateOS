@@ -1,4 +1,4 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v9";
+const SHELL_CACHE = "stonegate-mobile-shell-v10";
 const DATABASE_NAME = "stonegate-mobile";
 const DATABASE_VERSION = 2;
 const SNAPSHOT_STORE = "appointment-snapshots";
@@ -219,12 +219,30 @@ async function getQueue() {
   const database = await openDatabase();
   const transaction = database.transaction(QUEUE_STORE, "readonly");
   const completion = transactionDone(transaction);
-  const rows = await requestResult(
-    transaction.objectStore(QUEUE_STORE).getAll(),
+  const keys = await requestResult(
+    transaction.objectStore(QUEUE_STORE).getAllKeys(),
   );
   await completion;
   database.close();
-  return rows;
+
+  const rows = await Promise.all(
+    keys
+      .filter((key) => typeof key === "string")
+      .map(async (clientId) => {
+        const rowDatabase = await openDatabase();
+        const rowTransaction = rowDatabase.transaction(QUEUE_STORE, "readonly");
+        const rowCompletion = transactionDone(rowTransaction);
+        const row = await requestResult(
+          // Primary-key reads retain the explicit file path for WebKit's
+          // file-backed IndexedDB Blobs.
+          rowTransaction.objectStore(QUEUE_STORE).get(clientId),
+        );
+        await rowCompletion;
+        rowDatabase.close();
+        return row;
+      }),
+  );
+  return rows.filter(Boolean);
 }
 
 async function getActiveEmployeeId() {
