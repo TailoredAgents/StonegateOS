@@ -218,6 +218,7 @@ export function MobileQuotedWorkPanel({
   const [message, setMessage] = React.useState<string | null>(null);
   const [viewer, setViewer] = React.useState<MediaItem | null>(null);
   const cachedObjectUrls = React.useRef<string[]>([]);
+  const scopeRevision = React.useRef(0);
 
   const publishSummary = React.useCallback(
     (nextSummary: AppointmentMediaSummary, nextScope?: string | null): void => {
@@ -272,6 +273,7 @@ export function MobileQuotedWorkPanel({
   }, [appointmentId, canManage]);
 
   const load = React.useCallback(async () => {
+    const scopeRevisionAtStart = scopeRevision.current;
     setLoading(true);
     setMessage(null);
     try {
@@ -292,13 +294,16 @@ export function MobileQuotedWorkPanel({
           ? payload.legacyAttachments
           : [],
       );
-      setScope(payload.quotedScopeText ?? initialScope ?? "");
+      const loadedScope = payload.quotedScopeText ?? initialScope ?? "";
+      const canApplyLoadedScope =
+        scopeRevision.current === scopeRevisionAtStart;
+      if (canApplyLoadedScope) setScope(loadedScope);
       if (payload.mediaSummary) {
         setSummary(payload.mediaSummary);
         onScopeRequirementChange?.(payload.mediaSummary.needsScope);
         publishSummary(
           payload.mediaSummary,
-          payload.quotedScopeText ?? initialScope ?? null,
+          canApplyLoadedScope ? loadedScope : undefined,
         );
       }
       setCaptionDrafts(
@@ -444,6 +449,9 @@ export function MobileQuotedWorkPanel({
       setMessage("Add the quoted-to-remove summary before saving.");
       return;
     }
+    // An older gallery request may still be in flight. Keep its stale scope
+    // from replacing the text the employee is saving now.
+    scopeRevision.current += 1;
     setBusy("scope");
     const response = await fetch(
       `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/quoted-scope`,
@@ -457,6 +465,7 @@ export function MobileQuotedWorkPanel({
       setMessage(await readError(response, "Unable to save the scope."));
     } else {
       const nextSummary = { ...summary, needsScope: false };
+      setScope(nextScope);
       setSummary(nextSummary);
       onScopeRequirementChange?.(false);
       publishSummary(nextSummary, nextScope);
@@ -648,7 +657,10 @@ export function MobileQuotedWorkPanel({
               <>
                 <textarea
                   value={scope}
-                  onChange={(event) => setScope(event.target.value)}
+                  onChange={(event) => {
+                    scopeRevision.current += 1;
+                    setScope(event.target.value);
+                  }}
                   maxLength={4000}
                   rows={4}
                   className="mt-2 w-full resize-y rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base leading-6 text-white outline-none focus:border-cyan-300"

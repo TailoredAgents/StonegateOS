@@ -331,6 +331,86 @@ test.describe("Mobile appointment quoted work and payments", () => {
     ).toBeVisible();
   });
 
+  test("keeps a just-saved scope when an older gallery response finishes late", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment();
+    let mediaRequests = 0;
+    let staleRequestStarted = false;
+    let releaseStaleRequest: (() => void) | null = null;
+    const staleRequestGate = new Promise<void>((resolve) => {
+      releaseStaleRequest = resolve;
+    });
+    const emptyMediaResponse = {
+      quotedScopeText: null,
+      mediaSummary: {
+        readyCount: 0,
+        pendingCount: 0,
+        coverMediaId: null,
+        needsScope: false,
+      },
+      items: [],
+      legacyAttachments: [],
+    };
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/media`,
+      async (route) => {
+        mediaRequests += 1;
+        if (mediaRequests > 1) {
+          staleRequestStarted = true;
+          await staleRequestGate;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(emptyMediaResponse),
+        });
+      },
+    );
+    let savedScope = "";
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/quoted-scope`,
+      async (route) => {
+        const body = route.request().postDataJSON() as {
+          quotedScopeText?: string;
+        };
+        savedScope = body.quotedScopeText ?? "";
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, quotedScopeText: savedScope }),
+        });
+      },
+    );
+
+    await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
+    await expect.poll(() => mediaRequests).toBeGreaterThan(0);
+    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    await card.getByRole("button", { name: /E2E Contact/u }).click();
+    await card.getByText("Quoted Work", { exact: true }).click();
+    await expect.poll(() => staleRequestStarted).toBe(true);
+    await page.getByRole("button", { name: "Manage quoted work" }).click();
+
+    const nextScope = "Remove the blue chair shown in the customer photo.";
+    const scope = page.locator('textarea[placeholder^="Example: Remove"]');
+    await scope.fill(nextScope);
+    await page.getByRole("button", { name: "Save scope" }).click();
+    await expect.poll(() => savedScope).toBe(nextScope);
+    await expect(
+      page.getByText("Quoted scope saved. Any waiting photos will upload now."),
+    ).toBeVisible();
+
+    releaseStaleRequest?.();
+    await expect.poll(() => mediaRequests).toBeGreaterThanOrEqual(2);
+    await expect(scope).toHaveValue(nextScope);
+  });
+
   test("recovers a legacy Blob queue row when one reader never settles", async ({
     page,
     isMobile,
