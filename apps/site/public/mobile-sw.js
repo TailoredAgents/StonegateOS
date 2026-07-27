@@ -1,6 +1,7 @@
 const SHELL_CACHE = "stonegate-mobile-shell-v11";
 const DATABASE_NAME = "stonegate-mobile";
 const DATABASE_VERSION = 3;
+// Version 3 keeps queued media binary-safe across WebKit and Chromium.
 const SNAPSHOT_STORE = "appointment-snapshots";
 const MEDIA_STORE = "appointment-media";
 const QUEUE_STORE = "media-upload-queue";
