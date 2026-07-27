@@ -1,7 +1,9 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import * as React from "react";
 import type { OfflinePaymentSummary } from "./lib/offline-media";
+import { publishMobileAppointmentSummary } from "./mobile-appointment-summary";
 
 export type AppointmentPaymentSummary = OfflinePaymentSummary;
 
@@ -112,6 +114,8 @@ async function errorMessage(
       quoted_scope_required:
         "Add the quoted-to-remove summary before taking payment.",
       appointment_already_paid: "This appointment is already paid.",
+      appointment_not_collectible:
+        "Payments cannot be collected for a canceled, no-show, or quote-only appointment.",
       final_total_required: "Set the final job total first.",
       owner_required_after_payment:
         "Only an owner can change the total after payment starts.",
@@ -142,6 +146,7 @@ export function MobilePaymentPanel({
   isOwner: boolean;
   needsScope: boolean;
 }) {
+  const router = useRouter();
   const [summary, setSummary] = React.useState(initialSummary);
   const [rows, setRows] = React.useState<PaymentRow[]>([]);
   const [loaded, setLoaded] = React.useState(false);
@@ -160,6 +165,17 @@ export function MobilePaymentPanel({
   );
   const [manualTip, setManualTip] = React.useState("");
   const [manualNote, setManualNote] = React.useState("");
+
+  const applySummary = React.useCallback(
+    (nextSummary: AppointmentPaymentSummary) => {
+      setSummary(nextSummary);
+      publishMobileAppointmentSummary({
+        appointmentId,
+        paymentSummary: nextSummary,
+      });
+    },
+    [appointmentId],
+  );
 
   React.useEffect(() => {
     const update = () => setOnline(navigator.onLine);
@@ -182,7 +198,7 @@ export function MobilePaymentPanel({
     if (response.ok) {
       const payload = (await response.json()) as PaymentsResponse;
       if (payload.paymentSummary) {
-        setSummary(payload.paymentSummary);
+        applySummary(payload.paymentSummary);
         setFinalTotal(
           payload.paymentSummary.jobTotalCents == null
             ? ""
@@ -195,7 +211,7 @@ export function MobilePaymentPanel({
       setMessage(await errorMessage(response, "Unable to load payments."));
     }
     setLoading(false);
-  }, [appointmentId]);
+  }, [appointmentId, applySummary]);
 
   const saveFinalTotal = async (): Promise<boolean> => {
     const finalTotalCents = centsFromDollars(finalTotal);
@@ -226,17 +242,8 @@ export function MobilePaymentPanel({
       );
       return false;
     }
-    setSummary((current) => ({
-      ...current,
-      jobTotalCents: finalTotalCents,
-      balanceCents: Math.max(finalTotalCents - current.paidTowardJobCents, 0),
-      status:
-        current.paidTowardJobCents === 0
-          ? "unpaid"
-          : current.paidTowardJobCents >= finalTotalCents
-            ? "paid"
-            : "partial",
-    }));
+    await load().catch(() => undefined);
+    router.refresh();
     return true;
   };
 
@@ -328,13 +335,14 @@ export function MobilePaymentPanel({
       const payload = (await response.json().catch(() => null)) as {
         paymentSummary?: AppointmentPaymentSummary;
       } | null;
-      if (payload?.paymentSummary) setSummary(payload.paymentSummary);
+      if (payload?.paymentSummary) applySummary(payload.paymentSummary);
       setMessage(
         `${manualTender === "cash" ? "Cash" : "Check"} payment recorded. Job completion is still separate.`,
       );
       setManualTip("");
       setManualNote("");
       await load();
+      router.refresh();
     }
     setBusy(null);
   };

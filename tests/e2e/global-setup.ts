@@ -49,5 +49,13 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
       permissionsDeny: ["payments.read", "payments.collect"],
       siteBase,
     }),
+    bootstrapTeamStorage({
+      filename: "tests/e2e/storage/mobile-appointment-update-denied.json",
+      name: "E2E Appointment Update Denied",
+      email: "e2e-mobile-appointment-update-denied@mystos.test",
+      role: "sales",
+      permissionsDeny: ["appointments.update"],
+      siteBase,
+    }),
   ]);
 }

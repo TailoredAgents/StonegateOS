@@ -603,6 +603,15 @@ function isCanceledEvent(event: CalendarEvent): boolean {
   return status === "canceled" || status === "cancelled";
 }
 
+function canCollectPaymentForEvent(event: CalendarEvent): boolean {
+  const status = (event.status ?? "").trim().toLowerCase();
+  return (
+    !isCanceledEvent(event) &&
+    status !== "no_show" &&
+    !isQuoteOnlyAppointmentType(event.appointmentType)
+  );
+}
+
 function eventDayKey(event: CalendarEvent): string {
   return formatDayKey(new Date(event.start));
 }
@@ -1299,6 +1308,9 @@ function MobileWeekAgenda({
                       appointmentId &&
                       event.source === "db",
                   );
+                  const isQuoteOnly = isQuoteOnlyAppointmentType(
+                    event.appointmentType,
+                  );
                   const mapsHref = buildMapsDirectionsHref(event.address);
                   return (
                     <MobileAppointmentCard
@@ -1315,7 +1327,9 @@ function MobileWeekAgenda({
                         appointmentId ? eventMediaSummary(event) : null
                       }
                       paymentSummary={
-                        appointmentId ? eventPaymentSummary(event) : null
+                        appointmentId && !isQuoteOnly
+                          ? eventPaymentSummary(event)
+                          : null
                       }
                       amountLabel={formatEventAmountBadge(event)}
                       hasDetails={Boolean(appointmentId)}
@@ -1331,13 +1345,41 @@ function MobileWeekAgenda({
                             paymentSummary={eventPaymentSummary(event)}
                             canCaptureMedia={canCaptureMedia}
                             canManageMedia={canManageMedia}
-                            canReadPayments={canReadPayments}
+                            canReadPayments={canReadPayments && !isQuoteOnly}
                             canCollectPayments={
                               canCollectPayments &&
-                              !isQuoteOnlyAppointmentType(event.appointmentType)
+                              canCollectPaymentForEvent(event)
                             }
                             isOwner={isOwner}
                           />
+                        ) : null}
+
+                        {appointmentId &&
+                        event.source === "db" &&
+                        canOpenMessageThreads ? (
+                          <form action={openMobileAppointmentThreadAction}>
+                            <input
+                              type="hidden"
+                              name="appointmentId"
+                              value={appointmentId}
+                            />
+                            <input type="hidden" name="date" value={dayKey} />
+                            <input
+                              type="hidden"
+                              name="screen"
+                              value="calendar"
+                            />
+                            <button
+                              type="submit"
+                              className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200"
+                            >
+                              <MessageSquare
+                                className="h-4 w-4"
+                                aria-hidden="true"
+                              />
+                              Message
+                            </button>
+                          </form>
                         ) : null}
 
                         {canUpdate ? (
@@ -1352,35 +1394,6 @@ function MobileWeekAgenda({
                               currentTeamMemberName={currentTeamMemberName}
                               isOwner={isOwner}
                             />
-                            {canOpenMessageThreads ? (
-                              <form action={openMobileAppointmentThreadAction}>
-                                <input
-                                  type="hidden"
-                                  name="appointmentId"
-                                  value={appointmentId}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="date"
-                                  value={dayKey}
-                                />
-                                <input
-                                  type="hidden"
-                                  name="screen"
-                                  value="calendar"
-                                />
-                                <button
-                                  type="submit"
-                                  className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200"
-                                >
-                                  <MessageSquare
-                                    className="h-4 w-4"
-                                    aria-hidden="true"
-                                  />
-                                  Message
-                                </button>
-                              </form>
-                            ) : null}
                             <details className="rounded-md border border-white/10 bg-slate-900 px-3">
                               <summary className="flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-slate-300">
                                 More appointment actions
@@ -3021,6 +3034,9 @@ export default async function MobileHomePage({
                           appointmentId &&
                           event.source === "db",
                       );
+                      const isQuoteOnly = isQuoteOnlyAppointmentType(
+                        event.appointmentType,
+                      );
                       const mapsHref = buildMapsDirectionsHref(event.address);
                       return (
                         <MobileAppointmentCard
@@ -3037,7 +3053,9 @@ export default async function MobileHomePage({
                             appointmentId ? eventMediaSummary(event) : null
                           }
                           paymentSummary={
-                            appointmentId ? eventPaymentSummary(event) : null
+                            appointmentId && !isQuoteOnly
+                              ? eventPaymentSummary(event)
+                              : null
                           }
                           amountLabel={formatEventAmountBadge(event)}
                           hasDetails={Boolean(appointmentId)}
@@ -3053,12 +3071,12 @@ export default async function MobileHomePage({
                                 paymentSummary={eventPaymentSummary(event)}
                                 canCaptureMedia={canCaptureMedia}
                                 canManageMedia={canManageMedia}
-                                canReadPayments={canReadPayments}
+                                canReadPayments={
+                                  canReadPayments && !isQuoteOnly
+                                }
                                 canCollectPayments={
                                   canCollectPayments &&
-                                  !isQuoteOnlyAppointmentType(
-                                    event.appointmentType,
-                                  )
+                                  canCollectPaymentForEvent(event)
                                 }
                                 isOwner={session.isOwner}
                               />
@@ -3099,7 +3117,9 @@ export default async function MobileHomePage({
                               </form>
                             </details>
                           ) : null}
-                          {canUpdate && canOpenMessageThreads ? (
+                          {appointmentId &&
+                          event.source === "db" &&
+                          canOpenMessageThreads ? (
                             <div>
                               <form action={openMobileAppointmentThreadAction}>
                                 <input

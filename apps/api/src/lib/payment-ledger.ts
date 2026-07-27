@@ -32,6 +32,20 @@ export const PAYMENT_MUTATION_BLOCKING_ATTEMPT_STATUSES = [
   ...UNRESOLVED_SQUARE_ATTEMPT_STATUSES,
 ] as const;
 
+export function canCollectAppointmentPayment(
+  appointmentStatus: string | null | undefined,
+  appointmentType?: string | null,
+): boolean {
+  const normalizedStatus = appointmentStatus?.trim().toLowerCase() ?? "";
+  const normalizedType = appointmentType?.trim().toLowerCase() ?? "";
+  return (
+    normalizedStatus !== "canceled" &&
+    normalizedStatus !== "no_show" &&
+    normalizedType !== "in_person_quote" &&
+    normalizedType !== "in_person_estimate"
+  );
+}
+
 export function requiresSquareAttemptReconciliation(
   status: string | null | undefined,
 ): boolean {

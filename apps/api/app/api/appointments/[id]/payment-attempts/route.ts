@@ -12,6 +12,7 @@ import {
 import { isSquarePosEnabled } from "@/lib/payment-feature-flags";
 import {
   ACTIVE_PAYMENT_ATTEMPT_STATUSES,
+  canCollectAppointmentPayment,
   canRetrySquareAttempt,
   expireStalePaymentAttemptsForAppointment,
   getActivePaymentAttempt,
@@ -162,6 +163,7 @@ export async function POST(
         reused: boolean;
       }
     | { kind: "not_found" }
+    | { kind: "appointment_not_collectible"; appointmentStatus: string }
     | { kind: "scope_required" }
     | { kind: "total_required" }
     | { kind: "already_paid" }
@@ -174,12 +176,20 @@ export async function POST(
         .select({
           id: appointments.id,
           finalTotalCents: appointments.finalTotalCents,
+          status: appointments.status,
+          type: appointments.type,
         })
         .from(appointments)
         .where(eq(appointments.id, appointmentId))
         .limit(1)
         .for("update");
       if (!appointment) return { kind: "not_found" as const };
+      if (!canCollectAppointmentPayment(appointment.status, appointment.type)) {
+        return {
+          kind: "appointment_not_collectible" as const,
+          appointmentStatus: appointment.status,
+        };
+      }
       const lockedScope = await getAppointmentScopeState(appointmentId, tx);
       if (lockedScope.needsScope) {
         return { kind: "scope_required" as const };
@@ -324,10 +334,7 @@ export async function POST(
                   and(
                     eq(paymentAttempts.appointmentId, appointmentId),
                     eq(paymentAttempts.provider, "square"),
-                    eq(
-                      paymentAttempts.status,
-                      RETRYABLE_SQUARE_ATTEMPT_STATUS,
-                    ),
+                    eq(paymentAttempts.status, RETRYABLE_SQUARE_ATTEMPT_STATUS),
                   ),
                 )
                 .orderBy(desc(paymentAttempts.updatedAt))
@@ -380,10 +387,7 @@ export async function POST(
             and(
               eq(paymentAttempts.id, retryableAttempt.id),
               eq(paymentAttempts.appointmentId, appointmentId),
-              eq(
-                paymentAttempts.status,
-                RETRYABLE_SQUARE_ATTEMPT_STATUS,
-              ),
+              eq(paymentAttempts.status, RETRYABLE_SQUARE_ATTEMPT_STATUS),
             ),
           )
           .returning({
@@ -481,6 +485,17 @@ export async function POST(
     return NextResponse.json(
       { error: "appointment_not_found" },
       { status: 404 },
+    );
+  }
+  if (result.kind === "appointment_not_collectible") {
+    return NextResponse.json(
+      {
+        error: "appointment_not_collectible",
+        appointmentStatus: result.appointmentStatus,
+        message:
+          "Payments cannot be collected for canceled, no-show, or quote-only appointments.",
+      },
+      { status: 409 },
     );
   }
   if (result.kind === "total_required") {

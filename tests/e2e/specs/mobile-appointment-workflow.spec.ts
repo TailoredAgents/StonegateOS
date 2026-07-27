@@ -90,7 +90,10 @@ async function openSeededPayment(
   startAt: Date,
 ): Promise<void> {
   await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-  await page.getByText("E2E Contact", { exact: true }).click();
+  await page
+    .locator(`[data-appointment-id="${appointmentId}"]`)
+    .getByRole("button", { name: /E2E Contact/u })
+    .click();
   await page.getByText("Payment", { exact: true }).click();
 }
 
@@ -133,13 +136,13 @@ test.describe("Mobile appointment quoted work and payments", () => {
       "This workflow is covered by the mobile browser projects.",
     );
 
-    const { startAt } = await seededAppointment();
+    const { appointmentId, startAt } = await seededAppointment();
     const appointmentDay = easternDayKey(startAt);
 
     for (const screen of ["myday", "calendar"] as const) {
       await page.goto(`/mobile?screen=${screen}&date=${appointmentDay}`);
 
-      const card = page.getByRole("article").filter({ hasText: "E2E Contact" });
+      const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
       await expect(card).toBeVisible();
 
       const toggle = card.getByRole("button", {
@@ -149,17 +152,11 @@ test.describe("Mobile appointment quoted work and payments", () => {
         name: /^Open directions to /u,
       });
 
-      const initiallyExpanded =
-        (await toggle.getAttribute("aria-expanded")) === "true";
-      if (screen === "calendar") {
-        expect(initiallyExpanded).toBe(false);
-      }
-      if (!initiallyExpanded) {
-        await expect(
-          card.getByText("Quoted Work", { exact: true }),
-        ).toHaveCount(0);
-        await expect(card.getByText("Payment", { exact: true })).toHaveCount(0);
-      }
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(card.getByText("Quoted Work", { exact: true })).toHaveCount(
+        0,
+      );
+      await expect(card.getByText("Payment", { exact: true })).toHaveCount(0);
 
       await expect(directions).toBeVisible();
       await expect(directions).toHaveAttribute(
@@ -177,7 +174,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       ).toHaveCount(0);
       await expectNoEtaControls(card);
 
-      if (!initiallyExpanded) await toggle.click();
+      await toggle.click();
       await expect(toggle).toHaveAttribute("aria-expanded", "true");
       await expect(
         card.getByText("Quoted Work", { exact: true }),
@@ -1015,6 +1012,16 @@ test.describe("Mobile appointment quoted work and payments", () => {
       await expect(
         page.getByText("$0.00 remaining", { exact: true }),
       ).toBeVisible();
+
+      const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+      const cardToggle = card.getByRole("button", {
+        name: /E2E Contact/u,
+      });
+      await cardToggle.click();
+      await expect(cardToggle).toHaveAttribute("aria-expanded", "false");
+      await expect(card.getByText("Paid", { exact: true })).toBeVisible();
+      await expect(card.getByText("$325 due", { exact: true })).toHaveCount(0);
+
       expect(manualRequests).toBe(1);
       expect(manualPayload).toMatchObject({
         tenderType: tender,
@@ -1103,10 +1110,14 @@ test.describe("Mobile appointment quoted work and payments", () => {
       "This workflow is covered by the mobile browser projects.",
     );
 
-    const { startAt } = await seededAppointment();
+    const { appointmentId, startAt } = await seededAppointment();
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    await page.getByText("E2E Contact", { exact: true }).click();
+    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    const cardToggle = card.getByRole("button", {
+      name: /E2E Contact/u,
+    });
+    await cardToggle.click();
     await page.getByText("Quoted Work", { exact: true }).click();
     await page.getByRole("button", { name: "Manage quoted work" }).click();
 
@@ -1134,6 +1145,25 @@ test.describe("Mobile appointment quoted work and payments", () => {
     ).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("Staff photo", { exact: true })).toBeVisible();
     await expect(page.getByText("blue-chair.jpg", { exact: true })).toHaveCount(
+      0,
+    );
+
+    await cardToggle.click();
+    await expect(cardToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(
+      card.getByText(
+        "Quoted work: Remove the blue chair shown in the crew photo.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    const photoCount = card.getByText(/^\d+ photos?$/u);
+    await expect(photoCount).toBeVisible();
+    await expect
+      .poll(async () =>
+        Number.parseInt((await photoCount.textContent()) ?? "0", 10),
+      )
+      .toBeGreaterThan(0);
+    await expect(card.getByText("Scope needed", { exact: true })).toHaveCount(
       0,
     );
   });
@@ -1348,5 +1378,45 @@ test.describe("Mobile payment permission boundary", () => {
       },
     );
     expect(manualResponse.status()).toBe(403);
+  });
+});
+
+test.describe("Mobile appointment action permission boundary", () => {
+  test.use({
+    storageState: "tests/e2e/storage/mobile-appointment-update-denied.json",
+  });
+
+  test("keeps messaging available without appointment update access", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment();
+    const appointmentDay = easternDayKey(startAt);
+
+    for (const screen of ["myday", "calendar"] as const) {
+      await page.goto(`/mobile?screen=${screen}&date=${appointmentDay}`);
+      const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+      const toggle = card.getByRole("button", {
+        name: /E2E Contact/u,
+      });
+
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await toggle.click();
+      await expect(
+        card.getByRole("button", { name: "Message", exact: true }),
+      ).toBeVisible();
+      await expect(card.getByText("Complete job", { exact: true })).toHaveCount(
+        0,
+      );
+      await expect(
+        card.getByText("More appointment actions", { exact: true }),
+      ).toHaveCount(0);
+      await expect(card.getByText("Add note", { exact: true })).toHaveCount(0);
+    }
   });
 });

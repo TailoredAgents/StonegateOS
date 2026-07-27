@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import * as React from "react";
 import {
   MOBILE_MEDIA_QUEUE_EVENT,
@@ -13,6 +14,7 @@ import {
   syncQueuedMedia,
   type QueuedMediaUpload,
 } from "./lib/offline-media";
+import { publishMobileAppointmentSummary } from "./mobile-appointment-summary";
 
 export type AppointmentMediaSummary = {
   readyCount: number;
@@ -160,6 +162,7 @@ export function MobileQuotedWorkPanel({
   canManage: boolean;
   onScopeRequirementChange?: (needsScope: boolean) => void;
 }) {
+  const router = useRouter();
   const [loaded, setLoaded] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [scope, setScope] = React.useState(initialScope ?? "");
@@ -189,6 +192,17 @@ export function MobileQuotedWorkPanel({
   const [message, setMessage] = React.useState<string | null>(null);
   const [viewer, setViewer] = React.useState<MediaItem | null>(null);
   const cachedObjectUrls = React.useRef<string[]>([]);
+
+  const publishSummary = React.useCallback(
+    (nextSummary: AppointmentMediaSummary, nextScope?: string | null): void => {
+      publishMobileAppointmentSummary({
+        appointmentId,
+        ...(nextScope !== undefined ? { quotedScopeText: nextScope } : {}),
+        mediaSummary: nextSummary,
+      });
+    },
+    [appointmentId],
+  );
 
   const refreshQueue = React.useCallback(async () => {
     const rows = await getAppointmentQueue(employeeId, appointmentId).catch(
@@ -256,6 +270,10 @@ export function MobileQuotedWorkPanel({
       if (payload.mediaSummary) {
         setSummary(payload.mediaSummary);
         onScopeRequirementChange?.(payload.mediaSummary.needsScope);
+        publishSummary(
+          payload.mediaSummary,
+          payload.quotedScopeText ?? initialScope ?? null,
+        );
       }
       setCaptionDrafts(
         Object.fromEntries(
@@ -305,6 +323,7 @@ export function MobileQuotedWorkPanel({
     employeeId,
     initialScope,
     onScopeRequirementChange,
+    publishSummary,
     refreshQueue,
   ]);
 
@@ -319,7 +338,9 @@ export function MobileQuotedWorkPanel({
     const onQueueChange = () => {
       void refreshQueue();
       void syncQueuedMedia(employeeId).catch(() => undefined);
-      if (loaded) void load();
+      if (loaded) {
+        void load().then(() => router.refresh());
+      }
     };
     const queueTimer = window.setInterval(() => {
       void refreshQueue();
@@ -329,7 +350,7 @@ export function MobileQuotedWorkPanel({
       window.removeEventListener(MOBILE_MEDIA_QUEUE_EVENT, onQueueChange);
       window.clearInterval(queueTimer);
     };
-  }, [employeeId, load, loaded, refreshQueue]);
+  }, [employeeId, load, loaded, refreshQueue, router]);
 
   const addFiles = async (files: FileList | null, input: HTMLInputElement) => {
     try {
@@ -359,6 +380,7 @@ export function MobileQuotedWorkPanel({
       await syncQueuedMedia(employeeId).catch(() => undefined);
       await refreshQueue();
       await load();
+      router.refresh();
     } finally {
       input.value = "";
       setBusy(null);
@@ -383,9 +405,12 @@ export function MobileQuotedWorkPanel({
     if (!response.ok) {
       setMessage(await readError(response, "Unable to save the scope."));
     } else {
-      setSummary((current) => ({ ...current, needsScope: false }));
+      const nextSummary = { ...summary, needsScope: false };
+      setSummary(nextSummary);
       onScopeRequirementChange?.(false);
+      publishSummary(nextSummary, nextScope);
       setMessage("Quoted scope saved.");
+      router.refresh();
     }
     setBusy(null);
   };
@@ -408,6 +433,7 @@ export function MobileQuotedWorkPanel({
       setMessage(await readError(response, "Unable to update that photo."));
     } else {
       await load();
+      router.refresh();
     }
     setBusy(null);
   };
@@ -430,6 +456,7 @@ export function MobileQuotedWorkPanel({
     } else {
       await load();
       await loadManageData();
+      router.refresh();
     }
     setBusy(null);
   };
@@ -446,6 +473,7 @@ export function MobileQuotedWorkPanel({
     } else {
       await Promise.all([load(), loadManageData()]);
       setMessage("Photo restored.");
+      router.refresh();
     }
     setBusy(null);
   };
@@ -486,6 +514,7 @@ export function MobileQuotedWorkPanel({
       });
       await Promise.all([load(), loadManageData()]);
       setMessage("Photo moved to the selected appointment.");
+      router.refresh();
     }
     setBusy(null);
   };

@@ -4,6 +4,10 @@ import * as React from "react";
 import { ChevronDown, MapPin } from "lucide-react";
 import type { AppointmentPaymentSummary } from "./MobilePaymentPanel";
 import type { AppointmentMediaSummary } from "./MobileQuotedWorkPanel";
+import {
+  MOBILE_APPOINTMENT_SUMMARY_EVENT,
+  type MobileAppointmentSummaryEventDetail,
+} from "./mobile-appointment-summary";
 
 type AppointmentCardStatusTone =
   | "default"
@@ -57,6 +61,34 @@ function formatMoney(cents: number): string {
     currency: "USD",
     maximumFractionDigits: cents % 100 === 0 ? 0 : 2,
   }).format(cents / 100);
+}
+
+function mediaSummarySnapshot(
+  summary: AppointmentMediaSummary | null | undefined,
+): string {
+  if (!summary) return "none";
+  return [
+    summary.readyCount,
+    summary.pendingCount,
+    summary.coverMediaId ?? "",
+    summary.needsScope ? "1" : "0",
+  ].join("|");
+}
+
+function paymentSummarySnapshot(
+  summary: AppointmentPaymentSummary | null | undefined,
+): string {
+  if (!summary) return "none";
+  return [
+    summary.status,
+    summary.jobTotalCents ?? "",
+    summary.paidTowardJobCents,
+    summary.tipCents,
+    summary.refundedCents,
+    summary.balanceCents ?? "",
+    summary.activeAttemptId ?? "",
+    summary.latestReceiptUrl ?? "",
+  ].join("|");
 }
 
 function paymentChip(
@@ -150,13 +182,31 @@ export function MobileAppointmentCard({
   children?: React.ReactNode;
 }) {
   const [open, setOpen] = React.useState(false);
+  const [currentScope, setCurrentScope] = React.useState(quotedScopeText);
+  const [currentMediaSummary, setCurrentMediaSummary] =
+    React.useState(mediaSummary);
+  const [currentPaymentSummary, setCurrentPaymentSummary] =
+    React.useState(paymentSummary);
+  const incomingMediaSummary = React.useRef(mediaSummary);
+  const incomingPaymentSummary = React.useRef(paymentSummary);
+  // Keep a successful in-card update through a stale refresh, but accept any
+  // genuinely new server snapshot (for example, a Square webhook) immediately.
+  const scopeOverride = React.useRef<{
+    base: string | null | undefined;
+  } | null>(null);
+  const mediaOverride = React.useRef<string | null>(null);
+  const paymentOverride = React.useRef<string | null>(null);
+  incomingMediaSummary.current = mediaSummary;
+  incomingPaymentSummary.current = paymentSummary;
+  const incomingMediaSnapshot = mediaSummarySnapshot(mediaSummary);
+  const incomingPaymentSnapshot = paymentSummarySnapshot(paymentSummary);
   const reactId = React.useId();
   const detailsId = `mobile-appointment-details-${reactId.replaceAll(":", "")}`;
   const canExpand = hasDetails && React.Children.count(children) > 0;
-  const scope = quotedScopeText?.trim() ?? "";
+  const scope = currentScope?.trim() ?? "";
   const chips: SummaryChip[] = [];
 
-  if (mediaSummary?.needsScope) {
+  if (currentMediaSummary?.needsScope) {
     chips.push({
       key: "scope",
       label: "Scope needed",
@@ -164,25 +214,25 @@ export function MobileAppointmentCard({
     });
   }
 
-  if (mediaSummary && mediaSummary.readyCount > 0) {
+  if (currentMediaSummary && currentMediaSummary.readyCount > 0) {
     chips.push({
       key: "photos",
-      label: `${mediaSummary.readyCount} ${
-        mediaSummary.readyCount === 1 ? "photo" : "photos"
+      label: `${currentMediaSummary.readyCount} ${
+        currentMediaSummary.readyCount === 1 ? "photo" : "photos"
       }`,
       tone: "neutral",
     });
   }
 
-  if (mediaSummary && mediaSummary.pendingCount > 0) {
+  if (currentMediaSummary && currentMediaSummary.pendingCount > 0) {
     chips.push({
       key: "processing",
-      label: `${mediaSummary.pendingCount} processing`,
+      label: `${currentMediaSummary.pendingCount} processing`,
       tone: "warning",
     });
   }
 
-  const summaryPaymentChip = paymentChip(paymentSummary);
+  const summaryPaymentChip = paymentChip(currentPaymentSummary);
   if (summaryPaymentChip) chips.push(summaryPaymentChip);
 
   if (!summaryPaymentChip && amountLabel?.trim()) {
@@ -209,6 +259,72 @@ export function MobileAppointmentCard({
       );
     };
   }, [cardId]);
+
+  React.useEffect(() => {
+    if (scopeOverride.current?.base === quotedScopeText) {
+      return;
+    }
+    scopeOverride.current = null;
+    setCurrentScope(quotedScopeText);
+  }, [quotedScopeText]);
+
+  React.useEffect(() => {
+    if (
+      mediaOverride.current !== null &&
+      mediaOverride.current === incomingMediaSnapshot
+    ) {
+      return;
+    }
+    mediaOverride.current = null;
+    setCurrentMediaSummary(incomingMediaSummary.current);
+  }, [incomingMediaSnapshot]);
+
+  React.useEffect(() => {
+    if (
+      paymentOverride.current !== null &&
+      paymentOverride.current === incomingPaymentSnapshot
+    ) {
+      return;
+    }
+    paymentOverride.current = null;
+    setCurrentPaymentSummary(incomingPaymentSummary.current);
+  }, [incomingPaymentSnapshot]);
+
+  React.useEffect(() => {
+    const updateSummary = (event: Event) => {
+      const detail = (event as CustomEvent<MobileAppointmentSummaryEventDetail>)
+        .detail;
+      if (!detail || detail.appointmentId !== cardId) return;
+      if ("quotedScopeText" in detail) {
+        scopeOverride.current =
+          detail.quotedScopeText === quotedScopeText
+            ? null
+            : { base: quotedScopeText };
+        setCurrentScope(detail.quotedScopeText);
+      }
+      if (detail.mediaSummary) {
+        const nextSnapshot = mediaSummarySnapshot(detail.mediaSummary);
+        mediaOverride.current =
+          nextSnapshot === incomingMediaSnapshot ? null : incomingMediaSnapshot;
+        setCurrentMediaSummary(detail.mediaSummary);
+      }
+      if (detail.paymentSummary) {
+        const nextSnapshot = paymentSummarySnapshot(detail.paymentSummary);
+        paymentOverride.current =
+          nextSnapshot === incomingPaymentSnapshot
+            ? null
+            : incomingPaymentSnapshot;
+        setCurrentPaymentSummary(detail.paymentSummary);
+      }
+    };
+    window.addEventListener(MOBILE_APPOINTMENT_SUMMARY_EVENT, updateSummary);
+    return () => {
+      window.removeEventListener(
+        MOBILE_APPOINTMENT_SUMMARY_EVENT,
+        updateSummary,
+      );
+    };
+  }, [cardId, incomingMediaSnapshot, incomingPaymentSnapshot, quotedScopeText]);
 
   const toggleOpen = () => {
     const next = !open;

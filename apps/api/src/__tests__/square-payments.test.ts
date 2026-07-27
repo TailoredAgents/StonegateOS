@@ -9,6 +9,7 @@ import * as paymentSchema from "@/lib/payment-schema";
 import * as squareClient from "@/lib/square-client";
 import {
   blocksPaymentMutationForAttempt,
+  canCollectAppointmentPayment,
   canDismissSquareAttemptAfterReview,
   canRetrySquareAttempt,
   requiresSquareAttemptReconciliation,
@@ -110,6 +111,20 @@ describe("Square worker before payment migration", () => {
 });
 
 describe("Square attempt collection gate", () => {
+  it("allows collection only while the appointment remains collectible", () => {
+    expect(canCollectAppointmentPayment("requested")).toBe(true);
+    expect(canCollectAppointmentPayment("confirmed")).toBe(true);
+    expect(canCollectAppointmentPayment("completed")).toBe(true);
+    expect(canCollectAppointmentPayment("canceled")).toBe(false);
+    expect(canCollectAppointmentPayment("no_show")).toBe(false);
+    expect(canCollectAppointmentPayment("confirmed", "in_person_quote")).toBe(
+      false,
+    );
+    expect(
+      canCollectAppointmentPayment("confirmed", "in_person_estimate"),
+    ).toBe(false);
+  });
+
   it("requires owner reconciliation for expired and needs-review attempts", () => {
     expect(requiresSquareAttemptReconciliation("expired")).toBe(true);
     expect(requiresSquareAttemptReconciliation("needs_review")).toBe(true);
