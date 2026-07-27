@@ -1,8 +1,13 @@
 "use server";
 
+import type { Route } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { CREW_SESSION_COOKIE, crewSessionCookieOptions, getCrewKey } from "@/lib/crew-session";
+import {
+  CREW_SESSION_COOKIE,
+  crewSessionCookieOptions,
+  getCrewKey,
+} from "@/lib/crew-session";
 
 export type CrewLoginFormState = {
   error?: string;
@@ -10,10 +15,14 @@ export type CrewLoginFormState = {
 
 export async function crewLoginAction(
   _prev: CrewLoginFormState | undefined,
-  formData: FormData
+  formData: FormData,
 ): Promise<CrewLoginFormState> {
   const submitted = formData.get("key");
-  const redirectTo = (typeof formData.get("redirectTo") === "string" ? formData.get("redirectTo") : "/crew") as string;
+  const redirectTo = (
+    typeof formData.get("redirectTo") === "string"
+      ? formData.get("redirectTo")
+      : "/crew"
+  ) as string;
 
   if (typeof submitted !== "string" || submitted.trim().length === 0) {
     return { error: "Enter the crew key." };
@@ -23,6 +32,10 @@ export async function crewLoginAction(
     return { error: "Invalid crew key." };
   }
 
-  (await cookies()).set(CREW_SESSION_COOKIE, getCrewKey(), crewSessionCookieOptions());
-  redirect(redirectTo as Parameters<typeof redirect>[0]);
+  (await cookies()).set(
+    CREW_SESSION_COOKIE,
+    getCrewKey(),
+    crewSessionCookieOptions(),
+  );
+  redirect(redirectTo as Route);
 }

@@ -1,5 +1,6 @@
 "use server";
 
+import type { Route } from "next";
 import { redirect } from "next/navigation";
 
 export type RescheduleState = {
@@ -18,7 +19,7 @@ const API_BASE_URL =
 
 export async function rescheduleAction(
   _prev: RescheduleState | undefined,
-  formData: FormData
+  formData: FormData,
 ): Promise<RescheduleState> {
   const appointmentId = formData.get("appointmentId");
   const token = formData.get("token");
@@ -44,16 +45,20 @@ export async function rescheduleAction(
     body["startTime"] = startTime.trim();
   } else {
     body["preferredDate"] = preferredDate;
-    body["timeWindow"] = typeof timeWindow === "string" && timeWindow ? timeWindow : undefined;
+    body["timeWindow"] =
+      typeof timeWindow === "string" && timeWindow ? timeWindow : undefined;
   }
 
   const base = API_BASE_URL.replace(/\/$/, "");
-  const response = await fetch(`${base}/api/web/appointments/${encodeURIComponent(appointmentId)}/reschedule`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    cache: "no-store"
-  });
+  const response = await fetch(
+    `${base}/api/web/appointments/${encodeURIComponent(appointmentId)}/reschedule`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    },
+  );
 
   if (!response.ok) {
     let message = `Failed to reschedule (status ${response.status}).`;
@@ -75,14 +80,17 @@ export async function rescheduleAction(
   };
 
   if (typeof next === "string" && next.startsWith("/")) {
-    redirect(next as Parameters<typeof redirect>[0]);
+    redirect(next as Route);
   }
 
   return {
     ok: true,
     appointmentId: data.appointmentId,
     startAt: data.startAt,
-    preferredDate: data.preferredDate ?? (typeof preferredDate === "string" ? preferredDate : null),
-    timeWindow: data.timeWindow ?? (typeof timeWindow === "string" ? timeWindow : null)
+    preferredDate:
+      data.preferredDate ??
+      (typeof preferredDate === "string" ? preferredDate : null),
+    timeWindow:
+      data.timeWindow ?? (typeof timeWindow === "string" ? timeWindow : null),
   };
 }

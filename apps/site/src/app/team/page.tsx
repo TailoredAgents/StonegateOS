@@ -1,4 +1,5 @@
 import React from "react";
+import type { Route } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
@@ -570,7 +571,13 @@ export default async function TeamPage({
     {
       id: "sales",
       label: "Sales",
-      itemIds: ["pipeline", "sales-hq", "simulated-chat", "outbound", "partners"],
+      itemIds: [
+        "pipeline",
+        "sales-hq",
+        "simulated-chat",
+        "outbound",
+        "partners",
+      ],
     },
     {
       id: "marketing",
@@ -607,11 +614,7 @@ export default async function TeamPage({
         (candidate) =>
           candidate.id === fallback && isAllowed(candidate.requires),
       ) ?? resolvedTabs.find((candidate) => isAllowed(candidate.requires));
-    redirect(
-      (fallbackTab ? fallbackTab.href : "/team/login") as Parameters<
-        typeof redirect
-      >[0],
-    );
+    redirect((fallbackTab ? fallbackTab.href : "/team/login") as Route);
   }
 
   let calendarBadge: CalendarSyncBadge | null = null;
@@ -788,7 +791,9 @@ export default async function TeamPage({
       ) : null}
 
       {tab === "simulated-chat" && (hasOffice || hasOwner) ? (
-        <React.Suspense fallback={<TeamSkeletonCard title="Loading simulated chat" />}>
+        <React.Suspense
+          fallback={<TeamSkeletonCard title="Loading simulated chat" />}
+        >
           <SimulatedChatSection />
         </React.Suspense>
       ) : null}
