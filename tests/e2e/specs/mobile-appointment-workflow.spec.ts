@@ -223,7 +223,11 @@ test.describe("Mobile appointment quoted work and payments", () => {
         });
       },
     );
+    const uploadedObjectByteCounts = new Map<string, number>();
     await page.route("**/__e2e/media-object/*", async (route) => {
+      const mediaId = new URL(route.request().url()).pathname.split("/").at(-1);
+      const body = route.request().postDataBuffer();
+      if (mediaId) uploadedObjectByteCounts.set(mediaId, body?.byteLength ?? 0);
       await route.fulfill({ status: 200, body: "" });
     });
     let completedUploads = 0;
@@ -413,6 +417,17 @@ test.describe("Mobile appointment quoted work and payments", () => {
     expect(
       intentUploadModes.filter((mode) => mode === "offline_queue"),
     ).toHaveLength(2);
+    expect(uploadedObjectByteCounts).toHaveLength(3);
+    expect(
+      Array.from(uploadedObjectByteCounts.values()).every(
+        (byteCount) => byteCount > 0,
+      ),
+    ).toBe(true);
+    expect(
+      uploadedObjectByteCounts.get(
+        mediaIds.get("22222222-2222-4222-8222-222222222222") ?? "",
+      ),
+    ).toBe(onePixelPng.byteLength);
     await expect.poll(() => input.inputValue()).toBe("");
     await expect
       .poll(() =>
