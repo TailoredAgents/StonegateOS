@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import * as React from "react";
 import {
   MOBILE_MEDIA_QUEUE_EVENT,
+  MOBILE_MEDIA_SYNC_ISSUE_EVENT,
   cacheAppointmentMedia,
   discardQueuedMedia,
   getAppointmentQueue,
@@ -11,8 +12,10 @@ import {
   isInterruptedQueueRow,
   offlineMediaBlob,
   queueMediaUpload,
+  requestQueuedMediaSync,
   retryQueuedMedia,
   syncQueuedMedia,
+  type MobileMediaSyncIssueEventDetail,
   type QueuedMediaUpload,
 } from "./lib/offline-media";
 import { publishMobileAppointmentSummary } from "./mobile-appointment-summary";
@@ -130,6 +133,28 @@ function friendlyError(value: unknown): string {
   if (message.includes("offline_media_disabled"))
     return "Offline photo capture is not enabled yet.";
   return "The photo could not be prepared. It was not removed from your library.";
+}
+
+function syncIssueMessage(issue: MobileMediaSyncIssueEventDetail): string {
+  if (issue.code === "quoted_scope_required") {
+    return "Add and save the “Quoted to remove” summary. These photos are safe on this phone and will upload afterward.";
+  }
+  if (
+    issue.code === "appointment_media_writes_disabled" ||
+    issue.code === "media_writes_disabled"
+  ) {
+    return "Photo uploads are temporarily disabled. These photos remain safe on this phone.";
+  }
+  if (issue.mode === "auth_paused") {
+    return "Sign in again to continue uploading. These photos remain safe on this phone.";
+  }
+  if (issue.code === "forbidden" || issue.code === "unauthorized") {
+    return "This account does not have permission to upload appointment photos.";
+  }
+  if (issue.mode === "retry") {
+    return "The upload connection was interrupted. Keep StonegateOS open; it will retry without duplicating the photos.";
+  }
+  return "The upload needs attention. These photos remain safe on this phone.";
 }
 
 async function readError(
@@ -345,15 +370,27 @@ export function MobileQuotedWorkPanel({
         void load().then(() => router.refresh());
       }
     };
+    const onSyncIssue = (event: Event) => {
+      const detail = (event as CustomEvent<MobileMediaSyncIssueEventDetail>)
+        .detail;
+      if (
+        detail?.employeeId === employeeId &&
+        detail.appointmentId === appointmentId
+      ) {
+        setMessage(syncIssueMessage(detail));
+      }
+    };
     const queueTimer = window.setInterval(() => {
       void refreshQueue();
     }, 60_000);
     window.addEventListener(MOBILE_MEDIA_QUEUE_EVENT, onQueueChange);
+    window.addEventListener(MOBILE_MEDIA_SYNC_ISSUE_EVENT, onSyncIssue);
     return () => {
       window.removeEventListener(MOBILE_MEDIA_QUEUE_EVENT, onQueueChange);
+      window.removeEventListener(MOBILE_MEDIA_SYNC_ISSUE_EVENT, onSyncIssue);
       window.clearInterval(queueTimer);
     };
-  }, [employeeId, load, loaded, refreshQueue, router]);
+  }, [appointmentId, employeeId, load, loaded, refreshQueue, router]);
 
   const addFiles = async (files: FileList | null, input: HTMLInputElement) => {
     try {
@@ -362,6 +399,14 @@ export function MobileQuotedWorkPanel({
       const selected = Array.from(files);
       if (selected.length > 10) {
         setMessage("Choose no more than 10 photos at a time.");
+        return;
+      }
+      if (!scope.trim()) {
+        setMessage(
+          canManage
+            ? "Add the “Quoted to remove” summary before adding photos."
+            : "This appointment needs a quoted-work summary before photos can be added. Ask the office to add it first.",
+        );
         return;
       }
       setBusy("upload");
@@ -415,7 +460,10 @@ export function MobileQuotedWorkPanel({
       setSummary(nextSummary);
       onScopeRequirementChange?.(false);
       publishSummary(nextSummary, nextScope);
-      setMessage("Quoted scope saved.");
+      setMessage("Quoted scope saved. Any waiting photos will upload now.");
+      void requestQueuedMediaSync(employeeId)
+        .then(refreshQueue)
+        .catch(() => undefined);
       router.refresh();
     }
     setBusy(null);

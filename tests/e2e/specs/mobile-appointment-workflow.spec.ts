@@ -5,6 +5,10 @@ import {
   createE2EMobileAppointment,
   getLatestE2ESeedSummary,
 } from "../support/db";
+import {
+  appointmentCardSurfaceClassName,
+  appointmentCardTimeClassName,
+} from "../../../apps/site/src/app/mobile/mobile-appointment-card-styles";
 
 type PaymentSummary = {
   status:
@@ -36,6 +40,17 @@ const unpaidPaymentSummary: PaymentSummary = {
 
 const browserDecodablePng = readFileSync("apps/site/public/favicon-32.png");
 
+test("keeps quote and canceled appointment surface colors distinct", () => {
+  expect(appointmentCardSurfaceClassName("quote")).toContain(
+    "border-sky-300/30 bg-sky-300/10",
+  );
+  expect(appointmentCardSurfaceClassName("canceled")).toContain(
+    "border-rose-300/30 bg-rose-300/10",
+  );
+  expect(appointmentCardTimeClassName("quote")).toBe("text-sky-100");
+  expect(appointmentCardTimeClassName("canceled")).toBe("text-rose-100");
+});
+
 function easternDayKey(value: Date): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
@@ -54,7 +69,9 @@ function easternDayKey(value: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-async function seededAppointment(): Promise<{
+async function seededAppointment(options?: {
+  quotedScopeText?: string;
+}): Promise<{
   appointmentId: string;
   startAt: Date;
 }> {
@@ -63,6 +80,7 @@ async function seededAppointment(): Promise<{
   return createE2EMobileAppointment({
     contactId: seed.contactId,
     propertyId: seed.propertyId,
+    quotedScopeText: options?.quotedScopeText,
   });
 }
 
@@ -146,7 +164,11 @@ test.describe("Mobile appointment quoted work and payments", () => {
       "This workflow is covered by the mobile browser projects.",
     );
 
-    const { appointmentId, startAt } = await seededAppointment();
+    const quotedScopeText =
+      "Remove the full sectional sofa, matching ottoman, two boxed lamps, and every loose item shown along the back wall of the garage; leave the labeled donation bin in place.";
+    const { appointmentId, startAt } = await seededAppointment({
+      quotedScopeText,
+    });
     const appointmentDay = easternDayKey(startAt);
 
     for (const screen of ["myday", "calendar"] as const) {
@@ -163,6 +185,21 @@ test.describe("Mobile appointment quoted work and payments", () => {
       });
 
       await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(card.getByText("Confirmed", { exact: true })).toHaveClass(
+        /bg-emerald-300\/10/u,
+      );
+      await expect(card).toHaveClass(/border-emerald-300\/30/u);
+      await expect(card).toHaveClass(/bg-emerald-300\/10/u);
+      const collapsedScope = card.getByText(`Quoted work: ${quotedScopeText}`, {
+        exact: true,
+      });
+      await expect(collapsedScope).toBeVisible();
+      await expect(collapsedScope).not.toHaveClass(/line-clamp/u);
+      expect(
+        await collapsedScope.evaluate(
+          (element) => element.scrollHeight <= element.clientHeight + 1,
+        ),
+      ).toBe(true);
       await expect(card.getByText("Quoted Work", { exact: true })).toHaveCount(
         0,
       );
@@ -192,6 +229,349 @@ test.describe("Mobile appointment quoted work and payments", () => {
       await expect(card.getByText("Payment", { exact: true })).toBeVisible();
       await expectNoEtaControls(card);
     }
+  });
+
+  test("keeps photos recoverable until a quoted-work summary is saved", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment();
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/media`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            quotedScopeText: null,
+            mediaSummary: {
+              readyCount: 0,
+              pendingCount: 0,
+              coverMediaId: null,
+              needsScope: false,
+            },
+            items: [],
+            legacyAttachments: [],
+          }),
+        });
+      },
+    );
+    let uploadIntentRequests = 0;
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/media/upload-intents`,
+      async (route) => {
+        uploadIntentRequests += 1;
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "quoted_scope_required" }),
+        });
+      },
+    );
+
+    await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
+    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    await card.getByRole("button", { name: /E2E Contact/u }).click();
+    await card.getByText("Quoted Work", { exact: true }).click();
+
+    const input = page
+      .locator("label", { hasText: "Choose photos" })
+      .locator('input[type="file"]');
+    await input.setInputFiles({
+      name: "scope-required.png",
+      mimeType: "image/png",
+      buffer: browserDecodablePng,
+    });
+    await expect(
+      page.getByText(
+        "Add the “Quoted to remove” summary before adding photos.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    expect(uploadIntentRequests).toBe(0);
+
+    const employeeId = await page.evaluate(async () => {
+      const response = await fetch("/api/mobile/me", { cache: "no-store" });
+      const payload = (await response.json()) as {
+        teamMember?: { id?: string };
+      };
+      return payload.teamMember?.id ?? null;
+    });
+    if (!employeeId) throw new Error("Mobile employee was not available.");
+    await page.evaluate(
+      ({ queuedAppointmentId, queuedEmployeeId }) => {
+        window.dispatchEvent(
+          new CustomEvent("stonegate:media-sync-issue", {
+            detail: {
+              appointmentId: queuedAppointmentId,
+              employeeId: queuedEmployeeId,
+              clientId: "55555555-5555-4555-8555-555555555555",
+              code: "quoted_scope_required",
+              mode: "terminal",
+            },
+          }),
+        );
+      },
+      {
+        queuedAppointmentId: appointmentId,
+        queuedEmployeeId: employeeId,
+      },
+    );
+    await expect(
+      page.getByText(
+        "Add and save the “Quoted to remove” summary. These photos are safe on this phone and will upload afterward.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+  });
+
+  test("recovers a legacy Blob queue row when one reader never settles", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment();
+    const clientId = "33333333-3333-4333-8333-333333333333";
+    const mediaId = "44444444-4444-4444-8444-444444444444";
+    let releaseObjectUpload: (() => void) | null = null;
+    const objectUploadGate = new Promise<void>((resolve) => {
+      releaseObjectUpload = resolve;
+    });
+    let objectUploadByteCount = 0;
+    let objectUploadObserved = false;
+    let completedUploads = 0;
+
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/media/upload-intents`,
+      async (route) => {
+        const origin = new URL(route.request().url()).origin;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            intents: [
+              {
+                mediaId,
+                uploadUrl: `${origin}/__e2e/legacy-media-object`,
+                headers: {},
+                alreadyCompleted: false,
+              },
+            ],
+          }),
+        });
+      },
+    );
+    await page.route("**/__e2e/legacy-media-object", async (route) => {
+      objectUploadObserved = true;
+      objectUploadByteCount = route.request().postDataBuffer()?.byteLength ?? 0;
+      await objectUploadGate;
+      await route.fulfill({ status: 200, body: "" });
+    });
+    await page.route(
+      `**/api/mobile/appointment-media/${mediaId}/complete`,
+      async (route) => {
+        completedUploads += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            media: { id: mediaId, status: "ready" },
+          }),
+        });
+      },
+    );
+
+    await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
+    const employeeId = await page.evaluate(async () => {
+      const response = await fetch("/api/mobile/me", { cache: "no-store" });
+      const payload = (await response.json()) as {
+        teamMember?: { id?: string };
+      };
+      return payload.teamMember?.id ?? null;
+    });
+    if (!employeeId) throw new Error("Mobile employee was not available.");
+
+    await page.evaluate(
+      async ({
+        appointmentId: queuedAppointmentId,
+        clientId: queuedClientId,
+        employeeId: queuedEmployeeId,
+        imageBytes,
+      }) => {
+        const nativeSetTimeout = window.setTimeout.bind(window);
+        window.setTimeout = ((
+          handler: TimerHandler,
+          timeout?: number,
+        ): number =>
+          nativeSetTimeout(
+            handler,
+            timeout === 30_000 ? 25 : timeout,
+          )) as typeof window.setTimeout;
+
+        class NeverSettlingFileReader {
+          result: string | ArrayBuffer | null = null;
+          error: DOMException | null = null;
+          onload: ((event: ProgressEvent<FileReader>) => void) | null = null;
+          onerror: ((event: ProgressEvent<FileReader>) => void) | null = null;
+          onabort: ((event: ProgressEvent<FileReader>) => void) | null = null;
+
+          abort(): void {}
+
+          readAsArrayBuffer(): void {}
+        }
+        Object.defineProperty(window, "FileReader", {
+          configurable: true,
+          value: NeverSettlingFileReader,
+        });
+
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open("stonegate-mobile", 3);
+          request.onerror = () =>
+            reject(request.error ?? new Error("Unable to open the media DB."));
+          request.onsuccess = () => resolve(request.result);
+        });
+        const imageArray = new Uint8Array(imageBytes);
+        const checksumSha256 = Array.from(
+          new Uint8Array(await crypto.subtle.digest("SHA-256", imageArray)),
+          (byte) => byte.toString(16).padStart(2, "0"),
+        ).join("");
+        const transaction = database.transaction(
+          "media-upload-queue",
+          "readwrite",
+        );
+        const completion = new Promise<void>((resolve, reject) => {
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () =>
+            reject(
+              transaction.error ??
+                new Error("The legacy queue transaction failed."),
+            );
+          transaction.onabort = () =>
+            reject(
+              transaction.error ??
+                new Error("The legacy queue transaction was aborted."),
+            );
+        });
+        transaction.objectStore("media-upload-queue").put({
+          clientId: queuedClientId,
+          employeeId: queuedEmployeeId,
+          appointmentId: queuedAppointmentId,
+          filename: "legacy.png",
+          contentType: "image/png",
+          byteCount: imageArray.byteLength,
+          checksumSha256,
+          caption: null,
+          quotedScopeText: "Remove the photographed item.",
+          blob: new Blob([imageArray], { type: "image/png" }),
+          capturedOffline: true,
+          status: "queued",
+          error: null,
+          attempts: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        await completion;
+        database.close();
+        window.dispatchEvent(new Event("online"));
+      },
+      {
+        appointmentId,
+        clientId,
+        employeeId,
+        imageBytes: Array.from(browserDecodablePng),
+      },
+    );
+
+    await expect.poll(() => objectUploadObserved).toBe(true);
+    expect(objectUploadByteCount).toBe(browserDecodablePng.byteLength);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          ({ queuedClientId, expectedByteCount }) =>
+            new Promise<{
+              hasBytes: boolean;
+              hasBlob: boolean;
+              byteCount: number;
+            }>((resolve, reject) => {
+              const request = indexedDB.open("stonegate-mobile", 3);
+              request.onerror = () => reject(request.error);
+              request.onsuccess = () => {
+                const database = request.result;
+                const transaction = database.transaction(
+                  "media-upload-queue",
+                  "readonly",
+                );
+                const get = transaction
+                  .objectStore("media-upload-queue")
+                  .get(queuedClientId);
+                get.onerror = () => reject(get.error);
+                get.onsuccess = () => {
+                  const row = get.result as
+                    | { bytes?: ArrayBuffer; blob?: Blob }
+                    | undefined;
+                  database.close();
+                  resolve({
+                    hasBytes: row?.bytes instanceof ArrayBuffer,
+                    hasBlob: Boolean(row && "blob" in row),
+                    byteCount:
+                      row?.bytes instanceof ArrayBuffer
+                        ? row.bytes.byteLength
+                        : expectedByteCount,
+                  });
+                };
+              };
+            }),
+          {
+            queuedClientId: clientId,
+            expectedByteCount: browserDecodablePng.byteLength,
+          },
+        ),
+      )
+      .toEqual({
+        hasBytes: true,
+        hasBlob: false,
+        byteCount: browserDecodablePng.byteLength,
+      });
+
+    releaseObjectUpload?.();
+    await expect.poll(() => completedUploads).toBe(1);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (queuedClientId) =>
+            new Promise<boolean>((resolve, reject) => {
+              const request = indexedDB.open("stonegate-mobile", 3);
+              request.onerror = () => reject(request.error);
+              request.onsuccess = () => {
+                const database = request.result;
+                const transaction = database.transaction(
+                  "media-upload-queue",
+                  "readonly",
+                );
+                const get = transaction
+                  .objectStore("media-upload-queue")
+                  .get(queuedClientId);
+                get.onerror = () => reject(get.error);
+                get.onsuccess = () => {
+                  database.close();
+                  resolve(get.result === undefined);
+                };
+              };
+            }),
+          clientId,
+        ),
+      )
+      .toBe(true);
   });
 
   test("drains photos queued during an active sync even when online status is wrong", async ({

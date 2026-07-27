@@ -8,39 +8,18 @@ import {
   MOBILE_APPOINTMENT_SUMMARY_EVENT,
   type MobileAppointmentSummaryEventDetail,
 } from "./mobile-appointment-summary";
-
-type AppointmentCardStatusTone =
-  | "default"
-  | "requested"
-  | "confirmed"
-  | "completed"
-  | "quote"
-  | "canceled";
+import {
+  appointmentCardStatusClassName,
+  appointmentCardSurfaceClassName,
+  appointmentCardTimeClassName,
+  type AppointmentCardStatusTone,
+} from "./mobile-appointment-card-styles";
 
 type SummaryChip = {
   key: string;
   label: string;
   tone: "neutral" | "success" | "warning" | "danger";
 };
-
-function statusClassName(tone: AppointmentCardStatusTone): string {
-  if (tone === "canceled") {
-    return "bg-rose-300/10 text-rose-100 ring-1 ring-inset ring-rose-300/30";
-  }
-  if (tone === "completed") {
-    return "bg-emerald-300/10 text-emerald-100 ring-1 ring-inset ring-emerald-300/30";
-  }
-  if (tone === "confirmed") {
-    return "bg-cyan-300/10 text-cyan-100 ring-1 ring-inset ring-cyan-300/30";
-  }
-  if (tone === "requested") {
-    return "bg-amber-300/10 text-amber-100 ring-1 ring-inset ring-amber-300/30";
-  }
-  if (tone === "quote") {
-    return "bg-sky-300/10 text-sky-100 ring-1 ring-inset ring-sky-300/30";
-  }
-  return "bg-slate-800 text-slate-200 ring-1 ring-inset ring-white/10";
-}
 
 function chipClassName(tone: SummaryChip["tone"]): string {
   if (tone === "danger") {
@@ -341,7 +320,9 @@ export function MobileAppointmentCard({
   const headerContent = (
     <>
       <span className="min-w-0 flex-1 text-left">
-        <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-cyan-200">
+        <span
+          className={`block text-xs font-semibold uppercase tracking-[0.12em] ${appointmentCardTimeClassName(statusTone)}`}
+        >
           {timeLabel}
         </span>
         <span className="mt-1 block truncate text-base font-semibold leading-5 text-white">
@@ -350,9 +331,7 @@ export function MobileAppointmentCard({
       </span>
       <span className="flex shrink-0 flex-col items-end gap-1.5">
         <span
-          className={`max-w-36 truncate rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${statusClassName(
-            statusTone,
-          )}`}
+          className={`max-w-36 truncate rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${appointmentCardStatusClassName(statusTone)}`}
         >
           {statusLabel}
         </span>
@@ -375,7 +354,7 @@ export function MobileAppointmentCard({
     <article
       aria-label={`Appointment with ${customerName}`}
       data-appointment-id={cardId}
-      className="overflow-hidden rounded-xl border border-white/10 bg-slate-900/90 shadow-sm shadow-black/20"
+      className={`overflow-hidden rounded-xl border shadow-sm shadow-black/20 ${appointmentCardSurfaceClassName(statusTone)}`}
     >
       {canExpand ? (
         <button
@@ -417,7 +396,7 @@ export function MobileAppointmentCard({
       ) : null}
 
       {scope ? (
-        <p className="line-clamp-1 border-t border-white/10 px-4 py-2.5 text-sm leading-5 text-slate-300">
+        <p className="whitespace-pre-wrap break-words border-t border-white/10 px-4 py-2.5 text-sm leading-5 text-slate-300">
           <span className="font-semibold text-slate-200">Quoted work: </span>
           {scope}
         </p>

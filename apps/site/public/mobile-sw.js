@@ -1,4 +1,4 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v11";
+const SHELL_CACHE = "stonegate-mobile-shell-v12";
 const DATABASE_NAME = "stonegate-mobile";
 const DATABASE_VERSION = 3;
 // Version 3 keeps queued media binary-safe across WebKit and Chromium.
@@ -9,6 +9,10 @@ const METADATA_STORE = "app-metadata";
 const UPLOAD_ROW_LEASE_MS = 10 * 60 * 1000;
 const API_FETCH_TIMEOUT_MS = 45 * 1000;
 const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+const QUEUED_BLOB_READ_TIMEOUT_MS = 30 * 1000;
+const QUEUED_MEDIA_DIGEST_TIMEOUT_MS = 15 * 1000;
+const QUEUED_MEDIA_MIGRATION_TIMEOUT_MS = 5 * 1000;
+const QUEUE_UPLOAD_CONCURRENCY = 2;
 const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
 const DEVICE_ID_KEY = "mobileDeviceId";
 const SHELL_URLS = [
@@ -25,6 +29,31 @@ function workerIsAbortError(error) {
     "name" in error &&
     error.name === "AbortError"
   );
+}
+
+function workerPromiseWithTimeout(promise, timeoutMs, errorCode) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(errorCode));
+    }, timeoutMs);
+    void promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error(errorCode));
+      },
+    );
+  });
 }
 
 async function workerTimedFetch(input, init, timeoutMs, consume) {
@@ -334,6 +363,52 @@ async function deleteQueuedMedia(clientIds) {
   }
 }
 
+async function migrateLegacyQueuedMediaBytes(row, validatedBytes) {
+  if (row.bytes instanceof ArrayBuffer || !row.blob) return false;
+
+  const database = await openDatabase();
+  const transaction = database.transaction(QUEUE_STORE, "readwrite");
+  const completion = transactionDone(transaction);
+  const store = transaction.objectStore(QUEUE_STORE);
+  const abortTimer = setTimeout(() => {
+    try {
+      transaction.abort();
+    } catch {
+      // The migration may already have committed.
+    }
+  }, QUEUED_MEDIA_MIGRATION_TIMEOUT_MS);
+  try {
+    const migrated = await requestResult(store.get(row.clientId), (current) => {
+      if (
+        !current ||
+        current.bytes instanceof ArrayBuffer ||
+        !current.blob ||
+        current.employeeId !== row.employeeId ||
+        current.appointmentId !== row.appointmentId ||
+        current.byteCount !== validatedBytes.byteLength ||
+        current.byteCount !== row.byteCount ||
+        String(current.checksumSha256).toLowerCase() !==
+          String(row.checksumSha256).toLowerCase()
+      ) {
+        return false;
+      }
+
+      const migratedRow = {
+        ...current,
+        bytes: validatedBytes.slice(0),
+      };
+      delete migratedRow.blob;
+      store.put(migratedRow);
+      return true;
+    });
+    await completion;
+    return migrated;
+  } finally {
+    clearTimeout(abortTimer);
+    database.close();
+  }
+}
+
 function isInterruptedQueueRow(row, now = Date.now()) {
   return (
     (row.status === "uploading" || row.status === "finalizing") &&
@@ -427,6 +502,12 @@ function workerUploadFailureMode(error) {
   return error instanceof WorkerQueueUploadError ? error.mode : "terminal";
 }
 
+function workerBytesToHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+}
+
 async function materializeQueuedUploadBody(row) {
   if (
     (!row.bytes && !row.blob) ||
@@ -474,21 +555,71 @@ async function materializeQueuedUploadBody(row) {
   }
 
   let sawSizeMismatch = false;
-  for (const read of readers) {
-    try {
-      const bytes = await read();
-      if (bytes.byteLength === row.byteCount) return bytes;
-      sawSizeMismatch = true;
-    } catch {
-      // Try a separate Blob reader before leaving the row queued.
+  const bytes = await new Promise((resolve, reject) => {
+    let pendingReaders = readers.length;
+    let resolved = false;
+    const rejectIfExhausted = () => {
+      pendingReaders -= 1;
+      if (!resolved && pendingReaders === 0) {
+        reject(
+          new WorkerQueueUploadError(
+            sawSizeMismatch
+              ? "queued_media_blob_size_mismatch"
+              : "queued_media_blob_read_failed",
+            "retry",
+          ),
+        );
+      }
+    };
+
+    if (!pendingReaders) {
+      reject(
+        new WorkerQueueUploadError("queued_media_blob_read_failed", "retry"),
+      );
+      return;
     }
+    for (const read of readers) {
+      void workerPromiseWithTimeout(
+        Promise.resolve().then(read),
+        QUEUED_BLOB_READ_TIMEOUT_MS,
+        "queued_media_blob_read_timeout",
+      )
+        .then(async (candidateBytes) => {
+          if (candidateBytes.byteLength !== row.byteCount) {
+            sawSizeMismatch = true;
+            throw new Error("queued_media_blob_size_mismatch");
+          }
+          const digest = await workerPromiseWithTimeout(
+            crypto.subtle.digest("SHA-256", candidateBytes),
+            QUEUED_MEDIA_DIGEST_TIMEOUT_MS,
+            "queued_media_digest_failed",
+          );
+          if (
+            workerBytesToHex(new Uint8Array(digest)) !==
+            String(row.checksumSha256).toLowerCase()
+          ) {
+            throw new Error("queued_media_checksum_mismatch");
+          }
+          return candidateBytes;
+        })
+        .then((candidateBytes) => {
+          if (resolved) return;
+          resolved = true;
+          resolve(candidateBytes);
+        }, rejectIfExhausted);
+    }
+  });
+
+  if (!(storedBytes instanceof ArrayBuffer) && legacyBlob) {
+    // Only validated legacy Blob rows are rewritten. Normal progress and
+    // retry state never rewrites the large binary queue record.
+    await workerPromiseWithTimeout(
+      migrateLegacyQueuedMediaBytes(row, bytes),
+      QUEUED_MEDIA_MIGRATION_TIMEOUT_MS,
+      "queued_media_migration_timeout",
+    ).catch(() => undefined);
   }
-  throw new WorkerQueueUploadError(
-    sawSizeMismatch
-      ? "queued_media_blob_size_mismatch"
-      : "queued_media_blob_read_failed",
-    "retry",
-  );
+  return bytes;
 }
 
 async function uploadRow(row) {
@@ -626,21 +757,36 @@ async function performSyncQueue() {
   }
   if (sessionPayload?.teamMember?.id !== activeEmployeeId) return;
 
-  const completedClientIds = [];
+  let nextRowIndex = 0;
   let retryableFailures = 0;
-  for (const row of rows) {
-    const outcome = await uploadRow(row);
-    if (outcome === "success") {
-      completedClientIds.push(row.clientId);
-    } else if (outcome === "retry") {
-      retryableFailures += 1;
-    } else if (outcome === "auth_paused") {
-      break;
-    }
-  }
-
+  let authPaused = false;
   try {
-    await deleteQueuedMedia(completedClientIds);
+    const uploadWorker = async () => {
+      while (!authPaused) {
+        const row = rows[nextRowIndex];
+        nextRowIndex += 1;
+        if (!row) return;
+
+        const outcome = await uploadRow(row);
+        if (outcome === "success") {
+          try {
+            await deleteQueuedMedia([row.clientId]);
+          } catch {
+            retryableFailures += 1;
+          }
+        } else if (outcome === "retry") {
+          retryableFailures += 1;
+        } else if (outcome === "auth_paused") {
+          authPaused = true;
+        }
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(QUEUE_UPLOAD_CONCURRENCY, rows.length) },
+        () => uploadWorker(),
+      ),
+    );
   } finally {
     await reportQueueHealth(activeEmployeeId);
     const clients = await self.clients.matchAll({

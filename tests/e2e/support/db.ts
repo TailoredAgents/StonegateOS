@@ -293,6 +293,7 @@ export async function getAppointmentStartAt(
 export async function createE2EMobileAppointment(input: {
   contactId: string;
   propertyId: string;
+  quotedScopeText?: string;
 }): Promise<{ appointmentId: string; startAt: Date }> {
   const sql = getSql();
   return sql.begin(async (transaction) => {
@@ -337,6 +338,7 @@ export async function createE2EMobileAppointment(input: {
         start_at,
         duration_min,
         status,
+        quoted_scope_text,
         booking_details,
         reschedule_token
       )
@@ -347,6 +349,7 @@ export async function createE2EMobileAppointment(input: {
         ${startAt},
         90,
         'confirmed',
+        ${input.quotedScopeText ?? null},
         ${transaction.json({ e2eMobileClone: true })},
         ${randomUUID().replace(/-/gu, "")}
       )

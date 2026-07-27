@@ -3,16 +3,19 @@
 import * as React from "react";
 import {
   MOBILE_MEDIA_QUEUE_EVENT,
+  MOBILE_MEDIA_SYNC_ISSUE_EVENT,
   MOBILE_STORAGE_WARNING_EVENT,
   cacheAppointmentMedia,
   checkStoragePressure,
   getQueueSummary,
+  listEmployeeQueue,
   registerMediaBackgroundSync,
   reportOfflineQueueHealth,
   requestPersistentStorage,
   saveAppointmentSnapshots,
   syncQueuedMedia,
   type OfflineAppointmentSnapshot,
+  type MobileMediaSyncIssueEventDetail,
   type PersistentStorageState,
   type QueueSummary,
 } from "./lib/offline-media";
@@ -21,6 +24,31 @@ type SnapshotInput = Omit<
   OfflineAppointmentSnapshot,
   "key" | "employeeId" | "savedAt" | "expiresAt"
 >;
+
+function queueIssueMessage(
+  issue: MobileMediaSyncIssueEventDetail | null,
+): string | null {
+  if (!issue) return null;
+  if (issue.code === "quoted_scope_required") {
+    return "Open the appointment’s Quoted Work section and save the “Quoted to remove” summary. Uploading will resume automatically.";
+  }
+  if (
+    issue.code === "appointment_media_writes_disabled" ||
+    issue.code === "media_writes_disabled"
+  ) {
+    return "Photo uploads are temporarily disabled. The originals remain safe on this phone.";
+  }
+  if (issue.mode === "auth_paused") {
+    return "Sign in again to resume uploading. The originals remain safe on this phone.";
+  }
+  if (issue.code === "forbidden" || issue.code === "unauthorized") {
+    return "This account does not currently have permission to upload appointment photos.";
+  }
+  if (issue.mode === "retry") {
+    return "The connection was interrupted. Keep StonegateOS open; it will retry automatically.";
+  }
+  return "At least one photo needs attention. Open that appointment’s Quoted Work section for details.";
+}
 
 function mediaItems(payload: unknown): Array<{
   id: string;
@@ -71,10 +99,22 @@ export function MobileOfflineRuntime({
   const [storagePressure, setStoragePressure] = React.useState<number | null>(
     null,
   );
+  const [syncIssue, setSyncIssue] =
+    React.useState<MobileMediaSyncIssueEventDetail | null>(null);
 
   const refreshQueue = React.useCallback(async () => {
-    const summary = await getQueueSummary(employeeId).catch(() => null);
+    const [summary, rows] = await Promise.all([
+      getQueueSummary(employeeId).catch(() => null),
+      listEmployeeQueue(employeeId).catch(() => null),
+    ]);
     setQueue(summary);
+    if (rows) {
+      setSyncIssue((current) =>
+        current && !rows.some((row) => row.clientId === current.clientId)
+          ? null
+          : current,
+      );
+    }
     if (summary?.total) void registerMediaBackgroundSync();
     void reportOfflineQueueHealth(employeeId);
   }, [employeeId]);
@@ -145,6 +185,11 @@ export function MobileOfflineRuntime({
       const detail = (event as CustomEvent<{ ratio?: number }>).detail;
       if (typeof detail?.ratio === "number") setStoragePressure(detail.ratio);
     };
+    const onSyncIssue = (event: Event) => {
+      const detail = (event as CustomEvent<MobileMediaSyncIssueEventDetail>)
+        .detail;
+      if (detail?.employeeId === employeeId) setSyncIssue(detail);
+    };
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
         void synchronize();
@@ -171,12 +216,14 @@ export function MobileOfflineRuntime({
 
     window.addEventListener("online", onOnline);
     window.addEventListener(MOBILE_MEDIA_QUEUE_EVENT, onQueueChange);
+    window.addEventListener(MOBILE_MEDIA_SYNC_ISSUE_EVENT, onSyncIssue);
     window.addEventListener(MOBILE_STORAGE_WARNING_EVENT, onStorageWarning);
     document.addEventListener("visibilitychange", onVisibility);
     navigator.serviceWorker?.addEventListener("message", onWorkerMessage);
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener(MOBILE_MEDIA_QUEUE_EVENT, onQueueChange);
+      window.removeEventListener(MOBILE_MEDIA_SYNC_ISSUE_EVENT, onSyncIssue);
       window.removeEventListener(
         MOBILE_STORAGE_WARNING_EVENT,
         onStorageWarning,
@@ -185,10 +232,11 @@ export function MobileOfflineRuntime({
       navigator.serviceWorker?.removeEventListener("message", onWorkerMessage);
       window.clearInterval(retryTimer);
     };
-  }, [refreshQueue, synchronize]);
+  }, [employeeId, refreshQueue, synchronize]);
 
   const persistenceWarning =
     persistentStorage !== null && persistentStorage !== "granted";
+  const issueMessage = queueIssueMessage(syncIssue);
 
   if (
     !queue?.total &&
@@ -203,7 +251,7 @@ export function MobileOfflineRuntime({
       {queue?.total ? (
         <div
           className={`rounded-lg border p-3 text-sm ${
-            queue.failed || queue.stale
+            queue.failed || queue.stale || issueMessage
               ? "border-amber-300/30 bg-amber-300/10 text-amber-100"
               : "border-cyan-300/30 bg-cyan-300/10 text-cyan-100"
           }`}
@@ -218,6 +266,11 @@ export function MobileOfflineRuntime({
               ? `${queue.stale} have been waiting more than 24 hours.`
               : "They stay safely on this phone until upload succeeds."}
           </p>
+          {issueMessage ? (
+            <p className="mt-2 text-xs font-semibold leading-5">
+              {issueMessage}
+            </p>
+          ) : null}
         </div>
       ) : null}
       {storagePressure !== null && storagePressure >= 0.8 ? (
