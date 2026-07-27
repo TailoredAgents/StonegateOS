@@ -57,4 +57,11 @@ async function waitForLocalStack(): Promise<void> {
   throw new Error("LocalStack did not become ready.");
 }
 
-await Promise.all([waitForPostgres(), waitForLocalStack()]);
+async function main(): Promise<void> {
+  await Promise.all([waitForPostgres(), waitForLocalStack()]);
+}
+
+main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});
