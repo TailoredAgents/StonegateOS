@@ -29,6 +29,7 @@ import {
   type DatabaseClient,
 } from "@/db";
 import {
+  detectAppointmentImageType,
   MAX_APPOINTMENT_IMAGE_BYTES,
   normalizeAppointmentImage,
   validateDeclaredAppointmentImage,
@@ -780,6 +781,148 @@ async function toMediaItem(row: MediaRow): Promise<AppointmentMediaItem> {
             "This photo could not be processed. Retry it or choose another image.",
         }
       : {}),
+  };
+}
+
+export function validateAppointmentMediaProxyUpload(input: {
+  bytes: Buffer;
+  declaredContentType: string | null;
+  expectedByteSize: number | null;
+  expectedContentType: string | null;
+  expectedSha256: string | null;
+}): { contentType: string; sha256: string } {
+  if (
+    input.bytes.byteLength <= 0 ||
+    input.bytes.byteLength > MAX_APPOINTMENT_IMAGE_BYTES
+  ) {
+    throw new AppointmentMediaError(
+      "uploaded_image_size_invalid",
+      input.bytes.byteLength > MAX_APPOINTMENT_IMAGE_BYTES ? 413 : 400,
+    );
+  }
+  if (
+    input.expectedByteSize === null ||
+    input.expectedByteSize <= 0 ||
+    !input.expectedContentType ||
+    !input.expectedSha256 ||
+    !/^[a-f0-9]{64}$/i.test(input.expectedSha256)
+  ) {
+    throw new AppointmentMediaError("media_upload_declaration_missing", 409);
+  }
+  if (input.bytes.byteLength !== input.expectedByteSize) {
+    throw new AppointmentMediaError("uploaded_image_size_mismatch", 400);
+  }
+
+  const expectedContentType =
+    input.expectedContentType.split(";")[0]?.trim().toLowerCase() ?? "";
+  const declaredContentType =
+    input.declaredContentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (!declaredContentType || declaredContentType !== expectedContentType) {
+    throw new AppointmentMediaError("uploaded_image_type_mismatch", 400);
+  }
+
+  const detectedContentType = detectAppointmentImageType(input.bytes);
+  const compatibleHeifTypes =
+    (expectedContentType === "image/heic" ||
+      expectedContentType === "image/heif") &&
+    (detectedContentType === "image/heic" ||
+      detectedContentType === "image/heif");
+  if (
+    !detectedContentType ||
+    (detectedContentType !== expectedContentType && !compatibleHeifTypes)
+  ) {
+    throw new AppointmentMediaError("unsupported_or_corrupt_image", 400);
+  }
+
+  const sha256 = createHash("sha256").update(input.bytes).digest("hex");
+  if (sha256 !== input.expectedSha256.toLowerCase()) {
+    throw new AppointmentMediaError("image_checksum_mismatch", 400);
+  }
+  return { contentType: expectedContentType, sha256 };
+}
+
+export async function stageAppointmentMediaProxyUpload(input: {
+  mediaId: string;
+  bytes: Buffer;
+  declaredContentType: string | null;
+}): Promise<{
+  mediaId: string;
+  assetId: string;
+  status: "ready" | "staging";
+  byteLength: number;
+}> {
+  const db = getDb();
+  let row = await getMediaRow(input.mediaId, db);
+  if (!row) throw new AppointmentMediaError("media_not_found", 404);
+  assertAssetStorageLocation(row);
+  if (row.status === "ready") {
+    return {
+      mediaId: row.id,
+      assetId: row.assetId,
+      status: "ready",
+      byteLength: row.byteSize ?? 0,
+    };
+  }
+  if (row.status === "processing") {
+    throw new AppointmentMediaError("media_processing", 409);
+  }
+  if (!["staging", "failed"].includes(row.status)) {
+    throw new AppointmentMediaError("media_not_uploadable", 409);
+  }
+
+  const verified = validateAppointmentMediaProxyUpload({
+    bytes: input.bytes,
+    declaredContentType: input.declaredContentType,
+    expectedByteSize: row.byteSize,
+    expectedContentType: row.contentType,
+    expectedSha256: row.expectedSha256,
+  });
+  await putMediaObject({
+    key: row.originalObjectKey,
+    body: input.bytes,
+    contentType: verified.contentType,
+    cacheControl: "private, no-store",
+  });
+
+  const now = new Date();
+  const [updated] = await db
+    .update(mediaAssets)
+    .set({
+      status: "staging",
+      processingError: null,
+      stagingExpiresAt: new Date(now.getTime() + STAGING_LIFETIME_MS),
+      sourceMetadata: {
+        ...(row.sourceMetadata ?? {}),
+        proxyUploadByteSize: input.bytes.byteLength,
+        proxyUploadSha256: verified.sha256,
+      },
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(mediaAssets.id, row.assetId),
+        inArray(mediaAssets.status, ["staging", "failed"]),
+      ),
+    )
+    .returning({ id: mediaAssets.id });
+  if (!updated) {
+    row = await getMediaRow(input.mediaId, db);
+    if (row?.status === "ready") {
+      return {
+        mediaId: row.id,
+        assetId: row.assetId,
+        status: "ready",
+        byteLength: row.byteSize ?? input.bytes.byteLength,
+      };
+    }
+    throw new AppointmentMediaError("media_processing", 409);
+  }
+
+  return {
+    mediaId: row.id,
+    assetId: row.assetId,
+    status: "staging",
+    byteLength: input.bytes.byteLength,
   };
 }
 
