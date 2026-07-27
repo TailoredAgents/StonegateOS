@@ -362,10 +362,8 @@ test.describe("Mobile appointment quoted work and payments", () => {
       `**/api/mobile/appointments/${appointmentId}/media`,
       async (route) => {
         mediaRequests += 1;
-        if (mediaRequests > 1) {
-          staleRequestStarted = true;
-          await staleRequestGate;
-        }
+        staleRequestStarted = true;
+        await staleRequestGate;
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -390,7 +388,6 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    await expect.poll(() => mediaRequests).toBeGreaterThan(0);
     await page.evaluate((expectedAppointmentId) => {
       const summaryEvents: Array<{
         hasScope: boolean;
@@ -440,6 +437,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
     await card.getByRole("button", { name: /E2E Contact/u }).click();
     await card.getByText("Quoted Work", { exact: true }).click();
+    await expect.poll(() => mediaRequests).toBeGreaterThan(0);
     await expect.poll(() => staleRequestStarted).toBe(true);
     await page.getByRole("button", { name: "Manage quoted work" }).click();
 
