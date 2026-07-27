@@ -958,6 +958,54 @@ test.describe("Mobile appointment quoted work and payments", () => {
       }) => {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
           const request = indexedDB.open("stonegate-mobile", 3);
+          request.onupgradeneeded = () => {
+            const upgradedDatabase = request.result;
+            if (
+              !upgradedDatabase.objectStoreNames.contains(
+                "appointment-snapshots",
+              )
+            ) {
+              const snapshots = upgradedDatabase.createObjectStore(
+                "appointment-snapshots",
+                { keyPath: "key" },
+              );
+              snapshots.createIndex("employeeId", "employeeId", {
+                unique: false,
+              });
+              snapshots.createIndex("expiresAt", "expiresAt", {
+                unique: false,
+              });
+            }
+            if (
+              !upgradedDatabase.objectStoreNames.contains("appointment-media")
+            ) {
+              const media = upgradedDatabase.createObjectStore(
+                "appointment-media",
+                { keyPath: "key" },
+              );
+              media.createIndex("employeeId", "employeeId", { unique: false });
+              media.createIndex("appointmentId", "appointmentId", {
+                unique: false,
+              });
+            }
+            if (
+              !upgradedDatabase.objectStoreNames.contains("media-upload-queue")
+            ) {
+              const queue = upgradedDatabase.createObjectStore(
+                "media-upload-queue",
+                { keyPath: "clientId" },
+              );
+              queue.createIndex("employeeId", "employeeId", { unique: false });
+              queue.createIndex("appointmentId", "appointmentId", {
+                unique: false,
+              });
+            }
+            if (!upgradedDatabase.objectStoreNames.contains("app-metadata")) {
+              upgradedDatabase.createObjectStore("app-metadata", {
+                keyPath: "key",
+              });
+            }
+          };
           request.onerror = () => reject(request.error);
           request.onsuccess = () => resolve(request.result);
         });
