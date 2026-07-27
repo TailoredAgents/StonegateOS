@@ -973,7 +973,6 @@ function MobileCompleteAppointmentForm({
                         name="crewMemberId"
                         type="checkbox"
                         value={member.id}
-                        defaultChecked={member.id === currentTeamMemberId}
                         className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300"
                       />
                       <span className="min-w-0 truncate">{member.name}</span>
@@ -1083,7 +1082,6 @@ function MobileCompleteAppointmentForm({
                     name="crewMemberId"
                     type="checkbox"
                     value={member.id}
-                    defaultChecked={member.id === currentTeamMemberId}
                     className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300"
                   />
                   <span className="min-w-0 truncate">{member.name}</span>
@@ -1977,17 +1975,6 @@ export default async function MobileHomePage({
       event.source === "db" &&
       !isQuoteOnlyAppointmentType(event.appointmentType),
   );
-  const defaultTodayEventId =
-    visibleTodayEvents.find((event) => {
-      const status = (event.status ?? "").trim().toLowerCase();
-      return (
-        !isCanceledEvent(event) &&
-        status !== "completed" &&
-        status !== "no_show"
-      );
-    })?.id ??
-    visibleTodayEvents[0]?.id ??
-    null;
   const offlineSnapshots = offlineTodayEvents
     .filter(
       (event) =>
@@ -3054,7 +3041,6 @@ export default async function MobileHomePage({
                           }
                           amountLabel={formatEventAmountBadge(event)}
                           hasDetails={Boolean(appointmentId)}
-                          defaultOpen={event.id === defaultTodayEventId}
                         >
                           {appointmentId ? (
                             <div className="space-y-3">

@@ -133,7 +133,6 @@ export function MobileAppointmentCard({
   paymentSummary,
   amountLabel,
   hasDetails = true,
-  defaultOpen = false,
   children,
 }: {
   cardId: string;
@@ -148,10 +147,9 @@ export function MobileAppointmentCard({
   paymentSummary?: AppointmentPaymentSummary | null;
   amountLabel?: string | null;
   hasDetails?: boolean;
-  defaultOpen?: boolean;
   children?: React.ReactNode;
 }) {
-  const [open, setOpen] = React.useState(defaultOpen);
+  const [open, setOpen] = React.useState(false);
   const reactId = React.useId();
   const detailsId = `mobile-appointment-details-${reactId.replaceAll(":", "")}`;
   const canExpand = hasDetails && React.Children.count(children) > 0;
