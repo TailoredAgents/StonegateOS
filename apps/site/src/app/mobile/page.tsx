@@ -35,7 +35,6 @@ import {
   sendMobileTeamInviteAction,
   startMobileContactCallAction,
   sendMobileQuoteAction,
-  updateMobileAppointmentEtaStatusAction,
   updateMobileAppointmentStatusAction,
   updateMobileContactAction,
   updateMobileTeamMemberAction,
@@ -48,6 +47,7 @@ import { InboxRefresh } from "./InboxRefresh";
 import { MobileInboxMediaGallery } from "./MobileInboxMediaGallery";
 import { MobileThreadConversation } from "./MobileThreadConversation";
 import { MobileAppointmentPricingFields } from "./MobileAppointmentPricingFields";
+import { MobileAppointmentCard } from "./MobileAppointmentCard";
 import { MobileAppointmentDetail } from "./MobileAppointmentDetail";
 import { MobileLogoutForm } from "./MobileLogoutForm";
 import { MobileOfflineRuntime } from "./MobileOfflineRuntime";
@@ -706,50 +706,24 @@ function formatEventAmountBadge(event: CalendarEvent): string | null {
   return `${formatCompactUsdCents(range.minCents)} - ${formatCompactUsdCents(range.maxCents)}`;
 }
 
-function eventTone(event: CalendarEvent): {
-  card: string;
-  badge: string;
-  time: string;
-  amount: string;
-} {
-  if (isCanceledEvent(event)) {
-    return {
-      card: "border-rose-300/30 bg-rose-300/10",
-      badge: "bg-rose-300/15 text-rose-100 ring-1 ring-rose-300/30",
-      time: "text-rose-100",
-      amount: "text-rose-100",
-    };
-  }
-  if (isQuoteOnlyAppointmentType(event.appointmentType)) {
-    return {
-      card: "border-sky-300/30 bg-sky-300/10",
-      badge: "bg-sky-300/15 text-sky-100 ring-1 ring-sky-300/30",
-      time: "text-sky-100",
-      amount: "text-sky-100",
-    };
-  }
-  if (event.source !== "db") {
-    return {
-      card: "border-white/10 bg-white/[0.08]",
-      badge: "bg-slate-800 text-slate-300 ring-1 ring-white/10",
-      time: "text-cyan-200",
-      amount: "text-cyan-200",
-    };
-  }
-  return {
-    card: "border-emerald-300/30 bg-emerald-300/10",
-    badge: "bg-emerald-300/15 text-emerald-100 ring-1 ring-emerald-300/30",
-    time: "text-emerald-100",
-    amount: "text-emerald-100",
-  };
-}
-
 function eventKindLabel(event: CalendarEvent): string {
   if (isCanceledEvent(event)) return "Canceled";
   if (isQuoteOnlyAppointmentType(event.appointmentType))
     return "In-person quote";
   if (event.source !== "db") return "Calendar event";
   return event.status ? formatStage(event.status) : "Confirmed";
+}
+
+function eventCardTone(
+  event: CalendarEvent,
+): "default" | "requested" | "confirmed" | "completed" | "quote" | "canceled" {
+  const status = (event.status ?? "").trim().toLowerCase();
+  if (isCanceledEvent(event) || status === "no_show") return "canceled";
+  if (isQuoteOnlyAppointmentType(event.appointmentType)) return "quote";
+  if (status === "completed") return "completed";
+  if (status === "requested") return "requested";
+  if (status === "confirmed") return "confirmed";
+  return "default";
 }
 
 function formatStage(value: string | null | undefined): string {
@@ -824,81 +798,6 @@ function isQuoteOnlyAppointmentType(value: string | null | undefined): boolean {
   );
 }
 
-const mobileEtaActions = [
-  ["heading_there", "Heading"],
-  ["on_site", "On site"],
-  ["need_dump", "Need dump"],
-  ["dump_complete", "Dump done"],
-  ["finished", "Finished"],
-] as const;
-
-function formatEtaStatusLabel(value: string | null | undefined): string {
-  if (!value) return "No ETA status";
-  return value
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function MobileEtaControls({
-  event,
-  appointmentId,
-  calendarDay,
-  screen,
-}: {
-  event: CalendarEvent;
-  appointmentId: string;
-  calendarDay: string;
-  screen: "myday" | "calendar";
-}) {
-  if (
-    !appointmentId ||
-    event.source !== "db" ||
-    isQuoteOnlyAppointmentType(event.appointmentType) ||
-    isCanceledEvent(event)
-  ) {
-    return null;
-  }
-  return (
-    <div className="rounded-md border border-cyan-300/20 bg-cyan-300/10 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-200">
-            ETA
-          </p>
-          <p className="mt-1 truncate text-sm text-cyan-50">
-            {formatEtaStatusLabel(event.eta?.status)}
-            <span className="text-cyan-200/60"> · </span>
-            GPS {event.eta?.locationFreshness ?? "missing"}
-          </p>
-        </div>
-        {event.eta?.pendingDraft ? (
-          <span className="shrink-0 rounded-full border border-cyan-300/30 px-2 py-1 text-[11px] font-semibold text-cyan-100">
-            Draft
-          </span>
-        ) : null}
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
-        {mobileEtaActions.map(([value, label]) => (
-          <form key={value} action={updateMobileAppointmentEtaStatusAction}>
-            <input type="hidden" name="appointmentId" value={appointmentId} />
-            <input type="hidden" name="date" value={calendarDay} />
-            <input type="hidden" name="screen" value={screen} />
-            <button
-              type="submit"
-              name="etaStatus"
-              value={value}
-              className="w-full rounded-md border border-cyan-300/20 bg-slate-950 px-2 py-2 text-xs font-semibold text-cyan-100"
-            >
-              {label}
-            </button>
-          </form>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function detectAddressFromMessages(
   messages: MessageDetail[] | undefined,
 ): DetectedAddress | null {
@@ -954,9 +853,10 @@ function MobileCompleteAppointmentForm({
   )
     return null;
 
+  const finalTotalCents = normalizeCents(event.finalTotalCents);
   const amountDefault =
-    normalizeCents(event.finalTotalCents) !== null
-      ? (normalizeCents(event.finalTotalCents)! / 100).toFixed(2)
+    finalTotalCents !== null
+      ? (finalTotalCents / 100).toFixed(2)
       : normalizeCents(event.quotedTotalCents) !== null
         ? (normalizeCents(event.quotedTotalCents)! / 100).toFixed(2)
         : "";
@@ -1073,6 +973,7 @@ function MobileCompleteAppointmentForm({
                         name="crewMemberId"
                         type="checkbox"
                         value={member.id}
+                        defaultChecked={member.id === currentTeamMemberId}
                         className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300"
                       />
                       <span className="min-w-0 truncate">{member.name}</span>
@@ -1128,26 +1029,45 @@ function MobileCompleteAppointmentForm({
           value={event.appointmentType ?? ""}
         />
         <input type="hidden" name="status" value="completed" />
-        {pricingContext ? (
-          <div className="rounded-md border border-emerald-300/20 bg-slate-950 px-3 py-2 text-sm font-semibold text-emerald-100">
-            {pricingContext}
-          </div>
-        ) : null}
-        <label className="block">
-          <span className="text-xs font-semibold text-slate-300">
-            Final job total
-          </span>
-          <input
-            name="finalTotal"
-            type="number"
-            min={0}
-            step="0.01"
-            required
-            defaultValue={amountDefault}
-            className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-            placeholder="350"
-          />
-        </label>
+        {finalTotalCents !== null ? (
+          <>
+            <input type="hidden" name="finalTotal" value={amountDefault} />
+            <div className="rounded-md border border-emerald-300/20 bg-slate-950 px-3 py-2">
+              <p className="text-xs font-semibold text-slate-400">
+                Final job total
+              </p>
+              <p className="mt-1 text-sm font-semibold text-emerald-100">
+                {formatUsdCents(finalTotalCents)}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Change the total in Payment before completing the job.
+              </p>
+            </div>
+          </>
+        ) : (
+          <>
+            {pricingContext ? (
+              <div className="rounded-md border border-emerald-300/20 bg-slate-950 px-3 py-2 text-sm font-semibold text-emerald-100">
+                {pricingContext}
+              </div>
+            ) : null}
+            <label className="block">
+              <span className="text-xs font-semibold text-slate-300">
+                Final job total
+              </span>
+              <input
+                name="finalTotal"
+                type="number"
+                min={0}
+                step="0.01"
+                required
+                defaultValue={amountDefault}
+                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
+                placeholder="350"
+              />
+            </label>
+          </>
+        )}
         <div className="rounded-md border border-white/10 bg-slate-950 p-3">
           <p className="text-xs font-semibold text-slate-300">
             Select who worked
@@ -1163,6 +1083,7 @@ function MobileCompleteAppointmentForm({
                     name="crewMemberId"
                     type="checkbox"
                     value={member.id}
+                    defaultChecked={member.id === currentTeamMemberId}
                     className="h-5 w-5 rounded border-slate-500 bg-slate-950 accent-emerald-300"
                   />
                   <span className="min-w-0 truncate">{member.name}</span>
@@ -1279,6 +1200,7 @@ function MobileWeekStrip({
 function MobileWeekAgenda({
   days,
   events,
+  canUpdateAppointments,
   canOpenMessageThreads,
   canCaptureMedia,
   canManageMedia,
@@ -1291,6 +1213,7 @@ function MobileWeekAgenda({
 }: {
   days: string[];
   events: CalendarEvent[];
+  canUpdateAppointments: boolean;
   canOpenMessageThreads: boolean;
   canCaptureMedia: boolean;
   canManageMedia: boolean;
@@ -1374,54 +1297,37 @@ function MobileWeekAgenda({
                       ? event.id.replace(/^db:/, "")
                       : "");
                   const canUpdate = Boolean(
-                    appointmentId && event.source === "db",
+                    canUpdateAppointments &&
+                      appointmentId &&
+                      event.source === "db",
                   );
-                  const eventPricing = formatEventPricing(event);
                   const mapsHref = buildMapsDirectionsHref(event.address);
-                  const tone = eventTone(event);
                   return (
-                    <details
+                    <MobileAppointmentCard
                       key={event.id}
-                      className={`group overflow-hidden rounded-md border ${tone.card}`}
+                      cardId={appointmentId || event.id}
+                      timeLabel={`${formatTime(event.start)} – ${formatTime(event.end)}`}
+                      customerName={event.contactName ?? event.title}
+                      statusLabel={eventKindLabel(event)}
+                      statusTone={eventCardTone(event)}
+                      address={event.address}
+                      mapsHref={mapsHref}
+                      quotedScopeText={event.quotedScopeText}
+                      mediaSummary={
+                        appointmentId ? eventMediaSummary(event) : null
+                      }
+                      paymentSummary={
+                        appointmentId ? eventPaymentSummary(event) : null
+                      }
+                      amountLabel={formatEventAmountBadge(event)}
+                      hasDetails={Boolean(appointmentId)}
                     >
-                      <summary className="cursor-pointer list-none px-3 py-2 marker:hidden">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <span
-                                className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${tone.badge}`}
-                              >
-                                {eventKindLabel(event)}
-                              </span>
-                              <span
-                                className={`shrink-0 text-sm font-semibold tabular-nums ${tone.time}`}
-                              >
-                                {formatTime(event.start)} -{" "}
-                                {formatTime(event.end)}
-                              </span>
-                            </div>
-                            <h4 className="mt-1 truncate text-base font-semibold text-white">
-                              {event.contactName ?? event.title}
-                            </h4>
-                          </div>
-                          <div className="shrink-0 text-xs font-semibold text-cyan-100">
-                            <span className="group-open:hidden">Details</span>
-                            <span className="hidden group-open:inline">
-                              Close
-                            </span>
-                          </div>
-                        </div>
-                      </summary>
-
-                      <div className="space-y-3 border-t border-white/10 px-3 pb-3 pt-2">
+                      <div className="space-y-3">
                         {appointmentId ? (
                           <MobileAppointmentDetail
                             appointmentId={appointmentId}
                             employeeId={currentTeamMemberId}
-                            address={event.address}
-                            mapsHref={mapsHref}
                             notes={event.notes}
-                            pricingLabel={eventPricing}
                             quotedScopeText={event.quotedScopeText ?? null}
                             mediaSummary={eventMediaSummary(event)}
                             paymentSummary={eventPaymentSummary(event)}
@@ -1434,178 +1340,151 @@ function MobileWeekAgenda({
                             }
                             isOwner={isOwner}
                           />
-                        ) : (
-                          <>
-                            {mapsHref && event.address ? (
-                              <a
-                                href={mapsHref}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="block rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold leading-5 text-cyan-100 underline-offset-4 hover:underline"
-                              >
-                                {event.address}
-                              </a>
-                            ) : event.address ? (
-                              <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-5 text-slate-300">
-                                {event.address}
-                              </p>
-                            ) : null}
-                            {eventPricing ? (
-                              <div className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100">
-                                {eventPricing}
-                              </div>
-                            ) : null}
-                          </>
-                        )}
-                        <MobileEtaControls
-                          event={event}
-                          appointmentId={appointmentId}
-                          calendarDay={dayKey}
-                          screen="calendar"
-                        />
+                        ) : null}
 
                         {canUpdate ? (
                           <>
-                            <div className="grid grid-cols-2 gap-2">
-                              {canOpenMessageThreads ? (
-                                <form
-                                  action={openMobileAppointmentThreadAction}
+                            <MobileCompleteAppointmentForm
+                              event={event}
+                              appointmentId={appointmentId}
+                              calendarDay={dayKey}
+                              screen="calendar"
+                              teamMembers={teamMembers}
+                              currentTeamMemberId={currentTeamMemberId}
+                              currentTeamMemberName={currentTeamMemberName}
+                              isOwner={isOwner}
+                            />
+                            {canOpenMessageThreads ? (
+                              <form action={openMobileAppointmentThreadAction}>
+                                <input
+                                  type="hidden"
+                                  name="appointmentId"
+                                  value={appointmentId}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="date"
+                                  value={dayKey}
+                                />
+                                <input
+                                  type="hidden"
+                                  name="screen"
+                                  value="calendar"
+                                />
+                                <button
+                                  type="submit"
+                                  className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200"
                                 >
-                                  <input
-                                    type="hidden"
-                                    name="appointmentId"
-                                    value={appointmentId}
+                                  <MessageSquare
+                                    className="h-4 w-4"
+                                    aria-hidden="true"
                                   />
-                                  <input
-                                    type="hidden"
-                                    name="date"
-                                    value={dayKey}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="screen"
-                                    value="calendar"
-                                  />
-                                  <button
-                                    type="submit"
-                                    className="inline-flex w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200"
+                                  Message
+                                </button>
+                              </form>
+                            ) : null}
+                            <details className="rounded-md border border-white/10 bg-slate-900 px-3">
+                              <summary className="flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-slate-300">
+                                More appointment actions
+                              </summary>
+                              <div className="space-y-2 pb-3">
+                                {!isCanceledEvent(event) ? (
+                                  <form
+                                    action={updateMobileAppointmentStatusAction}
                                   >
-                                    <MessageSquare
-                                      className="h-4 w-4"
-                                      aria-hidden="true"
-                                    />
-                                    Message
-                                  </button>
-                                </form>
-                              ) : null}
-                              {!isCanceledEvent(event) ? (
-                                <form
-                                  action={updateMobileAppointmentStatusAction}
-                                >
-                                  <input
-                                    type="hidden"
-                                    name="appointmentId"
-                                    value={appointmentId}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="date"
-                                    value={dayKey}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="screen"
-                                    value="calendar"
-                                  />
-                                  <button
-                                    type="submit"
-                                    name="status"
-                                    value="canceled"
-                                    className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm font-semibold text-rose-100"
-                                  >
-                                    Cancel
-                                  </button>
-                                </form>
-                              ) : (
-                                <div className="w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-center text-sm font-semibold text-rose-100">
-                                  Canceled
-                                </div>
-                              )}
-                              <details className="col-span-2 rounded-md border border-white/10 bg-slate-900 p-3">
-                                <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
-                                  Reschedule
-                                </summary>
-                                <form
-                                  action={rescheduleMobileAppointmentAction}
-                                  className="mt-3 space-y-3"
-                                >
-                                  <input
-                                    type="hidden"
-                                    name="appointmentId"
-                                    value={appointmentId}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="currentDate"
-                                    value={dayKey}
-                                  />
-                                  <label className="block">
-                                    <span className="text-xs font-semibold text-slate-300">
-                                      Date
-                                    </span>
                                     <input
-                                      type="date"
-                                      name="preferredDate"
-                                      defaultValue={formatDayKey(
-                                        new Date(event.start),
-                                      )}
-                                      required
-                                      className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                                      type="hidden"
+                                      name="appointmentId"
+                                      value={appointmentId}
                                     />
-                                  </label>
-                                  <label className="block">
-                                    <span className="text-xs font-semibold text-slate-300">
-                                      Time
-                                    </span>
                                     <input
-                                      type="time"
-                                      name="startTime"
-                                      defaultValue={formatTimeInputValue(
-                                        event.start,
-                                      )}
-                                      step={900}
-                                      required
-                                      className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                                      type="hidden"
+                                      name="date"
+                                      value={dayKey}
                                     />
-                                    <span className="mt-1 block text-xs text-slate-500">
-                                      Eastern time
-                                    </span>
-                                  </label>
-                                  <button
-                                    type="submit"
-                                    className="w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
+                                    <input
+                                      type="hidden"
+                                      name="screen"
+                                      value="calendar"
+                                    />
+                                    <button
+                                      type="submit"
+                                      name="status"
+                                      value="canceled"
+                                      className="min-h-11 w-full rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm font-semibold text-rose-100"
+                                    >
+                                      Cancel appointment
+                                    </button>
+                                  </form>
+                                ) : (
+                                  <div className="flex min-h-11 w-full items-center justify-center rounded-md border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-sm font-semibold text-rose-100">
+                                    Canceled
+                                  </div>
+                                )}
+                                <details className="rounded-md border border-white/10 bg-slate-950 px-3">
+                                  <summary className="flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-cyan-100">
+                                    Reschedule
+                                  </summary>
+                                  <form
+                                    action={rescheduleMobileAppointmentAction}
+                                    className="space-y-3 pb-3"
                                   >
-                                    Save new time
-                                  </button>
-                                </form>
-                              </details>
-                            </div>
-                            <div className="mt-3">
-                              <MobileCompleteAppointmentForm
-                                event={event}
-                                appointmentId={appointmentId}
-                                calendarDay={dayKey}
-                                screen="calendar"
-                                teamMembers={teamMembers}
-                                currentTeamMemberId={currentTeamMemberId}
-                                currentTeamMemberName={currentTeamMemberName}
-                                isOwner={isOwner}
-                              />
-                            </div>
+                                    <input
+                                      type="hidden"
+                                      name="appointmentId"
+                                      value={appointmentId}
+                                    />
+                                    <input
+                                      type="hidden"
+                                      name="currentDate"
+                                      value={dayKey}
+                                    />
+                                    <label className="block">
+                                      <span className="text-xs font-semibold text-slate-300">
+                                        Date
+                                      </span>
+                                      <input
+                                        type="date"
+                                        name="preferredDate"
+                                        defaultValue={formatDayKey(
+                                          new Date(event.start),
+                                        )}
+                                        required
+                                        className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                                      />
+                                    </label>
+                                    <label className="block">
+                                      <span className="text-xs font-semibold text-slate-300">
+                                        Time
+                                      </span>
+                                      <input
+                                        type="time"
+                                        name="startTime"
+                                        defaultValue={formatTimeInputValue(
+                                          event.start,
+                                        )}
+                                        step={900}
+                                        required
+                                        className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white"
+                                      />
+                                      <span className="mt-1 block text-xs text-slate-500">
+                                        Eastern time
+                                      </span>
+                                    </label>
+                                    <button
+                                      type="submit"
+                                      className="min-h-11 w-full rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-semibold text-slate-950"
+                                    >
+                                      Save new time
+                                    </button>
+                                  </form>
+                                </details>
+                              </div>
+                            </details>
                           </>
                         ) : null}
                       </div>
-                    </details>
+                    </MobileAppointmentCard>
                   );
                 })
               ) : (
@@ -2011,6 +1890,10 @@ export default async function MobileHomePage({
     session.teamMember.permissions,
     "expenses.write",
   );
+  const canUpdateAppointments = hasMobilePermission(
+    session.teamMember.permissions,
+    "appointments.update",
+  );
   const canCaptureMedia = hasMobilePermission(
     session.teamMember.permissions,
     "appointment_media.capture",
@@ -2094,6 +1977,17 @@ export default async function MobileHomePage({
       event.source === "db" &&
       !isQuoteOnlyAppointmentType(event.appointmentType),
   );
+  const defaultTodayEventId =
+    visibleTodayEvents.find((event) => {
+      const status = (event.status ?? "").trim().toLowerCase();
+      return (
+        !isCanceledEvent(event) &&
+        status !== "completed" &&
+        status !== "no_show"
+      );
+    })?.id ??
+    visibleTodayEvents[0]?.id ??
+    null;
   const offlineSnapshots = offlineTodayEvents
     .filter(
       (event) =>
@@ -3136,44 +3030,38 @@ export default async function MobileHomePage({
                           ? event.id.replace(/^db:/, "")
                           : "");
                       const canUpdate = Boolean(
-                        appointmentId && event.source === "db",
+                        canUpdateAppointments &&
+                          appointmentId &&
+                          event.source === "db",
                       );
-                      const eventAmountLabel = formatEventAmountBadge(event);
-                      const eventPricing = formatEventPricing(event);
                       const mapsHref = buildMapsDirectionsHref(event.address);
-                      const tone = eventTone(event);
                       return (
-                        <div
+                        <MobileAppointmentCard
                           key={event.id}
-                          className={`rounded-md border p-3 ${tone.card}`}
+                          cardId={appointmentId || event.id}
+                          timeLabel={`${formatTime(event.start)} – ${formatTime(event.end)}`}
+                          customerName={event.contactName ?? event.title}
+                          statusLabel={eventKindLabel(event)}
+                          statusTone={eventCardTone(event)}
+                          address={event.address}
+                          mapsHref={mapsHref}
+                          quotedScopeText={event.quotedScopeText}
+                          mediaSummary={
+                            appointmentId ? eventMediaSummary(event) : null
+                          }
+                          paymentSummary={
+                            appointmentId ? eventPaymentSummary(event) : null
+                          }
+                          amountLabel={formatEventAmountBadge(event)}
+                          hasDetails={Boolean(appointmentId)}
+                          defaultOpen={event.id === defaultTodayEventId}
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p
-                                className={`text-sm font-semibold ${tone.time}`}
-                              >
-                                {formatTime(event.start)} -{" "}
-                                {formatTime(event.end)}
-                              </p>
-                              <p className="mt-1 truncate text-sm font-semibold text-white">
-                                {event.contactName ?? event.title}
-                              </p>
-                            </div>
-                            <span
-                              className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone.badge}`}
-                            >
-                              {eventKindLabel(event)}
-                            </span>
-                          </div>
                           {appointmentId ? (
-                            <div className="mt-3 space-y-3">
+                            <div className="space-y-3">
                               <MobileAppointmentDetail
                                 appointmentId={appointmentId}
                                 employeeId={session.teamMember.id}
-                                address={event.address}
-                                mapsHref={mapsHref}
                                 notes={event.notes}
-                                pricingLabel={eventPricing}
                                 quotedScopeText={event.quotedScopeText ?? null}
                                 mediaSummary={eventMediaSummary(event)}
                                 paymentSummary={eventPaymentSummary(event)}
@@ -3190,17 +3078,9 @@ export default async function MobileHomePage({
                               />
                             </div>
                           ) : null}
-                          <div className="mt-3">
-                            <MobileEtaControls
-                              event={event}
-                              appointmentId={appointmentId}
-                              calendarDay={calendarDay}
-                              screen="myday"
-                            />
-                          </div>
                           {canUpdate ? (
-                            <details className="mt-3 rounded-md border border-white/10 bg-slate-950 p-3">
-                              <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">
+                            <details className="rounded-md border border-white/10 bg-slate-950 p-3">
+                              <summary className="flex min-h-11 cursor-pointer list-none items-center text-sm font-semibold text-cyan-100">
                                 Add note
                               </summary>
                               <form
@@ -3233,26 +3113,8 @@ export default async function MobileHomePage({
                               </form>
                             </details>
                           ) : null}
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Link
-                              href={
-                                `/mobile?screen=calendar&date=${encodeURIComponent(calendarDay)}` as Route
-                              }
-                              className="rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200"
-                            >
-                              Open
-                            </Link>
-                            {mapsHref ? (
-                              <a
-                                href={mapsHref}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200"
-                              >
-                                Map
-                              </a>
-                            ) : null}
-                            {canUpdate && canOpenMessageThreads ? (
+                          {canUpdate && canOpenMessageThreads ? (
+                            <div>
                               <form action={openMobileAppointmentThreadAction}>
                                 <input
                                   type="hidden"
@@ -3271,26 +3133,19 @@ export default async function MobileHomePage({
                                 />
                                 <button
                                   type="submit"
-                                  className="inline-flex items-center gap-1.5 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200"
+                                  className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold text-slate-200"
                                 >
                                   <MessageSquare
-                                    className="h-3.5 w-3.5"
+                                    className="h-4 w-4"
                                     aria-hidden="true"
                                   />
                                   Message
                                 </button>
                               </form>
-                            ) : null}
-                            {eventAmountLabel ? (
-                              <span
-                                className={`ml-auto py-2 text-xs font-semibold ${tone.amount}`}
-                              >
-                                {eventAmountLabel}
-                              </span>
-                            ) : null}
-                          </div>
+                            </div>
+                          ) : null}
                           {canUpdate ? (
-                            <div className="mt-3">
+                            <div>
                               <MobileCompleteAppointmentForm
                                 event={event}
                                 appointmentId={appointmentId}
@@ -3303,7 +3158,7 @@ export default async function MobileHomePage({
                               />
                             </div>
                           ) : null}
-                        </div>
+                        </MobileAppointmentCard>
                       );
                     })
                   ) : (
@@ -4285,6 +4140,7 @@ export default async function MobileHomePage({
               <MobileWeekAgenda
                 days={calendarWeekDays}
                 events={calendarWeekEvents}
+                canUpdateAppointments={canUpdateAppointments}
                 canOpenMessageThreads={canOpenMessageThreads}
                 canCaptureMedia={canCaptureMedia}
                 canManageMedia={canManageMedia}

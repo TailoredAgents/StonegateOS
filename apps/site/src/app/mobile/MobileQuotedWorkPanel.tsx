@@ -182,6 +182,7 @@ export function MobileQuotedWorkPanel({
   const [reassignmentDrafts, setReassignmentDrafts] = React.useState<
     Record<string, string>
   >({});
+  const [managing, setManaging] = React.useState(false);
   const [manageLoaded, setManageLoaded] = React.useState(false);
   const [manageLoading, setManageLoading] = React.useState(false);
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -498,9 +499,11 @@ export function MobileQuotedWorkPanel({
             : "border-white/10 bg-slate-950"
         }`}
         onToggle={(event) => {
-          if (!event.currentTarget.open) return;
+          if (!event.currentTarget.open) {
+            setManaging(false);
+            return;
+          }
           if (!loaded) void load();
-          if (canManage && !manageLoaded) void loadManageData();
         }}
       >
         <summary className="cursor-pointer list-none">
@@ -525,6 +528,23 @@ export function MobileQuotedWorkPanel({
         </summary>
 
         <div className="mt-4 space-y-4 border-t border-white/10 pt-4">
+          {canManage ? (
+            <button
+              type="button"
+              onClick={() => {
+                const nextManaging = !managing;
+                setManaging(nextManaging);
+                if (nextManaging && !manageLoaded) void loadManageData();
+              }}
+              className={`min-h-11 w-full rounded-md border px-3 py-2 text-sm font-semibold ${
+                managing
+                  ? "border-cyan-300 bg-cyan-300 text-slate-950"
+                  : "border-white/10 bg-slate-900 text-slate-200"
+              }`}
+            >
+              {managing ? "Done managing quoted work" : "Manage quoted work"}
+            </button>
+          ) : null}
           {loading ? (
             <p className="text-sm text-slate-400">Loading quoted work…</p>
           ) : null}
@@ -541,7 +561,7 @@ export function MobileQuotedWorkPanel({
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               Quoted to remove
             </p>
-            {canManage ? (
+            {canManage && managing ? (
               <>
                 <textarea
                   value={scope}
@@ -617,7 +637,7 @@ export function MobileQuotedWorkPanel({
                       {sourceLabel(item.source)}
                       {item.status !== "ready" ? ` · ${item.status}` : ""}
                     </p>
-                    {canManage ? (
+                    {canManage && managing ? (
                       <>
                         <input
                           value={captionDrafts[item.id] ?? ""}
@@ -851,7 +871,7 @@ export function MobileQuotedWorkPanel({
             </section>
           ) : null}
 
-          {canManage && (manageLoading || manageLoaded) ? (
+          {canManage && managing && (manageLoading || manageLoaded) ? (
             <details className="rounded-md border border-white/10 bg-slate-900 p-2">
               <summary className="cursor-pointer text-xs font-semibold text-slate-300">
                 Removed photos (recoverable for 30 days)

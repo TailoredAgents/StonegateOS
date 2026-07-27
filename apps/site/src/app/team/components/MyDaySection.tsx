@@ -4,11 +4,8 @@ import { SubmitButton } from "@/components/SubmitButton";
 import { summarizeServiceLabels } from "@/lib/service-labels";
 import {
   rescheduleAppointmentAction,
-  dismissEtaDraftAction,
   scheduleQuoteFollowupAction,
-  sendEtaDraftAction,
   startContactCallAction,
-  updateAppointmentEtaStatusAction,
   updateAppointmentBookingDetailsAction,
   updateAppointmentSoldByAction,
 } from "../actions";
@@ -26,11 +23,7 @@ import { AppointmentBookingDetailsFields } from "./AppointmentBookingDetailsFiel
 import { CrewCompletionBookingDetailsEditor } from "./CrewCompletionBookingDetailsEditor";
 import { CrewPayoutSelector } from "./CrewPayoutSelector";
 import { labelForPipelineStage } from "./pipeline.stages";
-import {
-  TEAM_CARD_PADDED,
-  TEAM_EMPTY_STATE,
-  teamButtonClass,
-} from "./team-ui";
+import { TEAM_CARD_PADDED, TEAM_EMPTY_STATE, teamButtonClass } from "./team-ui";
 
 type AppointmentStatus =
   | "requested"
@@ -304,19 +297,6 @@ type EtaSummaryDto = {
   } | null;
 };
 
-type EtaDraftDto = {
-  id: string;
-  appointmentId: string;
-  customerName: string;
-  appointmentStartAt: string | null;
-  address: string | null;
-  reason: string;
-  body: string;
-  confidence: string;
-  locationFreshness: string;
-  createdAt: string;
-};
-
 type TeamMemberDto = {
   id: string;
   name: string;
@@ -361,114 +341,6 @@ function SummaryTile({
   );
 }
 
-const ETA_ACTIONS = [
-  ["heading_there", "Heading"],
-  ["on_site", "On site"],
-  ["need_dump", "Need dump"],
-  ["dump_complete", "Dump done"],
-  ["finished", "Finished"],
-] as const;
-
-function formatEtaStatus(value: string | null | undefined): string {
-  if (!value) return "No ETA status";
-  return value
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function EtaControls({ appointment }: { appointment: AppointmentDto }): ReactElement {
-  const eta = appointment.eta ?? null;
-  return (
-    <div className="mt-4 rounded-2xl border border-cyan-200 bg-cyan-50/70 px-3 py-3">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-cyan-800">
-            ETA agent
-          </div>
-          <div className="mt-1 text-sm text-slate-700">
-            {formatEtaStatus(eta?.status)}
-            <span className="text-slate-400"> · </span>
-            GPS {eta?.locationFreshness ?? "missing"}
-            {eta?.pendingDraft ? (
-              <>
-                <span className="text-slate-400"> · </span>
-                Draft ready
-              </>
-            ) : null}
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {ETA_ACTIONS.map(([value, label]) => (
-            <form key={value} action={updateAppointmentEtaStatusAction}>
-              <input type="hidden" name="appointmentId" value={appointment.id} />
-              <input type="hidden" name="etaStatus" value={value} />
-              <SubmitButton
-                className="inline-flex min-h-9 items-center justify-center rounded-xl border border-cyan-200 bg-white px-3 py-1.5 text-xs font-semibold text-cyan-900 shadow-sm"
-                pendingLabel="Saving..."
-              >
-                {label}
-              </SubmitButton>
-            </form>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EtaDraftReviewPanel({ drafts }: { drafts: EtaDraftDto[] }): ReactElement | null {
-  if (!drafts.length) return null;
-  return (
-    <section className={TEAM_CARD_PADDED}>
-      <div className="flex flex-col gap-2 border-b border-slate-200 pb-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 className="text-base font-semibold text-slate-900">ETA drafts</h2>
-          <p className="mt-1 text-sm text-slate-600">
-            Review customer updates before they send.
-          </p>
-        </div>
-        <span className="inline-flex items-center justify-center rounded-full bg-cyan-100 px-3 py-1 text-xs font-semibold text-cyan-800">
-          {drafts.length} pending
-        </span>
-      </div>
-      <div className="mt-4 space-y-3">
-        {drafts.map((draft) => (
-          <div key={draft.id} className="rounded-2xl border border-slate-200 bg-white p-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-slate-900">
-                  {draft.customerName}
-                </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  {draft.address ?? "Address not set"} · {formatEtaStatus(draft.reason)} · {draft.confidence} confidence
-                </div>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <form action={sendEtaDraftAction}>
-                  <input type="hidden" name="draftId" value={draft.id} />
-                  <SubmitButton className={teamButtonClass("primary", "sm")} pendingLabel="Sending...">
-                    Send
-                  </SubmitButton>
-                </form>
-                <form action={dismissEtaDraftAction}>
-                  <input type="hidden" name="draftId" value={draft.id} />
-                  <SubmitButton className={teamButtonClass("secondary", "sm")} pendingLabel="Dismissing...">
-                    Dismiss
-                  </SubmitButton>
-                </form>
-              </div>
-            </div>
-            <p className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-6 text-slate-700">
-              {draft.body}
-            </p>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 type AppointmentSectionProps = {
   title: string;
   subtitle: string;
@@ -503,8 +375,12 @@ function AppointmentSection({
     <section className={TEAM_CARD_PADDED}>
       <div className="flex flex-col gap-2 border-b border-slate-200 pb-3 sm:gap-3 sm:pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-base font-semibold text-slate-900 sm:text-lg">{title}</h2>
-          <p className="mt-1 hidden text-sm text-slate-600 sm:block">{subtitle}</p>
+          <h2 className="text-base font-semibold text-slate-900 sm:text-lg">
+            {title}
+          </h2>
+          <p className="mt-1 hidden text-sm text-slate-600 sm:block">
+            {subtitle}
+          </p>
         </div>
         <span
           className={`inline-flex items-center justify-center rounded-full px-3 py-1 text-xs font-semibold ${badgeClassName}`}
@@ -598,7 +474,8 @@ function AppointmentCard({
     {
       label: "Source",
       value:
-        item.leadSourceSummary ?? (item.isQuoteOnly ? "Optional for quote" : "Not set"),
+        item.leadSourceSummary ??
+        (item.isQuoteOnly ? "Optional for quote" : "Not set"),
       muted: !item.leadSourceSummary,
     },
     item.isQuoteOnly
@@ -709,13 +586,26 @@ function AppointmentCard({
             {fmtAppointmentSlot(a.startAt)}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-700">
-            <span>{addressText || "Address not set"}</span>
+            {hasAddress ? (
+              <a
+                href={mapsHref}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-cyan-800 underline-offset-4 hover:underline"
+              >
+                {addressText}
+              </a>
+            ) : (
+              <span>Address not set</span>
+            )}
             {addressText ? (
               <CopyButton value={addressText} label="Copy" />
             ) : null}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600">
-            <span>{a.contact.phone?.trim() ? a.contact.phone : "Not available"}</span>
+            <span>
+              {a.contact.phone?.trim() ? a.contact.phone : "Not available"}
+            </span>
             {a.contact.phone ? (
               <CopyButton value={a.contact.phone} label="Copy" />
             ) : null}
@@ -738,29 +628,12 @@ function AppointmentCard({
                 Call
               </SubmitButton>
             </form>
-
-            {hasAddress ? (
-              <a
-                href={mapsHref}
-                target="_blank"
-                rel="noreferrer"
-                className={teamButtonClass("secondary", "sm")}
-              >
-                Maps
-              </a>
-            ) : (
-              <span
-                className={`${teamButtonClass("secondary", "sm")} cursor-not-allowed opacity-60`}
-              >
-                Maps
-              </span>
-            )}
           </div>
         ) : null}
       </div>
 
       {!isCompleted ? (
-        <div className="mt-4 grid grid-cols-3 gap-2 sm:hidden">
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:hidden">
           <form action={startContactCallAction}>
             <input type="hidden" name="contactId" value={a.contact.id ?? ""} />
             <SubmitButton
@@ -772,24 +645,10 @@ function AppointmentCard({
             </SubmitButton>
           </form>
 
-          {hasAddress ? (
-            <a
-              href={mapsHref}
-              target="_blank"
-              rel="noreferrer"
-              className={teamButtonClass("secondary", "sm")}
-            >
-              Maps
-            </a>
-          ) : (
-            <span
-              className={`${teamButtonClass("secondary", "sm")} cursor-not-allowed opacity-60`}
-            >
-              Maps
-            </span>
-          )}
-
-          <a href={`#myday-complete-${a.id}`} className={teamButtonClass("primary", "sm")}>
+          <a
+            href={`#myday-complete-${a.id}`}
+            className={teamButtonClass("primary", "sm")}
+          >
             {mobilePrimaryActionLabel}
           </a>
         </div>
@@ -797,7 +656,10 @@ function AppointmentCard({
 
       <div className="mt-4 space-y-2 rounded-2xl border border-slate-200 bg-white/80 px-3 py-3 text-sm sm:hidden">
         {mobileMetaRows.map((row) => (
-          <div key={row.label} className="flex items-start justify-between gap-3">
+          <div
+            key={row.label}
+            className="flex items-start justify-between gap-3"
+          >
             <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
               {row.label}
             </span>
@@ -862,13 +724,14 @@ function AppointmentCard({
         )}
       </div>
 
-      {!isCompleted && !item.isQuoteOnly ? <EtaControls appointment={a} /> : null}
-
       {!isCompleted ? (
         <div className="mt-4 space-y-3">
           {item.isQuoteOnly ? (
             <>
-              <details id={`myday-complete-${a.id}`} className="group rounded-2xl border border-sky-200 bg-white p-3">
+              <details
+                id={`myday-complete-${a.id}`}
+                className="group rounded-2xl border border-sky-200 bg-white p-3"
+              >
                 <summary className={summaryButtonClass("primary")}>
                   Quote done
                 </summary>
@@ -878,7 +741,11 @@ function AppointmentCard({
                   className="mt-3 space-y-3"
                 >
                   <input type="hidden" name="appointmentId" value={a.id} />
-                  <input type="hidden" name="appointmentType" value={a.appointmentType ?? ""} />
+                  <input
+                    type="hidden"
+                    name="appointmentType"
+                    value={a.appointmentType ?? ""}
+                  />
                   <input type="hidden" name="status" value="completed" />
                   <div className="text-sm text-slate-600">
                     Mark this in-person quote visit as done.
@@ -968,7 +835,10 @@ function AppointmentCard({
               ) : null}
             </>
           ) : (
-            <details id={`myday-complete-${a.id}`} className="group rounded-2xl border border-emerald-200 bg-white p-3">
+            <details
+              id={`myday-complete-${a.id}`}
+              className="group rounded-2xl border border-emerald-200 bg-white p-3"
+            >
               <summary className={summaryButtonClass("primary")}>
                 Complete job
               </summary>
@@ -1037,221 +907,224 @@ function AppointmentCard({
           )}
 
           {mode === "manage" ? (
-          <details className="group rounded-2xl border border-slate-200 bg-white p-3">
-            <summary className={summaryButtonClass("secondary")}>
-              Manage
-            </summary>
+            <details className="group rounded-2xl border border-slate-200 bg-white p-3">
+              <summary className={summaryButtonClass("secondary")}>
+                Manage
+              </summary>
 
-            <div className="mt-3 grid gap-3 lg:grid-cols-2">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Quick changes
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <form action="/api/team/appointments/status" method="post">
-                    <input type="hidden" name="appointmentId" value={a.id} />
-                    <input type="hidden" name="status" value="no_show" />
-                    <SubmitButton
-                      className={teamButtonClass("secondary", "sm")}
-                      pendingLabel="Saving..."
-                    >
-                      No-show
-                    </SubmitButton>
-                  </form>
-                  <form action="/api/team/appointments/status" method="post">
-                    <input type="hidden" name="appointmentId" value={a.id} />
-                    <input type="hidden" name="status" value="canceled" />
-                    <SubmitButton
-                      className={teamButtonClass("danger", "sm")}
-                      pendingLabel="Saving..."
-                    >
-                      Cancel appointment
-                    </SubmitButton>
-                  </form>
-                  <a
-                    href={`/schedule?appointmentId=${encodeURIComponent(a.id)}&token=${encodeURIComponent(a.rescheduleToken)}`}
-                    className={teamButtonClass("secondary", "sm")}
-                  >
-                    Reschedule link
-                  </a>
-                </div>
-              </div>
-
-              <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Reschedule
-                </summary>
-                <form
-                  action={rescheduleAppointmentAction}
-                  className="mt-3 flex flex-col gap-2"
-                >
-                  <input type="hidden" name="appointmentId" value={a.id} />
-                  <label className="flex flex-col gap-1">
-                    <span>Date</span>
-                    <input
-                      type="date"
-                      name="preferredDate"
-                      defaultValue={a.startAt ? a.startAt.slice(0, 10) : ""}
-                      required
-                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span>Time</span>
-                    <input
-                      type="time"
-                      name="startTime"
-                      defaultValue={fmtTimeInputValue(a.startAt)}
-                      step={900}
-                      required
-                      className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    />
-                    <span className="text-[11px] text-slate-500">
-                      Times are saved in Eastern time.
-                    </span>
-                  </label>
-                  <SubmitButton
-                    className={teamButtonClass("primary", "sm")}
-                    pendingLabel="Saving..."
-                  >
-                    Save new time
-                  </SubmitButton>
-                </form>
-              </details>
-
-              {!item.isQuoteOnly ? (
-                <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
-                  <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    Edit booking details
-                  </summary>
-                  <form
-                    action={updateAppointmentBookingDetailsAction}
-                    className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
-                  >
-                    <input type="hidden" name="appointmentId" value={a.id} />
-                    <AppointmentBookingDetailsFields
-                      teamMembers={teamMembers}
-                      bookingDetails={a.bookingDetails}
-                      quotedTotalCents={a.quotedTotalCents}
-                      allowServiceTypeSelection
-                      labelClassName="flex flex-col gap-1"
-                      fieldClassName="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                    />
-                    <div className="sm:col-span-2 flex items-center justify-end">
+              <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Quick changes
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <form action="/api/team/appointments/status" method="post">
+                      <input type="hidden" name="appointmentId" value={a.id} />
+                      <input type="hidden" name="status" value="no_show" />
                       <SubmitButton
-                        className={teamButtonClass("primary", "sm")}
+                        className={teamButtonClass("secondary", "sm")}
                         pendingLabel="Saving..."
                       >
-                        Save booking details
+                        No-show
                       </SubmitButton>
-                    </div>
-                  </form>
-                </details>
-              ) : null}
+                    </form>
+                    <form action="/api/team/appointments/status" method="post">
+                      <input type="hidden" name="appointmentId" value={a.id} />
+                      <input type="hidden" name="status" value="canceled" />
+                      <SubmitButton
+                        className={teamButtonClass("danger", "sm")}
+                        pendingLabel="Saving..."
+                      >
+                        Cancel appointment
+                      </SubmitButton>
+                    </form>
+                    <a
+                      href={`/schedule?appointmentId=${encodeURIComponent(a.id)}&token=${encodeURIComponent(a.rescheduleToken)}`}
+                      className={teamButtonClass("secondary", "sm")}
+                    >
+                      Reschedule link
+                    </a>
+                  </div>
+                </div>
 
-              {!item.isQuoteOnly ? (
-                <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
+                <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                   <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                    Edit seller
+                    Reschedule
                   </summary>
                   <form
-                    action={updateAppointmentSoldByAction}
-                    className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
+                    action={rescheduleAppointmentAction}
+                    className="mt-3 flex flex-col gap-2"
                   >
                     <input type="hidden" name="appointmentId" value={a.id} />
                     <label className="flex flex-col gap-1">
-                      <span>Who sold the job?</span>
-                      <select
-                        name="soldByMemberId"
-                        defaultValue={
-                          a.soldByMemberId ??
-                          a.contact.assignedAssociateMemberId ??
-                          ""
-                        }
-                        required
-                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                      >
-                        <option value="">(Select seller)</option>
-                        {teamMembers.map((member) => (
-                          <option key={member.id} value={member.id}>
-                            {member.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span>Seller override code</span>
+                      <span>Date</span>
                       <input
-                        name="soldByOverrideCode"
-                        type="password"
-                        autoComplete="off"
-                        placeholder="Required if changing seller"
+                        type="date"
+                        name="preferredDate"
+                        defaultValue={a.startAt ? a.startAt.slice(0, 10) : ""}
+                        required
                         className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
                       />
                     </label>
-                    <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-600">
-                      Sales payouts use this seller. Completed jobs update
-                      draft payout reports immediately. Locked or paid payout
-                      periods must be unlocked before seller changes.
-                    </div>
-                    <div className="sm:col-span-2 flex items-center justify-end">
-                      <SubmitButton
-                        className={teamButtonClass("primary", "sm")}
-                        pendingLabel="Saving..."
-                      >
-                        Save seller
-                      </SubmitButton>
-                    </div>
+                    <label className="flex flex-col gap-1">
+                      <span>Time</span>
+                      <input
+                        type="time"
+                        name="startTime"
+                        defaultValue={fmtTimeInputValue(a.startAt)}
+                        step={900}
+                        required
+                        className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                      <span className="text-[11px] text-slate-500">
+                        Times are saved in Eastern time.
+                      </span>
+                    </label>
+                    <SubmitButton
+                      className={teamButtonClass("primary", "sm")}
+                      pendingLabel="Saving..."
+                    >
+                      Save new time
+                    </SubmitButton>
                   </form>
                 </details>
-              ) : null}
 
-              <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
-                <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                  Notes
-                </summary>
-                {a.notes.length ? (
-                  <div className="mt-3 space-y-2">
-                    {a.notes.map((note) => (
-                      <div
-                        key={note.id}
-                        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-                      >
-                        <div>{note.body}</div>
-                        <div className="mt-1 text-[11px] text-slate-500">
-                          {new Date(note.createdAt).toLocaleString(undefined, {
-                            timeZone: TEAM_TIME_ZONE,
-                          })}
-                        </div>
+                {!item.isQuoteOnly ? (
+                  <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
+                    <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Edit booking details
+                    </summary>
+                    <form
+                      action={updateAppointmentBookingDetailsAction}
+                      className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
+                    >
+                      <input type="hidden" name="appointmentId" value={a.id} />
+                      <AppointmentBookingDetailsFields
+                        teamMembers={teamMembers}
+                        bookingDetails={a.bookingDetails}
+                        quotedTotalCents={a.quotedTotalCents}
+                        allowServiceTypeSelection
+                        labelClassName="flex flex-col gap-1"
+                        fieldClassName="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                      />
+                      <div className="sm:col-span-2 flex items-center justify-end">
+                        <SubmitButton
+                          className={teamButtonClass("primary", "sm")}
+                          pendingLabel="Saving..."
+                        >
+                          Save booking details
+                        </SubmitButton>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-3 text-sm text-slate-500">
-                    No notes yet.
-                  </div>
-                )}
-                <form
-                  action="/api/team/appointments/notes"
-                  method="post"
-                  className="mt-3 flex flex-col gap-2 sm:flex-row"
-                >
-                  <input type="hidden" name="appointmentId" value={a.id} />
-                  <input
-                    name="body"
-                    placeholder="Add note"
-                    className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                  />
-                  <SubmitButton
-                    className={teamButtonClass("primary", "sm")}
-                    pendingLabel="Saving..."
+                    </form>
+                  </details>
+                ) : null}
+
+                {!item.isQuoteOnly ? (
+                  <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
+                    <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Edit seller
+                    </summary>
+                    <form
+                      action={updateAppointmentSoldByAction}
+                      className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2"
+                    >
+                      <input type="hidden" name="appointmentId" value={a.id} />
+                      <label className="flex flex-col gap-1">
+                        <span>Who sold the job?</span>
+                        <select
+                          name="soldByMemberId"
+                          defaultValue={
+                            a.soldByMemberId ??
+                            a.contact.assignedAssociateMemberId ??
+                            ""
+                          }
+                          required
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        >
+                          <option value="">(Select seller)</option>
+                          {teamMembers.map((member) => (
+                            <option key={member.id} value={member.id}>
+                              {member.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span>Seller override code</span>
+                        <input
+                          name="soldByOverrideCode"
+                          type="password"
+                          autoComplete="off"
+                          placeholder="Required if changing seller"
+                          className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-600">
+                        Sales payouts use this seller. Completed jobs update
+                        draft payout reports immediately. Locked or paid payout
+                        periods must be unlocked before seller changes.
+                      </div>
+                      <div className="sm:col-span-2 flex items-center justify-end">
+                        <SubmitButton
+                          className={teamButtonClass("primary", "sm")}
+                          pendingLabel="Saving..."
+                        >
+                          Save seller
+                        </SubmitButton>
+                      </div>
+                    </form>
+                  </details>
+                ) : null}
+
+                <details className="rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:col-span-2">
+                  <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Notes
+                  </summary>
+                  {a.notes.length ? (
+                    <div className="mt-3 space-y-2">
+                      {a.notes.map((note) => (
+                        <div
+                          key={note.id}
+                          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
+                        >
+                          <div>{note.body}</div>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            {new Date(note.createdAt).toLocaleString(
+                              undefined,
+                              {
+                                timeZone: TEAM_TIME_ZONE,
+                              },
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-3 text-sm text-slate-500">
+                      No notes yet.
+                    </div>
+                  )}
+                  <form
+                    action="/api/team/appointments/notes"
+                    method="post"
+                    className="mt-3 flex flex-col gap-2 sm:flex-row"
                   >
-                    Save note
-                  </SubmitButton>
-                </form>
-              </details>
-            </div>
-          </details>
+                    <input type="hidden" name="appointmentId" value={a.id} />
+                    <input
+                      name="body"
+                      placeholder="Add note"
+                      className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                    />
+                    <SubmitButton
+                      className={teamButtonClass("primary", "sm")}
+                      pendingLabel="Saving..."
+                    >
+                      Save note
+                    </SubmitButton>
+                  </form>
+                </details>
+              </div>
+            </details>
           ) : null}
         </div>
       ) : a.notes.length && mode === "manage" ? (
@@ -1398,16 +1271,14 @@ export async function MyDaySection({
   let completedTodayAppointments: AppointmentDto[] = [];
   let loadMessages: string[] = [];
   let teamMembers: TeamMemberDto[] = [];
-  let etaDrafts: EtaDraftDto[] = [];
 
   try {
-    const [confirmedRes, completedTodayRes, membersRes, etaDraftsRes] = await Promise.all([
+    const [confirmedRes, completedTodayRes, membersRes] = await Promise.all([
       callAdminApi("/api/appointments?status=confirmed"),
       callAdminApi(
         `/api/appointments?status=completed&startAtFrom=${encodeURIComponent(todayRange.startIso)}&startAtTo=${encodeURIComponent(todayRange.endIso)}`,
       ),
       callAdminApi("/api/admin/team/directory"),
-      callAdminApi("/api/admin/eta/drafts?status=draft&limit=8"),
     ]);
 
     if (!confirmedRes.ok) {
@@ -1449,13 +1320,6 @@ export async function MyDaySection({
         members?: TeamMemberDto[];
       };
       teamMembers = payload.members ?? [];
-    }
-
-    if (etaDraftsRes.ok) {
-      const payload = (await etaDraftsRes.json()) as {
-        drafts?: EtaDraftDto[];
-      };
-      etaDrafts = payload.drafts ?? [];
     }
   } catch (error) {
     loadMessages = [`Appointments request error: ${(error as Error).message}`];
@@ -1554,8 +1418,6 @@ export async function MyDaySection({
       {!hasAnySections ? (
         <p className={TEAM_EMPTY_STATE}>No confirmed visits.</p>
       ) : null}
-
-      <EtaDraftReviewPanel drafts={etaDrafts} />
 
       {upNext ? (
         <AppointmentSection

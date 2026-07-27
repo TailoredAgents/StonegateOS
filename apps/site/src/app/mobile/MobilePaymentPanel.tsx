@@ -72,7 +72,10 @@ function platform(): "ios" | "android" {
     : "android";
 }
 
-function openSquare(launchUrl: string, targetPlatform: "ios" | "android"): void {
+function openSquare(
+  launchUrl: string,
+  targetPlatform: "ios" | "android",
+): void {
   if (targetPlatform !== "ios") {
     window.location.assign(launchUrl);
     return;
@@ -96,9 +99,10 @@ async function errorMessage(
   response: Response,
   fallback: string,
 ): Promise<string> {
-  const payload = (await response.json().catch(() => null)) as
-    | Record<string, unknown>
-    | null;
+  const payload = (await response.json().catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
   const candidate = payload?.["message"] ?? payload?.["error"];
   if (typeof candidate === "string" && candidate.trim()) {
     const code = candidate.trim();
@@ -212,23 +216,20 @@ export function MobilePaymentPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           finalTotalCents,
-          ...(changeReason.trim()
-            ? { changeReason: changeReason.trim() }
-            : {}),
+          ...(changeReason.trim() ? { changeReason: changeReason.trim() } : {}),
         }),
       },
     );
     if (!response.ok) {
-      setMessage(await errorMessage(response, "Unable to save the final total."));
+      setMessage(
+        await errorMessage(response, "Unable to save the final total."),
+      );
       return false;
     }
     setSummary((current) => ({
       ...current,
       jobTotalCents: finalTotalCents,
-      balanceCents: Math.max(
-        finalTotalCents - current.paidTowardJobCents,
-        0,
-      ),
+      balanceCents: Math.max(finalTotalCents - current.paidTowardJobCents, 0),
       status:
         current.paidTowardJobCents === 0
           ? "unpaid"
@@ -271,9 +272,10 @@ export function MobilePaymentPanel({
       setBusy(null);
       return;
     }
-    const payload = (await response.json().catch(() => null)) as
-      | Record<string, unknown>
-      | null;
+    const payload = (await response.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
     const launchUrl = payload?.["launchUrl"];
     if (typeof launchUrl !== "string" || !launchUrl) {
       setMessage("Square did not return a launch link.");
@@ -301,9 +303,7 @@ export function MobilePaymentPanel({
       setBusy(null);
       return;
     }
-    const tipCents = manualTip.trim()
-      ? centsFromDollars(manualTip)
-      : 0;
+    const tipCents = manualTip.trim() ? centsFromDollars(manualTip) : 0;
     if (tipCents == null) {
       setMessage("Enter a valid tip or leave it blank.");
       setBusy(null);
@@ -323,13 +323,11 @@ export function MobilePaymentPanel({
       },
     );
     if (!response.ok) {
-      setMessage(
-        await errorMessage(response, "Unable to record the payment."),
-      );
+      setMessage(await errorMessage(response, "Unable to record the payment."));
     } else {
-      const payload = (await response.json().catch(() => null)) as
-        | { paymentSummary?: AppointmentPaymentSummary }
-        | null;
+      const payload = (await response.json().catch(() => null)) as {
+        paymentSummary?: AppointmentPaymentSummary;
+      } | null;
       if (payload?.paymentSummary) setSummary(payload.paymentSummary);
       setMessage(
         `${manualTender === "cash" ? "Cash" : "Check"} payment recorded. Job completion is still separate.`,
@@ -345,10 +343,7 @@ export function MobilePaymentPanel({
   const enteredFinalTotalCents = centsFromDollars(finalTotal);
   const actionBalance =
     enteredFinalTotalCents != null && enteredFinalTotalCents > 0
-      ? Math.max(
-          enteredFinalTotalCents - summary.paidTowardJobCents,
-          0,
-        )
+      ? Math.max(enteredFinalTotalCents - summary.paidTowardJobCents, 0)
       : balance;
   const canStartPayment =
     canCollect &&
@@ -408,75 +403,110 @@ export function MobilePaymentPanel({
           </p>
         ) : null}
 
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <div className="rounded-md border border-white/10 bg-slate-900 p-3">
-            <p className="text-xs text-slate-400">Final job total</p>
-            <p className="mt-1 font-semibold">
+        <div className="rounded-md border border-white/10 bg-slate-900 p-3 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-slate-400">Balance</span>
+            <span className="text-base font-semibold text-white">
+              {formatMoney(summary.balanceCents)}
+            </span>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+            <span className="text-slate-500">Final job total</span>
+            <span className="font-semibold text-slate-300">
               {formatMoney(summary.jobTotalCents)}
-            </p>
+            </span>
           </div>
-          <div className="rounded-md border border-white/10 bg-slate-900 p-3">
-            <p className="text-xs text-slate-400">Paid toward job</p>
-            <p className="mt-1 font-semibold">
-              {formatMoney(summary.paidTowardJobCents)}
-            </p>
-          </div>
-          <div className="rounded-md border border-white/10 bg-slate-900 p-3">
-            <p className="text-xs text-slate-400">Tips</p>
-            <p className="mt-1 font-semibold">
-              {formatMoney(summary.tipCents)}
-            </p>
-          </div>
-          <div className="rounded-md border border-white/10 bg-slate-900 p-3">
-            <p className="text-xs text-slate-400">Refunded</p>
-            <p className="mt-1 font-semibold">
-              {formatMoney(summary.refundedCents)}
-            </p>
-          </div>
+          {summary.paidTowardJobCents > 0 ? (
+            <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+              <span className="text-slate-500">Paid toward job</span>
+              <span className="font-semibold text-emerald-200">
+                {formatMoney(summary.paidTowardJobCents)}
+              </span>
+            </div>
+          ) : null}
+          {summary.tipCents > 0 ? (
+            <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+              <span className="text-slate-500">Tips</span>
+              <span className="font-semibold text-slate-300">
+                {formatMoney(summary.tipCents)}
+              </span>
+            </div>
+          ) : null}
+          {summary.refundedCents > 0 ? (
+            <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+              <span className="text-slate-500">Refunded</span>
+              <span className="font-semibold text-amber-200">
+                {formatMoney(summary.refundedCents)}
+              </span>
+            </div>
+          ) : null}
         </div>
 
         {canCollect ? (
           <>
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-300">
-                Final job total
-              </span>
-              <div className="mt-1 flex items-center rounded-md border border-white/10 bg-slate-900 focus-within:border-cyan-300">
-                <span className="pl-3 text-slate-400">$</span>
-                <input
-                  value={finalTotal}
-                  onChange={(event) => setFinalTotal(event.target.value)}
-                  inputMode="decimal"
-                  disabled={Boolean(summary.activeAttemptId)}
-                  className="min-w-0 flex-1 bg-transparent px-2 py-3 text-base text-white outline-none disabled:cursor-not-allowed disabled:text-slate-400"
-                  placeholder="350.00"
-                />
-              </div>
-            </label>
-            {summary.activeAttemptId ? (
-              <p className="text-xs leading-5 text-amber-100">
-                The final total is locked while this Square attempt is active.
-              </p>
-            ) : null}
-            {summary.paidTowardJobCents > 0 && isOwner ? (
+            {summary.jobTotalCents == null ? (
               <label className="block">
                 <span className="text-xs font-semibold text-slate-300">
-                  Reason for total change
+                  Set final job total
                 </span>
-                <input
-                  value={changeReason}
-                  onChange={(event) => setChangeReason(event.target.value)}
-                  maxLength={500}
-                  className="mt-1 w-full rounded-md border border-white/10 bg-slate-900 px-3 py-2 text-base text-white"
-                  placeholder="Required if changing a paid job"
-                />
+                <div className="mt-1 flex items-center rounded-md border border-white/10 bg-slate-900 focus-within:border-cyan-300">
+                  <span className="pl-3 text-slate-400">$</span>
+                  <input
+                    value={finalTotal}
+                    onChange={(event) => setFinalTotal(event.target.value)}
+                    inputMode="decimal"
+                    disabled={Boolean(summary.activeAttemptId)}
+                    className="min-w-0 flex-1 bg-transparent px-2 py-3 text-base text-white outline-none disabled:cursor-not-allowed disabled:text-slate-400"
+                    placeholder="350.00"
+                  />
+                </div>
               </label>
-            ) : null}
-            {summary.paidTowardJobCents > 0 && !isOwner ? (
-              <p className="text-xs leading-5 text-slate-400">
-                Only an owner can change the final total after the first
-                successful payment.
-              </p>
+            ) : summary.paidTowardJobCents === 0 || isOwner ? (
+              <details className="rounded-md border border-white/10 bg-slate-900 p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-slate-200">
+                  Edit final job total
+                </summary>
+                <div className="mt-3 space-y-3">
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-300">
+                      Final job total
+                    </span>
+                    <div className="mt-1 flex items-center rounded-md border border-white/10 bg-slate-950 focus-within:border-cyan-300">
+                      <span className="pl-3 text-slate-400">$</span>
+                      <input
+                        value={finalTotal}
+                        onChange={(event) => setFinalTotal(event.target.value)}
+                        inputMode="decimal"
+                        disabled={Boolean(summary.activeAttemptId)}
+                        className="min-w-0 flex-1 bg-transparent px-2 py-3 text-base text-white outline-none disabled:cursor-not-allowed disabled:text-slate-400"
+                        placeholder="350.00"
+                      />
+                    </div>
+                  </label>
+                  {summary.paidTowardJobCents > 0 && isOwner ? (
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-300">
+                        Reason for total change
+                      </span>
+                      <input
+                        value={changeReason}
+                        onChange={(event) =>
+                          setChangeReason(event.target.value)
+                        }
+                        maxLength={500}
+                        className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white"
+                        placeholder="Required if changing a paid job"
+                      />
+                    </label>
+                  ) : null}
+                  {summary.activeAttemptId ? (
+                    <p className="text-xs leading-5 text-amber-100">
+                      The final total is locked while this Square attempt is
+                      active.
+                    </p>
+                  ) : null}
+                </div>
+              </details>
             ) : null}
 
             <button

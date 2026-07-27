@@ -1,7 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { MobilePaymentPanel, type AppointmentPaymentSummary } from "./MobilePaymentPanel";
+import {
+  MobilePaymentPanel,
+  type AppointmentPaymentSummary,
+} from "./MobilePaymentPanel";
 import {
   MobileQuotedWorkPanel,
   type AppointmentMediaSummary,
@@ -16,10 +19,7 @@ export type MobileAppointmentNote = {
 export function MobileAppointmentDetail({
   appointmentId,
   employeeId,
-  address,
-  mapsHref,
   notes,
-  pricingLabel,
   quotedScopeText,
   mediaSummary,
   paymentSummary,
@@ -31,10 +31,7 @@ export function MobileAppointmentDetail({
 }: {
   appointmentId: string;
   employeeId: string;
-  address: string | null | undefined;
-  mapsHref: string | null;
   notes: MobileAppointmentNote[] | undefined;
-  pricingLabel: string | null;
   quotedScopeText: string | null;
   mediaSummary: AppointmentMediaSummary;
   paymentSummary: AppointmentPaymentSummary | null;
@@ -52,30 +49,30 @@ export function MobileAppointmentDetail({
 
   return (
     <>
-      {mapsHref && address ? (
-        <a
-          href={mapsHref}
-          target="_blank"
-          rel="noreferrer"
-          className="block rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold leading-5 text-cyan-100 underline-offset-4 hover:underline"
-        >
-          {address}
-        </a>
-      ) : address ? (
-        <p className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm leading-5 text-slate-300">
-          {address}
-        </p>
+      <MobileQuotedWorkPanel
+        appointmentId={appointmentId}
+        employeeId={employeeId}
+        initialScope={quotedScopeText}
+        initialSummary={{ ...mediaSummary, needsScope }}
+        canCapture={canCaptureMedia}
+        canManage={canManageMedia}
+        onScopeRequirementChange={setNeedsScope}
+      />
+      {canReadPayments && paymentSummary ? (
+        <MobilePaymentPanel
+          appointmentId={appointmentId}
+          initialSummary={paymentSummary}
+          canCollect={canCollectPayments}
+          isOwner={isOwner}
+          needsScope={needsScope}
+        />
       ) : null}
-
       {notes?.length ? (
-        <details
-          className="rounded-md border border-white/10 bg-slate-950 p-3"
-          open={notes.length <= 2}
-        >
-          <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+        <details className="rounded-md border border-white/10 bg-slate-950 px-3">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
             Notes ({notes.length})
           </summary>
-          <div className="mt-2 space-y-2">
+          <div className="space-y-2 pb-3">
             {notes.slice(0, 5).map((note) => (
               <div
                 key={note.id}
@@ -97,35 +94,6 @@ export function MobileAppointmentDetail({
             ))}
           </div>
         </details>
-      ) : (
-        <div className="rounded-md border border-dashed border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-500">
-          No notes.
-        </div>
-      )}
-
-      {pricingLabel ? (
-        <div className="rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-sm font-semibold text-cyan-100">
-          {pricingLabel}
-        </div>
-      ) : null}
-
-      <MobileQuotedWorkPanel
-        appointmentId={appointmentId}
-        employeeId={employeeId}
-        initialScope={quotedScopeText}
-        initialSummary={{ ...mediaSummary, needsScope }}
-        canCapture={canCaptureMedia}
-        canManage={canManageMedia}
-        onScopeRequirementChange={setNeedsScope}
-      />
-      {canReadPayments && paymentSummary ? (
-        <MobilePaymentPanel
-          appointmentId={appointmentId}
-          initialSummary={paymentSummary}
-          canCollect={canCollectPayments}
-          isOwner={isOwner}
-          needsScope={needsScope}
-        />
       ) : null}
     </>
   );

@@ -30,6 +30,10 @@ type OfflineJob = OfflineAppointmentSnapshot & {
   queue: QueuedMediaUpload[];
 };
 
+function directionsHref(address: string): string {
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`;
+}
+
 function OfflineQueueList({
   employeeId,
   items,
@@ -376,7 +380,15 @@ export default function MobileOfflinePage() {
                   {job.contactName}
                 </h2>
                 {job.address ? (
-                  <p className="mt-1 text-sm text-slate-300">{job.address}</p>
+                  <a
+                    href={directionsHref(job.address)}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(event) => event.stopPropagation()}
+                    className="mt-1 block text-sm font-semibold text-cyan-100 underline-offset-4 hover:underline"
+                  >
+                    {job.address}
+                  </a>
                 ) : null}
               </summary>
               <div className="space-y-4 border-t border-white/10 p-4">

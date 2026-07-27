@@ -1,5 +1,5 @@
 import { test, expect } from "../test";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { getAppointmentStartAt, getLatestE2ESeedSummary } from "../support/db";
 
 type PaymentSummary = {
@@ -94,8 +94,98 @@ async function openSeededPayment(
   await page.getByText("Payment", { exact: true }).click();
 }
 
+async function expectMinimumTapHeight(
+  locator: Locator,
+  minimumHeight = 44,
+): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box, "expected a visible tap target").not.toBeNull();
+  expect(box?.height ?? 0).toBeGreaterThanOrEqual(minimumHeight);
+}
+
+async function expectNoEtaControls(card: Locator): Promise<void> {
+  await expect(card.getByText(/^ETA$/u)).toHaveCount(0);
+  for (const oldEtaControl of [
+    "Heading",
+    "On site",
+    "Need dump",
+    "Dump done",
+    "Finished",
+  ]) {
+    await expect(
+      card.getByRole("button", {
+        name: oldEtaControl,
+        exact: true,
+      }),
+    ).toHaveCount(0);
+  }
+}
+
 test.describe("Mobile appointment quoted work and payments", () => {
   test.use({ storageState: "tests/e2e/storage/mobile-owner.json" });
+
+  test("keeps My Day and Calendar appointment cards compact and actionable", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { startAt } = await seededAppointment();
+    const appointmentDay = easternDayKey(startAt);
+
+    for (const screen of ["myday", "calendar"] as const) {
+      await page.goto(`/mobile?screen=${screen}&date=${appointmentDay}`);
+
+      const card = page.getByRole("article").filter({ hasText: "E2E Contact" });
+      await expect(card).toBeVisible();
+
+      const toggle = card.getByRole("button", {
+        name: /E2E Contact/u,
+      });
+      const directions = card.getByRole("link", {
+        name: /^Open directions to /u,
+      });
+
+      const initiallyExpanded =
+        (await toggle.getAttribute("aria-expanded")) === "true";
+      if (screen === "calendar") {
+        expect(initiallyExpanded).toBe(false);
+      }
+      if (!initiallyExpanded) {
+        await expect(
+          card.getByText("Quoted Work", { exact: true }),
+        ).toHaveCount(0);
+        await expect(card.getByText("Payment", { exact: true })).toHaveCount(0);
+      }
+
+      await expect(directions).toBeVisible();
+      await expect(directions).toHaveAttribute(
+        "href",
+        /^https:\/\/www\.google\.com\/maps\/dir\//u,
+      );
+      await expectMinimumTapHeight(toggle);
+      await expectMinimumTapHeight(directions);
+
+      await expect(
+        card.getByRole("button", { name: "Map", exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        card.getByRole("link", { name: "Map", exact: true }),
+      ).toHaveCount(0);
+      await expectNoEtaControls(card);
+
+      if (!initiallyExpanded) await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      await expect(
+        card.getByText("Quoted Work", { exact: true }),
+      ).toBeVisible();
+      await expect(card.getByText("Payment", { exact: true })).toBeVisible();
+      await expectNoEtaControls(card);
+    }
+  });
 
   test("drains photos queued during an active sync even when online status is wrong", async ({
     page,
@@ -673,10 +763,14 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     await page.getByText("Quoted Work", { exact: true }).click();
     await expect(
-      page.locator('textarea[placeholder^="Example: Remove"]'),
-    ).toHaveValue(
-      "Remove the sectional and boxed garage items shown in the photos.",
-    );
+      page.getByText(
+        "Remove the sectional and boxed garage items shown in the photos.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Manage quoted work" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("img", { name: "Sectional in garage" }),
     ).toBeVisible();
@@ -827,6 +921,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await openSeededPayment(page, appointmentId, startAt);
+    await page.getByText("Edit final job total", { exact: true }).click();
     const finalTotal = page.locator('input[placeholder="350.00"]');
     await expect(finalTotal).toBeDisabled();
     await expect(
@@ -1013,6 +1108,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
     await page.getByText("E2E Contact", { exact: true }).click();
     await page.getByText("Quoted Work", { exact: true }).click();
+    await page.getByRole("button", { name: "Manage quoted work" }).click();
 
     const scope = page.locator('textarea[placeholder^="Example: Remove"]');
     await scope.fill("Remove the blue chair shown in the crew photo.");
