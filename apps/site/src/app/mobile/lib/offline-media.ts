@@ -837,6 +837,23 @@ export async function listEmployeeQueue(
     .sort((left, right) => left.createdAt - right.createdAt);
 }
 
+async function getQueuedMediaByPrimaryKey(
+  clientId: string,
+): Promise<QueuedMediaUpload | null> {
+  const database = await openDatabase();
+  const transaction = database.transaction(QUEUE_STORE, "readonly");
+  const completion = transactionDone(transaction);
+  const row = (await requestResult(
+    // WebKit can lose the private file path backing a Blob when its record is
+    // returned through IDBIndex/getAll. A primary-key read restores a usable
+    // handle to the exact persisted bytes.
+    transaction.objectStore(QUEUE_STORE).get(clientId),
+  )) as QueuedMediaUpload | undefined;
+  await completion;
+  database.close();
+  return row ?? null;
+}
+
 async function getOrCreateMobileDeviceId(): Promise<string> {
   const database = await openDatabase();
   const transaction = database.transaction(METADATA_STORE, "readwrite");
@@ -1227,8 +1244,14 @@ async function materializeQueuedUploadBody(
   for (const read of readers) {
     try {
       const bytes = await read();
-      if (bytes.byteLength === row.byteCount) return bytes;
-      sawSizeMismatch = true;
+      if (bytes.byteLength !== row.byteCount) {
+        sawSizeMismatch = true;
+        continue;
+      }
+      const checksum = bytesToHex(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+      );
+      if (checksum === row.checksumSha256.toLowerCase()) return bytes;
     } catch {
       // Try a separate WebKit Blob reader before leaving the row queued.
     }
@@ -1241,58 +1264,6 @@ async function materializeQueuedUploadBody(
   );
 }
 
-function canUseSameOriginBlobXhr(uploadUrl: string): boolean {
-  if (typeof window === "undefined" || typeof XMLHttpRequest === "undefined") {
-    return false;
-  }
-  try {
-    return (
-      new URL(uploadUrl, window.location.href).origin === window.location.origin
-    );
-  } catch {
-    return false;
-  }
-}
-
-function uploadQueuedBlobWithXhr(
-  uploadUrl: string,
-  headers: Record<string, string>,
-  blob: Blob,
-): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open("PUT", uploadUrl, true);
-    request.timeout = OBJECT_UPLOAD_TIMEOUT_MS;
-    request.onload = () => {
-      if (request.status === 0) {
-        reject(new TypeError("object_upload_failed"));
-        return;
-      }
-      resolve(
-        new Response(request.responseText, {
-          status: request.status,
-          statusText: request.statusText,
-        }),
-      );
-    };
-    request.onerror = () => reject(new TypeError("object_upload_failed"));
-    request.onabort = () =>
-      reject(new DOMException("object_upload_aborted", "AbortError"));
-    request.ontimeout = () =>
-      reject(new DOMException("object_upload_timeout", "AbortError"));
-    try {
-      for (const [name, value] of Object.entries(headers)) {
-        request.setRequestHeader(name, value);
-      }
-      request.send(blob);
-    } catch (error) {
-      reject(
-        error instanceof Error ? error : new Error("object_upload_failed"),
-      );
-    }
-  });
-}
-
 async function uploadQueuedObject(
   row: QueuedMediaUpload,
   intent: UploadIntent,
@@ -1301,23 +1272,6 @@ async function uploadQueuedObject(
     "content-type": row.contentType,
     ...intent.headers,
   };
-
-  if (canUseSameOriginBlobXhr(intent.uploadUrl)) {
-    try {
-      const response = await uploadQueuedBlobWithXhr(
-        intent.uploadUrl,
-        headers,
-        row.blob,
-      );
-      if (response.ok || (response.status !== 400 && response.status !== 422)) {
-        return response;
-      }
-      // A zero-byte WebKit serialization is rejected by the relay. Retry once
-      // through independent Blob readers before preserving the queue.
-    } catch {
-      // A native XHR failure can still be recovered by a concrete ArrayBuffer.
-    }
-  }
 
   const uploadBody = await materializeQueuedUploadBody(row);
   return fetchWithTimeout(
@@ -1332,9 +1286,17 @@ async function uploadQueuedObject(
 }
 
 async function uploadQueueRow(
-  row: QueuedMediaUpload,
+  indexedRow: QueuedMediaUpload,
 ): Promise<"success" | QueueUploadFailureMode> {
   try {
+    const row = await getQueuedMediaByPrimaryKey(indexedRow.clientId);
+    if (
+      !row ||
+      row.employeeId !== indexedRow.employeeId ||
+      row.appointmentId !== indexedRow.appointmentId
+    ) {
+      throw new QueueUploadError("queued_media_primary_read_failed", "retry");
+    }
     const { response: intentResponse, payload: intentPayload } =
       await fetchJsonWithTimeout(
         `/api/mobile/appointments/${encodeURIComponent(row.appointmentId)}/media/upload-intents`,
