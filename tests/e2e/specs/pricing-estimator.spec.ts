@@ -2,23 +2,21 @@ import { test, expect } from "../test";
 import type { Locator } from "@playwright/test";
 
 async function setRange(locator: Locator, value: number) {
-  await locator.evaluate((element, next) => {
-    if (!(element instanceof HTMLInputElement)) {
-      throw new Error("Expected input element");
-    }
+  const current = Number(await locator.inputValue());
+  const step = Number((await locator.getAttribute("step")) ?? "1");
+  const distance = value - current;
+  if (!Number.isFinite(current) || step <= 0 || distance % step !== 0) {
+    throw new Error(
+      `Cannot move range from ${current} to ${value} in steps of ${step}`,
+    );
+  }
 
-    const nativeValueSetter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    )?.set;
-    if (!nativeValueSetter) {
-      throw new Error("Expected the native input value setter");
-    }
+  await locator.focus();
+  const key = distance >= 0 ? "ArrowRight" : "ArrowLeft";
+  for (let index = 0; index < Math.abs(distance / step); index += 1) {
+    await locator.press(key);
+  }
 
-    nativeValueSetter.call(element, String(next));
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
   await expect(locator).toHaveValue(String(value));
 }
 

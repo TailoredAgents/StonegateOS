@@ -12,6 +12,7 @@ import {
   getRememberedMobileEmployee,
   isInterruptedQueueRow,
   listEmployeeQueue,
+  offlineMediaBlob,
   queueMediaUpload,
   registerMediaBackgroundSync,
   reportOfflineQueueHealth,
@@ -156,7 +157,7 @@ export default function MobileOfflinePage() {
           ...snapshot,
           media: media.map((item) => ({
             ...item,
-            objectUrl: URL.createObjectURL(item.blob),
+            objectUrl: URL.createObjectURL(offlineMediaBlob(item)),
           })),
           queue: queuedItems.filter(
             (item) => item.appointmentId === snapshot.appointmentId,

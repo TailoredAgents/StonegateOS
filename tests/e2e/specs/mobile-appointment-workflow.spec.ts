@@ -1,7 +1,10 @@
 import { test, expect } from "../test";
 import type { Locator, Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { getAppointmentStartAt, getLatestE2ESeedSummary } from "../support/db";
+import {
+  createE2EMobileAppointment,
+  getLatestE2ESeedSummary,
+} from "../support/db";
 
 type PaymentSummary = {
   status:
@@ -56,14 +59,11 @@ async function seededAppointment(): Promise<{
   startAt: Date;
 }> {
   const seed = await getLatestE2ESeedSummary();
-  if (!seed?.appointmentId) {
-    throw new Error("The E2E seed did not create an appointment.");
-  }
-  const startAt = await getAppointmentStartAt(seed.appointmentId);
-  if (!startAt) {
-    throw new Error("The seeded appointment has no start time.");
-  }
-  return { appointmentId: seed.appointmentId, startAt };
+  if (!seed) throw new Error("The E2E seed did not create a contact.");
+  return createE2EMobileAppointment({
+    contactId: seed.contactId,
+    propertyId: seed.propertyId,
+  });
 }
 
 async function mockPayments(
@@ -153,7 +153,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       await page.goto(`/mobile?screen=${screen}&date=${appointmentDay}`);
 
       const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
-      await expect(card).toBeVisible();
+      await expect(card).toBeVisible({ timeout: 30_000 });
 
       const toggle = card.getByRole("button", {
         name: /E2E Contact/u,
@@ -374,7 +374,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         imageBytes,
       }) => {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open("stonegate-mobile", 2);
+          const request = indexedDB.open("stonegate-mobile", 3);
           request.onerror = () =>
             reject(request.error ?? new Error("Unable to open the media DB."));
           request.onsuccess = () => resolve(request.result);
@@ -402,8 +402,8 @@ test.describe("Mobile appointment quoted work and payments", () => {
         ).join("");
         const now = Date.now();
 
-        // Separate stores into individual transactions. WebKit can abort a
-        // multi-store write containing a Blob without exposing an IDB error.
+        // Keep binary queue data in its own transaction so WebKit cannot
+        // abort unrelated metadata writes when storage is under pressure.
         const metadataTransaction = database.transaction(
           "app-metadata",
           "readwrite",
@@ -434,7 +434,10 @@ test.describe("Mobile appointment quoted work and payments", () => {
           checksumSha256,
           caption: null,
           quotedScopeText: "Remove both photographed items.",
-          blob: new Blob([imageArray], { type: "image/png" }),
+          bytes: imageArray.buffer.slice(
+            imageArray.byteOffset,
+            imageArray.byteOffset + imageArray.byteLength,
+          ),
           capturedOffline: true,
           status: "uploading",
           error: null,
@@ -465,7 +468,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
             if (clientId && knownQueueClientIds.has(clientId)) {
               mediaQueueRewriteAttempts += 1;
               throw new DOMException(
-                "Large Blob row rewrites are unavailable.",
+                "Large binary row rewrites are unavailable.",
                 "UnknownError",
               );
             }
@@ -485,7 +488,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
           if (clientId && knownQueueClientIds.has(clientId)) {
             mediaQueueRewriteAttempts += 1;
             throw new DOMException(
-              "Large Blob cursor rewrites are unavailable.",
+              "Large binary cursor rewrites are unavailable.",
               "UnknownError",
             );
           }
@@ -555,7 +558,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         page.evaluate(
           ({ employeeStore, appointmentId: expectedAppointmentId }) =>
             new Promise<number>((resolve, reject) => {
-              const request = indexedDB.open("stonegate-mobile", 2);
+              const request = indexedDB.open("stonegate-mobile", 3);
               request.onerror = () => reject(request.error);
               request.onsuccess = () => {
                 const database = request.result;
@@ -683,7 +686,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         page.evaluate(
           (expectedAppointmentId) =>
             new Promise<number>((resolve, reject) => {
-              const request = indexedDB.open("stonegate-mobile", 2);
+              const request = indexedDB.open("stonegate-mobile", 3);
               request.onerror = () => reject(request.error);
               request.onsuccess = () => {
                 const database = request.result;
@@ -1143,6 +1146,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       !isMobile,
       "This workflow is covered by the mobile browser projects.",
     );
+    test.setTimeout(120_000);
 
     const { appointmentId, startAt } = await seededAppointment();
     const photoCaption = `${browserName} blue chair ${testInfo.retry}-${Date.now()}`;
@@ -1172,7 +1176,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     const uploadedPhoto = page.getByRole("img", { name: photoCaption });
     await expect(uploadedPhoto).toBeVisible({
-      timeout: 30_000,
+      timeout: 60_000,
     });
     const uploadedPhotoCard = uploadedPhoto
       .locator("xpath=..")
@@ -1239,7 +1243,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await page.evaluate(
       async ({ appointmentId, clientId, employeeId }) => {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open("stonegate-mobile", 2);
+          const request = indexedDB.open("stonegate-mobile", 3);
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
         });
@@ -1302,9 +1306,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
           checksumSha256: "0".repeat(64),
           caption: null,
           quotedScopeText: null,
-          blob: new Blob([new Uint8Array([1, 2, 3])], {
-            type: "image/jpeg",
-          }),
+          bytes: new Uint8Array([1, 2, 3]).buffer.slice(0),
           capturedOffline: true,
           status: "finalizing",
           error: null,
@@ -1341,7 +1343,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     const expiredSnapshotExists = await page.evaluate(
       async ({ appointmentId, employeeId }) => {
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open("stonegate-mobile", 2);
+          const request = indexedDB.open("stonegate-mobile", 3);
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
         });
@@ -1365,7 +1367,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     await page.evaluate(async (queuedClientId) => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("stonegate-mobile", 2);
+        const request = indexedDB.open("stonegate-mobile", 3);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });

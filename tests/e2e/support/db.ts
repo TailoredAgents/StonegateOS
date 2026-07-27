@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 
 export type LeadDetails = {
@@ -287,6 +288,45 @@ export async function getAppointmentStartAt(
   if (!value) return null;
   const startAt = new Date(value);
   return Number.isFinite(startAt.getTime()) ? startAt : null;
+}
+
+export async function createE2EMobileAppointment(input: {
+  contactId: string;
+  propertyId: string;
+}): Promise<{ appointmentId: string; startAt: Date }> {
+  const sql = getSql();
+  const startAt = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+  startAt.setUTCHours(18, 0, 0, 0);
+  const rows = await sql<{ appointmentId: string; startAt: Date | string }[]>`
+    INSERT INTO appointments (
+      contact_id,
+      property_id,
+      type,
+      start_at,
+      duration_min,
+      status,
+      reschedule_token
+    )
+    VALUES (
+      ${input.contactId},
+      ${input.propertyId},
+      'service',
+      ${startAt},
+      90,
+      'confirmed',
+      ${randomUUID().replace(/-/gu, "")}
+    )
+    RETURNING id AS "appointmentId", start_at AS "startAt"
+  `;
+  const row = rows[0];
+  if (!row?.appointmentId) {
+    throw new Error("Unable to create an isolated mobile E2E appointment.");
+  }
+  const persistedStartAt = new Date(row.startAt);
+  if (!Number.isFinite(persistedStartAt.getTime())) {
+    throw new Error("The isolated mobile E2E appointment has no start time.");
+  }
+  return { appointmentId: row.appointmentId, startAt: persistedStartAt };
 }
 
 export async function createE2EPhoneOnlyContact(

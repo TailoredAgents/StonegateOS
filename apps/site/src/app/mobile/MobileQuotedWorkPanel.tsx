@@ -9,6 +9,7 @@ import {
   getAppointmentQueue,
   getCachedAppointmentMedia,
   isInterruptedQueueRow,
+  offlineMediaBlob,
   queueMediaUpload,
   retryQueuedMedia,
   syncQueuedMedia,
@@ -280,7 +281,7 @@ export function MobileQuotedWorkPanel({
           nextItems.map((item) => [item.id, item.caption ?? ""]),
         ),
       );
-      await cacheAppointmentMedia(
+      void cacheAppointmentMedia(
         employeeId,
         appointmentId,
         nextItems.map((item) => ({
@@ -294,7 +295,9 @@ export function MobileQuotedWorkPanel({
         appointmentId,
       ).catch(() => []);
       for (const url of cachedObjectUrls.current) URL.revokeObjectURL(url);
-      const urls = cached.map((item) => URL.createObjectURL(item.blob));
+      const urls = cached.map((item) =>
+        URL.createObjectURL(offlineMediaBlob(item)),
+      );
       cachedObjectUrls.current = urls;
       setItems(
         cached.map((item, index) => ({
@@ -362,6 +365,7 @@ export function MobileQuotedWorkPanel({
         return;
       }
       setBusy("upload");
+      let preparationError: string | null = null;
       for (const file of selected) {
         try {
           await queueMediaUpload({
@@ -373,13 +377,15 @@ export function MobileQuotedWorkPanel({
             quotedScopeText: canManage ? scope : null,
           });
         } catch (error) {
-          setMessage(friendlyError(error));
+          preparationError = friendlyError(error);
+          setMessage(preparationError);
         }
       }
       await refreshQueue();
       await syncQueuedMedia(employeeId).catch(() => undefined);
       await refreshQueue();
       await load();
+      if (preparationError) setMessage(preparationError);
       router.refresh();
     } finally {
       input.value = "";

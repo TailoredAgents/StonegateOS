@@ -1,6 +1,6 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v10";
+const SHELL_CACHE = "stonegate-mobile-shell-v11";
 const DATABASE_NAME = "stonegate-mobile";
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const SNAPSHOT_STORE = "appointment-snapshots";
 const MEDIA_STORE = "appointment-media";
 const QUEUE_STORE = "media-upload-queue";
@@ -427,20 +427,29 @@ function workerUploadFailureMode(error) {
 }
 
 async function materializeQueuedUploadBody(row) {
-  if (!row.blob || !Number.isSafeInteger(row.byteCount) || row.byteCount <= 0) {
+  if (
+    (!row.bytes && !row.blob) ||
+    !Number.isSafeInteger(row.byteCount) ||
+    row.byteCount <= 0
+  ) {
     throw new WorkerQueueUploadError("queued_media_blob_invalid", "retry");
   }
 
   const readers = [];
-  if (typeof row.blob.arrayBuffer === "function") {
-    readers.push(() => row.blob.arrayBuffer());
+  const storedBytes = row.bytes;
+  if (storedBytes instanceof ArrayBuffer) {
+    readers.push(() => Promise.resolve(storedBytes.slice(0)));
   }
-  if (typeof Response !== "undefined") {
-    readers.push(() => new Response(row.blob).arrayBuffer());
+  const legacyBlob = row.blob;
+  if (legacyBlob && typeof legacyBlob.arrayBuffer === "function") {
+    readers.push(() => legacyBlob.arrayBuffer());
   }
-  if (typeof row.blob.stream === "function") {
+  if (legacyBlob && typeof Response !== "undefined") {
+    readers.push(() => new Response(legacyBlob).arrayBuffer());
+  }
+  if (legacyBlob && typeof legacyBlob.stream === "function") {
     readers.push(async () => {
-      const reader = row.blob.stream().getReader();
+      const reader = legacyBlob.stream().getReader();
       const output = new Uint8Array(row.byteCount);
       let offset = 0;
       try {

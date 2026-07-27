@@ -2,7 +2,7 @@ export const MOBILE_MEDIA_QUEUE_EVENT = "stonegate:media-queue-change";
 export const MOBILE_STORAGE_WARNING_EVENT = "stonegate:storage-warning";
 
 const DATABASE_NAME = "stonegate-mobile";
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const SNAPSHOT_STORE = "appointment-snapshots";
 const MEDIA_STORE = "appointment-media";
 const QUEUE_STORE = "media-upload-queue";
@@ -15,6 +15,10 @@ const VISIBLE_SYNC_RETRY_MS = 5 * 1000;
 const API_FETCH_TIMEOUT_MS = 45 * 1000;
 const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const QUEUED_BLOB_READ_TIMEOUT_MS = 30 * 1000;
+const IMAGE_READ_TIMEOUT_MS = 30 * 1000;
+const IMAGE_DECODE_TIMEOUT_MS = 15 * 1000;
+const IMAGE_ENCODE_TIMEOUT_MS = 15 * 1000;
+const IMAGE_DIGEST_TIMEOUT_MS = 15 * 1000;
 const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
 const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 const STONEGATE_TIME_ZONE = "America/New_York";
@@ -75,7 +79,8 @@ export type OfflineMediaRecord = {
   isCover: boolean;
   orderIndex: number;
   contentType: string;
-  blob: Blob;
+  bytes?: ArrayBuffer;
+  blob?: Blob;
   savedAt: number;
 };
 
@@ -89,13 +94,14 @@ export type QueuedMediaUpload = {
   checksumSha256: string;
   caption: string | null;
   quotedScopeText: string | null;
-  blob: Blob;
   capturedOffline: boolean;
   status: "queued" | "uploading" | "finalizing" | "failed";
   error: string | null;
   attempts: number;
   createdAt: number;
   updatedAt: number;
+  bytes?: ArrayBuffer;
+  blob?: Blob;
 };
 
 export type QueueSummary = {
@@ -110,6 +116,18 @@ export type PersistentStorageState =
   | "denied"
   | "unsupported"
   | "error";
+
+export function offlineMediaBlob(
+  record: Pick<OfflineMediaRecord, "bytes" | "blob" | "contentType">,
+): Blob {
+  if (record.bytes instanceof ArrayBuffer) {
+    return new Blob([new Uint8Array(record.bytes)], {
+      type: record.contentType,
+    });
+  }
+  if (record.blob instanceof Blob) return record.blob;
+  throw new Error("offline_media_bytes_unavailable");
+}
 
 type UploadIntent = {
   mediaId: string;
@@ -565,7 +583,7 @@ export async function cacheAppointmentMedia(
             cache: "no-store",
           });
           if (!response.ok) return null;
-          const blob = await response.blob();
+          const bytes = await response.arrayBuffer();
           return {
             key: mediaKey(employeeId, appointmentId, item.id),
             employeeId,
@@ -576,8 +594,10 @@ export async function cacheAppointmentMedia(
             isCover: Boolean(item.isCover),
             orderIndex: item.orderIndex ?? 0,
             contentType:
-              item.contentType ?? blob.type ?? "application/octet-stream",
-            blob,
+              item.contentType ??
+              response.headers.get("content-type") ??
+              "application/octet-stream",
+            bytes,
             savedAt: Date.now(),
           };
         } catch {
@@ -657,8 +677,50 @@ function bytesToHex(bytes: Uint8Array): string {
   );
 }
 
+function promiseWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  errorCode: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = globalThis.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(errorCode));
+    }, timeoutMs);
+    void promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timer);
+        reject(new Error(errorCode));
+      },
+    );
+  });
+}
+
+function readBlobArrayBuffer(
+  blob: Blob,
+  errorCode = "image_read_failed",
+): Promise<ArrayBuffer> {
+  return promiseWithTimeout(
+    blob.arrayBuffer(),
+    IMAGE_READ_TIMEOUT_MS,
+    errorCode,
+  );
+}
+
 async function detectImageType(file: File): Promise<string> {
-  const bytes = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+  const bytes = new Uint8Array(
+    await readBlobArrayBuffer(file.slice(0, 32), "image_read_failed"),
+  );
   if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
     return "image/jpeg";
   }
@@ -698,12 +760,30 @@ async function canvasBlob(
   quality?: number,
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) =>
-        blob ? resolve(blob) : reject(new Error("image_encode_failed")),
-      contentType,
-      quality,
-    );
+    let settled = false;
+    const timer = globalThis.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("image_encode_failed"));
+    }, IMAGE_ENCODE_TIMEOUT_MS);
+    try {
+      canvas.toBlob(
+        (blob) => {
+          if (settled) return;
+          settled = true;
+          globalThis.clearTimeout(timer);
+          if (blob) resolve(blob);
+          else reject(new Error("image_encode_failed"));
+        },
+        contentType,
+        quality,
+      );
+    } catch {
+      if (settled) return;
+      settled = true;
+      globalThis.clearTimeout(timer);
+      reject(new Error("image_encode_failed"));
+    }
   });
 }
 
@@ -715,8 +795,22 @@ async function loadBrowserImage(file: File): Promise<{
   const image = new Image();
   try {
     await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("image_decode_failed"));
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timer);
+        image.onload = null;
+        image.onerror = null;
+        if (error) reject(error);
+        else resolve();
+      };
+      const timer = globalThis.setTimeout(() => {
+        image.src = "";
+        finish(new Error("image_decode_failed"));
+      }, IMAGE_DECODE_TIMEOUT_MS);
+      image.onload = () => finish();
+      image.onerror = () => finish(new Error("image_decode_failed"));
       image.src = objectUrl;
     });
     return { image, objectUrl };
@@ -724,6 +818,46 @@ async function loadBrowserImage(file: File): Promise<{
     URL.revokeObjectURL(objectUrl);
     throw error;
   }
+}
+
+function prefersHtmlImageDecoder(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const userAgent = navigator.userAgent;
+  return (
+    /AppleWebKit/u.test(userAgent) &&
+    !/(?:Chrome|Chromium|Edg|OPR)\//u.test(userAgent)
+  );
+}
+
+async function loadImageBitmap(file: File): Promise<ImageBitmap> {
+  const operation = createImageBitmap(file, {
+    imageOrientation: "from-image",
+  });
+  return new Promise<ImageBitmap>((resolve, reject) => {
+    let settled = false;
+    const timer = globalThis.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("image_decode_failed"));
+    }, IMAGE_DECODE_TIMEOUT_MS);
+    void operation.then(
+      (bitmap) => {
+        if (settled) {
+          bitmap.close();
+          return;
+        }
+        settled = true;
+        globalThis.clearTimeout(timer);
+        resolve(bitmap);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timer);
+        reject(new Error("image_decode_failed"));
+      },
+    );
+  });
 }
 
 export async function normalizeImageForQueue(file: File): Promise<{
@@ -738,17 +872,25 @@ export async function normalizeImageForQueue(file: File): Promise<{
 
   let bitmap: ImageBitmap | null = null;
   let browserImage: Awaited<ReturnType<typeof loadBrowserImage>> | null = null;
-  try {
-    if (typeof createImageBitmap === "function") {
-      bitmap = await createImageBitmap(file, {
-        imageOrientation: "from-image",
-      });
+  if (prefersHtmlImageDecoder()) {
+    try {
+      browserImage = await loadBrowserImage(file);
+    } catch {
+      if (typeof createImageBitmap === "function") {
+        bitmap = await loadImageBitmap(file);
+      }
     }
-  } catch {
-    // Safari can render camera HEIC files through an HTMLImageElement even on
-    // versions where createImageBitmap rejects the same file.
+  } else {
+    try {
+      if (typeof createImageBitmap === "function") {
+        bitmap = await loadImageBitmap(file);
+      }
+    } catch {
+      // Safari can render camera HEIC files through an HTMLImageElement even on
+      // versions where createImageBitmap rejects the same file.
+    }
   }
-  if (!bitmap) {
+  if (!bitmap && !browserImage) {
     browserImage = await loadBrowserImage(file);
   }
   const source = bitmap ?? browserImage?.image;
@@ -777,16 +919,21 @@ export async function normalizeImageForQueue(file: File): Promise<{
     if (browserImage) URL.revokeObjectURL(browserImage.objectUrl);
     throw new Error("canvas_unavailable");
   }
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, width, height);
-  context.drawImage(source, 0, 0, width, height);
-  bitmap?.close();
-  if (browserImage) URL.revokeObjectURL(browserImage.objectUrl);
+  try {
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(source, 0, 0, width, height);
+  } finally {
+    bitmap?.close();
+    if (browserImage) URL.revokeObjectURL(browserImage.objectUrl);
+  }
 
   const blob = await canvasBlob(canvas, "image/jpeg", 0.84);
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    await blob.arrayBuffer(),
+  const blobBytes = await readBlobArrayBuffer(blob, "image_read_failed");
+  const digest = await promiseWithTimeout(
+    crypto.subtle.digest("SHA-256", blobBytes),
+    IMAGE_DIGEST_TIMEOUT_MS,
+    "image_digest_failed",
   );
   const baseName = file.name.replace(/\.[^.]+$/u, "").slice(0, 120) || "photo";
   return {
@@ -806,6 +953,7 @@ export async function queueMediaUpload(input: {
   quotedScopeText?: string | null;
 }): Promise<QueuedMediaUpload> {
   const normalized = await normalizeImageForQueue(input.file);
+  const bytes = await readBlobArrayBuffer(normalized.blob, "image_read_failed");
   const now = Date.now();
   const row: QueuedMediaUpload = {
     clientId: crypto.randomUUID(),
@@ -817,7 +965,7 @@ export async function queueMediaUpload(input: {
     checksumSha256: normalized.checksumSha256,
     caption: input.caption?.trim().slice(0, 500) || null,
     quotedScopeText: input.quotedScopeText?.trim().slice(0, 4_000) || null,
-    blob: normalized.blob,
+    bytes,
     capturedOffline: input.capturedOffline,
     status: "queued",
     error: null,
@@ -1206,15 +1354,24 @@ function isReadyCompletion(payload: unknown, mediaId: string): boolean {
 async function materializeQueuedUploadBody(
   row: QueuedMediaUpload,
 ): Promise<ArrayBuffer> {
-  if (!row.blob || !Number.isSafeInteger(row.byteCount) || row.byteCount <= 0) {
+  if (
+    (!row.bytes && !row.blob) ||
+    !Number.isSafeInteger(row.byteCount) ||
+    row.byteCount <= 0
+  ) {
     throw new QueueUploadError("queued_media_blob_invalid", "retry");
   }
 
   const readers: Array<() => Promise<ArrayBuffer>> = [];
-  if (typeof row.blob.arrayBuffer === "function") {
-    readers.push(() => row.blob.arrayBuffer());
+  const storedBytes = row.bytes;
+  if (storedBytes instanceof ArrayBuffer) {
+    readers.push(() => Promise.resolve(storedBytes.slice(0)));
   }
-  if (typeof FileReader !== "undefined") {
+  const legacyBlob = row.blob;
+  if (legacyBlob && typeof legacyBlob.arrayBuffer === "function") {
+    readers.push(() => legacyBlob.arrayBuffer());
+  }
+  if (legacyBlob && typeof FileReader !== "undefined") {
     readers.push(
       () =>
         new Promise<ArrayBuffer>((resolve, reject) => {
@@ -1243,7 +1400,7 @@ async function materializeQueuedUploadBody(
           reader.onabort = () =>
             settle(new Error("queued_media_blob_read_aborted"));
           try {
-            reader.readAsArrayBuffer(row.blob);
+            reader.readAsArrayBuffer(legacyBlob);
           } catch (error) {
             settle(
               error instanceof Error
@@ -1254,8 +1411,8 @@ async function materializeQueuedUploadBody(
         }),
     );
   }
-  if (typeof Response !== "undefined") {
-    readers.push(() => new Response(row.blob).arrayBuffer());
+  if (legacyBlob && typeof Response !== "undefined") {
+    readers.push(() => new Response(legacyBlob).arrayBuffer());
   }
 
   let sawSizeMismatch = false;
