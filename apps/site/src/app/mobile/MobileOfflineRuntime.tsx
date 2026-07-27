@@ -103,10 +103,10 @@ export function MobileOfflineRuntime({
     React.useState<MobileMediaSyncIssueEventDetail | null>(null);
 
   const refreshQueue = React.useCallback(async () => {
-    const [summary, rows] = await Promise.all([
-      getQueueSummary(employeeId).catch(() => null),
-      listEmployeeQueue(employeeId).catch(() => null),
-    ]);
+    const rows = await listEmployeeQueue(employeeId).catch(() => null);
+    const summary = rows
+      ? await getQueueSummary(employeeId, rows).catch(() => null)
+      : null;
     setQueue(summary);
     if (rows) {
       setSyncIssue((current) =>

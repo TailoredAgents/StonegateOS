@@ -1256,8 +1256,9 @@ export async function retryQueuedMedia(clientId: string): Promise<void> {
 
 export async function getQueueSummary(
   employeeId: string,
+  knownRows?: readonly QueuedMediaUpload[],
 ): Promise<QueueSummary> {
-  const rows = await listEmployeeQueue(employeeId);
+  const rows = knownRows ?? (await listEmployeeQueue(employeeId));
   const staleBefore = Date.now() - STALE_QUEUE_MS;
   return {
     total: rows.length,
