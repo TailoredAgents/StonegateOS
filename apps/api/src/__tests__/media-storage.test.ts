@@ -59,6 +59,9 @@ describe("appointment media object storage", () => {
     expect(intent.url).toContain("X-Amz-Signature=");
     expect(intent.headers["content-type"]).toBe("image/jpeg");
     expect(intent.headers["x-amz-checksum-sha256"]).toBeTruthy();
+    expect(
+      new URL(intent.url).searchParams.get("X-Amz-SignedHeaders"),
+    ).toContain("content-length");
   });
 
   it("recognizes a Cloudflare R2 endpoint", () => {
@@ -93,6 +96,9 @@ describe("appointment media object storage", () => {
     const parameters = new URL(intent.url).searchParams;
     expect(parameters.get("X-Amz-SignedHeaders")).not.toContain(
       "x-amz-checksum-sha256",
+    );
+    expect(parameters.get("X-Amz-SignedHeaders")).not.toContain(
+      "content-length",
     );
     expect(
       [...parameters.keys()].filter((key) =>
