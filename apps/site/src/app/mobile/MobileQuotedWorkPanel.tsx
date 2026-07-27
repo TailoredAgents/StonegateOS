@@ -219,6 +219,9 @@ export function MobileQuotedWorkPanel({
   const [viewer, setViewer] = React.useState<MediaItem | null>(null);
   const cachedObjectUrls = React.useRef<string[]>([]);
   const scopeRevision = React.useRef(0);
+  const scopeSaveInFlight = React.useRef(false);
+  const summaryRef = React.useRef(summary);
+  summaryRef.current = summary;
 
   const publishSummary = React.useCallback(
     (nextSummary: AppointmentMediaSummary, nextScope?: string | null): void => {
@@ -296,13 +299,21 @@ export function MobileQuotedWorkPanel({
       );
       const loadedScope = payload.quotedScopeText ?? initialScope ?? "";
       const canApplyLoadedScope =
+        !scopeSaveInFlight.current &&
         scopeRevision.current === scopeRevisionAtStart;
       if (canApplyLoadedScope) setScope(loadedScope);
       if (payload.mediaSummary) {
-        setSummary(payload.mediaSummary);
-        onScopeRequirementChange?.(payload.mediaSummary.needsScope);
+        const nextSummary = canApplyLoadedScope
+          ? payload.mediaSummary
+          : {
+              ...payload.mediaSummary,
+              needsScope: summaryRef.current.needsScope,
+            };
+        summaryRef.current = nextSummary;
+        setSummary(nextSummary);
+        onScopeRequirementChange?.(nextSummary.needsScope);
         publishSummary(
-          payload.mediaSummary,
+          nextSummary,
           canApplyLoadedScope ? loadedScope : undefined,
         );
       }
@@ -452,30 +463,40 @@ export function MobileQuotedWorkPanel({
     // An older gallery request may still be in flight. Keep its stale scope
     // from replacing the text the employee is saving now.
     scopeRevision.current += 1;
+    scopeSaveInFlight.current = true;
     setBusy("scope");
-    const response = await fetch(
-      `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/quoted-scope`,
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ quotedScopeText: nextScope }),
-      },
-    );
-    if (!response.ok) {
-      setMessage(await readError(response, "Unable to save the scope."));
-    } else {
-      const nextSummary = { ...summary, needsScope: false };
-      setScope(nextScope);
-      setSummary(nextSummary);
-      onScopeRequirementChange?.(false);
-      publishSummary(nextSummary, nextScope);
-      setMessage("Quoted scope saved. Any waiting photos will upload now.");
-      void requestQueuedMediaSync(employeeId)
-        .then(refreshQueue)
-        .catch(() => undefined);
-      router.refresh();
+    try {
+      const response = await fetch(
+        `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/quoted-scope`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ quotedScopeText: nextScope }),
+        },
+      );
+      if (!response.ok) {
+        setMessage(await readError(response, "Unable to save the scope."));
+      } else {
+        const nextSummary = { ...summaryRef.current, needsScope: false };
+        setScope(nextScope);
+        summaryRef.current = nextSummary;
+        setSummary(nextSummary);
+        onScopeRequirementChange?.(false);
+        publishSummary(nextSummary, nextScope);
+        setMessage("Quoted scope saved. Any waiting photos will upload now.");
+        void requestQueuedMediaSync(employeeId)
+          .then(refreshQueue)
+          .catch(() => undefined);
+        router.refresh();
+      }
+    } catch {
+      setMessage("Unable to save the scope. Try again when connected.");
+    } finally {
+      // Invalidate every gallery read that began before or during the save.
+      scopeSaveInFlight.current = false;
+      scopeRevision.current += 1;
+      setBusy(null);
     }
-    setBusy(null);
   };
 
   const updateMedia = async (

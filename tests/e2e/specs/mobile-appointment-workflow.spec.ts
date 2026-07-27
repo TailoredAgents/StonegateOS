@@ -353,7 +353,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
         readyCount: 0,
         pendingCount: 0,
         coverMediaId: null,
-        needsScope: false,
+        needsScope: true,
       },
       items: [],
       legacyAttachments: [],
@@ -391,6 +391,52 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
     await expect.poll(() => mediaRequests).toBeGreaterThan(0);
+    await page.evaluate((expectedAppointmentId) => {
+      const summaryEvents: Array<{
+        hasScope: boolean;
+        needsScope: boolean | null;
+        scope: string | null;
+      }> = [];
+      window.addEventListener(
+        "stonegate:mobile-appointment-summary",
+        (event) => {
+          const detail = (
+            event as CustomEvent<{
+              appointmentId?: string;
+              mediaSummary?: { needsScope?: boolean };
+              quotedScopeText?: string | null;
+            }>
+          ).detail;
+          if (
+            detail?.appointmentId !== expectedAppointmentId ||
+            !detail.mediaSummary
+          ) {
+            return;
+          }
+          const hasScope = Object.prototype.hasOwnProperty.call(
+            detail,
+            "quotedScopeText",
+          );
+          summaryEvents.push({
+            hasScope,
+            needsScope:
+              typeof detail.mediaSummary.needsScope === "boolean"
+                ? detail.mediaSummary.needsScope
+                : null,
+            scope: hasScope ? (detail.quotedScopeText ?? null) : null,
+          });
+        },
+      );
+      (
+        window as Window & {
+          __scopeSummaryEvents?: () => Array<{
+            hasScope: boolean;
+            needsScope: boolean | null;
+            scope: string | null;
+          }>;
+        }
+      ).__scopeSummaryEvents = () => [...summaryEvents];
+    }, appointmentId);
     const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
     await card.getByRole("button", { name: /E2E Contact/u }).click();
     await card.getByText("Quoted Work", { exact: true }).click();
@@ -405,9 +451,31 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await expect(
       page.getByText("Quoted scope saved. Any waiting photos will upload now."),
     ).toBeVisible();
+    const scopeSummaryEvents = () =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __scopeSummaryEvents?: () => Array<{
+                hasScope: boolean;
+                needsScope: boolean | null;
+                scope: string | null;
+              }>;
+            }
+          ).__scopeSummaryEvents?.() ?? [],
+      );
+    const eventCountAfterSave = (await scopeSummaryEvents()).length;
 
     releaseStaleRequest?.();
-    await expect.poll(() => mediaRequests).toBeGreaterThanOrEqual(2);
+    await expect
+      .poll(async () => (await scopeSummaryEvents()).length)
+      .toBeGreaterThan(eventCountAfterSave);
+    expect(
+      (await scopeSummaryEvents())
+        .filter((event) => event.hasScope)
+        .map((event) => event.scope),
+    ).toEqual([nextScope]);
+    expect((await scopeSummaryEvents()).at(-1)?.needsScope).toBe(false);
     await expect(scope).toHaveValue(nextScope);
   });
 
