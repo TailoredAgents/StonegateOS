@@ -24,9 +24,17 @@ export async function POST(
   if (!payload || typeof payload !== "object") return response;
 
   const root = payload as Record<string, unknown>;
+  let rewroteUploadUrl = false;
   const rewriteIntent = (value: unknown): unknown => {
     if (!value || typeof value !== "object") return value;
     const intent = value as Record<string, unknown>;
+    if (
+      intent["alreadyCompleted"] === true ||
+      intent["status"] === "ready" ||
+      intent["status"] === "processing"
+    ) {
+      return value;
+    }
     const mediaId =
       typeof intent["mediaId"] === "string"
         ? intent["mediaId"]
@@ -34,6 +42,7 @@ export async function POST(
           ? intent["id"]
           : null;
     if (!mediaId || typeof intent["uploadUrl"] !== "string") return value;
+    rewroteUploadUrl = true;
     return {
       ...intent,
       uploadUrl: `/api/mobile/appointment-media/${encodeRouteId(mediaId)}/upload`,
@@ -50,6 +59,8 @@ export async function POST(
   if (root["intent"]) {
     root["intent"] = rewriteIntent(root["intent"]);
   }
+
+  if (!rewroteUploadUrl) return response;
 
   return Response.json(root, {
     status: response.status,
