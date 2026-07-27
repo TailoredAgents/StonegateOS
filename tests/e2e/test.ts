@@ -5,11 +5,15 @@ import { attachServiceLogs } from "./support/log-attachments";
 let dependencyStatus: { ok: boolean; reason?: string } | null = null;
 
 async function ensureDependencies() {
-  if (dependencyStatus) {
+  if (dependencyStatus?.ok) {
     return dependencyStatus;
   }
-  dependencyStatus = await checkDependencies();
-  return dependencyStatus;
+
+  const status = await checkDependencies();
+  if (status.ok) {
+    dependencyStatus = status;
+  }
+  return status;
 }
 
 const test = base.extend({});
@@ -17,7 +21,11 @@ const test = base.extend({});
 test.beforeEach(async ({}, testInfo) => {
   const status = await ensureDependencies();
   if (!status.ok) {
-    testInfo.skip(true, status.reason ?? "Required services unavailable");
+    const reason = status.reason ?? "Required services unavailable";
+    if (process.env.CI) {
+      throw new Error(reason);
+    }
+    testInfo.skip(true, reason);
   }
 });
 

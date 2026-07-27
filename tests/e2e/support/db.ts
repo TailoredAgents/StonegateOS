@@ -295,38 +295,73 @@ export async function createE2EMobileAppointment(input: {
   propertyId: string;
 }): Promise<{ appointmentId: string; startAt: Date }> {
   const sql = getSql();
-  const startAt = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
-  startAt.setUTCHours(18, 0, 0, 0);
-  const rows = await sql<{ appointmentId: string; startAt: Date | string }[]>`
-    INSERT INTO appointments (
-      contact_id,
-      property_id,
-      type,
-      start_at,
-      duration_min,
-      status,
-      reschedule_token
-    )
-    VALUES (
-      ${input.contactId},
-      ${input.propertyId},
-      'service',
-      ${startAt},
-      90,
-      'confirmed',
-      ${randomUUID().replace(/-/gu, "")}
-    )
-    RETURNING id AS "appointmentId", start_at AS "startAt"
-  `;
-  const row = rows[0];
-  if (!row?.appointmentId) {
-    throw new Error("Unable to create an isolated mobile E2E appointment.");
-  }
-  const persistedStartAt = new Date(row.startAt);
-  if (!Number.isFinite(persistedStartAt.getTime())) {
-    throw new Error("The isolated mobile E2E appointment has no start time.");
-  }
-  return { appointmentId: row.appointmentId, startAt: persistedStartAt };
+  return sql.begin(async (transaction) => {
+    // Fully parallel mobile tests share one seeded contact. Reserve a distinct
+    // calendar week atomically so each page renders only its own cloned job.
+    await transaction`
+      SELECT pg_advisory_xact_lock(
+        hashtext('e2e_mobile_appointment'),
+        hashtext(${input.contactId})
+      )
+    `;
+    const slotRows = await transaction<{ nextStartAt: Date | string }[]>`
+      SELECT
+        CURRENT_TIMESTAMP
+          + (
+              (
+                COUNT(*) FILTER (
+                  WHERE booking_details->>'e2eMobileClone' = 'true'
+                )
+                + 1
+              ) * INTERVAL '7 days'
+            ) AS "nextStartAt"
+      FROM appointments
+      WHERE contact_id = ${input.contactId}
+    `;
+    const nextStartAt = slotRows[0]?.nextStartAt;
+    if (!nextStartAt) {
+      throw new Error("Unable to reserve a mobile E2E calendar week.");
+    }
+    const startAt = new Date(nextStartAt);
+    if (!Number.isFinite(startAt.getTime())) {
+      throw new Error("The isolated mobile E2E appointment has no start time.");
+    }
+
+    const rows = await transaction<
+      { appointmentId: string; startAt: Date | string }[]
+    >`
+      INSERT INTO appointments (
+        contact_id,
+        property_id,
+        type,
+        start_at,
+        duration_min,
+        status,
+        booking_details,
+        reschedule_token
+      )
+      VALUES (
+        ${input.contactId},
+        ${input.propertyId},
+        'service',
+        ${startAt},
+        90,
+        'confirmed',
+        ${transaction.json({ e2eMobileClone: true })},
+        ${randomUUID().replace(/-/gu, "")}
+      )
+      RETURNING id AS "appointmentId", start_at AS "startAt"
+    `;
+    const row = rows[0];
+    if (!row?.appointmentId) {
+      throw new Error("Unable to create an isolated mobile E2E appointment.");
+    }
+    const persistedStartAt = new Date(row.startAt);
+    if (!Number.isFinite(persistedStartAt.getTime())) {
+      throw new Error("The isolated mobile E2E appointment has no start time.");
+    }
+    return { appointmentId: row.appointmentId, startAt: persistedStartAt };
+  });
 }
 
 export async function createE2EPhoneOnlyContact(

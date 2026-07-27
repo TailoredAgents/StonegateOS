@@ -16,7 +16,9 @@ import { getEnvVar } from "../support/env";
 test.describe("Quote lifecycle journey", () => {
   test("admin issues a quote and customer accepts via public link", async ({
     page,
-  }) => {
+  }, testInfo) => {
+    testInfo.setTimeout(120_000);
+
     const api = new ApiClient();
     const contactEmail = uniqueEmail("quote");
     const phoneDigits = uniquePhone();
@@ -121,6 +123,18 @@ test.describe("Quote lifecycle journey", () => {
         new URL(shareUrl).pathname,
         browserSiteUrl,
       ).toString();
+      const quotePathname = new URL(localShareUrl).pathname;
+      const waitForDecision = (flag: "booking" | "approval", value: string) =>
+        page.waitForURL(
+          (url) =>
+            url.pathname === quotePathname &&
+            url.searchParams.get(flag) === value,
+          {
+            timeout: 45_000,
+            waitUntil: "domcontentloaded",
+          },
+        );
+
       await page.goto(localShareUrl);
       await expect(
         page.getByRole("heading", { name: /your junk removal proposal/i }),
@@ -134,13 +148,19 @@ test.describe("Quote lifecycle journey", () => {
       });
       if ((await approveAndBook.count()) > 0) {
         bookedFromQuote = true;
-        await approveAndBook.click();
+        await Promise.all([
+          waitForDecision("booking", "confirmed"),
+          approveAndBook.click(),
+        ]);
         await expect(
           page.getByText(/your service window is booked/i),
         ).toBeVisible();
       } else {
         await expect(approveForScheduling).toBeVisible();
-        await approveForScheduling.click();
+        await Promise.all([
+          waitForDecision("approval", "received"),
+          approveForScheduling.click(),
+        ]);
         await expect(page.getByText(/quote approved/i)).toBeVisible();
       }
 

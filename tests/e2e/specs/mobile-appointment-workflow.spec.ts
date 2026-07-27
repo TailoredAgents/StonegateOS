@@ -1146,7 +1146,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       !isMobile,
       "This workflow is covered by the mobile browser projects.",
     );
-    test.setTimeout(120_000);
+    test.setTimeout(240_000);
 
     const { appointmentId, startAt } = await seededAppointment();
     const photoCaption = `${browserName} blue chair ${testInfo.retry}-${Date.now()}`;
@@ -1162,10 +1162,47 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     const scope = page.locator('textarea[placeholder^="Example: Remove"]');
     await scope.fill("Remove the blue chair shown in the crew photo.");
+    const scopeSaved = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PATCH" &&
+        new URL(response.url()).pathname ===
+          `/api/mobile/appointments/${appointmentId}/quoted-scope` &&
+        response.ok(),
+      { timeout: 45_000 },
+    );
     await page.getByRole("button", { name: "Save scope" }).click();
-    await expect(page.getByText("Quoted scope saved.")).toBeVisible();
+    await scopeSaved;
+    await expect(page.getByText("Quoted scope saved.")).toBeVisible({
+      timeout: 30_000,
+    });
 
     await page.getByPlaceholder("Items behind the shed").fill(photoCaption);
+    const readyMediaLoaded = page.waitForResponse(
+      async (response) => {
+        if (
+          response.request().method() !== "GET" ||
+          new URL(response.url()).pathname !==
+            `/api/mobile/appointments/${appointmentId}/media` ||
+          !response.ok()
+        ) {
+          return false;
+        }
+        try {
+          const payload = (await response.json()) as {
+            items?: Array<{ caption?: string | null; status?: string }>;
+          };
+          return (
+            payload.items?.some(
+              (item) =>
+                item.caption === photoCaption && item.status === "ready",
+            ) ?? false
+          );
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 105_000 },
+    );
     await page
       .locator('input[type="file"][multiple][accept*="image/jpeg"]')
       .setInputFiles({
@@ -1174,9 +1211,10 @@ test.describe("Mobile appointment quoted work and payments", () => {
         buffer: browserDecodablePng,
       });
 
+    await readyMediaLoaded;
     const uploadedPhoto = page.getByRole("img", { name: photoCaption });
     await expect(uploadedPhoto).toBeVisible({
-      timeout: 60_000,
+      timeout: 30_000,
     });
     const uploadedPhotoCard = uploadedPhoto
       .locator("xpath=..")
