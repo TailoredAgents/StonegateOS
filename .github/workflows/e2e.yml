@@ -52,26 +52,32 @@ jobs:
       - name: Build applications
         run: pnpm build
 
-      - name: Start dev stack
+      - name: Start dev stack and run Playwright suite
+        env:
+          CI: "true"
         run: |
           pnpm dev:e2e &
           echo $! > dev-server.pid
-
-      - name: Wait for health checks
-        run: |
-          for attempt in {1..60}; do
+          services_ready=false
+          for attempt in {1..90}; do
             if curl -fsS http://localhost:3000/api/healthz >/dev/null && curl -fsS http://localhost:3001/api/healthz >/dev/null; then
-              exit 0
+              services_ready=true
+              break
             fi
             sleep 2
           done
-          echo "Services failed to pass health checks" >&2
-          exit 1
-
-      - name: Run Playwright suite
-        env:
-          CI: "true"
-        run: pnpm test:e2e
+          if [ "$services_ready" != "true" ]; then
+            echo "Services failed to pass health checks" >&2
+            for log_file in artifacts/e2e/logs/*.log; do
+              if [ -f "$log_file" ]; then
+                echo "::group::$log_file"
+                tail -n 200 "$log_file"
+                echo "::endgroup::"
+              fi
+            done
+            exit 1
+          fi
+          pnpm test:e2e
 
       - name: Upload artifacts
         if: always()
