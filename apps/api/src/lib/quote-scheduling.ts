@@ -64,6 +64,21 @@ type Block = {
   end: Date;
 };
 
+export async function runBestEffortQuoteHoldCleanup(
+  cleanup: () => Promise<unknown>,
+  context: { quoteId: string; appointmentId: string },
+): Promise<void> {
+  try {
+    await cleanup();
+  } catch (error) {
+    console.warn("[quote-scheduling] expired_hold_cleanup_failed", {
+      quoteId: context.quoteId,
+      appointmentId: context.appointmentId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
   return aStart < bEnd && bStart < aEnd;
 }
@@ -77,7 +92,10 @@ function overlapsCount(blocks: Block[], start: Date, end: Date): number {
 }
 
 function localDayKey(value: Date, timezone: string): string {
-  return DateTime.fromJSDate(value, { zone: "utc" }).setZone(timezone).toISODate() ?? "";
+  return (
+    DateTime.fromJSDate(value, { zone: "utc" }).setZone(timezone).toISODate() ??
+    ""
+  );
 }
 
 function formatSlotLabel(startAt: Date, timezone: string): string {
@@ -123,7 +141,13 @@ export async function loadPublicQuoteForScheduling(
     .where(eq(quotes.shareToken, token))
     .limit(1);
 
-  if (!row?.id || !row.propertyAddressLine1 || !row.propertyCity || !row.propertyState || !row.propertyPostalCode) {
+  if (
+    !row?.id ||
+    !row.propertyAddressLine1 ||
+    !row.propertyCity ||
+    !row.propertyState ||
+    !row.propertyPostalCode
+  ) {
     return null;
   }
   return {
@@ -196,14 +220,24 @@ async function getQuoteScheduleContext(quote: PublicQuoteSchedulingRow) {
     "America/New_York";
   const durationMinutes = quote.jobDurationMinutes || 120;
   const travelBufferMinutes =
-    typeof bookingRules.bufferMinutes === "number" && Number.isFinite(bookingRules.bufferMinutes)
+    typeof bookingRules.bufferMinutes === "number" &&
+    Number.isFinite(bookingRules.bufferMinutes)
       ? bookingRules.bufferMinutes
       : DEFAULT_TRAVEL_BUFFER_MIN;
   const capacity = getAppointmentCapacity();
-  return { businessHours, bookingRules, timezone, durationMinutes, travelBufferMinutes, capacity };
+  return {
+    businessHours,
+    bookingRules,
+    timezone,
+    durationMinutes,
+    travelBufferMinutes,
+    capacity,
+  };
 }
 
-export async function getQuoteAvailability(quote: PublicQuoteSchedulingRow): Promise<{
+export async function getQuoteAvailability(
+  quote: PublicQuoteSchedulingRow,
+): Promise<{
   days: QuoteDaySlots[];
   suggestions: QuoteSlot[];
   durationMinutes: number;
@@ -236,8 +270,14 @@ export async function getQuoteAvailability(quote: PublicQuoteSchedulingRow): Pro
     const dayKey = baseDay.toISODate();
     if (!dayKey) continue;
     const daySlots: QuoteSlot[] = [];
-    const windows = getBusinessHourWindowsForDate(baseDay, context.businessHours);
-    if (context.bookingRules.maxJobsPerDay > 0 && (dayTotals.get(dayKey) ?? 0) >= context.bookingRules.maxJobsPerDay) {
+    const windows = getBusinessHourWindowsForDate(
+      baseDay,
+      context.businessHours,
+    );
+    if (
+      context.bookingRules.maxJobsPerDay > 0 &&
+      (dayTotals.get(dayKey) ?? 0) >= context.bookingRules.maxJobsPerDay
+    ) {
       days.push({ date: dayKey, slots: daySlots });
       continue;
     }
@@ -247,11 +287,16 @@ export async function getQuoteAvailability(quote: PublicQuoteSchedulingRow): Pro
       while (cursor.plus({ minutes: context.durationMinutes }) <= window.end) {
         if (cursor > nowLocal.plus({ hours: 2 })) {
           const start = cursor.toUTC().toJSDate();
-          const end = new Date(start.getTime() + (context.durationMinutes + context.travelBufferMinutes) * 60_000);
+          const end = new Date(
+            start.getTime() +
+              (context.durationMinutes + context.travelBufferMinutes) * 60_000,
+          );
           if (overlapsCount(blocks, start, end) < context.capacity) {
             const slot = {
               startAt: start.toISOString(),
-              endAt: new Date(start.getTime() + context.durationMinutes * 60_000).toISOString(),
+              endAt: new Date(
+                start.getTime() + context.durationMinutes * 60_000,
+              ).toISOString(),
               label: formatSlotLabel(start, context.timezone),
             };
             daySlots.push(slot);
@@ -281,10 +326,19 @@ export async function createQuoteAppointmentHold(
   if (!startAt.isValid) throw new Error("invalid_start_at");
   const start = startAt.toJSDate();
   const context = await getQuoteScheduleContext(quote);
-  if (!isWithinBusinessHours(start, context.durationMinutes, context.businessHours)) {
+  if (
+    !isWithinBusinessHours(
+      start,
+      context.durationMinutes,
+      context.businessHours,
+    )
+  ) {
     throw new Error("outside_business_hours");
   }
-  const end = new Date(start.getTime() + (context.durationMinutes + context.travelBufferMinutes) * 60_000);
+  const end = new Date(
+    start.getTime() +
+      (context.durationMinutes + context.travelBufferMinutes) * 60_000,
+  );
   const blocks = await loadScheduleBlocks({
     start: new Date(start.getTime() - 24 * 60 * 60 * 1000),
     end: new Date(start.getTime() + 24 * 60 * 60 * 1000),
@@ -311,7 +365,10 @@ export async function createQuoteAppointmentHold(
       createdAt: now,
       updatedAt: now,
     })
-    .returning({ id: appointmentHolds.id, expiresAt: appointmentHolds.expiresAt });
+    .returning({
+      id: appointmentHolds.id,
+      expiresAt: appointmentHolds.expiresAt,
+    });
   if (!created?.id) throw new Error("hold_create_failed");
   return { holdId: created.id, expiresAt: created.expiresAt.toISOString() };
 }
@@ -364,14 +421,13 @@ export async function bookAcceptedQuote(input: {
 
     const quotedScopeText =
       input.quote.clientScope?.trim().slice(0, 4_000) || null;
-    const appointmentStatus =
-      await resolveAutomaticAppointmentStatusForMedia({
-        proposedStatus: "confirmed",
-        quotedScopeText,
-        contactId: input.quote.contactId,
-        database: tx,
-        now,
-      });
+    const appointmentStatus = await resolveAutomaticAppointmentStatusForMedia({
+      proposedStatus: "confirmed",
+      quotedScopeText,
+      contactId: input.quote.contactId,
+      database: tx,
+      now,
+    });
     const [appointment] = await tx
       .insert(appointments)
       .values({
@@ -397,15 +453,18 @@ export async function bookAcceptedQuote(input: {
       });
     }
 
-    await tx.update(quotes).set({
-      status: "accepted",
-      decisionAt: now,
-      decisionNotes: customerNote
-        ? `Scheduling note: ${customerNote}`
-        : "Approved and booked from quote page.",
-      acceptedAppointmentId: appointment.id,
-      updatedAt: now,
-    }).where(eq(quotes.id, input.quote.id));
+    await tx
+      .update(quotes)
+      .set({
+        status: "accepted",
+        decisionAt: now,
+        decisionNotes: customerNote
+          ? `Scheduling note: ${customerNote}`
+          : "Approved and booked from quote page.",
+        acceptedAppointmentId: appointment.id,
+        updatedAt: now,
+      })
+      .where(eq(quotes.id, input.quote.id));
 
     await tx.insert(outboxEvents).values({
       type: "estimate.requested",
@@ -429,17 +488,24 @@ export async function bookAcceptedQuote(input: {
     return { appointmentId: appointment.id, startAt: start.toISOString() };
   });
 
-  await db
-    .update(appointmentHolds)
-    .set({ status: "expired", updatedAt: now })
-    .where(
-      and(
-        eq(appointmentHolds.contactId, input.quote.contactId),
-        eq(appointmentHolds.propertyId, input.quote.propertyId),
-        eq(appointmentHolds.status, "active"),
-        sql`${appointmentHolds.expiresAt} <= ${now}`,
-      ),
-    );
+  await runBestEffortQuoteHoldCleanup(
+    () =>
+      db
+        .update(appointmentHolds)
+        .set({ status: "expired", updatedAt: now })
+        .where(
+          and(
+            eq(appointmentHolds.contactId, input.quote.contactId),
+            eq(appointmentHolds.propertyId, input.quote.propertyId),
+            eq(appointmentHolds.status, "active"),
+            sql`${appointmentHolds.expiresAt} <= ${now}`,
+          ),
+        ),
+    {
+      quoteId: input.quote.id,
+      appointmentId: result.appointmentId,
+    },
+  );
 
   return result;
 }

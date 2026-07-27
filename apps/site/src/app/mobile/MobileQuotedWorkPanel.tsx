@@ -287,7 +287,7 @@ export function MobileQuotedWorkPanel({
           ...item,
           orderIndex: item.sortOrder,
         })),
-      );
+      ).catch(() => undefined);
     } catch {
       const cached = await getCachedAppointmentMedia(
         employeeId,

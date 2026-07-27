@@ -6,10 +6,20 @@ async function setRange(locator: Locator, value: number) {
     if (!(element instanceof HTMLInputElement)) {
       throw new Error("Expected input element");
     }
-    element.value = String(next);
+
+    const nativeValueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    if (!nativeValueSetter) {
+      throw new Error("Expected the native input value setter");
+    }
+
+    nativeValueSetter.call(element, String(next));
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
   }, value);
+  await expect(locator).toHaveValue(String(value));
 }
 
 test.describe("Pricing estimator", () => {

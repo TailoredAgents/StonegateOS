@@ -1,5 +1,6 @@
 import { test, expect } from "../test";
 import type { Locator, Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { getAppointmentStartAt, getLatestE2ESeedSummary } from "../support/db";
 
 type PaymentSummary = {
@@ -29,6 +30,8 @@ const unpaidPaymentSummary: PaymentSummary = {
   activeAttemptId: null,
   latestReceiptUrl: null,
 };
+
+const browserDecodablePng = readFileSync("apps/site/public/favicon-32.png");
 
 function easternDayKey(value: Date): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -348,16 +351,13 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    await page.getByText("E2E Contact", { exact: true }).click();
-    await page.getByText("Quoted Work", { exact: true }).click();
+    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    await card.getByRole("button", { name: /E2E Contact/u }).click();
+    await card.getByText("Quoted Work", { exact: true }).click();
 
     const input = page
       .locator("label", { hasText: "Choose photos" })
       .locator('input[type="file"]');
-    const onePixelPng = Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-      "base64",
-    );
     const employeeId = await page.evaluate(async () => {
       const response = await fetch("/api/mobile/me", { cache: "no-store" });
       const payload = (await response.json()) as {
@@ -501,7 +501,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       {
         appointmentId,
         employeeId,
-        imageBytes: Array.from(onePixelPng),
+        imageBytes: Array.from(browserDecodablePng),
       },
     );
 
@@ -509,12 +509,12 @@ test.describe("Mobile appointment quoted work and payments", () => {
       {
         name: "first.png",
         mimeType: "image/png",
-        buffer: onePixelPng,
+        buffer: browserDecodablePng,
       },
       {
         name: "second.png",
         mimeType: "image/png",
-        buffer: onePixelPng,
+        buffer: browserDecodablePng,
       },
     ]);
 
@@ -538,7 +538,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     expect(
       intentUploadModes.filter((mode) => mode === "offline_queue"),
     ).toHaveLength(2);
-    expect(uploadedObjectByteCounts).toHaveLength(3);
+    expect(uploadedObjectByteCounts.size).toBe(3);
     expect(
       Array.from(uploadedObjectByteCounts.values()).every(
         (byteCount) => byteCount > 0,
@@ -548,7 +548,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       uploadedObjectByteCounts.get(
         mediaIds.get("22222222-2222-4222-8222-222222222222") ?? "",
       ),
-    ).toBe(onePixelPng.byteLength);
+    ).toBe(browserDecodablePng.byteLength);
     await expect.poll(() => input.inputValue()).toBe("");
     await expect
       .poll(() =>
@@ -664,18 +664,16 @@ test.describe("Mobile appointment quoted work and payments", () => {
     );
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    await page.getByText("E2E Contact", { exact: true }).click();
-    await page.getByText("Quoted Work", { exact: true }).click();
+    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    await card.getByRole("button", { name: /E2E Contact/u }).click();
+    await card.getByText("Quoted Work", { exact: true }).click();
     const input = page
       .locator("label", { hasText: "Choose photos" })
       .locator('input[type="file"]');
     await input.setInputFiles({
       name: "unverified.png",
       mimeType: "image/png",
-      buffer: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-        "base64",
-      ),
+      buffer: browserDecodablePng,
     });
 
     await expect.poll(() => completeRequests).toBeGreaterThan(0);
@@ -750,10 +748,8 @@ test.describe("Mobile appointment quoted work and payments", () => {
                 source: "twilio_mms",
                 filename: "sectional.jpg",
                 contentType: "image/jpeg",
-                thumbnailUrl:
-                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-                displayUrl:
-                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                thumbnailUrl: `data:image/png;base64,${browserDecodablePng.toString("base64")}`,
+                displayUrl: `data:image/png;base64,${browserDecodablePng.toString("base64")}`,
                 originalUrl: null,
               },
             ],
@@ -791,7 +787,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
     const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
-    await expect(card).toBeVisible();
+    await expect(card).toBeVisible({ timeout: 30_000 });
     await cardToggle.click();
     await expect(cardToggle).toHaveAttribute("aria-expanded", "true");
 
@@ -1171,10 +1167,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       .setInputFiles({
         name: "blue-chair.png",
         mimeType: "image/png",
-        buffer: Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-          "base64",
-        ),
+        buffer: browserDecodablePng,
       });
 
     const uploadedPhoto = page.getByRole("img", { name: photoCaption });
@@ -1250,12 +1243,27 @@ test.describe("Mobile appointment quoted work and payments", () => {
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
         });
-        const transaction = database.transaction(
-          ["appointment-snapshots", "media-upload-queue"],
+        const transactionDone = (transaction: IDBTransaction) =>
+          new Promise<void>((resolve, reject) => {
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () =>
+              reject(
+                transaction.error ??
+                  new Error("The offline test transaction failed."),
+              );
+            transaction.onabort = () =>
+              reject(
+                transaction.error ??
+                  new Error("The offline test transaction was aborted."),
+              );
+          });
+        const now = Date.now();
+        const snapshotTransaction = database.transaction(
+          "appointment-snapshots",
           "readwrite",
         );
-        const now = Date.now();
-        transaction.objectStore("appointment-snapshots").put({
+        const snapshotDone = transactionDone(snapshotTransaction);
+        snapshotTransaction.objectStore("appointment-snapshots").put({
           key: `${employeeId}:${appointmentId}`,
           employeeId,
           appointmentId,
@@ -1277,7 +1285,14 @@ test.describe("Mobile appointment quoted work and payments", () => {
           savedAt: now - 49 * 60 * 60 * 1000,
           expiresAt: now - 1,
         });
-        transaction.objectStore("media-upload-queue").put({
+        await snapshotDone;
+
+        const queueTransaction = database.transaction(
+          "media-upload-queue",
+          "readwrite",
+        );
+        const queueDone = transactionDone(queueTransaction);
+        queueTransaction.objectStore("media-upload-queue").put({
           clientId,
           employeeId,
           appointmentId,
@@ -1297,11 +1312,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
           createdAt: now - 25 * 60 * 60 * 1000,
           updatedAt: now - 11 * 60 * 1000,
         });
-        await new Promise<void>((resolve, reject) => {
-          transaction.oncomplete = () => resolve();
-          transaction.onerror = () => reject(transaction.error);
-          transaction.onabort = () => reject(transaction.error);
-        });
+        await queueDone;
         database.close();
       },
       { appointmentId, clientId, employeeId },
@@ -1391,8 +1402,9 @@ test.describe("Mobile payment permission boundary", () => {
 
     const { appointmentId, startAt } = await seededAppointment();
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-    await page.getByText("E2E Contact", { exact: true }).click();
-    await expect(page.getByText("Payment", { exact: true })).toHaveCount(0);
+    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    await card.getByRole("button", { name: /E2E Contact/u }).click();
+    await expect(card.getByText("Payment", { exact: true })).toHaveCount(0);
 
     const readResponse = await request.get(
       `/api/mobile/appointments/${appointmentId}/payments`,

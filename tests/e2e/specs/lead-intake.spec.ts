@@ -4,7 +4,7 @@ import {
   uniqueEmail,
   uniquePhone,
   drainOutbox,
-  findAutoFirstTouchByLeadId,
+  findSpeedToLeadCustomerFollowUpByLeadId,
   findLeadByEmail,
   getOutboxEventsByLeadId,
   waitForMailhogMessage,
@@ -95,17 +95,19 @@ test.describe("Lead Intake Journey", () => {
           timeWindow: "morning",
         },
       });
-      const firstTouch = await waitFor(
+      const customerFollowUp = await waitFor(
         async () => {
           await drainOutbox(50);
-          return findAutoFirstTouchByLeadId(record.leadId);
+          return findSpeedToLeadCustomerFollowUpByLeadId(record.leadId);
         },
-        { description: "customer first-touch SMS draft" },
+        { description: "automated customer follow-up SMS" },
       );
-      expect(firstTouch.toAddress).toBe(phoneE164);
-      expect(firstTouch.deliveryStatus).toBe("queued");
-      expect(firstTouch.isDraft).toBe(true);
-      expect(firstTouch.body).toMatch(/Stonegate/i);
+      expect(customerFollowUp.toAddress).toBe(phoneE164);
+      expect(["queued", "sending", "sent"]).toContain(
+        customerFollowUp.deliveryStatus,
+      );
+      expect(customerFollowUp.isDraft).toBe(false);
+      expect(customerFollowUp.body).toMatch(/Stonegate.+about to call/i);
     });
   });
 

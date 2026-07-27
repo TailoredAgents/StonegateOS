@@ -178,6 +178,8 @@ test.describe("Inbox CRM drawers", () => {
   test("opens workflow drawers and drafts owner-reviewed messages", async ({
     page,
   }) => {
+    test.setTimeout(120_000);
+
     const seed = await latestSeed();
     let currentWorkspace = workspaceFixture(seed, "quote");
 

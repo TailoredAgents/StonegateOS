@@ -27,7 +27,7 @@ export type OutboxEventDetails = {
   createdAt: Date;
 };
 
-export type AutoFirstTouchDetails = {
+export type SpeedToLeadCustomerFollowUpDetails = {
   body: string;
   toAddress: string | null;
   deliveryStatus: string;
@@ -193,11 +193,11 @@ export async function getOutboxEventsByLeadId(
   }));
 }
 
-export async function findAutoFirstTouchByLeadId(
+export async function findSpeedToLeadCustomerFollowUpByLeadId(
   leadId: string,
-): Promise<AutoFirstTouchDetails | null> {
+): Promise<SpeedToLeadCustomerFollowUpDetails | null> {
   const sql = getSql();
-  const rows = await sql<AutoFirstTouchDetails[]>`
+  const rows = await sql<SpeedToLeadCustomerFollowUpDetails[]>`
     SELECT
       conversation_messages.body,
       conversation_messages.to_address AS "toAddress",
@@ -209,7 +209,7 @@ export async function findAutoFirstTouchByLeadId(
     WHERE conversation_threads.lead_id = ${leadId}
       AND conversation_messages.direction = 'outbound'
       AND conversation_messages.channel = 'sms'
-      AND conversation_messages.metadata->>'autoFirstTouch' = 'true'
+      AND conversation_messages.metadata->>'speedToLead' = 'true'
     ORDER BY conversation_messages.created_at DESC
     LIMIT 1
   `;

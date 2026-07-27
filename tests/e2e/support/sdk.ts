@@ -7,7 +7,7 @@ export { waitFor } from "./wait";
 export { waitForMailhogMessage } from "./mailhog";
 export { waitForTwilioMessage } from "./twilio";
 export {
-  findAutoFirstTouchByLeadId,
+  findSpeedToLeadCustomerFollowUpByLeadId,
   findLeadByEmail,
   getOutboxEventsByLeadId,
   getOutboxEventsByQuoteId,
