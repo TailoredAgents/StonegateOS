@@ -90,11 +90,12 @@ async function openSeededPayment(
   startAt: Date,
 ): Promise<void> {
   await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
-  await page
-    .locator(`[data-appointment-id="${appointmentId}"]`)
-    .getByRole("button", { name: /E2E Contact/u })
-    .click();
-  await page.getByText("Payment", { exact: true }).click();
+  const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+  const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
+  await expect(card).toBeVisible();
+  await cardToggle.click();
+  await expect(cardToggle).toHaveAttribute("aria-expanded", "true");
+  await card.getByText("Payment", { exact: true }).click();
 }
 
 async function expectMinimumTapHeight(
@@ -125,7 +126,13 @@ async function expectNoEtaControls(card: Locator): Promise<void> {
 }
 
 test.describe("Mobile appointment quoted work and payments", () => {
-  test.use({ storageState: "tests/e2e/storage/mobile-owner.json" });
+  test.use({
+    storageState: "tests/e2e/storage/mobile-owner.json",
+    // This describe exercises the foreground PWA runtime. WebKit can route a
+    // request through a controlling worker even when its fetch handler falls
+    // through, which bypasses Playwright's page-level endpoint mocks.
+    serviceWorkers: "block",
+  });
 
   test("keeps My Day and Calendar appointment cards compact and actionable", async ({
     page,
@@ -361,109 +368,136 @@ test.describe("Mobile appointment quoted work and payments", () => {
     if (!employeeId) throw new Error("Mobile employee was not available.");
 
     await page.evaluate(
-      ({
+      async ({
         appointmentId: queuedAppointmentId,
         employeeId: queuedEmployeeId,
         imageBytes,
-      }) =>
-        new Promise<void>((resolve, reject) => {
+      }) => {
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
           const request = indexedDB.open("stonegate-mobile", 2);
-          request.onerror = () => reject(request.error);
-          request.onsuccess = () => {
-            const database = request.result;
-            const transaction = database.transaction(
-              ["app-metadata", "media-upload-queue"],
-              "readwrite",
+          request.onerror = () =>
+            reject(request.error ?? new Error("Unable to open the media DB."));
+          request.onsuccess = () => resolve(request.result);
+        });
+        const transactionDone = (transaction: IDBTransaction) =>
+          new Promise<void>((resolve, reject) => {
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () =>
+              reject(
+                transaction.error ??
+                  new Error("The media DB transaction failed."),
+              );
+            transaction.onabort = () =>
+              reject(
+                transaction.error ??
+                  new Error("The media DB transaction was aborted."),
+              );
+          });
+        const imageArray = new Uint8Array(imageBytes);
+        const digest = new Uint8Array(
+          await crypto.subtle.digest("SHA-256", imageArray),
+        );
+        const checksumSha256 = Array.from(digest, (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join("");
+        const now = Date.now();
+
+        // Separate stores into individual transactions. WebKit can abort a
+        // multi-store write containing a Blob without exposing an IDB error.
+        const metadataTransaction = database.transaction(
+          "app-metadata",
+          "readwrite",
+        );
+        const metadataDone = transactionDone(metadataTransaction);
+        metadataTransaction.objectStore("app-metadata").put({
+          key: "mediaSyncLease:callback-v1",
+          version: 4,
+          owner: "window:terminated-production-realm",
+          employeeId: queuedEmployeeId,
+          heartbeatAt: now,
+          expiresAt: now + 10 * 60 * 1000,
+        });
+        await metadataDone;
+
+        const queueTransaction = database.transaction(
+          "media-upload-queue",
+          "readwrite",
+        );
+        const queueDone = transactionDone(queueTransaction);
+        queueTransaction.objectStore("media-upload-queue").put({
+          clientId: "22222222-2222-4222-8222-222222222222",
+          employeeId: queuedEmployeeId,
+          appointmentId: queuedAppointmentId,
+          filename: "interrupted.png",
+          contentType: "image/png",
+          byteCount: imageArray.byteLength,
+          checksumSha256,
+          caption: null,
+          quotedScopeText: "Remove both photographed items.",
+          blob: new Blob([imageArray], { type: "image/png" }),
+          capturedOffline: true,
+          status: "uploading",
+          error: null,
+          attempts: 1,
+          createdAt: now - 12 * 60 * 1000,
+          updatedAt: now - 11 * 60 * 1000,
+        });
+        await queueDone;
+        database.close();
+
+        const originalPut = IDBObjectStore.prototype.put;
+        const originalCursorUpdate = IDBCursorWithValue.prototype.update;
+        const knownQueueClientIds = new Set([
+          "22222222-2222-4222-8222-222222222222",
+        ]);
+        let mediaQueueRewriteAttempts = 0;
+        IDBObjectStore.prototype.put = function (
+          value: unknown,
+          key?: IDBValidKey,
+        ) {
+          const row =
+            typeof value === "object" && value !== null
+              ? (value as { clientId?: unknown })
+              : null;
+          if (this.name === "media-upload-queue") {
+            const clientId =
+              typeof row?.clientId === "string" ? row.clientId : null;
+            if (clientId && knownQueueClientIds.has(clientId)) {
+              mediaQueueRewriteAttempts += 1;
+              throw new DOMException(
+                "Large Blob row rewrites are unavailable.",
+                "UnknownError",
+              );
+            }
+            if (clientId) knownQueueClientIds.add(clientId);
+          }
+          return key === undefined
+            ? originalPut.call(this, value)
+            : originalPut.call(this, value, key);
+        };
+        IDBCursorWithValue.prototype.update = function (value: unknown) {
+          const row =
+            typeof value === "object" && value !== null
+              ? (value as { clientId?: unknown })
+              : null;
+          const clientId =
+            typeof row?.clientId === "string" ? row.clientId : null;
+          if (clientId && knownQueueClientIds.has(clientId)) {
+            mediaQueueRewriteAttempts += 1;
+            throw new DOMException(
+              "Large Blob cursor rewrites are unavailable.",
+              "UnknownError",
             );
-            transaction.onerror = () => reject(transaction.error);
-            transaction.onabort = () => reject(transaction.error);
-            transaction.oncomplete = () => {
-              database.close();
-              const originalPut = IDBObjectStore.prototype.put;
-              const originalCursorUpdate = IDBCursorWithValue.prototype.update;
-              const knownQueueClientIds = new Set([
-                "22222222-2222-4222-8222-222222222222",
-              ]);
-              let mediaQueueRewriteAttempts = 0;
-              IDBObjectStore.prototype.put = function (
-                value: unknown,
-                key?: IDBValidKey,
-              ) {
-                const row =
-                  typeof value === "object" && value !== null
-                    ? (value as { clientId?: unknown })
-                    : null;
-                if (this.name === "media-upload-queue") {
-                  const clientId =
-                    typeof row?.clientId === "string" ? row.clientId : null;
-                  if (clientId && knownQueueClientIds.has(clientId)) {
-                    mediaQueueRewriteAttempts += 1;
-                    throw new DOMException(
-                      "Large Blob row rewrites are unavailable.",
-                      "UnknownError",
-                    );
-                  }
-                  if (clientId) knownQueueClientIds.add(clientId);
-                }
-                return key === undefined
-                  ? originalPut.call(this, value)
-                  : originalPut.call(this, value, key);
-              };
-              IDBCursorWithValue.prototype.update = function (value: unknown) {
-                const row =
-                  typeof value === "object" && value !== null
-                    ? (value as { clientId?: unknown })
-                    : null;
-                const clientId =
-                  typeof row?.clientId === "string" ? row.clientId : null;
-                if (clientId && knownQueueClientIds.has(clientId)) {
-                  mediaQueueRewriteAttempts += 1;
-                  throw new DOMException(
-                    "Large Blob cursor rewrites are unavailable.",
-                    "UnknownError",
-                  );
-                }
-                if (clientId) knownQueueClientIds.add(clientId);
-                return originalCursorUpdate.call(this, value);
-              };
-              (
-                window as Window & {
-                  __mediaQueueRewriteAttempts?: () => number;
-                }
-              ).__mediaQueueRewriteAttempts = () => mediaQueueRewriteAttempts;
-              resolve();
-            };
-            const now = Date.now();
-            transaction.objectStore("app-metadata").put({
-              key: "mediaSyncLease:callback-v1",
-              version: 4,
-              owner: "window:terminated-production-realm",
-              employeeId: queuedEmployeeId,
-              heartbeatAt: now,
-              expiresAt: now + 10 * 60 * 1000,
-            });
-            transaction.objectStore("media-upload-queue").put({
-              clientId: "22222222-2222-4222-8222-222222222222",
-              employeeId: queuedEmployeeId,
-              appointmentId: queuedAppointmentId,
-              filename: "interrupted.jpg",
-              contentType: "image/jpeg",
-              byteCount: imageBytes.length,
-              checksumSha256: "0".repeat(64),
-              caption: null,
-              quotedScopeText: "Remove both photographed items.",
-              blob: new Blob([new Uint8Array(imageBytes)], {
-                type: "image/jpeg",
-              }),
-              capturedOffline: true,
-              status: "uploading",
-              error: null,
-              attempts: 1,
-              createdAt: now - 12 * 60 * 1000,
-              updatedAt: now - 11 * 60 * 1000,
-            });
-          };
-        }),
+          }
+          if (clientId) knownQueueClientIds.add(clientId);
+          return originalCursorUpdate.call(this, value);
+        };
+        (
+          window as Window & {
+            __mediaQueueRewriteAttempts?: () => number;
+          }
+        ).__mediaQueueRewriteAttempts = () => mediaQueueRewriteAttempts;
+      },
       {
         appointmentId,
         employeeId,
@@ -755,10 +789,13 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
 
-    await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
-    await page.getByText("E2E Contact", { exact: true }).click();
+    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
+    await expect(card).toBeVisible();
+    await cardToggle.click();
+    await expect(cardToggle).toHaveAttribute("aria-expanded", "true");
 
-    await page.getByText("Quoted Work", { exact: true }).click();
+    await card.getByText("Quoted Work", { exact: true }).click();
     await expect(
       page.getByText(
         "Remove the sectional and boxed garage items shown in the photos.",
@@ -777,7 +814,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       page.getByText("Choose photos", { exact: true }),
     ).toBeVisible();
 
-    await page.getByText("Payment", { exact: true }).click();
+    await card.getByText("Payment", { exact: true }).click();
     await expect(page.getByText("$325.00 remaining")).toBeVisible();
     const acceptPayment = page.getByRole("button", {
       name: "Accept payment · $325.00",
@@ -988,7 +1025,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
       await page.getByText("Record cash or check", { exact: true }).click();
       await page
         .getByRole("button", {
-          name: tender === "cash" ? "Cash" : "Check",
+          name: tender,
           exact: true,
         })
         .click();
@@ -1103,14 +1140,16 @@ test.describe("Mobile appointment quoted work and payments", () => {
 
   test("uploads and finalizes a quoted-work photo through LocalStack", async ({
     page,
+    browserName,
     isMobile,
-  }) => {
+  }, testInfo) => {
     test.skip(
       !isMobile,
       "This workflow is covered by the mobile browser projects.",
     );
 
     const { appointmentId, startAt } = await seededAppointment();
+    const photoCaption = `${browserName} blue chair ${testInfo.retry}-${Date.now()}`;
 
     await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
     const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
@@ -1126,9 +1165,7 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await page.getByRole("button", { name: "Save scope" }).click();
     await expect(page.getByText("Quoted scope saved.")).toBeVisible();
 
-    await page
-      .getByPlaceholder("Items behind the shed")
-      .fill("Blue chair by the garage");
+    await page.getByPlaceholder("Items behind the shed").fill(photoCaption);
     await page
       .locator('input[type="file"][multiple][accept*="image/jpeg"]')
       .setInputFiles({
@@ -1140,10 +1177,16 @@ test.describe("Mobile appointment quoted work and payments", () => {
         ),
       });
 
+    const uploadedPhoto = page.getByRole("img", { name: photoCaption });
+    await expect(uploadedPhoto).toBeVisible({
+      timeout: 30_000,
+    });
+    const uploadedPhotoCard = uploadedPhoto
+      .locator("xpath=..")
+      .locator("xpath=..");
     await expect(
-      page.getByRole("img", { name: "Blue chair by the garage" }),
-    ).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText("Staff photo", { exact: true })).toBeVisible();
+      uploadedPhotoCard.getByText("Staff photo", { exact: true }),
+    ).toBeVisible();
     await expect(page.getByText("blue-chair.jpg", { exact: true })).toHaveCount(
       0,
     );

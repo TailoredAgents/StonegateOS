@@ -27,6 +27,13 @@ export type OutboxEventDetails = {
   createdAt: Date;
 };
 
+export type AutoFirstTouchDetails = {
+  body: string;
+  toAddress: string | null;
+  deliveryStatus: string;
+  isDraft: boolean;
+};
+
 export type E2ESeedSummary = {
   contactId: string;
   propertyId: string;
@@ -66,23 +73,27 @@ function getSql(): SqlClient {
     prepare: false,
     max: 5,
     idle_timeout: 20,
-    ...(shouldUseSsl ? { ssl: { rejectUnauthorized: false } } : {})
+    ...(shouldUseSsl ? { ssl: { rejectUnauthorized: false } } : {}),
   });
 
   return cachedClient;
 }
 
-export async function findLeadByEmail(email: string): Promise<LeadDetails | null> {
+export async function findLeadByEmail(
+  email: string,
+): Promise<LeadDetails | null> {
   const sql = getSql();
-  const rows = await sql<{
-    leadId: string;
-    contactId: string;
-    propertyId: string;
-    servicesRequested: string[] | null;
-    contactEmail: string | null;
-    contactPhoneE164: string | null;
-    appointmentId: string | null;
-  }[]>`
+  const rows = await sql<
+    {
+      leadId: string;
+      contactId: string;
+      propertyId: string;
+      servicesRequested: string[] | null;
+      contactEmail: string | null;
+      contactPhoneE164: string | null;
+      appointmentId: string | null;
+    }[]
+  >`
     SELECT
       leads.id AS "leadId",
       leads.contact_id AS "contactId",
@@ -112,21 +123,23 @@ export async function findLeadByEmail(email: string): Promise<LeadDetails | null
     services: row.servicesRequested ?? [],
     contactEmail: row.contactEmail,
     contactPhoneE164: row.contactPhoneE164,
-    appointmentId: row.appointmentId ?? null
+    appointmentId: row.appointmentId ?? null,
   };
 }
 
 export async function getQuoteById(id: string): Promise<QuoteDetails | null> {
   const sql = getSql();
-  const rows = await sql<{
-    id: string;
-    status: string;
-    shareToken: string | null;
-    total: string | number | null;
-    depositDue: string | number | null;
-    balanceDue: string | number | null;
-    contactEmail: string | null;
-  }[]>`
+  const rows = await sql<
+    {
+      id: string;
+      status: string;
+      shareToken: string | null;
+      total: string | number | null;
+      depositDue: string | number | null;
+      balanceDue: string | number | null;
+      contactEmail: string | null;
+    }[]
+  >`
     SELECT
       quotes.id,
       quotes.status,
@@ -153,11 +166,13 @@ export async function getQuoteById(id: string): Promise<QuoteDetails | null> {
     total: Number(row.total ?? 0),
     depositDue: Number(row.depositDue ?? 0),
     balanceDue: Number(row.balanceDue ?? 0),
-    contactEmail: row.contactEmail
+    contactEmail: row.contactEmail,
   };
 }
 
-export async function getOutboxEventsByLeadId(leadId: string): Promise<OutboxEventDetails[]> {
+export async function getOutboxEventsByLeadId(
+  leadId: string,
+): Promise<OutboxEventDetails[]> {
   const sql = getSql();
   const rows = await sql<OutboxEventDetails[]>`
     SELECT
@@ -174,11 +189,37 @@ export async function getOutboxEventsByLeadId(leadId: string): Promise<OutboxEve
     id: row.id,
     type: row.type,
     payload: row.payload,
-    createdAt: new Date(row.createdAt)
+    createdAt: new Date(row.createdAt),
   }));
 }
 
-export async function getOutboxEventsByQuoteId(quoteId: string): Promise<OutboxEventDetails[]> {
+export async function findAutoFirstTouchByLeadId(
+  leadId: string,
+): Promise<AutoFirstTouchDetails | null> {
+  const sql = getSql();
+  const rows = await sql<AutoFirstTouchDetails[]>`
+    SELECT
+      conversation_messages.body,
+      conversation_messages.to_address AS "toAddress",
+      conversation_messages.delivery_status AS "deliveryStatus",
+      COALESCE((conversation_messages.metadata->>'draft')::boolean, false) AS "isDraft"
+    FROM conversation_messages
+    INNER JOIN conversation_threads
+      ON conversation_threads.id = conversation_messages.thread_id
+    WHERE conversation_threads.lead_id = ${leadId}
+      AND conversation_messages.direction = 'outbound'
+      AND conversation_messages.channel = 'sms'
+      AND conversation_messages.metadata->>'autoFirstTouch' = 'true'
+    ORDER BY conversation_messages.created_at DESC
+    LIMIT 1
+  `;
+
+  return rows[0] ?? null;
+}
+
+export async function getOutboxEventsByQuoteId(
+  quoteId: string,
+): Promise<OutboxEventDetails[]> {
   const sql = getSql();
   const rows = await sql<OutboxEventDetails[]>`
     SELECT
@@ -195,7 +236,7 @@ export async function getOutboxEventsByQuoteId(quoteId: string): Promise<OutboxE
     id: row.id,
     type: row.type,
     payload: row.payload,
-    createdAt: new Date(row.createdAt)
+    createdAt: new Date(row.createdAt),
   }));
 }
 
@@ -212,9 +253,12 @@ export async function getLatestE2ESeedSummary(): Promise<E2ESeedSummary | null> 
   const payload = rows[0]?.payload;
   if (!payload) return null;
 
-  const contactId = typeof payload["contactId"] === "string" ? payload["contactId"] : null;
-  const propertyId = typeof payload["propertyId"] === "string" ? payload["propertyId"] : null;
-  const leadId = typeof payload["leadId"] === "string" ? payload["leadId"] : null;
+  const contactId =
+    typeof payload["contactId"] === "string" ? payload["contactId"] : null;
+  const propertyId =
+    typeof payload["propertyId"] === "string" ? payload["propertyId"] : null;
+  const leadId =
+    typeof payload["leadId"] === "string" ? payload["leadId"] : null;
   if (!contactId || !propertyId || !leadId) return null;
 
   return {
@@ -222,11 +266,16 @@ export async function getLatestE2ESeedSummary(): Promise<E2ESeedSummary | null> 
     propertyId,
     leadId,
     quoteId: typeof payload["quoteId"] === "string" ? payload["quoteId"] : null,
-    appointmentId: typeof payload["appointmentId"] === "string" ? payload["appointmentId"] : null
+    appointmentId:
+      typeof payload["appointmentId"] === "string"
+        ? payload["appointmentId"]
+        : null,
   };
 }
 
-export async function getAppointmentStartAt(appointmentId: string): Promise<Date | null> {
+export async function getAppointmentStartAt(
+  appointmentId: string,
+): Promise<Date | null> {
   const sql = getSql();
   const rows = await sql<{ startAt: Date | string }[]>`
     SELECT start_at AS "startAt"
@@ -240,7 +289,9 @@ export async function getAppointmentStartAt(appointmentId: string): Promise<Date
   return Number.isFinite(startAt.getTime()) ? startAt : null;
 }
 
-export async function createE2EPhoneOnlyContact(label = "Direct Caller"): Promise<E2EContactSummary> {
+export async function createE2EPhoneOnlyContact(
+  label = "Direct Caller",
+): Promise<E2EContactSummary> {
   const sql = getSql();
   const suffix = String(Date.now()).slice(-7);
   const phone = `404${suffix}`;

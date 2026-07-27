@@ -2572,12 +2572,12 @@ export default async function MobileHomePage({
                 <div className="rounded-lg border border-white/10 bg-white/[0.08] p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
-                        Contact
-                      </p>
-                      <h2 className="mt-1 truncate text-lg font-semibold">
-                        {selectedContact.name}
+                      <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
+                        Contact details
                       </h2>
+                      <p className="mt-1 truncate text-lg font-semibold">
+                        {selectedContact.name}
+                      </p>
                       <p className="mt-1 text-sm text-slate-300">
                         {selectedContact.phoneE164 ??
                           selectedContact.phone ??

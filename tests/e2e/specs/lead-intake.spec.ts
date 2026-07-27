@@ -1,77 +1,171 @@
 import { test, expect } from "../test";
 import {
+  ApiClient,
   uniqueEmail,
   uniquePhone,
-  waitForMailhogMessage,
-  waitForTwilioMessage,
   drainOutbox,
+  findAutoFirstTouchByLeadId,
   findLeadByEmail,
   getOutboxEventsByLeadId,
-  waitFor
+  waitForMailhogMessage,
+  waitForTwilioMessage,
+  waitFor,
 } from "../support/sdk";
 
 test.describe("Lead Intake Journey", () => {
-  test("visitor schedules an in-person estimate and receives notifications", async ({ page }) => {
+  test("visitor requests an on-site estimate and queues a customer follow-up", async ({
+    page,
+  }) => {
     const email = uniqueEmail("lead");
     const phoneDigits = uniquePhone();
     const phoneDisplay = `(${phoneDigits.slice(0, 3)}) ${phoneDigits.slice(3, 6)}-${phoneDigits.slice(6)}`;
     const phoneE164 = `+1${phoneDigits}`;
-    const preferredDate = new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const alternateDate = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const preferredDate = new Date(Date.now() + 4 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+    const alternateDate = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
 
     await test.step("Submit lead form", async () => {
-      await page.goto("/");
-      const formAnchor = page.locator("#schedule-estimate");
-      await formAnchor.scrollIntoViewIfNeeded();
+      await page.goto("/estimate");
+      await expect(
+        page.getByRole("heading", { name: /request an on-site estimate/i }),
+      ).toBeVisible();
 
-      await page.getByLabel("Furniture Removal").check();
-      await page.getByLabel("Yard Waste & Debris").check();
+      await page.getByRole("button", { name: /Furniture Removal/ }).click();
+      await page.getByRole("button", { name: /Construction Debris/ }).click();
 
-      await page.getByLabel("Service address").fill("123 Lead Intake Lane");
-      await page.getByLabel("City").fill("Atlanta");
-      await page.getByLabel("State").fill("GA");
-      await page.getByLabel("ZIP").fill("30301");
+      await page
+        .getByPlaceholder("Jamie Customer", { exact: true })
+        .fill("Jordan Lead");
+      await page
+        .getByPlaceholder("(404) 777-2631", { exact: true })
+        .fill(phoneDisplay);
+      await page
+        .getByPlaceholder("you@example.com", { exact: true })
+        .fill(email);
+      await page
+        .getByPlaceholder("Street address", { exact: true })
+        .fill("123 Lead Intake Lane");
+      await page.getByPlaceholder("City", { exact: true }).fill("Roswell");
+      await page.getByPlaceholder("GA", { exact: true }).fill("GA");
+      await page.getByPlaceholder("ZIP", { exact: true }).fill("30075");
 
-      await page.getByRole("button", { name: "Next: Contact & time" }).click();
+      const visitDates = page.locator('input[type="date"]');
+      await visitDates.first().fill(preferredDate);
+      await visitDates.nth(1).fill(alternateDate);
+      await page
+        .getByPlaceholder(/stairs, gate codes/i)
+        .fill("Playwright E2E lead intake scenario.");
 
-      await page.getByLabel("Full name").fill("Jordan Lead");
-      await page.getByLabel("Email").fill(email);
-      await page.getByLabel("Mobile phone").fill(phoneDisplay);
-      await page.getByLabel("Preferred visit date").fill(preferredDate);
-      await page.getByLabel("Alternate date (optional)").fill(alternateDate);
-      await page.getByLabel(/Morning/).check();
-      await page.getByLabel("Notes for the crew (gate codes, surfaces, pets)").fill(
-        "Playwright E2E lead intake scenario."
-      );
-      await page.getByLabel(/I agree to receive appointment updates/).check();
-
-      await page.getByRole("button", { name: "Book in-person estimate" }).click();
-      await expect(page.getByRole("heading", { name: /in-person schedule/i })).toBeVisible();
+      await page.getByRole("button", { name: "Request estimate" }).click();
+      await expect(
+        page.getByRole("heading", { name: "You’re all set" }),
+      ).toBeVisible();
+      await expect(
+        page.getByText(
+          "Request received. We'll follow up to confirm the exact time.",
+          { exact: true },
+        ),
+      ).toBeVisible();
     });
 
     await test.step("Verify DB + outbox", async () => {
-      await drainOutbox(10);
-      const record = await waitFor(() => findLeadByEmail(email), { description: "lead in database" });
-      expect(record.services).toEqual(expect.arrayContaining(["furniture", "yard-waste"]));
-      expect(record.appointmentId).toBeTruthy();
+      const record = await waitFor(() => findLeadByEmail(email), {
+        description: "lead in database",
+      });
+      expect(record.services).toEqual(
+        expect.arrayContaining(["furniture", "construction-debris"]),
+      );
+      expect(record.contactEmail).toBe(email);
+      expect(record.contactPhoneE164).toBe(phoneE164);
+      expect(record.appointmentId).toBeNull();
 
       const events = await getOutboxEventsByLeadId(record.leadId);
-      expect(events.map((event) => event.type)).toContain("estimate.requested");
-    });
-
-    await test.step("Validate notifications", async () => {
-      const confirmationEmail = await waitForMailhogMessage((message) => {
-        const toHeader = message.Content.Headers["To"] ?? [];
-        return toHeader.some((value) => value.includes(email));
-      });
-      expect(confirmationEmail.Content.Body).toContain("estimate");
-
-      const confirmationSms = await waitForTwilioMessage(
-        (message) => message.to === phoneE164 && message.body.toLowerCase().includes("estimate")
+      expect(events.map((event) => event.type)).toEqual(
+        expect.arrayContaining(["lead.alert", "lead.created"]),
       );
-      expect(confirmationSms.body).toContain("Stonegate");
-
-      // No-op: rely on unique email/phone per test instead of clearing shared inboxes.
+      const leadCreated = events.find((event) => event.type === "lead.created");
+      expect(leadCreated?.payload).toMatchObject({
+        appointmentType: "web_lead",
+        scheduling: {
+          preferredDate,
+          alternateDate,
+          timeWindow: "morning",
+        },
+      });
+      const firstTouch = await waitFor(
+        async () => {
+          await drainOutbox(50);
+          return findAutoFirstTouchByLeadId(record.leadId);
+        },
+        { description: "customer first-touch SMS draft" },
+      );
+      expect(firstTouch.toAddress).toBe(phoneE164);
+      expect(firstTouch.deliveryStatus).toBe("queued");
+      expect(firstTouch.isDraft).toBe(true);
+      expect(firstTouch.body).toMatch(/Stonegate/i);
     });
+  });
+
+  test("in-person estimate API creates an appointment and sends confirmations", async () => {
+    const api = new ApiClient();
+    const email = uniqueEmail("estimate-confirmation");
+    const phoneDigits = uniquePhone();
+    const phoneDisplay = `(${phoneDigits.slice(0, 3)}) ${phoneDigits.slice(3, 6)}-${phoneDigits.slice(6)}`;
+    const phoneE164 = `+1${phoneDigits}`;
+    const preferredDate = new Date(Date.now() + 6 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+
+    const response = await api.post<{ appointmentId: string | null }>(
+      "/api/web/lead-intake",
+      {
+        services: ["furniture"],
+        name: "Morgan Estimate",
+        phone: phoneDisplay,
+        email,
+        addressLine1: "456 Estimate Confirmation Way",
+        city: "Roswell",
+        state: "GA",
+        postalCode: "30075",
+        appointmentType: "in_person_estimate",
+        scheduling: {
+          preferredDate,
+          timeWindow: "morning",
+        },
+        consent: true,
+      },
+      { admin: false },
+    );
+    expect(response.appointmentId).toEqual(expect.any(String));
+
+    const record = await waitFor(() => findLeadByEmail(email), {
+      description: "in-person estimate appointment",
+    });
+    expect(record.appointmentId).toBe(response.appointmentId);
+
+    const events = await getOutboxEventsByLeadId(record.leadId);
+    expect(events.map((event) => event.type)).toContain("estimate.requested");
+
+    await drainOutbox(50);
+    await drainOutbox(50);
+
+    const confirmationEmail = await waitForMailhogMessage((message) => {
+      const toHeader = message.Content.Headers["To"] ?? [];
+      return (
+        toHeader.some((value) => value.includes(email)) &&
+        message.Content.Body.toLowerCase().includes("you're booked")
+      );
+    });
+    expect(confirmationEmail.Content.Body).toMatch(/Stonegate/i);
+
+    const confirmationSms = await waitForTwilioMessage(
+      (message) =>
+        message.to === phoneE164 &&
+        message.body.toLowerCase().includes("you're booked"),
+    );
+    expect(confirmationSms.body).toContain("Stonegate");
   });
 });

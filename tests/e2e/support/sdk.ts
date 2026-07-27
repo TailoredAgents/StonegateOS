@@ -6,5 +6,11 @@ export { uniqueEmail, uniquePhone } from "./data-factories";
 export { waitFor } from "./wait";
 export { waitForMailhogMessage } from "./mailhog";
 export { waitForTwilioMessage } from "./twilio";
-export { findLeadByEmail, getOutboxEventsByLeadId, getOutboxEventsByQuoteId, getQuoteById } from "./db";
+export {
+  findAutoFirstTouchByLeadId,
+  findLeadByEmail,
+  getOutboxEventsByLeadId,
+  getOutboxEventsByQuoteId,
+  getQuoteById,
+} from "./db";
 export { buildLeadIntakePayload } from "./web-lead";

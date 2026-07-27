@@ -26,34 +26,52 @@ function normalizeCandidate(raw: string): string {
 
 function isUnsafeHost(hostname: string): boolean {
   const lowered = hostname.toLowerCase();
-  return lowered === "localhost" || lowered === "127.0.0.1" || lowered === "0.0.0.0" || lowered === "::1";
+  return (
+    lowered === "localhost" ||
+    lowered === "127.0.0.1" ||
+    lowered === "0.0.0.0" ||
+    lowered === "::1"
+  );
 }
 
-/**
- * Base URL for customer-facing links (quotes, scheduling, partner portal).
- * - Prefers `NEXT_PUBLIC_SITE_URL`, then `SITE_URL`
- * - Ensures we never emit localhost/0.0.0.0 links outside dev
- * - Requires HTTPS outside dev
- * - Returns the origin (no path/query)
- */
-export function resolvePublicSiteBaseUrl(options: ResolveOptions = {}): string | null {
-  const raw = process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "";
+function resolveCandidate(raw: string | undefined): string | null {
+  if (!raw) return null;
   const candidate = normalizeCandidate(raw);
-
-  if (!candidate) {
-    if (isDevEnv() && options.devFallbackLocalhost) return "http://localhost:3000";
-    return null;
-  }
+  if (!candidate) return null;
 
   try {
     const url = new URL(candidate);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     if (isUnsafeHost(url.hostname)) return null;
     if (isProductionLike() && url.protocol !== "https:") return null;
     return url.origin;
   } catch {
-    if (isDevEnv() && options.devFallbackLocalhost) return "http://localhost:3000";
     return null;
   }
+}
+
+/**
+ * Base URL for customer-facing links (quotes, scheduling, partner portal).
+ * - Uses the first safe value from `NEXT_PUBLIC_SITE_URL`, then `SITE_URL`
+ * - Ensures we never emit localhost/0.0.0.0 links outside dev
+ * - Requires HTTPS outside dev
+ * - Returns the origin (no path/query)
+ */
+export function resolvePublicSiteBaseUrl(
+  options: ResolveOptions = {},
+): string | null {
+  const candidates = [
+    process.env["NEXT_PUBLIC_SITE_URL"],
+    process.env["SITE_URL"],
+  ];
+  for (const candidate of candidates) {
+    const resolved = resolveCandidate(candidate);
+    if (resolved) return resolved;
+  }
+
+  if (isDevEnv() && options.devFallbackLocalhost)
+    return "http://localhost:3000";
+  return null;
 }
 
 export function resolvePublicSiteBaseUrlOrThrow(): string {
@@ -63,4 +81,3 @@ export function resolvePublicSiteBaseUrlOrThrow(): string {
   }
   return base;
 }
-

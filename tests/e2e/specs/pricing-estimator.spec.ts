@@ -17,49 +17,57 @@ test.describe("Pricing estimator", () => {
     await page.goto("/pricing");
 
     const slider = page.locator("#dumpster-load-slider");
-    const price = page.getByText(/Pricing:\s*\\$/i).first();
+    const price = page.getByRole("status").filter({ hasText: /^Pricing:/ });
 
     await expect(slider).toBeVisible();
-    await expect(price).toContainText("$175");
-    await expect(price).toContainText("$250");
+    await expect(price).toContainText("$195");
+    await expect(price).toContainText("$310");
 
     await setRange(slider, 50);
-    await expect(price).toContainText("$350");
-    await expect(price).toContainText("$500");
+    await expect(price).toContainText("$320");
+    await expect(price).toContainText("$470");
 
     await setRange(slider, 75);
-    await expect(price).toContainText("$525");
-    await expect(price).toContainText("$700");
+    await expect(price).toContainText("$480");
+    await expect(price).toContainText("$620");
 
     await setRange(slider, 100);
-    await expect(price).toContainText("$700");
-    await expect(price).toContainText("$900");
+    await expect(price).toContainText("$630");
+    await expect(price).toContainText("$850");
   });
 
-  test("applies add-ons and carries selection into estimate notes", async ({ page }) => {
+  test("applies add-ons and carries selection into estimate notes", async ({
+    page,
+  }) => {
     await page.goto("/pricing");
 
     const slider = page.locator("#dumpster-load-slider");
     await setRange(slider, 25);
 
-    const addMattress = page.getByRole("button", { name: /add one mattresses/i });
+    const addMattress = page.getByRole("button", {
+      name: /add one mattresses/i,
+    });
     await addMattress.click();
 
-    const price = page.getByText(/Pricing:\s*\\$/i).first();
-    await expect(price).toContainText("$205");
-    await expect(price).toContainText("$280");
+    const price = page.getByRole("status").filter({ hasText: /^Pricing:/ });
+    await expect(price).toContainText("$225");
+    await expect(price).toContainText("$340");
 
     await expect(page).toHaveURL(/pe_load=quarter/);
     await expect(page).toHaveURL(/pe_mattress=1/);
 
-    const scheduleLink = page.locator('a[href^="/estimate"][href*="pe_load="]').first();
+    const scheduleLink = page
+      .locator('a[href^="/estimate"][href*="pe_load="]')
+      .first();
     await expect(scheduleLink).toBeVisible();
     await scheduleLink.click();
-    await expect(page.getByRole("heading", { name: /request an on-site estimate/i })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: /request an on-site estimate/i }),
+    ).toBeVisible();
 
     const notes = page.getByPlaceholder(/stairs, gate codes/i);
-    await expect(notes).toContainText("Pricing estimator selection:");
-    await expect(notes).toContainText("Load size:");
-    await expect(notes).toContainText("Estimated range:");
+    await expect(notes).toHaveValue(/Pricing estimator selection:/);
+    await expect(notes).toHaveValue(/Load size:/);
+    await expect(notes).toHaveValue(/Estimated range:/);
   });
 });

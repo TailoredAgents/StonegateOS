@@ -5,10 +5,18 @@ import { LRUCache } from "lru-cache";
 import { z } from "zod";
 import { lt, sql } from "drizzle-orm";
 import { getDb, webEventCountsDaily, webEvents, webVitals } from "@/db";
-import { getServiceAreaPolicy, isGeorgiaPostalCode, isPostalCodeAllowed, normalizePostalCode } from "@/lib/policy";
+import {
+  getServiceAreaPolicy,
+  isGeorgiaPostalCode,
+  isPostalCodeAllowed,
+  normalizePostalCode,
+} from "@/lib/policy";
 
 const RAW_ALLOWED_ORIGINS =
-  process.env["CORS_ALLOW_ORIGINS"] ?? process.env["NEXT_PUBLIC_SITE_URL"] ?? process.env["SITE_URL"] ?? "*";
+  process.env["CORS_ALLOW_ORIGINS"] ??
+  process.env["NEXT_PUBLIC_SITE_URL"] ??
+  process.env["SITE_URL"] ??
+  "*";
 
 const MAX_EVENTS_PER_REQUEST = 50;
 const MAX_META_KEYS = 24;
@@ -17,19 +25,24 @@ const PRUNE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const rateLimiter = new LRUCache<string, { count: number }>({
   max: 2000,
-  ttl: 60_000
+  ttl: 60_000,
 });
 
 function resolveOrigin(requestOrigin: string | null): string {
   if (RAW_ALLOWED_ORIGINS === "*") return "*";
-  const allowed = RAW_ALLOWED_ORIGINS.split(",").map((o) => o.trim().replace(/\/+$/u, "")).filter(Boolean);
+  const allowed = RAW_ALLOWED_ORIGINS.split(",")
+    .map((o) => o.trim().replace(/\/+$/u, ""))
+    .filter(Boolean);
   if (!allowed.length) return "*";
   const origin = requestOrigin?.trim().replace(/\/+$/u, "") ?? null;
   if (origin && allowed.includes(origin)) return origin;
   return allowed[0] ?? "*";
 }
 
-function applyCors(response: NextResponse, requestOrigin: string | null): NextResponse {
+function applyCors(
+  response: NextResponse,
+  requestOrigin: string | null,
+): NextResponse {
   const origin = resolveOrigin(requestOrigin);
   response.headers.set("Access-Control-Allow-Origin", origin);
   response.headers.set("Vary", "Origin");
@@ -40,12 +53,19 @@ function applyCors(response: NextResponse, requestOrigin: string | null): NextRe
   return response;
 }
 
-function corsJson(body: unknown, requestOrigin: string | null, init?: ResponseInit): NextResponse {
+function corsJson(
+  body: unknown,
+  requestOrigin: string | null,
+  init?: ResponseInit,
+): NextResponse {
   return applyCors(NextResponse.json(body, init), requestOrigin);
 }
 
 export function OPTIONS(request: NextRequest): NextResponse {
-  return applyCors(new NextResponse(null, { status: 204 }), request.headers.get("origin"));
+  return applyCors(
+    new NextResponse(null, { status: 204 }),
+    request.headers.get("origin"),
+  );
 }
 
 function checkRateLimit(key: string): boolean {
@@ -95,7 +115,9 @@ function normalizePath(raw: string): string {
   }
 }
 
-function normalizeReferrerDomain(raw: string | null | undefined): string | null {
+function normalizeReferrerDomain(
+  raw: string | null | undefined,
+): string | null {
   if (!raw) return null;
   const trimmed = raw.trim();
   if (!trimmed) return null;
@@ -136,22 +158,13 @@ function normalizeMeta(value: unknown): Record<string, unknown> {
   return result;
 }
 
-async function resolveAreaBucket(zip: string | null): Promise<string | null> {
-  if (!zip) return null;
-  const normalized = normalizePostalCode(zip);
-  if (!normalized) return null;
-  if (!isGeorgiaPostalCode(normalized)) return "out_of_area";
-  const policy = await getServiceAreaPolicy();
-  return isPostalCodeAllowed(normalized, policy) ? "in_area" : "borderline";
-}
-
 let lastPruneAtMs = 0;
 async function maybePruneOldRows(db = getDb()): Promise<void> {
   const now = Date.now();
   if (now - lastPruneAtMs < PRUNE_INTERVAL_MS) return;
   lastPruneAtMs = now;
   try {
-    const cutoff = sql`now() - interval '${RETAIN_DAYS} days'`;
+    const cutoff = sql`now() - (${RETAIN_DAYS} * interval '1 day')`;
     await db.delete(webEvents).where(lt(webEvents.createdAt, cutoff));
     await db.delete(webVitals).where(lt(webVitals.createdAt, cutoff));
   } catch (error) {
@@ -172,18 +185,18 @@ const EventSchema = z.object({
       medium: z.string().max(120).optional(),
       campaign: z.string().max(120).optional(),
       term: z.string().max(120).optional(),
-      content: z.string().max(120).optional()
+      content: z.string().max(120).optional(),
     })
     .optional(),
   device: z.enum(["mobile", "desktop", "tablet", "unknown"]).optional(),
   zip: z.string().max(32).optional(),
   meta: z.record(z.unknown()).optional(),
-  value: z.number().finite().optional()
+  value: z.number().finite().optional(),
 });
 
 const PayloadSchema = z.union([
   z.object({ events: z.array(EventSchema).min(1).max(MAX_EVENTS_PER_REQUEST) }),
-  EventSchema
+  EventSchema,
 ]);
 
 export async function POST(request: NextRequest): Promise<Response> {
@@ -194,38 +207,51 @@ export async function POST(request: NextRequest): Promise<Response> {
     RAW_ALLOWED_ORIGINS !== "*" &&
     resolveOrigin(requestOrigin) !== (requestOrigin ?? "").replace(/\/+$/u, "")
   ) {
-    return corsJson({ ok: false, error: "forbidden_origin" }, requestOrigin, { status: 403 });
+    return corsJson({ ok: false, error: "forbidden_origin" }, requestOrigin, {
+      status: 403,
+    });
   }
 
   const ip = resolveClientIp(request);
   if (checkRateLimit(ip)) {
-    return corsJson({ ok: false, error: "rate_limited" }, requestOrigin, { status: 429 });
+    return corsJson({ ok: false, error: "rate_limited" }, requestOrigin, {
+      status: 429,
+    });
   }
 
   const contentType = request.headers.get("content-type") ?? "";
-  const body: unknown = await (async () => {
-    if (/application\/json/i.test(contentType) || /\+json/i.test(contentType)) {
-      return request.json().catch(() => null);
-    }
-    const raw = await request.text().catch(() => "");
-    if (!raw) return null;
+  let body: unknown = null;
+  if (/application\/json/i.test(contentType) || /\+json/i.test(contentType)) {
     try {
-      return JSON.parse(raw);
+      body = (await request.json()) as unknown;
     } catch {
-      return null;
+      body = null;
     }
-  })();
+  } else {
+    const raw = await request.text().catch(() => "");
+    if (raw) {
+      try {
+        body = JSON.parse(raw) as unknown;
+      } catch {
+        body = null;
+      }
+    }
+  }
 
   const parsed = PayloadSchema.safeParse(body);
   if (!parsed.success) {
-    return corsJson({ ok: false, error: "invalid_payload" }, requestOrigin, { status: 400 });
+    return corsJson({ ok: false, error: "invalid_payload" }, requestOrigin, {
+      status: 400,
+    });
   }
 
   const events = "events" in parsed.data ? parsed.data.events : [parsed.data];
   const tz = process.env["APPOINTMENT_TIMEZONE"] ?? "America/New_York";
   const dateStart = DateTime.now().setZone(tz).toISODate();
   if (!dateStart) {
-    return corsJson({ ok: false, error: "invalid_time" }, requestOrigin, { status: 500 });
+    return corsJson({ ok: false, error: "invalid_time" }, requestOrigin, {
+      status: 500,
+    });
   }
 
   const db = getDb();
@@ -271,18 +297,25 @@ export async function POST(request: NextRequest): Promise<Response> {
       utmContent: normalizeUtmField(utm.content),
       device,
       inAreaBucket,
-      meta
+      meta,
     });
 
-    if (evt.event === "web_vital" && typeof evt.value === "number" && Number.isFinite(evt.value)) {
+    if (
+      evt.event === "web_vital" &&
+      typeof evt.value === "number" &&
+      Number.isFinite(evt.value)
+    ) {
       vitalsInserts.push({
         sessionId: evt.sessionId,
         visitId: evt.visitId,
         path,
         metric: key ?? "unknown",
         value: evt.value,
-        rating: typeof meta["rating"] === "string" ? String(meta["rating"]).slice(0, 20) : null,
-        device
+        rating:
+          typeof meta["rating"] === "string"
+            ? String(meta["rating"]).slice(0, 20)
+            : null,
+        device,
       });
     }
 
@@ -297,7 +330,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       utmMedium: normalizeUtmField(utm.medium) ?? "",
       utmCampaign: normalizeUtmField(utm.campaign) ?? "",
       utmTerm: normalizeUtmField(utm.term) ?? "",
-      utmContent: normalizeUtmField(utm.content) ?? ""
+      utmContent: normalizeUtmField(utm.content) ?? "",
     });
   }
 
@@ -324,17 +357,19 @@ export async function POST(request: NextRequest): Promise<Response> {
             webEventCountsDaily.utmMedium,
             webEventCountsDaily.utmCampaign,
             webEventCountsDaily.utmTerm,
-            webEventCountsDaily.utmContent
+            webEventCountsDaily.utmContent,
           ],
           set: {
             count: sql`${webEventCountsDaily.count} + 1`,
-            updatedAt: new Date()
-          }
+            updatedAt: new Date(),
+          },
         });
     }
   } catch (error) {
     console.warn("[web.analytics] ingest_failed", { error: String(error) });
-    return corsJson({ ok: false, error: "server_error" }, requestOrigin, { status: 500 });
+    return corsJson({ ok: false, error: "server_error" }, requestOrigin, {
+      status: 500,
+    });
   }
 
   return corsJson({ ok: true }, requestOrigin);
