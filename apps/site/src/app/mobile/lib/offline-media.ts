@@ -14,6 +14,7 @@ const UPLOAD_ROW_LEASE_MS = 10 * 60 * 1000;
 const VISIBLE_SYNC_RETRY_MS = 5 * 1000;
 const API_FETCH_TIMEOUT_MS = 45 * 1000;
 const OBJECT_UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+const QUEUED_BLOB_READ_TIMEOUT_MS = 30 * 1000;
 const QUEUE_HEALTH_TIMEOUT_MS = 30 * 1000;
 const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 const STONEGATE_TIME_ZONE = "America/New_York";
@@ -1178,24 +1179,164 @@ function isReadyCompletion(payload: unknown, mediaId: string): boolean {
 async function materializeQueuedUploadBody(
   row: QueuedMediaUpload,
 ): Promise<ArrayBuffer> {
-  if (
-    !row.blob ||
-    typeof row.blob.arrayBuffer !== "function" ||
-    !Number.isSafeInteger(row.byteCount) ||
-    row.byteCount <= 0
-  ) {
+  if (!row.blob || !Number.isSafeInteger(row.byteCount) || row.byteCount <= 0) {
     throw new QueueUploadError("queued_media_blob_invalid", "retry");
   }
-  let bytes: ArrayBuffer;
+
+  const readers: Array<() => Promise<ArrayBuffer>> = [];
+  if (typeof row.blob.arrayBuffer === "function") {
+    readers.push(() => row.blob.arrayBuffer());
+  }
+  if (typeof FileReader !== "undefined") {
+    readers.push(
+      () =>
+        new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader();
+          const timer = globalThis.setTimeout(() => {
+            try {
+              reader.abort();
+            } catch {
+              // The read may already have settled.
+            }
+            reject(new Error("queued_media_blob_read_timeout"));
+          }, QUEUED_BLOB_READ_TIMEOUT_MS);
+          const settle = (result: ArrayBuffer | Error) => {
+            globalThis.clearTimeout(timer);
+            if (result instanceof ArrayBuffer) resolve(result);
+            else reject(result);
+          };
+          reader.onload = () =>
+            settle(
+              reader.result instanceof ArrayBuffer
+                ? reader.result
+                : new Error("queued_media_blob_read_failed"),
+            );
+          reader.onerror = () =>
+            settle(reader.error ?? new Error("queued_media_blob_read_failed"));
+          reader.onabort = () =>
+            settle(new Error("queued_media_blob_read_aborted"));
+          try {
+            reader.readAsArrayBuffer(row.blob);
+          } catch (error) {
+            settle(
+              error instanceof Error
+                ? error
+                : new Error("queued_media_blob_read_failed"),
+            );
+          }
+        }),
+    );
+  }
+  if (typeof Response !== "undefined") {
+    readers.push(() => new Response(row.blob).arrayBuffer());
+  }
+
+  let sawSizeMismatch = false;
+  for (const read of readers) {
+    try {
+      const bytes = await read();
+      if (bytes.byteLength === row.byteCount) return bytes;
+      sawSizeMismatch = true;
+    } catch {
+      // Try a separate WebKit Blob reader before leaving the row queued.
+    }
+  }
+  throw new QueueUploadError(
+    sawSizeMismatch
+      ? "queued_media_blob_size_mismatch"
+      : "queued_media_blob_read_failed",
+    "retry",
+  );
+}
+
+function canUseSameOriginBlobXhr(uploadUrl: string): boolean {
+  if (typeof window === "undefined" || typeof XMLHttpRequest === "undefined") {
+    return false;
+  }
   try {
-    bytes = await row.blob.arrayBuffer();
+    return (
+      new URL(uploadUrl, window.location.href).origin === window.location.origin
+    );
   } catch {
-    throw new QueueUploadError("queued_media_blob_read_failed", "retry");
+    return false;
   }
-  if (bytes.byteLength !== row.byteCount) {
-    throw new QueueUploadError("queued_media_blob_size_mismatch", "retry");
+}
+
+function uploadQueuedBlobWithXhr(
+  uploadUrl: string,
+  headers: Record<string, string>,
+  blob: Blob,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("PUT", uploadUrl, true);
+    request.timeout = OBJECT_UPLOAD_TIMEOUT_MS;
+    request.onload = () => {
+      if (request.status === 0) {
+        reject(new TypeError("object_upload_failed"));
+        return;
+      }
+      resolve(
+        new Response(request.responseText, {
+          status: request.status,
+          statusText: request.statusText,
+        }),
+      );
+    };
+    request.onerror = () => reject(new TypeError("object_upload_failed"));
+    request.onabort = () =>
+      reject(new DOMException("object_upload_aborted", "AbortError"));
+    request.ontimeout = () =>
+      reject(new DOMException("object_upload_timeout", "AbortError"));
+    try {
+      for (const [name, value] of Object.entries(headers)) {
+        request.setRequestHeader(name, value);
+      }
+      request.send(blob);
+    } catch (error) {
+      reject(
+        error instanceof Error ? error : new Error("object_upload_failed"),
+      );
+    }
+  });
+}
+
+async function uploadQueuedObject(
+  row: QueuedMediaUpload,
+  intent: UploadIntent,
+): Promise<Response> {
+  const headers = {
+    "content-type": row.contentType,
+    ...intent.headers,
+  };
+
+  if (canUseSameOriginBlobXhr(intent.uploadUrl)) {
+    try {
+      const response = await uploadQueuedBlobWithXhr(
+        intent.uploadUrl,
+        headers,
+        row.blob,
+      );
+      if (response.ok || (response.status !== 400 && response.status !== 422)) {
+        return response;
+      }
+      // A zero-byte WebKit serialization is rejected by the relay. Retry once
+      // through independent Blob readers before preserving the queue.
+    } catch {
+      // A native XHR failure can still be recovered by a concrete ArrayBuffer.
+    }
   }
-  return bytes;
+
+  const uploadBody = await materializeQueuedUploadBody(row);
+  return fetchWithTimeout(
+    intent.uploadUrl,
+    {
+      method: "PUT",
+      headers,
+      body: uploadBody,
+    },
+    OBJECT_UPLOAD_TIMEOUT_MS,
+  );
 }
 
 async function uploadQueueRow(
@@ -1242,22 +1383,7 @@ async function uploadQueueRow(
     }
 
     if (!intent.alreadyCompleted) {
-      // WebKit can acknowledge a fetch that streams an IndexedDB-backed Blob
-      // while sending a zero-byte body. Materializing it gives fetch a concrete
-      // length and preserves the queue when the stored bytes are incomplete.
-      const uploadBody = await materializeQueuedUploadBody(row);
-      const uploadResponse = await fetchWithTimeout(
-        intent.uploadUrl,
-        {
-          method: "PUT",
-          headers: {
-            "content-type": row.contentType,
-            ...intent.headers,
-          },
-          body: uploadBody,
-        },
-        OBJECT_UPLOAD_TIMEOUT_MS,
-      );
+      const uploadResponse = await uploadQueuedObject(row, intent);
       if (!uploadResponse.ok) {
         throw responseFailure(uploadResponse, null, "object_upload_failed");
       }

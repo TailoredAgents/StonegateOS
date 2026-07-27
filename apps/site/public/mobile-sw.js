@@ -1,4 +1,4 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v8";
+const SHELL_CACHE = "stonegate-mobile-shell-v9";
 const DATABASE_NAME = "stonegate-mobile";
 const DATABASE_VERSION = 2;
 const SNAPSHOT_STORE = "appointment-snapshots";
@@ -409,27 +409,58 @@ function workerUploadFailureMode(error) {
 }
 
 async function materializeQueuedUploadBody(row) {
-  if (
-    !row.blob ||
-    typeof row.blob.arrayBuffer !== "function" ||
-    !Number.isSafeInteger(row.byteCount) ||
-    row.byteCount <= 0
-  ) {
+  if (!row.blob || !Number.isSafeInteger(row.byteCount) || row.byteCount <= 0) {
     throw new WorkerQueueUploadError("queued_media_blob_invalid", "retry");
   }
-  let bytes;
-  try {
-    bytes = await row.blob.arrayBuffer();
-  } catch {
-    throw new WorkerQueueUploadError("queued_media_blob_read_failed", "retry");
+
+  const readers = [];
+  if (typeof row.blob.arrayBuffer === "function") {
+    readers.push(() => row.blob.arrayBuffer());
   }
-  if (bytes.byteLength !== row.byteCount) {
-    throw new WorkerQueueUploadError(
-      "queued_media_blob_size_mismatch",
-      "retry",
-    );
+  if (typeof Response !== "undefined") {
+    readers.push(() => new Response(row.blob).arrayBuffer());
   }
-  return bytes;
+  if (typeof row.blob.stream === "function") {
+    readers.push(async () => {
+      const reader = row.blob.stream().getReader();
+      const output = new Uint8Array(row.byteCount);
+      let offset = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (
+            !(value instanceof Uint8Array) ||
+            offset + value.byteLength > row.byteCount
+          ) {
+            throw new Error("queued_media_blob_size_mismatch");
+          }
+          output.set(value, offset);
+          offset += value.byteLength;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return output.buffer.slice(0, offset);
+    });
+  }
+
+  let sawSizeMismatch = false;
+  for (const read of readers) {
+    try {
+      const bytes = await read();
+      if (bytes.byteLength === row.byteCount) return bytes;
+      sawSizeMismatch = true;
+    } catch {
+      // Try a separate Blob reader before leaving the row queued.
+    }
+  }
+  throw new WorkerQueueUploadError(
+    sawSizeMismatch
+      ? "queued_media_blob_size_mismatch"
+      : "queued_media_blob_read_failed",
+    "retry",
+  );
 }
 
 async function uploadRow(row) {
