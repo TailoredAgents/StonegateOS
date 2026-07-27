@@ -296,20 +296,23 @@ export async function createMediaUploadUrl(input: {
 }): Promise<{ url: string; headers: Record<string, string>; expiresAt: Date }> {
   await ensureBucket();
   const storage = getStorage();
+  const provider = getMediaStorageProvider();
   // R2 does not support a full-object SHA-256 checksum on a single PutObject.
   // Keep the client digest in PostgreSQL and verify it from the downloaded
   // staging bytes during finalization instead of signing an unsupported R2
-  // request header. S3-compatible development storage can still validate the
-  // checksum at upload time.
+  // request header. Browser JavaScript also cannot control Content-Length, so
+  // requiring it in R2's signed headers breaks uploads on Safari. Finalization
+  // verifies both the byte length and checksum after the staging upload.
+  // S3-compatible development storage can still validate both at upload time.
   const checksum =
-    getMediaStorageProvider() === "s3" && input.checksumSha256Hex
+    provider === "s3" && input.checksumSha256Hex
       ? Buffer.from(input.checksumSha256Hex, "hex").toString("base64")
       : undefined;
   const command = new PutObjectCommand({
     Bucket: storage.config.bucket,
     Key: input.key,
     ContentType: input.contentType,
-    ContentLength: input.byteLength,
+    ...(provider === "s3" ? { ContentLength: input.byteLength } : {}),
     ...(checksum ? { ChecksumSHA256: checksum } : {}),
   });
   const expiresInSeconds = Math.min(
