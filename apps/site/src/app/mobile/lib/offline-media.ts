@@ -361,9 +361,9 @@ function deleteCachedMediaForAppointment(
   appointmentId: string,
 ): Promise<void> {
   const traversal = new Promise<void>((resolve, reject) => {
-    const request = store
-      .index("appointmentId")
-      .openCursor(IDBKeyRange.only(appointmentId));
+    // WebKit 18.x can omit file-backed Blob paths when records are read
+    // through IDBIndex. Traverse Blob-bearing stores directly instead.
+    const request = store.openCursor();
     request.onerror = () =>
       reject(request.error ?? new Error("indexed_db_cursor_error"));
     request.onsuccess = () => {
@@ -374,7 +374,12 @@ function deleteCachedMediaForAppointment(
           return;
         }
         const row = cursor.value as OfflineMediaRecord;
-        if (row.employeeId === employeeId) cursor.delete();
+        if (
+          row.employeeId === employeeId &&
+          row.appointmentId === appointmentId
+        ) {
+          cursor.delete();
+        }
         cursor.continue();
       } catch (error) {
         try {
@@ -588,9 +593,8 @@ export async function cacheAppointmentMedia(
   const store = transaction.objectStore(MEDIA_STORE);
   for (const record of records) store.put(record);
   const traversal = new Promise<void>((resolve, reject) => {
-    const request = store
-      .index("appointmentId")
-      .openCursor(IDBKeyRange.only(appointmentId));
+    // Keep Blob-backed values on WebKit's direct object-store code path.
+    const request = store.openCursor();
     request.onerror = () =>
       reject(request.error ?? new Error("indexed_db_cursor_error"));
     request.onsuccess = () => {
@@ -603,6 +607,7 @@ export async function cacheAppointmentMedia(
         const row = cursor.value as OfflineMediaRecord;
         if (
           row.employeeId === employeeId &&
+          row.appointmentId === appointmentId &&
           !currentMediaIds.has(row.mediaId)
         ) {
           cursor.delete();
@@ -633,15 +638,16 @@ export async function getCachedAppointmentMedia(
   const transaction = database.transaction(MEDIA_STORE, "readonly");
   const completion = transactionDone(transaction);
   const rows = (await requestResult(
-    transaction
-      .objectStore(MEDIA_STORE)
-      .index("appointmentId")
-      .getAll(appointmentId),
+    // IDBIndex results can contain unusable file-backed Blobs on WebKit 18.x.
+    transaction.objectStore(MEDIA_STORE).getAll(),
   )) as OfflineMediaRecord[];
   await completion;
   database.close();
   return rows
-    .filter((row) => row.employeeId === employeeId)
+    .filter(
+      (row) =>
+        row.employeeId === employeeId && row.appointmentId === appointmentId,
+    )
     .sort((left, right) => left.orderIndex - right.orderIndex);
 }
 
@@ -838,11 +844,15 @@ export async function listEmployeeQueue(
   const transaction = database.transaction(QUEUE_STORE, "readonly");
   const completion = transactionDone(transaction);
   const rows = (await requestResult(
-    transaction.objectStore(QUEUE_STORE).index("employeeId").getAll(employeeId),
+    // WebKit 18.x may omit a file-backed Blob's explicit path when the record
+    // is retrieved through IDBIndex. Direct store reads preserve queued bytes.
+    transaction.objectStore(QUEUE_STORE).getAll(),
   )) as QueuedMediaUpload[];
   await completion;
   database.close();
-  return rows.sort((left, right) => left.createdAt - right.createdAt);
+  return rows
+    .filter((row) => row.employeeId === employeeId)
+    .sort((left, right) => left.createdAt - right.createdAt);
 }
 
 async function getOrCreateMobileDeviceId(): Promise<string> {
