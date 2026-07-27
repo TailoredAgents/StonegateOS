@@ -1157,6 +1157,29 @@ function isReadyCompletion(payload: unknown, mediaId: string): boolean {
   );
 }
 
+async function materializeQueuedUploadBody(
+  row: QueuedMediaUpload,
+): Promise<ArrayBuffer> {
+  if (
+    !row.blob ||
+    typeof row.blob.arrayBuffer !== "function" ||
+    !Number.isSafeInteger(row.byteCount) ||
+    row.byteCount <= 0
+  ) {
+    throw new QueueUploadError("queued_media_blob_invalid", "retry");
+  }
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await row.blob.arrayBuffer();
+  } catch {
+    throw new QueueUploadError("queued_media_blob_read_failed", "retry");
+  }
+  if (bytes.byteLength !== row.byteCount) {
+    throw new QueueUploadError("queued_media_blob_size_mismatch", "retry");
+  }
+  return bytes;
+}
+
 async function uploadQueueRow(
   row: QueuedMediaUpload,
 ): Promise<"success" | QueueUploadFailureMode> {
@@ -1201,6 +1224,10 @@ async function uploadQueueRow(
     }
 
     if (!intent.alreadyCompleted) {
+      // WebKit can acknowledge a fetch that streams an IndexedDB-backed Blob
+      // while sending a zero-byte body. Materializing it gives fetch a concrete
+      // length and preserves the queue when the stored bytes are incomplete.
+      const uploadBody = await materializeQueuedUploadBody(row);
       const uploadResponse = await fetchWithTimeout(
         intent.uploadUrl,
         {
@@ -1209,7 +1236,7 @@ async function uploadQueueRow(
             "content-type": row.contentType,
             ...intent.headers,
           },
-          body: row.blob,
+          body: uploadBody,
         },
         OBJECT_UPLOAD_TIMEOUT_MS,
       );

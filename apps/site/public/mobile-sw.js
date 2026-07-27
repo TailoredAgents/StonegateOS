@@ -1,4 +1,4 @@
-const SHELL_CACHE = "stonegate-mobile-shell-v7";
+const SHELL_CACHE = "stonegate-mobile-shell-v8";
 const DATABASE_NAME = "stonegate-mobile";
 const DATABASE_VERSION = 2;
 const SNAPSHOT_STORE = "appointment-snapshots";
@@ -408,6 +408,30 @@ function workerUploadFailureMode(error) {
   return error instanceof WorkerQueueUploadError ? error.mode : "terminal";
 }
 
+async function materializeQueuedUploadBody(row) {
+  if (
+    !row.blob ||
+    typeof row.blob.arrayBuffer !== "function" ||
+    !Number.isSafeInteger(row.byteCount) ||
+    row.byteCount <= 0
+  ) {
+    throw new WorkerQueueUploadError("queued_media_blob_invalid", "retry");
+  }
+  let bytes;
+  try {
+    bytes = await row.blob.arrayBuffer();
+  } catch {
+    throw new WorkerQueueUploadError("queued_media_blob_read_failed", "retry");
+  }
+  if (bytes.byteLength !== row.byteCount) {
+    throw new WorkerQueueUploadError(
+      "queued_media_blob_size_mismatch",
+      "retry",
+    );
+  }
+  return bytes;
+}
+
 async function uploadRow(row) {
   try {
     const { response: intentResponse, payload: intentPayload } =
@@ -450,6 +474,10 @@ async function uploadRow(row) {
     }
 
     if (!intent.ready) {
+      // WebKit can acknowledge a fetch that streams an IndexedDB-backed Blob
+      // while sending a zero-byte body. Materializing it gives fetch a concrete
+      // length and preserves the queue when the stored bytes are incomplete.
+      const uploadBody = await materializeQueuedUploadBody(row);
       const objectResponse = await workerFetchWithTimeout(
         intent.uploadUrl,
         {
@@ -458,7 +486,7 @@ async function uploadRow(row) {
             "content-type": row.contentType,
             ...intent.uploadHeaders,
           },
-          body: row.blob,
+          body: uploadBody,
         },
         OBJECT_UPLOAD_TIMEOUT_MS,
       );
