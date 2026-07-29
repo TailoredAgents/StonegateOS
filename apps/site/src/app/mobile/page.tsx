@@ -49,6 +49,7 @@ import { MobileThreadConversation } from "./MobileThreadConversation";
 import { MobileAppointmentPricingFields } from "./MobileAppointmentPricingFields";
 import { MobileAppointmentCard } from "./MobileAppointmentCard";
 import { MobileAppointmentDetail } from "./MobileAppointmentDetail";
+import { MobileCompletionFinalTotalFields } from "./MobileCompletionFinalTotalFields";
 import { MobileLogoutForm } from "./MobileLogoutForm";
 import { MobileOfflineRuntime } from "./MobileOfflineRuntime";
 import type { AppointmentMediaSummary } from "./MobileQuotedWorkPanel";
@@ -1037,45 +1038,14 @@ function MobileCompleteAppointmentForm({
           value={event.appointmentType ?? ""}
         />
         <input type="hidden" name="status" value="completed" />
-        {finalTotalCents !== null ? (
-          <>
-            <input type="hidden" name="finalTotal" value={amountDefault} />
-            <div className="rounded-md border border-emerald-300/20 bg-slate-950 px-3 py-2">
-              <p className="text-xs font-semibold text-slate-400">
-                Final job total
-              </p>
-              <p className="mt-1 text-sm font-semibold text-emerald-100">
-                {formatUsdCents(finalTotalCents)}
-              </p>
-              <p className="mt-1 text-xs leading-5 text-slate-500">
-                Change the total in Payment before completing the job.
-              </p>
-            </div>
-          </>
-        ) : (
-          <>
-            {pricingContext ? (
-              <div className="rounded-md border border-emerald-300/20 bg-slate-950 px-3 py-2 text-sm font-semibold text-emerald-100">
-                {pricingContext}
-              </div>
-            ) : null}
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-300">
-                Final job total
-              </span>
-              <input
-                name="finalTotal"
-                type="number"
-                min={0}
-                step="0.01"
-                required
-                defaultValue={amountDefault}
-                className="mt-1 w-full rounded-md border border-white/10 bg-slate-950 px-3 py-2 text-base text-white outline-none focus:border-cyan-300"
-                placeholder="350"
-              />
-            </label>
-          </>
-        )}
+        <MobileCompletionFinalTotalFields
+          appointmentId={appointmentId}
+          initialFinalTotalCents={finalTotalCents}
+          quotedTotalCents={normalizeCents(event.quotedTotalCents)}
+          initialPaymentSummary={event.paymentSummary ?? null}
+          pricingContext={pricingContext}
+          isOwner={isOwner}
+        />
         <div className="rounded-md border border-white/10 bg-slate-950 p-3">
           <p className="text-xs font-semibold text-slate-300">
             Select who worked

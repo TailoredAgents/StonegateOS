@@ -53,6 +53,21 @@ export type E2EContactSummary = {
 
 type SqlClient = ReturnType<typeof postgres>;
 
+const E2E_COMMISSION_PRINCIPALS = [
+  {
+    id: "239ca36d-e618-4c5c-a283-b6e5d4ccb704",
+    name: "E2E Austin commission principal",
+  },
+  {
+    id: "b45988bb-7417-48c5-af6d-fcdf71088282",
+    name: "E2E Devon commission principal",
+  },
+  {
+    id: "5ac5217e-3905-4ea3-bdeb-65456982f5e3",
+    name: "E2E Jeffrey commission principal",
+  },
+] as const;
+
 let cachedClient: SqlClient | null = null;
 
 function getSql(): SqlClient {
@@ -290,10 +305,64 @@ export async function getAppointmentStartAt(
   return Number.isFinite(startAt.getTime()) ? startAt : null;
 }
 
+export async function ensureE2ECommissionPrincipals(): Promise<void> {
+  const sql = getSql();
+  await sql`
+    INSERT INTO team_members (id, name, active)
+    VALUES
+      (
+        ${E2E_COMMISSION_PRINCIPALS[0].id},
+        ${E2E_COMMISSION_PRINCIPALS[0].name},
+        false
+      ),
+      (
+        ${E2E_COMMISSION_PRINCIPALS[1].id},
+        ${E2E_COMMISSION_PRINCIPALS[1].name},
+        false
+      ),
+      (
+        ${E2E_COMMISSION_PRINCIPALS[2].id},
+        ${E2E_COMMISSION_PRINCIPALS[2].name},
+        false
+      )
+    ON CONFLICT (id) DO NOTHING
+  `;
+}
+
+export async function createE2EDraftPayoutRun(): Promise<string> {
+  const sql = getSql();
+  const now = Date.now();
+  const periodStart = new Date(now - 24 * 60 * 60 * 1000);
+  const periodEnd = new Date(now + 24 * 60 * 60 * 1000);
+  const rows = await sql<Array<{ id: string }>>`
+    INSERT INTO payout_runs (
+      timezone,
+      period_start,
+      period_end,
+      scheduled_payout_at,
+      status
+    )
+    VALUES (
+      'America/New_York',
+      ${periodStart},
+      ${periodEnd},
+      ${periodEnd},
+      'draft'
+    )
+    RETURNING id
+  `;
+  const payoutRunId = rows[0]?.id;
+  if (!payoutRunId) {
+    throw new Error("Unable to create an E2E draft payout run.");
+  }
+  return payoutRunId;
+}
+
 export async function createE2EMobileAppointment(input: {
   contactId: string;
   propertyId: string;
   quotedScopeText?: string;
+  finalTotalCents?: number | null;
 }): Promise<{ appointmentId: string; startAt: Date }> {
   const sql = getSql();
   return sql.begin(async (transaction) => {
@@ -339,6 +408,7 @@ export async function createE2EMobileAppointment(input: {
         duration_min,
         status,
         quoted_scope_text,
+        final_total_cents,
         booking_details,
         reschedule_token
       )
@@ -350,6 +420,7 @@ export async function createE2EMobileAppointment(input: {
         90,
         'confirmed',
         ${input.quotedScopeText ?? null},
+        ${input.finalTotalCents ?? null},
         ${transaction.json({ e2eMobileClone: true })},
         ${randomUUID().replace(/-/gu, "")}
       )
@@ -365,6 +436,92 @@ export async function createE2EMobileAppointment(input: {
     }
     return { appointmentId: row.appointmentId, startAt: persistedStartAt };
   });
+}
+
+export async function getE2EAppointmentCompletion(
+  appointmentId: string,
+): Promise<{
+  status: string;
+  finalTotalCents: number | null;
+  commissionBaseCents: number[];
+} | null> {
+  const sql = getSql();
+  const appointments = await sql<
+    Array<{ status: string; finalTotalCents: number | null }>
+  >`
+    SELECT
+      status,
+      final_total_cents AS "finalTotalCents"
+    FROM appointments
+    WHERE id = ${appointmentId}
+    LIMIT 1
+  `;
+  const appointment = appointments[0];
+  if (!appointment) return null;
+
+  const commissions = await sql<Array<{ baseCents: number }>>`
+    SELECT base_cents AS "baseCents"
+    FROM appointment_commissions
+    WHERE appointment_id = ${appointmentId}
+    ORDER BY role, member_id
+  `;
+
+  return {
+    ...appointment,
+    commissionBaseCents: commissions.map((row) => row.baseCents),
+  };
+}
+
+export async function getE2EDraftPayoutReport(
+  payoutRunId: string,
+  appointmentId: string,
+): Promise<{
+  status: string;
+  reportHtml: string | null;
+  reportGeneratedAt: Date | null;
+  appointmentCommissionCents: number;
+  includesAppointment: boolean;
+} | null> {
+  const sql = getSql();
+  const rows = await sql<
+    Array<{
+      status: string;
+      reportHtml: string | null;
+      reportGeneratedAt: Date | string | null;
+      appointmentCommissionCents: number | string;
+      appointmentCommissionCount: number | string;
+    }>
+  >`
+    SELECT
+      payout_runs.status,
+      payout_runs.report_html AS "reportHtml",
+      payout_runs.report_generated_at AS "reportGeneratedAt",
+      COALESCE(SUM(appointment_commissions.amount_cents), 0)
+        AS "appointmentCommissionCents",
+      COUNT(appointment_commissions.id) AS "appointmentCommissionCount"
+    FROM payout_runs
+    LEFT JOIN appointments
+      ON appointments.id = ${appointmentId}
+      AND appointments.status = 'completed'
+      AND appointments.completed_at >= payout_runs.period_start
+      AND appointments.completed_at < payout_runs.period_end
+    LEFT JOIN appointment_commissions
+      ON appointment_commissions.appointment_id = appointments.id
+    WHERE payout_runs.id = ${payoutRunId}
+    GROUP BY payout_runs.id
+    LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    status: row.status,
+    reportHtml: row.reportHtml,
+    reportGeneratedAt: row.reportGeneratedAt
+      ? new Date(row.reportGeneratedAt)
+      : null,
+    appointmentCommissionCents: Number(row.appointmentCommissionCents),
+    includesAppointment: Number(row.appointmentCommissionCount) > 0,
+  };
 }
 
 export async function createE2EPhoneOnlyContact(

@@ -165,6 +165,9 @@ export function MobilePaymentPanel({
   );
   const [manualTip, setManualTip] = React.useState("");
   const [manualNote, setManualNote] = React.useState("");
+  const finalTotalDirtyRef = React.useRef(false);
+  const finalTotalEditRevisionRef = React.useRef(0);
+  const paymentLoadRevisionRef = React.useRef(0);
 
   const applySummary = React.useCallback(
     (nextSummary: AppointmentPaymentSummary) => {
@@ -190,27 +193,51 @@ export function MobilePaymentPanel({
 
   const load = React.useCallback(async () => {
     if (!navigator.onLine) return;
+    const loadRevision = ++paymentLoadRevisionRef.current;
+    const editRevisionAtStart = finalTotalEditRevisionRef.current;
     setLoading(true);
-    const response = await fetch(
-      `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/payments`,
-      { cache: "no-store" },
-    );
-    if (response.ok) {
-      const payload = (await response.json()) as PaymentsResponse;
-      if (payload.paymentSummary) {
-        applySummary(payload.paymentSummary);
-        setFinalTotal(
-          payload.paymentSummary.jobTotalCents == null
-            ? ""
-            : (payload.paymentSummary.jobTotalCents / 100).toFixed(2),
+    try {
+      const response = await fetch(
+        `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/payments`,
+        { cache: "no-store" },
+      );
+      if (loadRevision !== paymentLoadRevisionRef.current) return;
+      if (response.ok) {
+        const payload = (await response.json()) as PaymentsResponse;
+        if (loadRevision !== paymentLoadRevisionRef.current) return;
+        if (payload.paymentSummary) {
+          applySummary(payload.paymentSummary);
+          if (
+            !finalTotalDirtyRef.current &&
+            editRevisionAtStart === finalTotalEditRevisionRef.current
+          ) {
+            setFinalTotal(
+              payload.paymentSummary.jobTotalCents == null
+                ? ""
+                : (payload.paymentSummary.jobTotalCents / 100).toFixed(2),
+            );
+          }
+        }
+        setRows(Array.isArray(payload.payments) ? payload.payments : []);
+        setLoaded(true);
+      } else {
+        const nextMessage = await errorMessage(
+          response,
+          "Unable to load payments.",
         );
+        if (loadRevision === paymentLoadRevisionRef.current) {
+          setMessage(nextMessage);
+        }
       }
-      setRows(Array.isArray(payload.payments) ? payload.payments : []);
-      setLoaded(true);
-    } else {
-      setMessage(await errorMessage(response, "Unable to load payments."));
+    } catch {
+      if (loadRevision === paymentLoadRevisionRef.current) {
+        setMessage("Unable to load payments. Check your connection and retry.");
+      }
+    } finally {
+      if (loadRevision === paymentLoadRevisionRef.current) {
+        setLoading(false);
+      }
     }
-    setLoading(false);
   }, [appointmentId, applySummary]);
 
   const saveFinalTotal = async (): Promise<boolean> => {
@@ -223,28 +250,48 @@ export function MobilePaymentPanel({
       summary.jobTotalCents === finalTotalCents &&
       summary.jobTotalCents !== null
     ) {
+      finalTotalDirtyRef.current = false;
       return true;
     }
-    const response = await fetch(
-      `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/final-total`,
-      {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          finalTotalCents,
-          ...(changeReason.trim() ? { changeReason: changeReason.trim() } : {}),
-        }),
-      },
-    );
-    if (!response.ok) {
+    ++paymentLoadRevisionRef.current;
+    setLoading(false);
+    try {
+      const response = await fetch(
+        `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/final-total`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            finalTotalCents,
+            ...(changeReason.trim()
+              ? { changeReason: changeReason.trim() }
+              : {}),
+          }),
+        },
+      );
+      if (!response.ok) {
+        setMessage(
+          await errorMessage(response, "Unable to save the final total."),
+        );
+        return false;
+      }
+      const nextSummary = {
+        ...summary,
+        jobTotalCents: finalTotalCents,
+        balanceCents: Math.max(finalTotalCents - summary.paidTowardJobCents, 0),
+      };
+      finalTotalDirtyRef.current = false;
+      applySummary(nextSummary);
+      setFinalTotal((finalTotalCents / 100).toFixed(2));
+      await load();
+      router.refresh();
+      return true;
+    } catch {
       setMessage(
-        await errorMessage(response, "Unable to save the final total."),
+        "Unable to save the final total. Check your connection and retry.",
       );
       return false;
     }
-    await load().catch(() => undefined);
-    router.refresh();
-    return true;
   };
 
   const acceptSquare = async () => {
@@ -258,41 +305,44 @@ export function MobilePaymentPanel({
     }
     setBusy("square");
     setMessage(null);
-    if (!(await saveFinalTotal())) {
-      setBusy(null);
-      return;
+    let handoffStarted = false;
+    try {
+      if (!(await saveFinalTotal())) return;
+      const targetPlatform = platform();
+      const response = await fetch(
+        `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/payment-attempts`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            clientRequestId: crypto.randomUUID(),
+            platform: targetPlatform,
+          }),
+        },
+      );
+      if (!response.ok) {
+        setMessage(await errorMessage(response, "Unable to open Square."));
+        return;
+      }
+      const payload = (await response.json().catch(() => null)) as Record<
+        string,
+        unknown
+      > | null;
+      const launchUrl = payload?.["launchUrl"];
+      if (typeof launchUrl !== "string" || !launchUrl) {
+        setMessage("Square did not return a launch link.");
+        return;
+      }
+      setMessage(
+        "Opening Square. StonegateOS will verify the charge before showing Paid.",
+      );
+      openSquare(launchUrl, targetPlatform);
+      handoffStarted = true;
+    } catch {
+      setMessage("Unable to open Square. Check your connection and retry.");
+    } finally {
+      if (!handoffStarted) setBusy(null);
     }
-    const targetPlatform = platform();
-    const response = await fetch(
-      `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/payment-attempts`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          clientRequestId: crypto.randomUUID(),
-          platform: targetPlatform,
-        }),
-      },
-    );
-    if (!response.ok) {
-      setMessage(await errorMessage(response, "Unable to open Square."));
-      setBusy(null);
-      return;
-    }
-    const payload = (await response.json().catch(() => null)) as Record<
-      string,
-      unknown
-    > | null;
-    const launchUrl = payload?.["launchUrl"];
-    if (typeof launchUrl !== "string" || !launchUrl) {
-      setMessage("Square did not return a launch link.");
-      setBusy(null);
-      return;
-    }
-    setMessage(
-      "Opening Square. StonegateOS will verify the charge before showing Paid.",
-    );
-    openSquare(launchUrl, targetPlatform);
   };
 
   const recordManual = async () => {
@@ -306,32 +356,32 @@ export function MobilePaymentPanel({
     }
     setBusy("manual");
     setMessage(null);
-    if (!(await saveFinalTotal())) {
-      setBusy(null);
-      return;
-    }
-    const tipCents = manualTip.trim() ? centsFromDollars(manualTip) : 0;
-    if (tipCents == null) {
-      setMessage("Enter a valid tip or leave it blank.");
-      setBusy(null);
-      return;
-    }
-    const response = await fetch(
-      `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/manual-payments`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          clientRequestId: crypto.randomUUID(),
-          tenderType: manualTender,
-          tipCents,
-          ...(manualNote.trim() ? { note: manualNote.trim() } : {}),
-        }),
-      },
-    );
-    if (!response.ok) {
-      setMessage(await errorMessage(response, "Unable to record the payment."));
-    } else {
+    try {
+      if (!(await saveFinalTotal())) return;
+      const tipCents = manualTip.trim() ? centsFromDollars(manualTip) : 0;
+      if (tipCents == null) {
+        setMessage("Enter a valid tip or leave it blank.");
+        return;
+      }
+      const response = await fetch(
+        `/api/mobile/appointments/${encodeURIComponent(appointmentId)}/manual-payments`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            clientRequestId: crypto.randomUUID(),
+            tenderType: manualTender,
+            tipCents,
+            ...(manualNote.trim() ? { note: manualNote.trim() } : {}),
+          }),
+        },
+      );
+      if (!response.ok) {
+        setMessage(
+          await errorMessage(response, "Unable to record the payment."),
+        );
+        return;
+      }
       const payload = (await response.json().catch(() => null)) as {
         paymentSummary?: AppointmentPaymentSummary;
       } | null;
@@ -343,12 +393,23 @@ export function MobilePaymentPanel({
       setManualNote("");
       await load();
       router.refresh();
+    } catch {
+      setMessage(
+        "Unable to record the payment. Check your connection and retry.",
+      );
+    } finally {
+      setBusy(null);
     }
-    setBusy(null);
   };
 
   const balance = summary.balanceCents;
   const enteredFinalTotalCents = centsFromDollars(finalTotal);
+  const hasRecordedPayment =
+    summary.paidTowardJobCents > 0 ||
+    summary.refundedCents > 0 ||
+    ["partial", "paid", "refunded", "needs_review"].includes(summary.status);
+  const canEditFinalTotal = isOwner || !hasRecordedPayment;
+  const finalTotalIsDirty = enteredFinalTotalCents !== summary.jobTotalCents;
   const actionBalance =
     enteredFinalTotalCents != null && enteredFinalTotalCents > 0
       ? Math.max(enteredFinalTotalCents - summary.paidTowardJobCents, 0)
@@ -360,6 +421,23 @@ export function MobilePaymentPanel({
     actionBalance != null &&
     actionBalance > 0 &&
     summary.status !== "needs_review";
+  const saveFinalTotalOnly = async () => {
+    if (!online) {
+      setMessage("Payments are disabled offline.");
+      return;
+    }
+    setBusy("total");
+    setMessage(null);
+    try {
+      const saved = await saveFinalTotal();
+      if (saved) {
+        setChangeReason("");
+        setMessage("Final job total saved.");
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <details
@@ -461,15 +539,19 @@ export function MobilePaymentPanel({
                   <span className="pl-3 text-slate-400">$</span>
                   <input
                     value={finalTotal}
-                    onChange={(event) => setFinalTotal(event.target.value)}
+                    onChange={(event) => {
+                      finalTotalDirtyRef.current = true;
+                      finalTotalEditRevisionRef.current += 1;
+                      setFinalTotal(event.target.value);
+                    }}
                     inputMode="decimal"
-                    disabled={Boolean(summary.activeAttemptId)}
+                    disabled={busy !== null || Boolean(summary.activeAttemptId)}
                     className="min-w-0 flex-1 bg-transparent px-2 py-3 text-base text-white outline-none disabled:cursor-not-allowed disabled:text-slate-400"
                     placeholder="350.00"
                   />
                 </div>
               </label>
-            ) : summary.paidTowardJobCents === 0 || isOwner ? (
+            ) : canEditFinalTotal ? (
               <details className="rounded-md border border-white/10 bg-slate-900 p-3">
                 <summary className="cursor-pointer text-sm font-semibold text-slate-200">
                   Edit final job total
@@ -483,15 +565,21 @@ export function MobilePaymentPanel({
                       <span className="pl-3 text-slate-400">$</span>
                       <input
                         value={finalTotal}
-                        onChange={(event) => setFinalTotal(event.target.value)}
+                        onChange={(event) => {
+                          finalTotalDirtyRef.current = true;
+                          finalTotalEditRevisionRef.current += 1;
+                          setFinalTotal(event.target.value);
+                        }}
                         inputMode="decimal"
-                        disabled={Boolean(summary.activeAttemptId)}
+                        disabled={
+                          busy !== null || Boolean(summary.activeAttemptId)
+                        }
                         className="min-w-0 flex-1 bg-transparent px-2 py-3 text-base text-white outline-none disabled:cursor-not-allowed disabled:text-slate-400"
                         placeholder="350.00"
                       />
                     </div>
                   </label>
-                  {summary.paidTowardJobCents > 0 && isOwner ? (
+                  {hasRecordedPayment && isOwner ? (
                     <label className="block">
                       <span className="text-xs font-semibold text-slate-300">
                         Reason for total change
@@ -515,6 +603,26 @@ export function MobilePaymentPanel({
                   ) : null}
                 </div>
               </details>
+            ) : null}
+
+            {canEditFinalTotal ? (
+              <button
+                type="button"
+                disabled={
+                  !online ||
+                  busy !== null ||
+                  Boolean(summary.activeAttemptId) ||
+                  !finalTotalIsDirty
+                }
+                onClick={() => void saveFinalTotalOnly()}
+                className="w-full rounded-md border border-cyan-300/40 bg-cyan-300/10 px-3 py-3 text-sm font-semibold text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {busy === "total"
+                  ? "Saving final job total…"
+                  : finalTotalIsDirty
+                    ? "Save final job total"
+                    : "Final job total saved"}
+              </button>
             ) : null}
 
             <button

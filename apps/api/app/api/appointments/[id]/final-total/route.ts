@@ -134,10 +134,7 @@ export async function PUT(
     );
   }
 
-  if (
-    result.status === "completed" &&
-    result.previousFinalTotalCents !== parsed.data.finalTotalCents
-  ) {
+  if (result.status === "completed") {
     await recalculateAppointmentCommissionsAndRefreshDraftPayouts(
       db,
       appointmentId,

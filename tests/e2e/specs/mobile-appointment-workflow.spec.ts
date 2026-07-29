@@ -4,6 +4,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   createE2EMobileAppointment,
+  createE2EDraftPayoutRun,
+  ensureE2ECommissionPrincipals,
+  getE2EAppointmentCompletion,
+  getE2EDraftPayoutReport,
   getLatestE2ESeedSummary,
 } from "../support/db";
 import {
@@ -72,6 +76,7 @@ function easternDayKey(value: Date): string {
 
 async function seededAppointment(options?: {
   quotedScopeText?: string;
+  finalTotalCents?: number | null;
 }): Promise<{
   appointmentId: string;
   startAt: Date;
@@ -82,6 +87,7 @@ async function seededAppointment(options?: {
     contactId: seed.contactId,
     propertyId: seed.propertyId,
     quotedScopeText: options?.quotedScopeText,
+    finalTotalCents: options?.finalTotalCents,
   });
 }
 
@@ -231,6 +237,93 @@ test.describe("Mobile appointment quoted work and payments", () => {
       await expectNoEtaControls(card);
     }
   });
+
+  for (const [screen, screenOffsetCents] of [
+    ["myday", 0],
+    ["calendar", 1_000],
+  ] as const) {
+    test(`saves an above-quote total into the ${screen} job and draft payout`, async ({
+      page,
+      isMobile,
+      browserName,
+    }) => {
+      test.skip(
+        !isMobile,
+        "This workflow is covered by the mobile browser projects.",
+      );
+
+      await ensureE2ECommissionPrincipals();
+      const { appointmentId, startAt } = await seededAppointment({
+        finalTotalCents: 32_500,
+      });
+      const payoutRunId = await createE2EDraftPayoutRun();
+      const finalTotalCents =
+        47_500 + screenOffsetCents + (browserName === "webkit" ? 100 : 0);
+      const appointmentDay = easternDayKey(startAt);
+      await page.goto(
+        `/mobile?screen=${screen}&date=${encodeURIComponent(appointmentDay)}`,
+      );
+
+      const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+      const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
+      await expect(card).toBeVisible({ timeout: 30_000 });
+      await cardToggle.click();
+      await card.getByText("Complete job", { exact: true }).click();
+
+      const finalTotal = card.locator('input[name="finalTotal"]');
+      await expect(finalTotal).toHaveValue("325.00");
+      await finalTotal.fill((finalTotalCents / 100).toFixed(2));
+      await card.locator('input[name="crewMemberId"]').first().check();
+
+      await Promise.all([
+        page.waitForURL(/appointment=1/u),
+        card.getByRole("button", { name: "Mark complete" }).click(),
+      ]);
+
+      await expect
+        .poll(async () => getE2EAppointmentCompletion(appointmentId), {
+          timeout: 20_000,
+        })
+        .toMatchObject({
+          status: "completed",
+          finalTotalCents,
+        });
+      const completion = await getE2EAppointmentCompletion(appointmentId);
+      expect(completion?.commissionBaseCents.length).toBeGreaterThan(0);
+      expect(
+        completion?.commissionBaseCents.every(
+          (baseCents) => baseCents === finalTotalCents,
+        ),
+      ).toBe(true);
+
+      const expectedReportAmount = `$${(finalTotalCents / 100).toFixed(2)}`;
+      await expect
+        .poll(
+          async () => {
+            const report = await getE2EDraftPayoutReport(
+              payoutRunId,
+              appointmentId,
+            );
+            return {
+              status: report?.status ?? null,
+              generated: report?.reportGeneratedAt instanceof Date,
+              includesAppointment: report?.includesAppointment ?? false,
+              hasCommission: (report?.appointmentCommissionCents ?? 0) > 0,
+              containsRevisedTotal:
+                report?.reportHtml?.includes(expectedReportAmount) ?? false,
+            };
+          },
+          { timeout: 20_000 },
+        )
+        .toEqual({
+          status: "draft",
+          generated: true,
+          includesAppointment: true,
+          hasCommission: true,
+          containsRevisedTotal: true,
+        });
+    });
+  }
 
   test("blocks new photos and explains queued scope failures when the summary is missing", async ({
     page,
@@ -1870,6 +1963,221 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
   });
 
+  test("saves an edited final total without starting payment", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment();
+    let currentSummary = { ...unpaidPaymentSummary };
+    await mockPayments(page, appointmentId, () => currentSummary);
+
+    let savedPayload: Record<string, unknown> | null = null;
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/final-total`,
+      async (route) => {
+        savedPayload = route.request().postDataJSON() as Record<
+          string,
+          unknown
+        >;
+        currentSummary = {
+          ...currentSummary,
+          jobTotalCents: 47_500,
+          balanceCents: 47_500,
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            appointmentId,
+            finalTotalCents: 47_500,
+          }),
+        });
+      },
+    );
+
+    await openSeededPayment(page, appointmentId, startAt);
+    await page.getByText("Edit final job total", { exact: true }).click();
+    const finalTotal = page.locator('input[placeholder="350.00"]');
+    await finalTotal.fill("475.00");
+
+    const saveTotal = page.getByRole("button", {
+      name: "Save final job total",
+    });
+    await expect(saveTotal).toBeEnabled();
+    await saveTotal.click();
+
+    await expect
+      .poll(() => savedPayload)
+      .toEqual({
+        finalTotalCents: 47_500,
+      });
+    await expect(
+      page.getByText("Final job total saved.", { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("$475.00 remaining")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Final job total saved" }),
+    ).toBeDisabled();
+    await page.getByText("Complete job", { exact: true }).click();
+    await expect(page.locator('input[name="finalTotal"]')).toHaveValue(
+      "475.00",
+    );
+  });
+
+  test("keeps a typed final total when the initial payment load finishes late", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment({
+      finalTotalCents: 32_500,
+    });
+    let markRequestStarted!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    let releaseInitialLoad!: () => void;
+    const initialLoadGate = new Promise<void>((resolve) => {
+      releaseInitialLoad = resolve;
+    });
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/payments`,
+      async (route) => {
+        markRequestStarted();
+        await initialLoadGate;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            paymentSummary: unpaidPaymentSummary,
+            payments: [],
+            attempts: [],
+          }),
+        });
+      },
+    );
+
+    await openSeededPayment(page, appointmentId, startAt);
+    await requestStarted;
+    await page.getByText("Edit final job total", { exact: true }).click();
+    const finalTotal = page.locator('input[placeholder="350.00"]');
+    await finalTotal.fill("475.00");
+
+    releaseInitialLoad();
+    await expect(
+      page.getByText("No payments recorded.", { exact: true }),
+    ).toBeVisible();
+    await expect(finalTotal).toHaveValue("475.00");
+    await expect(
+      page.getByRole("button", { name: "Save final job total" }),
+    ).toBeEnabled();
+  });
+
+  test("does not rebase a completion edit when a newer total arrives", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment({
+      finalTotalCents: 32_500,
+    });
+    let markRequestStarted!: () => void;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    let releasePaymentLoad!: () => void;
+    const paymentLoadGate = new Promise<void>((resolve) => {
+      releasePaymentLoad = resolve;
+    });
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/payments`,
+      async (route) => {
+        markRequestStarted();
+        await paymentLoadGate;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            paymentSummary: {
+              ...unpaidPaymentSummary,
+              jobTotalCents: 47_500,
+              balanceCents: 47_500,
+            },
+            payments: [],
+            attempts: [],
+          }),
+        });
+      },
+    );
+
+    await page.goto(`/mobile?screen=calendar&date=${easternDayKey(startAt)}`);
+    const card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    const cardToggle = card.getByRole("button", { name: /E2E Contact/u });
+    await expect(card).toBeVisible();
+    await cardToggle.click();
+    await card.getByText("Complete job", { exact: true }).click();
+    const completionTotal = card.locator('input[name="finalTotal"]');
+    await completionTotal.fill("500.00");
+
+    await card.getByText("Payment", { exact: true }).click();
+    await requestStarted;
+    releasePaymentLoad();
+
+    await expect(
+      card.getByText(
+        "The final total changed elsewhere to $475.00 while you were editing.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(completionTotal).toHaveValue("500.00");
+    await expect(
+      card.locator('input[name="expectedFinalTotalCents"]'),
+    ).toHaveValue("32500");
+
+    await page.evaluate(
+      ({ delayedAppointmentId, delayedSummary }) => {
+        window.dispatchEvent(
+          new CustomEvent("stonegate:mobile-appointment-summary", {
+            detail: {
+              appointmentId: delayedAppointmentId,
+              paymentSummary: delayedSummary,
+            },
+          }),
+        );
+      },
+      {
+        delayedAppointmentId: appointmentId,
+        delayedSummary: unpaidPaymentSummary,
+      },
+    );
+    await expect(
+      card.getByText(
+        "The final total changed elsewhere to $475.00 while you were editing.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+
+    await card.getByRole("button", { name: "Use latest amount" }).click();
+    await expect(completionTotal).toHaveValue("475.00");
+    await expect(
+      card.locator('input[name="expectedFinalTotalCents"]'),
+    ).toHaveValue("47500");
+  });
+
   test("creates one mocked Square handoff without calling the provider", async ({
     page,
     browserName,
@@ -2451,6 +2759,55 @@ test.describe("Mobile appointment quoted work and payments", () => {
       database.close();
     }, clientId);
     await page.context().setOffline(false);
+  });
+});
+
+test.describe("Mobile non-owner final-total lock", () => {
+  test.use({
+    storageState: "tests/e2e/storage/mobile-sales.json",
+    serviceWorkers: "block",
+  });
+
+  test("does not expose total editing after a full refund", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment({
+      finalTotalCents: 32_500,
+    });
+    const fullyRefundedSummary: PaymentSummary = {
+      ...unpaidPaymentSummary,
+      status: "refunded",
+      paidTowardJobCents: 0,
+      refundedCents: 32_500,
+      balanceCents: 32_500,
+    };
+    await mockPayments(page, appointmentId, () => fullyRefundedSummary);
+
+    await openSeededPayment(page, appointmentId, startAt);
+    await expect(
+      page.getByText("Refunded", { exact: true }).first(),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Accept payment · $325.00" }),
+    ).toBeEnabled();
+    await expect(
+      page.getByText("Edit final job total", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: /final job total/iu }),
+    ).toHaveCount(0);
+    await expect(page.locator('input[placeholder="350.00"]')).toHaveCount(0);
+    await page.getByText("Complete job", { exact: true }).click();
+    await expect(page.locator('input[name="finalTotal"]')).toHaveCount(0);
+    await expect(page.locator('input[name="preserveFinalTotal"]')).toHaveValue(
+      "1",
+    );
   });
 });
 

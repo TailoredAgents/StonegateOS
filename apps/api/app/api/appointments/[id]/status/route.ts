@@ -44,6 +44,7 @@ const StatusSchema = z.object({
   owner: z.string().optional().nullable(),
   marketingMemberId: z.string().uuid().optional().nullable(),
   finalTotalCents: z.number().int().nonnegative().optional(),
+  expectedFinalTotalCents: z.number().int().nonnegative().nullable().optional(),
   finalTotalChangeReason: z.string().trim().min(1).max(500).optional(),
   cardTipCents: z.number().int().nonnegative().optional(),
   finalTotalSameAsQuoted: z.boolean().optional(),
@@ -69,9 +70,7 @@ function parseLocalOrIsoDateTime(value: string, timezone: string): Date | null {
   return dt.toUTC().toJSDate();
 }
 
-function isQuoteOnlyAppointmentType(
-  value: string | null | undefined,
-): boolean {
+function isQuoteOnlyAppointmentType(value: string | null | undefined): boolean {
   const normalized = (value ?? "").trim().toLowerCase();
   return (
     normalized === "in_person_quote" || normalized === "in_person_estimate"
@@ -87,8 +86,7 @@ function extractPgCode(error: unknown): string | null {
   const directCode =
     direct && typeof direct["code"] === "string" ? direct["code"] : null;
   if (directCode) return directCode;
-  const cause =
-    direct && isRecord(direct["cause"]) ? direct["cause"] : null;
+  const cause = direct && isRecord(direct["cause"]) ? direct["cause"] : null;
   const causeCode =
     cause && typeof cause["code"] === "string" ? cause["code"] : null;
   return causeCode;
@@ -155,6 +153,7 @@ export async function POST(
   const owner = parsed.data.owner;
   const marketingMemberId = parsed.data.marketingMemberId;
   const finalTotalCentsInput = parsed.data.finalTotalCents;
+  const expectedFinalTotalCents = parsed.data.expectedFinalTotalCents;
   const cardTipCentsInput = parsed.data.cardTipCents;
   const finalTotalSameAsQuoted = parsed.data.finalTotalSameAsQuoted === true;
   let completedAtOverride: Date | undefined;
@@ -192,8 +191,7 @@ export async function POST(
       return NextResponse.json(
         {
           error: "invalid_crew_combo",
-          message:
-            "Invalid crew payout split for that crew combination.",
+          message: "Invalid crew payout split for that crew combination.",
         },
         { status: 400 },
       );
@@ -249,10 +247,7 @@ export async function POST(
     }
   }
 
-  if (
-    paymentLedgerAvailable &&
-    typeof finalTotalCentsToSet === "number"
-  ) {
+  if (paymentLedgerAvailable && typeof finalTotalCentsToSet === "number") {
     if (existing.finalTotalCents !== finalTotalCentsToSet) {
       await expireStalePaymentAttemptsForAppointment(db, appointmentId);
       const blockingAttempt = await getBlockingSquareAttempt(db, appointmentId);
@@ -289,8 +284,7 @@ export async function POST(
       return NextResponse.json(
         { error: decision.code, message: decision.message },
         {
-          status:
-            decision.code === "owner_required_after_payment" ? 403 : 409,
+          status: decision.code === "owner_required_after_payment" ? 403 : 409,
         },
       );
     }
@@ -312,7 +306,7 @@ export async function POST(
       ? completedAtOverride
       : becameCompleted
         ? new Date()
-      : undefined;
+        : undefined;
 
   let marketingToSet: string | null | undefined = undefined;
   if (becameCompleted && marketingMemberId === undefined) {
@@ -350,6 +344,28 @@ export async function POST(
     if (!lockedAppointment) {
       return { kind: "not_found" as const };
     }
+    if (
+      status === "completed" &&
+      !isQuoteOnly &&
+      expectedFinalTotalCents !== undefined &&
+      expectedFinalTotalCents !== lockedAppointment.finalTotalCents
+    ) {
+      return {
+        kind: "final_total_changed" as const,
+        currentFinalTotalCents: lockedAppointment.finalTotalCents,
+      };
+    }
+    const effectiveFinalTotalCents =
+      finalTotalCentsToSet === undefined
+        ? lockedAppointment.finalTotalCents
+        : finalTotalCentsToSet;
+    if (
+      status === "completed" &&
+      !isQuoteOnly &&
+      effectiveFinalTotalCents === null
+    ) {
+      return { kind: "final_total_required" as const };
+    }
     try {
       await assertAppointmentStatusTransitionAllowed({
         appointmentId,
@@ -381,11 +397,9 @@ export async function POST(
           attemptStatus: blockingAttempt.status,
         };
       }
-      const paymentLock = await getFinalTotalPaymentLock(
-        tx,
-        appointmentId,
-        { schemaAvailable: true },
-      );
+      const paymentLock = await getFinalTotalPaymentLock(tx, appointmentId, {
+        schemaAvailable: true,
+      });
       if (cardTipCentsInput !== undefined && paymentLock.hasSuccessfulPayment) {
         return { kind: "tip_managed_by_payments" as const };
       }
@@ -518,6 +532,26 @@ export async function POST(
       { status: 409 },
     );
   }
+  if (updated.kind === "final_total_required") {
+    return NextResponse.json(
+      {
+        error: "final_total_required",
+        message: "Enter the final job total before marking complete.",
+      },
+      { status: 400 },
+    );
+  }
+  if (updated.kind === "final_total_changed") {
+    return NextResponse.json(
+      {
+        error: "final_total_changed",
+        message:
+          "The final job total changed on another screen or phone. Review the current amount and try again.",
+        currentFinalTotalCents: updated.currentFinalTotalCents,
+      },
+      { status: 409 },
+    );
+  }
   if (updated.kind === "total_rejected") {
     return NextResponse.json(
       {
@@ -526,9 +560,7 @@ export async function POST(
       },
       {
         status:
-          updated.decision.code === "owner_required_after_payment"
-            ? 403
-            : 409,
+          updated.decision.code === "owner_required_after_payment" ? 403 : 409,
       },
     );
   }

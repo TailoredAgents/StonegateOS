@@ -59,8 +59,11 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
   try {
     const text = await response.text();
     try {
-      const json = JSON.parse(text) as { error?: string; detail?: string; message?: string };
-      return json.error ?? json.detail ?? json.message ?? fallback;
+      const json = JSON.parse(text) as { error?: unknown; detail?: unknown; message?: unknown };
+      for (const candidate of [json.message, json.detail, json.error]) {
+        if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+      }
+      return fallback;
     } catch {
       return text || fallback;
     }
@@ -770,11 +773,30 @@ export async function updateMobileAppointmentStatusAction(formData: FormData) {
     const appointmentType = typeof appointmentTypeRaw === "string" ? appointmentTypeRaw.trim().toLowerCase() : "";
     const isQuoteOnly = appointmentType === "in_person_quote" || appointmentType === "in_person_estimate";
     if (!isQuoteOnly) {
-      const finalTotalCents = parseUsdToCents(formData.get("finalTotal"));
-      if (finalTotalCents === null) {
-        redirect(`${redirectPath}&error=amount_required` as Route);
+      const preserveFinalTotal = formData.get("preserveFinalTotal") === "1";
+      if (!preserveFinalTotal) {
+        const finalTotalCents = parseUsdToCents(formData.get("finalTotal"));
+        if (finalTotalCents === null) {
+          redirect(`${redirectPath}&error=amount_required` as Route);
+        }
+        payload["finalTotalCents"] = finalTotalCents;
+        const expectedFinalTotalCentsRaw = formData.get("expectedFinalTotalCents");
+        if (expectedFinalTotalCentsRaw === "null") {
+          payload["expectedFinalTotalCents"] = null;
+        } else if (typeof expectedFinalTotalCentsRaw === "string" && expectedFinalTotalCentsRaw.trim()) {
+          const expectedFinalTotalCents = Number(expectedFinalTotalCentsRaw);
+          if (!Number.isInteger(expectedFinalTotalCents) || expectedFinalTotalCents < 0) {
+            redirect(`${redirectPath}&error=invalid_expected_total` as Route);
+          }
+          payload["expectedFinalTotalCents"] = expectedFinalTotalCents;
+        }
+        const finalTotalChangeReasonRaw = formData.get("finalTotalChangeReason");
+        const finalTotalChangeReason =
+          typeof finalTotalChangeReasonRaw === "string" ? finalTotalChangeReasonRaw.trim() : "";
+        if (finalTotalChangeReason) {
+          payload["finalTotalChangeReason"] = finalTotalChangeReason;
+        }
       }
-      payload["finalTotalCents"] = finalTotalCents;
 
       const crewMembers = formData
         .getAll("crewMemberId")
