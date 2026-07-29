@@ -325,6 +325,86 @@ test.describe("Mobile appointment quoted work and payments", () => {
     });
   }
 
+  test("lets an owner correct a completed job and refreshes its draft payout", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    await ensureE2ECommissionPrincipals();
+    const { appointmentId, startAt } = await seededAppointment({
+      finalTotalCents: 32_500,
+    });
+    const payoutRunId = await createE2EDraftPayoutRun();
+    const appointmentDay = easternDayKey(startAt);
+    const mobileUrl = `/mobile?screen=calendar&date=${encodeURIComponent(appointmentDay)}`;
+
+    await page.goto(mobileUrl);
+    let card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    await card.getByRole("button", { name: /E2E Contact/u }).click();
+    await card.getByText("Complete job", { exact: true }).click();
+    await card.locator('input[name="finalTotal"]').fill("475.00");
+    await card.locator('input[name="crewMemberId"]').first().check();
+    await Promise.all([
+      page.waitForURL(/appointment=1/u),
+      card.getByRole("button", { name: "Mark complete" }).click(),
+    ]);
+
+    await page.goto(mobileUrl);
+    card = page.locator(`[data-appointment-id="${appointmentId}"]`);
+    await card.getByRole("button", { name: /E2E Contact/u }).click();
+    await card.getByText("Correct completed job", { exact: true }).click();
+    await expect(card.locator('input[name="finalTotal"]')).toHaveValue(
+      "475.00",
+    );
+    await card.locator('input[name="finalTotal"]').fill("1050.00");
+    await card.locator('input[name="crewMemberId"]').first().check();
+    await Promise.all([
+      page.waitForURL(/appointment=1/u),
+      card.getByRole("button", { name: "Save completed job" }).click(),
+    ]);
+
+    await expect
+      .poll(async () => getE2EAppointmentCompletion(appointmentId), {
+        timeout: 20_000,
+      })
+      .toMatchObject({
+        status: "completed",
+        finalTotalCents: 105_000,
+      });
+    const completion = await getE2EAppointmentCompletion(appointmentId);
+    expect(completion?.commissionBaseCents.length).toBeGreaterThan(0);
+    expect(
+      completion?.commissionBaseCents.every(
+        (baseCents) => baseCents === 105_000,
+      ),
+    ).toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const report = await getE2EDraftPayoutReport(
+            payoutRunId,
+            appointmentId,
+          );
+          return {
+            status: report?.status ?? null,
+            generated: report?.reportGeneratedAt instanceof Date,
+            containsRevisedTotal:
+              report?.reportHtml?.includes("$1,050.00") ?? false,
+          };
+        },
+        { timeout: 20_000 },
+      )
+      .toEqual({
+        status: "draft",
+        generated: true,
+        containsRevisedTotal: true,
+      });
+  });
+
   test("blocks new photos and explains queued scope failures when the summary is missing", async ({
     page,
     isMobile,
@@ -2028,6 +2108,53 @@ test.describe("Mobile appointment quoted work and payments", () => {
     await expect(page.locator('input[name="finalTotal"]')).toHaveValue(
       "475.00",
     );
+  });
+
+  test("keeps total editing available while ledger collection is disabled", async ({
+    page,
+    isMobile,
+  }) => {
+    test.skip(
+      !isMobile,
+      "This workflow is covered by the mobile browser projects.",
+    );
+
+    const { appointmentId, startAt } = await seededAppointment({
+      finalTotalCents: 32_500,
+    });
+    await page.route(
+      `**/api/mobile/appointments/${appointmentId}/payments`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ledgerAvailable: false,
+            paymentSummary: unpaidPaymentSummary,
+            payments: [],
+            refunds: [],
+            attempts: [],
+          }),
+        });
+      },
+    );
+
+    await openSeededPayment(page, appointmentId, startAt);
+    await expect(
+      page.getByText(
+        "Payment collection is not enabled yet. You can still save the correct final job total for commissions and payouts.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Edit final job total", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Accept payment/u }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("Record cash or check", { exact: true }),
+    ).toHaveCount(0);
   });
 
   test("keeps a typed final total when the initial payment load finishes late", async ({

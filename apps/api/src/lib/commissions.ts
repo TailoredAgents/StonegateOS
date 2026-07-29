@@ -182,8 +182,7 @@ function extractPgCode(error: unknown): string | null {
   const directCode =
     direct && typeof direct["code"] === "string" ? direct["code"] : null;
   if (directCode) return directCode;
-  const cause =
-    direct && isRecord(direct["cause"]) ? direct["cause"] : null;
+  const cause = direct && isRecord(direct["cause"]) ? direct["cause"] : null;
   const causeCode =
     cause && typeof cause["code"] === "string" ? cause["code"] : null;
   return causeCode;
@@ -553,7 +552,7 @@ export async function createOrGetCurrentPayoutRun(
   );
 
   const [existing] = await db
-    .select({ id: payoutRuns.id, status: payoutRuns.status })
+    .select({ id: payoutRuns.id })
     .from(payoutRuns)
     .where(
       and(
@@ -564,9 +563,9 @@ export async function createOrGetCurrentPayoutRun(
     .limit(1);
 
   if (existing?.id) {
-    if (existing.status === "draft") {
-      await refreshDraftPayoutReports(db);
-    }
+    // recalculatePayoutPeriodAppointments already refreshed every draft report.
+    // Avoid regenerating the same report a second time on the common
+    // create-or-get path.
     return { payoutRunId: existing.id };
   }
 

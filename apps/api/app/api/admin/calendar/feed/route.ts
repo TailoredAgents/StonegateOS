@@ -2,8 +2,20 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { and, gte, inArray, lte, eq, desc } from "drizzle-orm";
-import { getDb, appointmentNotes, appointments, contacts, crmTasks, properties, type AppointmentBookingDetails } from "@/db";
-import { getCalendarConfig, getAccessToken, isGoogleCalendarEnabled } from "@/lib/calendar";
+import {
+  getDb,
+  appointmentNotes,
+  appointments,
+  contacts,
+  crmTasks,
+  properties,
+  type AppointmentBookingDetails,
+} from "@/db";
+import {
+  getCalendarConfig,
+  getAccessToken,
+  isGoogleCalendarEnabled,
+} from "@/lib/calendar";
 import { getAppointmentCapacity } from "@/lib/appointment-capacity";
 import { parseAppointmentBookingDetails } from "@/lib/appointment-booking-details";
 import {
@@ -37,6 +49,7 @@ type CalendarEvent = {
   quotedScopeText?: string | null;
   mediaSummary?: AppointmentMediaSummary;
   paymentSummary?: AppointmentPaymentSummary;
+  paymentLedgerAvailable?: boolean;
   bookingDetails?: AppointmentBookingDetails | null;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
   eta?: {
@@ -59,9 +72,33 @@ const DEFAULT_DAYS_FORWARD = 30;
 const DEFAULT_DAYS_BACK = 1;
 const MAX_RANGE_DAYS = 366;
 
+function fallbackPaymentSummary(
+  finalTotalCents: number | null,
+): AppointmentPaymentSummary {
+  return {
+    status: "unknown",
+    jobTotalCents: finalTotalCents,
+    paidTowardJobCents: 0,
+    tipCents: 0,
+    refundedCents: 0,
+    balanceCents: null,
+    activeAttemptId: null,
+    latestReceiptUrl: null,
+  };
+}
+
 export async function GET(request: NextRequest): Promise<Response> {
   if (!isAdminRequest(request)) {
-    return NextResponse.json({ ok: false, appointments: [], externalEvents: [], conflicts: [], error: "unauthorized" }, { status: 401 });
+    return NextResponse.json(
+      {
+        ok: false,
+        appointments: [],
+        externalEvents: [],
+        conflicts: [],
+        error: "unauthorized",
+      },
+      { status: 401 },
+    );
   }
   const permissionError = await requirePermission(request, "appointments.read");
   if (permissionError) return permissionError;
@@ -91,7 +128,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       addressLine1: properties.addressLine1,
       city: properties.city,
       state: properties.state,
-      postalCode: properties.postalCode
+      postalCode: properties.postalCode,
     })
     .from(appointments)
     .leftJoin(contacts, eq(appointments.contactId, contacts.id))
@@ -99,46 +136,48 @@ export async function GET(request: NextRequest): Promise<Response> {
     .where(
       and(
         gte(appointments.startAt, windowStart),
-        lte(appointments.startAt, windowEnd)
-      )
+        lte(appointments.startAt, windowEnd),
+      ),
     );
 
   const contactIds = Array.from(
     new Set(
       dbRows
         .map((row) => row.contactId)
-        .filter((id): id is string => typeof id === "string" && id.length > 0)
-    )
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
   );
-  const appointmentIds = dbRows.map((row) => row.id).filter((id): id is string => typeof id === "string" && id.length > 0);
-  const notesByAppointmentId = new Map<string, Array<{ id: string; body: string; createdAt: string }>>();
+  const appointmentIds = dbRows
+    .map((row) => row.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const notesByAppointmentId = new Map<
+    string,
+    Array<{ id: string; body: string; createdAt: string }>
+  >();
   const quotedScopeByAppointmentId = new Map(
     dbRows.map((row) => [row.id, row.quotedScopeText ?? null]),
   );
-  const [etaSummaryMap, mediaSummaryMap, paymentSummaryMap] = await Promise.all([
-    appointmentIds.length > 0
-      ? getEtaSummariesForAppointments(appointmentIds)
-      : Promise.resolve(new Map<string, EtaAppointmentSummary>()),
-    getAppointmentMediaSummaryMap(
-      appointmentIds,
-      quotedScopeByAppointmentId,
-    ),
-    paymentLedgerAvailable
-      ? getAppointmentPaymentSummaryMap(
-          appointmentIds,
-          new Map(
-            dbRows.map((row) => [row.id, row.finalTotalCents ?? null]),
-          ),
-        )
-      : Promise.resolve(new Map<string, AppointmentPaymentSummary>()),
-  ]);
+  const [etaSummaryMap, mediaSummaryMap, paymentSummaryMap] = await Promise.all(
+    [
+      appointmentIds.length > 0
+        ? getEtaSummariesForAppointments(appointmentIds)
+        : Promise.resolve(new Map<string, EtaAppointmentSummary>()),
+      getAppointmentMediaSummaryMap(appointmentIds, quotedScopeByAppointmentId),
+      paymentLedgerAvailable
+        ? getAppointmentPaymentSummaryMap(
+            appointmentIds,
+            new Map(dbRows.map((row) => [row.id, row.finalTotalCents ?? null])),
+          )
+        : Promise.resolve(new Map<string, AppointmentPaymentSummary>()),
+    ],
+  );
   if (appointmentIds.length) {
     const noteRows = await db
       .select({
         id: appointmentNotes.id,
         appointmentId: appointmentNotes.appointmentId,
         body: appointmentNotes.body,
-        createdAt: appointmentNotes.createdAt
+        createdAt: appointmentNotes.createdAt,
       })
       .from(appointmentNotes)
       .where(inArray(appointmentNotes.appointmentId, appointmentIds))
@@ -149,13 +188,16 @@ export async function GET(request: NextRequest): Promise<Response> {
       list.push({
         id: `appointment:${row.id}`,
         body: row.body,
-        createdAt: row.createdAt.toISOString()
+        createdAt: row.createdAt.toISOString(),
       });
       notesByAppointmentId.set(row.appointmentId, list);
     }
   }
 
-  const notesByContactId = new Map<string, Array<{ id: string; body: string; createdAt: string }>>();
+  const notesByContactId = new Map<
+    string,
+    Array<{ id: string; body: string; createdAt: string }>
+  >();
   if (contactIds.length) {
     const noteRows = await db
       .select({
@@ -164,7 +206,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         body: crmTasks.notes,
         createdAt: crmTasks.createdAt,
         status: crmTasks.status,
-        dueAt: crmTasks.dueAt
+        dueAt: crmTasks.dueAt,
       })
       .from(crmTasks)
       .where(inArray(crmTasks.contactId, contactIds))
@@ -179,7 +221,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       list.push({
         id: `contact:${row.id}`,
         body: row.body,
-        createdAt: row.createdAt.toISOString()
+        createdAt: row.createdAt.toISOString(),
       });
       notesByContactId.set(row.contactId, list);
     }
@@ -189,21 +231,34 @@ export async function GET(request: NextRequest): Promise<Response> {
     .filter((row) => row.startAt)
     .map((row) => {
       const start = row.startAt as Date;
-      const end = new Date(start.getTime() + (row.durationMinutes ?? 60) * 60_000);
+      const end = new Date(
+        start.getTime() + (row.durationMinutes ?? 60) * 60_000,
+      );
       const contactName =
         row.contactFirstName && row.contactLastName
           ? `${row.contactFirstName} ${row.contactLastName}`.trim()
-          : row.contactFirstName ?? row.contactLastName ?? null;
-      const addressParts = [row.addressLine1, row.city, row.state, row.postalCode]
+          : (row.contactFirstName ?? row.contactLastName ?? null);
+      const addressParts = [
+        row.addressLine1,
+        row.city,
+        row.state,
+        row.postalCode,
+      ]
         .filter((part) => typeof part === "string" && part.trim().length > 0)
         .join(", ");
       const notes = [
         ...(notesByAppointmentId.get(row.id) ?? []),
-        ...(row.contactId ? notesByContactId.get(row.contactId) ?? [] : [])
+        ...(row.contactId ? (notesByContactId.get(row.contactId) ?? []) : []),
       ]
         .filter((note, index, all) => {
           const key = `${note.body.trim().toLowerCase()}|${note.createdAt}`;
-          return all.findIndex((candidate) => `${candidate.body.trim().toLowerCase()}|${candidate.createdAt}` === key) === index;
+          return (
+            all.findIndex(
+              (candidate) =>
+                `${candidate.body.trim().toLowerCase()}|${candidate.createdAt}` ===
+                key,
+            ) === index
+          );
         })
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
       return {
@@ -226,19 +281,14 @@ export async function GET(request: NextRequest): Promise<Response> {
           coverMediaId: null,
           needsScope: false,
         },
-        ...(paymentLedgerAvailable
+        ...(canReadPayments
           ? {
               finalTotalCents: row.finalTotalCents ?? null,
-              paymentSummary: paymentSummaryMap.get(row.id) ?? {
-                status: row.finalTotalCents == null ? "unknown" : "unpaid",
-                jobTotalCents: row.finalTotalCents ?? null,
-                paidTowardJobCents: 0,
-                tipCents: 0,
-                refundedCents: 0,
-                balanceCents: row.finalTotalCents ?? null,
-                activeAttemptId: null,
-                latestReceiptUrl: null,
-              },
+              paymentLedgerAvailable,
+              paymentSummary: paymentLedgerAvailable
+                ? (paymentSummaryMap.get(row.id) ??
+                  fallbackPaymentSummary(row.finalTotalCents ?? null))
+                : fallbackPaymentSummary(row.finalTotalCents ?? null),
             }
           : {}),
         bookingDetails: parseAppointmentBookingDetails(row.bookingDetails),
@@ -248,9 +298,9 @@ export async function GET(request: NextRequest): Promise<Response> {
           eventSource: null,
           eventAt: null,
           locationFreshness: "missing",
-          pendingDraft: null
+          pendingDraft: null,
         },
-        notes
+        notes,
       };
     });
 
@@ -265,15 +315,15 @@ export async function GET(request: NextRequest): Promise<Response> {
           timeMax: windowEnd.toISOString(),
           singleEvents: "true",
           orderBy: "startTime",
-          showDeleted: "false"
+          showDeleted: "false",
         });
         const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
-          config.calendarId
+          config.calendarId,
         )}/events?${params.toString()}`;
         const res = await fetch(url, {
           headers: {
-            Authorization: `Bearer ${token}`
-          }
+            Authorization: `Bearer ${token}`,
+          },
         });
         if (res.ok) {
           const data = (await res.json()) as {
@@ -287,8 +337,12 @@ export async function GET(request: NextRequest): Promise<Response> {
           };
           for (const item of data.items ?? []) {
             if (!item || item.status === "cancelled") continue;
-            const startIso = item.start?.dateTime ?? (item.start?.date ? `${item.start.date}T00:00:00.000Z` : null);
-            const endIso = item.end?.dateTime ?? (item.end?.date ? `${item.end.date}T00:00:00.000Z` : null);
+            const startIso =
+              item.start?.dateTime ??
+              (item.start?.date ? `${item.start.date}T00:00:00.000Z` : null);
+            const endIso =
+              item.end?.dateTime ??
+              (item.end?.date ? `${item.end.date}T00:00:00.000Z` : null);
             if (!startIso || !endIso) continue;
             externalEvents.push({
               id: `google:${item.id ?? randomUUID()}`,
@@ -296,7 +350,7 @@ export async function GET(request: NextRequest): Promise<Response> {
               source: "google",
               start: new Date(startIso).toISOString(),
               end: new Date(endIso).toISOString(),
-              status: item.status ?? null
+              status: item.status ?? null,
             });
           }
         }
@@ -308,26 +362,43 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const isBlockingForCapacity = (evt: CalendarEvent): boolean => {
     if (evt.source !== "db") return true;
-    const status = typeof evt.status === "string" ? evt.status.trim().toLowerCase() : "";
+    const status =
+      typeof evt.status === "string" ? evt.status.trim().toLowerCase() : "";
     // Canceled/completed/no-show appointments should not consume capacity or be shown as conflicts.
-    if (status === "canceled" || status === "cancelled" || status === "completed" || status === "no_show") return false;
+    if (
+      status === "canceled" ||
+      status === "cancelled" ||
+      status === "completed" ||
+      status === "no_show"
+    )
+      return false;
     return true;
   };
 
-  const conflicts = computeCapacityConflicts(allEvents.filter(isBlockingForCapacity), getAppointmentCapacity());
+  const conflicts = computeCapacityConflicts(
+    allEvents.filter(isBlockingForCapacity),
+    getAppointmentCapacity(),
+  );
 
   return NextResponse.json({
     ok: true,
     appointments: appointmentsEvents,
     externalEvents,
-    conflicts
+    conflicts,
   });
 }
 
-function getWindow(request: NextRequest): { windowStart: Date; windowEnd: Date } {
+function getWindow(request: NextRequest): {
+  windowStart: Date;
+  windowEnd: Date;
+} {
   const now = new Date();
-  const defaultStart = new Date(now.getTime() - DEFAULT_DAYS_BACK * 24 * 60 * 60 * 1000);
-  const defaultEnd = new Date(now.getTime() + DEFAULT_DAYS_FORWARD * 24 * 60 * 60 * 1000);
+  const defaultStart = new Date(
+    now.getTime() - DEFAULT_DAYS_BACK * 24 * 60 * 60 * 1000,
+  );
+  const defaultEnd = new Date(
+    now.getTime() + DEFAULT_DAYS_FORWARD * 24 * 60 * 60 * 1000,
+  );
 
   let url: URL | null = null;
   try {
@@ -338,18 +409,28 @@ function getWindow(request: NextRequest): { windowStart: Date; windowEnd: Date }
 
   const startRaw = url.searchParams.get("start");
   const endRaw = url.searchParams.get("end");
-  if (!startRaw || !endRaw) return { windowStart: defaultStart, windowEnd: defaultEnd };
+  if (!startRaw || !endRaw)
+    return { windowStart: defaultStart, windowEnd: defaultEnd };
 
   const parsedStart = new Date(startRaw);
   const parsedEnd = new Date(endRaw);
-  if (Number.isNaN(parsedStart.getTime()) || Number.isNaN(parsedEnd.getTime())) {
+  if (
+    Number.isNaN(parsedStart.getTime()) ||
+    Number.isNaN(parsedEnd.getTime())
+  ) {
     return { windowStart: defaultStart, windowEnd: defaultEnd };
   }
 
-  if (parsedEnd <= parsedStart) return { windowStart: defaultStart, windowEnd: defaultEnd };
+  if (parsedEnd <= parsedStart)
+    return { windowStart: defaultStart, windowEnd: defaultEnd };
 
-  const diffDays = (parsedEnd.getTime() - parsedStart.getTime()) / (24 * 60 * 60 * 1000);
-  if (!Number.isFinite(diffDays) || diffDays <= 0 || diffDays > MAX_RANGE_DAYS) {
+  const diffDays =
+    (parsedEnd.getTime() - parsedStart.getTime()) / (24 * 60 * 60 * 1000);
+  if (
+    !Number.isFinite(diffDays) ||
+    diffDays <= 0 ||
+    diffDays > MAX_RANGE_DAYS
+  ) {
     return { windowStart: defaultStart, windowEnd: defaultEnd };
   }
 
@@ -366,10 +447,12 @@ function overlaps(a: CalendarEvent, b: CalendarEvent): boolean {
 
 function computeCapacityConflicts(
   events: CalendarEvent[],
-  rawCapacity: number
+  rawCapacity: number,
 ): Array<{ a: string; b: string }> {
   const capacity =
-    typeof rawCapacity === "number" && Number.isFinite(rawCapacity) && rawCapacity > 0
+    typeof rawCapacity === "number" &&
+    Number.isFinite(rawCapacity) &&
+    rawCapacity > 0
       ? Math.floor(rawCapacity)
       : 1;
   if (capacity <= 1) {
@@ -391,7 +474,8 @@ function computeCapacityConflicts(
   for (const evt of events) {
     const start = Date.parse(evt.start);
     const end = Date.parse(evt.end);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
+      continue;
     points.push({ t: start, type: "start", id: evt.id });
     points.push({ t: end, type: "end", id: evt.id });
   }

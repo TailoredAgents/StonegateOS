@@ -52,6 +52,7 @@ import { MobileAppointmentDetail } from "./MobileAppointmentDetail";
 import { MobileCompletionFinalTotalFields } from "./MobileCompletionFinalTotalFields";
 import { MobileLogoutForm } from "./MobileLogoutForm";
 import { MobileOfflineRuntime } from "./MobileOfflineRuntime";
+import { MobilePayoutCreateButton } from "./MobilePayoutCreateButton";
 import type { AppointmentMediaSummary } from "./MobileQuotedWorkPanel";
 import type { AppointmentPaymentSummary } from "./MobilePaymentPanel";
 import {
@@ -255,6 +256,7 @@ type CalendarEvent = {
   quotedScopeText?: string | null;
   mediaSummary?: AppointmentMediaSummary;
   paymentSummary?: AppointmentPaymentSummary;
+  paymentLedgerAvailable?: boolean;
   bookingDetails?: AppointmentBookingDetails | null;
   eta?: EtaSummary;
   notes?: Array<{ id: string; body: string; createdAt: string }>;
@@ -855,11 +857,15 @@ function MobileCompleteAppointmentForm({
   const isQuoteOnly = isQuoteOnlyAppointmentType(event.appointmentType);
   const canConvertCompletedQuote =
     isQuoteOnly && status === "completed" && isOwner;
+  const canCorrectCompletedJob =
+    !isQuoteOnly && status === "completed" && isOwner;
   if (
     !appointmentId ||
     isCanceledEvent(event) ||
     status === "no_show" ||
-    (status === "completed" && !canConvertCompletedQuote)
+    (status === "completed" &&
+      !canConvertCompletedQuote &&
+      !canCorrectCompletedJob)
   )
     return null;
 
@@ -1023,7 +1029,7 @@ function MobileCompleteAppointmentForm({
   return (
     <details className="rounded-md border border-emerald-300/30 bg-emerald-300/10 p-3">
       <summary className="cursor-pointer list-none text-sm font-semibold text-emerald-100">
-        Complete job
+        {status === "completed" ? "Correct completed job" : "Complete job"}
       </summary>
       <form
         action={updateMobileAppointmentStatusAction}
@@ -1046,6 +1052,12 @@ function MobileCompleteAppointmentForm({
           pricingContext={pricingContext}
           isOwner={isOwner}
         />
+        {status === "completed" ? (
+          <p className="rounded-md border border-cyan-300/20 bg-cyan-300/10 px-3 py-2 text-xs leading-5 text-cyan-100">
+            Enter the correct final total and reselect everyone who worked.
+            Saving refreshes commissions and any draft payout.
+          </p>
+        ) : null}
         <div className="rounded-md border border-white/10 bg-slate-950 p-3">
           <p className="text-xs font-semibold text-slate-300">
             Select who worked
@@ -1078,7 +1090,7 @@ function MobileCompleteAppointmentForm({
           type="submit"
           className="w-full rounded-md bg-emerald-300 px-3 py-2 text-sm font-semibold text-slate-950"
         >
-          Mark complete
+          {status === "completed" ? "Save completed job" : "Mark complete"}
         </button>
       </form>
     </details>
@@ -1313,6 +1325,9 @@ function MobileWeekAgenda({
                             quotedScopeText={event.quotedScopeText ?? null}
                             mediaSummary={eventMediaSummary(event)}
                             paymentSummary={eventPaymentSummary(event)}
+                            paymentLedgerAvailable={
+                              event.paymentLedgerAvailable !== false
+                            }
                             canCaptureMedia={canCaptureMedia}
                             canManageMedia={canManageMedia}
                             canReadPayments={canReadPayments && !isQuoteOnly}
@@ -2113,7 +2128,7 @@ export default async function MobileHomePage({
           {payoutAction ? (
             <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-4 text-sm text-emerald-100">
               {payoutAction === "create"
-                ? "Payout run created."
+                ? "Current payout generated and refreshed."
                 : payoutAction === "lock"
                   ? "Payout run locked."
                   : payoutAction === "paid"
@@ -3039,6 +3054,9 @@ export default async function MobileHomePage({
                                 quotedScopeText={event.quotedScopeText ?? null}
                                 mediaSummary={eventMediaSummary(event)}
                                 paymentSummary={eventPaymentSummary(event)}
+                                paymentLedgerAvailable={
+                                  event.paymentLedgerAvailable !== false
+                                }
                                 canCaptureMedia={canCaptureMedia}
                                 canManageMedia={canManageMedia}
                                 canReadPayments={
@@ -4316,12 +4334,16 @@ export default async function MobileHomePage({
                   </div>
                   <form action={runMobilePayoutAction}>
                     <input type="hidden" name="action" value="create" />
-                    <button
-                      type="submit"
-                      className="rounded-md border border-cyan-300 bg-cyan-300 px-3 py-2 text-xs font-semibold text-slate-950"
-                    >
-                      Create
-                    </button>
+                    <MobilePayoutCreateButton
+                      hasCurrentDraft={ownerSummary.payoutRuns.some(
+                        (run) =>
+                          run.status === "draft" &&
+                          run.periodStart ===
+                            ownerSummary.currentPayout?.periodStart &&
+                          run.periodEnd ===
+                            ownerSummary.currentPayout?.periodEnd,
+                      )}
+                    />
                   </form>
                 </div>
                 {ownerSummary.currentPayout ? (

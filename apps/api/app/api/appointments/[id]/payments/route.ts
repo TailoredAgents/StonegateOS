@@ -1,12 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { desc, eq, inArray } from "drizzle-orm";
-import {
-  appointments,
-  getDb,
-  paymentAttempts,
-  paymentRefunds,
-} from "@/db";
+import { appointments, getDb, paymentAttempts, paymentRefunds } from "@/db";
 import {
   getAppointmentPaymentSummary,
   listAppointmentPaymentRows,
@@ -27,12 +22,6 @@ export async function GET(
 
   const { id: appointmentId } = await context.params;
   const db = getDb();
-  if (!(await isPaymentLedgerSchemaAvailable(db))) {
-    return NextResponse.json(
-      { error: "payment_ledger_unavailable" },
-      { status: 503 },
-    );
-  }
   const [appointment] = await db
     .select({
       id: appointments.id,
@@ -48,6 +37,27 @@ export async function GET(
     );
   }
 
+  if (!(await isPaymentLedgerSchemaAvailable(db))) {
+    const jobTotalCents = appointment.finalTotalCents;
+    return NextResponse.json({
+      appointmentId,
+      ledgerAvailable: false,
+      paymentSummary: {
+        status: "unknown",
+        jobTotalCents,
+        paidTowardJobCents: 0,
+        tipCents: 0,
+        refundedCents: 0,
+        balanceCents: null,
+        activeAttemptId: null,
+        latestReceiptUrl: null,
+      },
+      payments: [],
+      refunds: [],
+      attempts: [],
+    });
+  }
+
   const [ledgerRows, attempts, summary] = await Promise.all([
     listAppointmentPaymentRows(db, appointmentId),
     db
@@ -55,8 +65,7 @@ export async function GET(
         id: paymentAttempts.id,
         provider: paymentAttempts.provider,
         status: paymentAttempts.status,
-        requestedJobAmountCents:
-          paymentAttempts.requestedJobAmountCents,
+        requestedJobAmountCents: paymentAttempts.requestedJobAmountCents,
         currency: paymentAttempts.currency,
         providerOrderId: paymentAttempts.providerOrderId,
         providerPaymentId: paymentAttempts.providerPaymentId,
@@ -102,6 +111,7 @@ export async function GET(
 
   return NextResponse.json({
     appointmentId,
+    ledgerAvailable: true,
     paymentSummary: summary,
     payments: ledgerRows.map((row) => ({
       ...row,

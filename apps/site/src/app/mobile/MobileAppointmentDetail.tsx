@@ -23,6 +23,7 @@ export function MobileAppointmentDetail({
   quotedScopeText,
   mediaSummary,
   paymentSummary,
+  paymentLedgerAvailable,
   canCaptureMedia,
   canManageMedia,
   canReadPayments,
@@ -35,6 +36,7 @@ export function MobileAppointmentDetail({
   quotedScopeText: string | null;
   mediaSummary: AppointmentMediaSummary;
   paymentSummary: AppointmentPaymentSummary | null;
+  paymentLedgerAvailable: boolean;
   canCaptureMedia: boolean;
   canManageMedia: boolean;
   canReadPayments: boolean;
@@ -62,6 +64,7 @@ export function MobileAppointmentDetail({
         <MobilePaymentPanel
           appointmentId={appointmentId}
           initialSummary={paymentSummary}
+          initialLedgerAvailable={paymentLedgerAvailable}
           canCollect={canCollectPayments}
           isOwner={isOwner}
           needsScope={needsScope}
