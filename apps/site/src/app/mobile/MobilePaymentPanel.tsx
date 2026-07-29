@@ -36,6 +36,19 @@ type PaymentsResponse = {
   }>;
 };
 
+function paymentSummarySnapshot(summary: AppointmentPaymentSummary): string {
+  return [
+    summary.status,
+    summary.jobTotalCents ?? "",
+    summary.paidTowardJobCents,
+    summary.tipCents,
+    summary.refundedCents,
+    summary.balanceCents ?? "",
+    summary.activeAttemptId ?? "",
+    summary.latestReceiptUrl ?? "",
+  ].join("|");
+}
+
 function formatMoney(cents: number | null | undefined): string {
   if (cents == null || !Number.isFinite(cents)) return "Not set";
   return new Intl.NumberFormat("en-US", {
@@ -174,9 +187,22 @@ export function MobilePaymentPanel({
   const finalTotalDirtyRef = React.useRef(false);
   const finalTotalEditRevisionRef = React.useRef(0);
   const paymentLoadRevisionRef = React.useRef(0);
+  const incomingSummaryRef = React.useRef(initialSummary);
+  const incomingSummarySnapshot = paymentSummarySnapshot(initialSummary);
+  const incomingSummarySnapshotRef = React.useRef(incomingSummarySnapshot);
+  const summaryOverrideBaseRef = React.useRef<string | null>(null);
+  const incomingLedgerAvailableRef = React.useRef(initialLedgerAvailable);
+  const ledgerOverrideBaseRef = React.useRef<boolean | null>(null);
+  incomingSummaryRef.current = initialSummary;
+  incomingSummarySnapshotRef.current = incomingSummarySnapshot;
+  incomingLedgerAvailableRef.current = initialLedgerAvailable;
 
   const applySummary = React.useCallback(
     (nextSummary: AppointmentPaymentSummary) => {
+      const nextSnapshot = paymentSummarySnapshot(nextSummary);
+      const incomingSnapshot = incomingSummarySnapshotRef.current;
+      summaryOverrideBaseRef.current =
+        nextSnapshot === incomingSnapshot ? null : incomingSnapshot;
       setSummary(nextSummary);
       publishMobileAppointmentSummary({
         appointmentId,
@@ -185,6 +211,45 @@ export function MobilePaymentPanel({
     },
     [appointmentId],
   );
+
+  const applyLedgerAvailable = React.useCallback((nextAvailable: boolean) => {
+    const incomingAvailable = incomingLedgerAvailableRef.current;
+    ledgerOverrideBaseRef.current =
+      nextAvailable === incomingAvailable ? null : incomingAvailable;
+    setLedgerAvailable(nextAvailable);
+  }, []);
+
+  React.useEffect(() => {
+    if (
+      summaryOverrideBaseRef.current !== null &&
+      summaryOverrideBaseRef.current === incomingSummarySnapshot
+    ) {
+      return;
+    }
+
+    summaryOverrideBaseRef.current = null;
+    const nextSummary = incomingSummaryRef.current;
+    setSummary(nextSummary);
+    if (!finalTotalDirtyRef.current) {
+      setFinalTotal(
+        nextSummary.jobTotalCents == null
+          ? ""
+          : (nextSummary.jobTotalCents / 100).toFixed(2),
+      );
+    }
+  }, [appointmentId, incomingSummarySnapshot]);
+
+  React.useEffect(() => {
+    if (
+      ledgerOverrideBaseRef.current !== null &&
+      ledgerOverrideBaseRef.current === initialLedgerAvailable
+    ) {
+      return;
+    }
+
+    ledgerOverrideBaseRef.current = null;
+    setLedgerAvailable(initialLedgerAvailable);
+  }, [appointmentId, initialLedgerAvailable]);
 
   React.useEffect(() => {
     const update = () => setOnline(navigator.onLine);
@@ -212,7 +277,7 @@ export function MobilePaymentPanel({
         const payload = (await response.json()) as PaymentsResponse;
         if (loadRevision !== paymentLoadRevisionRef.current) return;
         if (typeof payload.ledgerAvailable === "boolean") {
-          setLedgerAvailable(payload.ledgerAvailable);
+          applyLedgerAvailable(payload.ledgerAvailable);
         }
         if (payload.paymentSummary) {
           applySummary(payload.paymentSummary);
@@ -247,7 +312,7 @@ export function MobilePaymentPanel({
         setLoading(false);
       }
     }
-  }, [appointmentId, applySummary]);
+  }, [appointmentId, applyLedgerAvailable, applySummary]);
 
   const saveFinalTotal = async (): Promise<boolean> => {
     const finalTotalCents = centsFromDollars(finalTotal);

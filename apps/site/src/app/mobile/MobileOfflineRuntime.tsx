@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import {
   MOBILE_MEDIA_QUEUE_EVENT,
   MOBILE_MEDIA_SYNC_ISSUE_EVENT,
@@ -93,6 +94,7 @@ export function MobileOfflineRuntime({
   authoritative: boolean;
   snapshots: SnapshotInput[];
 }) {
+  const router = useRouter();
   const [queue, setQueue] = React.useState<QueueSummary | null>(null);
   const [persistentStorage, setPersistentStorage] =
     React.useState<PersistentStorageState | null>(null);
@@ -135,6 +137,41 @@ export function MobileOfflineRuntime({
       scope: "/mobile",
     });
   }, []);
+
+  React.useEffect(() => {
+    let hiddenAt: number | null = null;
+    let lastRefreshAt = Date.now();
+
+    const refreshServerData = () => {
+      if (!navigator.onLine) return;
+      const now = Date.now();
+      if (now - lastRefreshAt < 15_000) return;
+      lastRefreshAt = now;
+      router.refresh();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (hiddenAt !== null && Date.now() - hiddenAt >= 15_000) {
+        hiddenAt = null;
+        refreshServerData();
+      }
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) refreshServerData();
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", refreshServerData);
+    window.addEventListener("pageshow", onPageShow);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", refreshServerData);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [router]);
 
   React.useEffect(() => {
     void saveAppointmentSnapshots(employeeId, dayKey, snapshots, {

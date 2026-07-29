@@ -280,6 +280,18 @@ test.describe("Mobile appointment quoted work and payments", () => {
         card.getByRole("button", { name: "Mark complete" }).click(),
       ]);
 
+      const completedCardAmount = new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0,
+      }).format(finalTotalCents / 100);
+      await expect(
+        page
+          .locator(`[data-appointment-id="${appointmentId}"]`)
+          .getByText(`Final total ${completedCardAmount}`, {
+            exact: true,
+          }),
+      ).toBeVisible();
       await expect
         .poll(async () => getE2EAppointmentCompletion(appointmentId), {
           timeout: 20_000,

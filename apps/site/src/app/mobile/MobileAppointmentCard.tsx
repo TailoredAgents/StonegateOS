@@ -183,6 +183,11 @@ export function MobileAppointmentCard({
   const detailsId = `mobile-appointment-details-${reactId.replaceAll(":", "")}`;
   const canExpand = hasDetails && React.Children.count(children) > 0;
   const scope = currentScope?.trim() ?? "";
+  const normalizedAmountLabel = amountLabel?.trim() ?? "";
+  const completedAmountLabel =
+    statusTone === "completed" && normalizedAmountLabel
+      ? normalizedAmountLabel
+      : null;
   const chips: SummaryChip[] = [];
 
   if (currentMediaSummary?.needsScope) {
@@ -212,12 +217,24 @@ export function MobileAppointmentCard({
   }
 
   const summaryPaymentChip = paymentChip(currentPaymentSummary);
-  if (summaryPaymentChip) chips.push(summaryPaymentChip);
+  if (summaryPaymentChip) {
+    const duplicatesCompletedTotal =
+      completedAmountLabel !== null &&
+      currentPaymentSummary?.status === "unpaid" &&
+      currentPaymentSummary.jobTotalCents !== null &&
+      currentPaymentSummary.balanceCents ===
+        currentPaymentSummary.jobTotalCents;
+    chips.push(
+      duplicatesCompletedTotal
+        ? { ...summaryPaymentChip, label: "Unpaid" }
+        : summaryPaymentChip,
+    );
+  }
 
-  if (!summaryPaymentChip && amountLabel?.trim()) {
+  if (!summaryPaymentChip && normalizedAmountLabel && !completedAmountLabel) {
     chips.push({
       key: "amount",
-      label: amountLabel.trim(),
+      label: normalizedAmountLabel,
       tone: "neutral",
     });
   }
@@ -399,6 +416,12 @@ export function MobileAppointmentCard({
         <p className="whitespace-pre-wrap break-words border-t border-white/10 px-4 py-2.5 text-sm leading-5 text-slate-300">
           <span className="font-semibold text-slate-200">Quoted work: </span>
           {scope}
+        </p>
+      ) : null}
+
+      {completedAmountLabel ? (
+        <p className="border-t border-white/10 px-4 py-2.5 text-sm font-semibold leading-5 text-emerald-100">
+          Final total {completedAmountLabel}
         </p>
       ) : null}
 

@@ -4332,19 +4332,15 @@ export default async function MobileHomePage({
                       before card tips.
                     </p>
                   </div>
-                  <form action={runMobilePayoutAction}>
-                    <input type="hidden" name="action" value="create" />
-                    <MobilePayoutCreateButton
-                      hasCurrentDraft={ownerSummary.payoutRuns.some(
-                        (run) =>
-                          run.status === "draft" &&
-                          run.periodStart ===
-                            ownerSummary.currentPayout?.periodStart &&
-                          run.periodEnd ===
-                            ownerSummary.currentPayout?.periodEnd,
-                      )}
-                    />
-                  </form>
+                  <MobilePayoutCreateButton
+                    hasCurrentDraft={ownerSummary.payoutRuns.some(
+                      (run) =>
+                        run.status === "draft" &&
+                        run.periodStart ===
+                          ownerSummary.currentPayout?.periodStart &&
+                        run.periodEnd === ownerSummary.currentPayout?.periodEnd,
+                    )}
+                  />
                 </div>
                 {ownerSummary.currentPayout ? (
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
@@ -4406,6 +4402,22 @@ export default async function MobileHomePage({
                                 run.timezone,
                               )}
                             </p>
+                            {run.status === "draft" ? (
+                              <p
+                                className={`mt-1 text-xs ${
+                                  run.reportGeneratedAt
+                                    ? "text-emerald-200"
+                                    : "text-amber-200"
+                                }`}
+                              >
+                                {run.reportGeneratedAt
+                                  ? `Report ready ${formatMobileDateTime(
+                                      run.reportGeneratedAt,
+                                      run.timezone,
+                                    )}`
+                                  : "Report has not finished generating yet."}
+                              </p>
+                            ) : null}
                           </div>
                           <span className="shrink-0 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-semibold capitalize text-slate-300">
                             {run.status}

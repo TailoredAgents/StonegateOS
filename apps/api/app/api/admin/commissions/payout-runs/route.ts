@@ -40,6 +40,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       createdAt: payoutRuns.createdAt,
       lockedAt: payoutRuns.lockedAt,
       paidAt: payoutRuns.paidAt,
+      reportGeneratedAt: payoutRuns.reportGeneratedAt,
     })
     .from(payoutRuns)
     .orderBy(desc(payoutRuns.createdAt))
@@ -100,16 +101,14 @@ export async function GET(request: NextRequest): Promise<Response> {
       amountCents: number;
       note: string | null;
       createdAt: string;
-      expense:
-        | {
-            id: string;
-            paidAt: string;
-            category: string | null;
-            vendor: string | null;
-            memo: string | null;
-            receipt: { filename: string; contentType: string } | null;
-          }
-        | null;
+      expense: {
+        id: string;
+        paidAt: string;
+        category: string | null;
+        vendor: string | null;
+        memo: string | null;
+        receipt: { filename: string; contentType: string } | null;
+      } | null;
     }>
   >();
 
@@ -126,7 +125,8 @@ export async function GET(request: NextRequest): Promise<Response> {
       expense: row.expenseId
         ? {
             id: row.expenseId,
-            paidAt: row.expensePaidAt?.toISOString() ?? row.createdAt.toISOString(),
+            paidAt:
+              row.expensePaidAt?.toISOString() ?? row.createdAt.toISOString(),
             category: row.expenseCategory,
             vendor: row.expenseVendor,
             memo: row.expenseMemo,
@@ -179,6 +179,9 @@ export async function GET(request: NextRequest): Promise<Response> {
         createdAt: run.createdAt.toISOString(),
         lockedAt: run.lockedAt ? run.lockedAt.toISOString() : null,
         paidAt: run.paidAt ? run.paidAt.toISOString() : null,
+        reportGeneratedAt: run.reportGeneratedAt
+          ? run.reportGeneratedAt.toISOString()
+          : null,
         totalCents,
         reimbursementTotalCents,
         otherAdjustmentsTotalCents,
@@ -205,5 +208,14 @@ export async function POST(request: NextRequest): Promise<Response> {
   const { payoutRunId } = await createOrGetCurrentPayoutRun(db, {
     actorId: actor.id ?? null,
   });
-  return NextResponse.json({ ok: true, payoutRunId });
+  const [run] = await db
+    .select({ reportGeneratedAt: payoutRuns.reportGeneratedAt })
+    .from(payoutRuns)
+    .where(eq(payoutRuns.id, payoutRunId))
+    .limit(1);
+  return NextResponse.json({
+    ok: true,
+    payoutRunId,
+    reportGeneratedAt: run?.reportGeneratedAt?.toISOString() ?? null,
+  });
 }

@@ -5,17 +5,23 @@ import { appointmentCommissions, appointments, getDb } from "@/db";
 import { requirePermission } from "@/lib/permissions";
 import {
   getOrCreateCommissionSettings,
-  recalculateCurrentPayoutPeriodAppointments,
-  resolveCurrentPayoutPeriod
+  resolveCurrentPayoutPeriod,
 } from "@/lib/commissions";
 import { isAdminRequest } from "../../../web/admin";
 
 function extractPgCode(error: unknown): string | null {
   if (!error || typeof error !== "object") return null;
-  if ("code" in error && typeof (error as { code?: unknown }).code === "string") {
+  if (
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string"
+  ) {
     return (error as { code: string }).code;
   }
-  if ("cause" in error && (error as { cause?: unknown }).cause && typeof (error as { cause?: unknown }).cause === "object") {
+  if (
+    "cause" in error &&
+    (error as { cause?: unknown }).cause &&
+    typeof (error as { cause?: unknown }).cause === "object"
+  ) {
     const cause = (error as { cause: { code?: unknown } }).cause;
     if (typeof cause.code === "string") return cause.code;
   }
@@ -33,37 +39,45 @@ export async function GET(request: NextRequest): Promise<Response> {
   try {
     const settings = await getOrCreateCommissionSettings(db);
     const period = resolveCurrentPayoutPeriod(new Date(), settings);
-    await recalculateCurrentPayoutPeriodAppointments(db);
     let cardTipsCents = 0;
 
     const rows = await db
       .select({
         role: appointmentCommissions.role,
-        totalCents: sql<number>`coalesce(sum(${appointmentCommissions.amountCents}), 0)::int`.as("total_cents")
+        totalCents:
+          sql<number>`coalesce(sum(${appointmentCommissions.amountCents}), 0)::int`.as(
+            "total_cents",
+          ),
       })
       .from(appointmentCommissions)
-      .innerJoin(appointments, eq(appointmentCommissions.appointmentId, appointments.id))
+      .innerJoin(
+        appointments,
+        eq(appointmentCommissions.appointmentId, appointments.id),
+      )
       .where(
         and(
           eq(appointments.status, "completed"),
           gte(appointments.completedAt, period.periodStart),
-          lt(appointments.completedAt, period.periodEnd)
-        )
+          lt(appointments.completedAt, period.periodEnd),
+        ),
       )
       .groupBy(appointmentCommissions.role);
 
     try {
       const [tipsRow] = await db
         .select({
-          totalCents: sql<number>`coalesce(sum(${appointments.cardTipCents}), 0)::int`.as("total_cents")
+          totalCents:
+            sql<number>`coalesce(sum(${appointments.cardTipCents}), 0)::int`.as(
+              "total_cents",
+            ),
         })
         .from(appointments)
         .where(
           and(
             eq(appointments.status, "completed"),
             gte(appointments.completedAt, period.periodStart),
-            lt(appointments.completedAt, period.periodEnd)
-          )
+            lt(appointments.completedAt, period.periodEnd),
+          ),
         );
       cardTipsCents = Number(tipsRow?.totalCents ?? 0);
     } catch (error) {
@@ -93,8 +107,9 @@ export async function GET(request: NextRequest): Promise<Response> {
         marketing: totals.marketing,
         crew: totals.crew,
         adjustments: totals.adjustments,
-        total: totals.sales + totals.marketing + totals.crew + totals.adjustments
-      }
+        total:
+          totals.sales + totals.marketing + totals.crew + totals.adjustments,
+      },
     });
   } catch (error) {
     const code = extractPgCode(error);
